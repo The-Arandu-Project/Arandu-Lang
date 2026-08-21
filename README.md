@@ -13,6 +13,8 @@ Arandu is an experimental Brazilian systems programming language focused on memo
 
 **Current execution roadmaps:** [compiler stabilization gold](docs/arandu-stability-gold-roadmap-v0.1.md) and [LSP/editor gold](docs/arandu-lsp-editor-gold-roadmap-v0.1.md). Implemented milestones are not called `gold` unless their published scope and gates are complete.
 
+Documentation map: [docs/README.md](docs/README.md).
+
 Implemented:
 
 - Rust workspace.

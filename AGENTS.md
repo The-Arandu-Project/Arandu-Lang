@@ -58,6 +58,28 @@ camadas é uma regressão arquitetural.
 - Workers LSP só analisam snapshots; a thread principal registra arquivos e
   publica resultados apenas se `DocumentId` ainda estiver vivo e a revisão
   coincidir. Não comite Salsa a cada tecla: preserve debounce/save/goto.
+- `initialize` deve responder sem varrer, ler ou analisar o workspace. Faça
+  descoberta e indexação depois do handshake, em background, priorizando
+  documentos abertos. Recursos locais devem continuar disponíveis durante
+  reload/indexação parcial.
+- Descartar um resultado stale não basta: filas de trabalho devem ser limitadas
+  e coalescer/cancelar jobs obsoletos. Nunca permita que uma rajada de edição
+  gere backlog sem limite ou atrase completion/goto atrás de análise global.
+- Separe trabalho interativo (arquivo aberto, completion, hover, goto) de
+  trabalho amplo (workspace diagnostics/index). O primeiro tem prioridade; o
+  segundo roda após idle/save e deve expor progresso/cancelamento quando longo.
+- Mudanças de protocolo exigem testes stdio E2E, incluindo `initialize`,
+  `$/cancelRequest`, shutdown, Unicode/UTF-16, edição incremental e resposta
+  stale. A extensão exige testes no VS Code Extension Host, não apenas `tsc`.
+- Preserve a riqueza do diagnóstico até o cliente: código, labels, notes, hints
+  e replacements não podem ser reduzidos a uma string no DTO IDE. Quick fixes
+  usam replacements estruturados; nunca parseiam o texto da mensagem.
+- O LSP classifica semantic tokens; o editor/tema escolhe cores. Prefira tipos
+  e modificadores LSP padrão, mantenha TextMate como fallback e teste temas
+  claro, escuro e alto contraste. Não fixe RGB no servidor.
+- Hover, completion e signature help devem compartilhar apresentação de tipos,
+  assinaturas e doc comments. Não exponha `Debug` de IR, `SymbolId` ou detalhes
+  internos ao usuário e não crie sintaxe apenas para uma decoração do editor.
 
 ## IR, ownership e backends
 
@@ -91,6 +113,26 @@ camadas é uma regressão arquitetural.
 - Fixtures dourados cobrem lexer/parser/semântica/HIR/AMIR/UI. Só use
   `UPDATE_EXPECT=1 cargo test --workspace --locked` após inspecionar e aceitar cada
   alteração de snapshot.
+- Snapshots não devem serializar offsets incidentais quando o contrato testado
+  é semântico. Quando spans fizerem parte do contrato, fixtures e scripts devem
+  preservar bytes e finais de linha entre Windows, Linux e macOS.
+
+## Releases e portabilidade
+
+- A `main` recebe mudanças apenas por PR com `S0 / Gate`; não tente contornar o
+  ruleset com push direto. O gate completo roda no PR, e workflows de tag devem
+  provar que o commit veio de PR verde sem repetir toda a suíte sem necessidade.
+- Tags e releases são imutáveis. Toda correção de candidata usa um novo número
+  `rc.N`; nunca mova uma tag publicada nem sobrescreva seus artefatos.
+- O contrato de release mantém tag, versões dos crates, CLI, LSP, extensão,
+  manifest e stdlib alinhados. Use `xtask prepare-release` e
+  `check-release-contract`, não atualizações manuais parciais.
+- Bootstrap de integridade não pode depender de uma instalação prévia do
+  Arandu: o archive externo usa SHA-256; depois da extração em staging, o
+  próprio binário valida o `BLAKE3SUMS` interno antes da publicação atômica.
+- Sucesso no host de desenvolvimento não promove suporte multiplataforma.
+  Packages e installers devem ser exercitados em runners nativos Windows,
+  Linux e macOS, fora do checkout e usando exatamente os artefatos públicos.
 
 ## Regra de edição e validação
 

@@ -1,7 +1,7 @@
 # Arandu — Salsa, LSP e Identidades (v0.1)
 
 **Status:** caminho arquitetural implementado (F0–F5, inclusive delta por item/bloco); maturidade de produto acompanhada no [roadmap gold do LSP/editor](./arandu-lsp-editor-gold-roadmap-v0.1.md).
-**Plano:** [`arandu-salsa-lsp-gold-plan-v0.1.md`](./arandu-salsa-lsp-gold-plan-v0.1.md).  
+**Plano de produto:** [`arandu-lsp-editor-gold-roadmap-v0.1.md`](./arandu-lsp-editor-gold-roadmap-v0.1.md).
 **Dono do grafo de queries:** `arandu_query` apenas.
 
 ## Salsa toca / não toca
