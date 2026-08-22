@@ -98,6 +98,10 @@
 16. Concorrência multi-documento é provada em três fronteiras: snapshots Salsa
     paralelos preservam arquivo/revisão, o scheduler cancela somente a chave
     solicitada e o stdio aceita respostas fora de ordem sem misturar documentos.
+17. Performance interativa é medida no processo stdio real sobre corpus
+    versionado: warm-up e 21 amostras produzem p50/p95 de diagnóstico,
+    completion, goto e rename; cada resposta é validada antes de entrar na
+    amostra e o relatório identifica commit, SO e arquitetura.
 
 ## F4 / P3 — delta on-type
 

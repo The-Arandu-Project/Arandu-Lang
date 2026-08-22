@@ -231,7 +231,9 @@ do editor e contrato próprio no roadmap mestre.
 - [x] Vários documentos abertos e requests concorrentes usam snapshots da mesma
       revisão sem contaminar resultados; a campanha cobre fan-out stdio fora de
       ordem, leitores Salsa paralelos e cancelamento isolado por request id.
-- [ ] Medir p50/p95 de diagnóstico, completion, goto e rename em corpus versionado.
+- [x] Medir p50/p95 end-to-end de diagnóstico, completion, goto e rename no
+      corpus IDE versionado, com warm-up, nearest-rank, validação semântica,
+      budgets nativos e relatório histórico por commit/plataforma.
 - [ ] Folding, selection ranges e document highlights baseados no CST/resolve.
 - [ ] Validar Problems, Output, status, progress e recuperação de crash no editor.
 

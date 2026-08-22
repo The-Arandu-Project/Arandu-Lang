@@ -1236,7 +1236,9 @@ fn stdio_diagnostics_preserve_context_and_structured_quick_fix() {
             "position": { "line": 0, "character": 4 }
         }
     }));
-    let _ = lsp.wait_for_response(3);
+    // The diagnostics worker and completion worker are deliberately
+    // concurrent. Do not consume and discard a valid diagnostic merely because
+    // it overtook the response that forced the pending edit to flush.
     let republished = lsp.wait_for(|message| {
         message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
             && message.pointer("/params/uri").and_then(Value::as_str) == Some(uri.as_str())
@@ -1381,6 +1383,266 @@ fn stdio_concurrent_requests_keep_open_documents_isolated() {
     lsp.shutdown(18);
 }
 
+#[derive(Debug)]
+struct LspPerfBudget {
+    samples: usize,
+    warmup: usize,
+    diagnostics_p95: Duration,
+    completion_p95: Duration,
+    goto_p95: Duration,
+    rename_p95: Duration,
+}
+
+#[test]
+#[ignore = "native performance campaign; run explicitly in the L2 CI job"]
+fn stdio_l2_corpus_performance_p50_p95() {
+    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("arandu_lsp crate must be inside the workspace")
+        .to_path_buf();
+    let budget = load_lsp_perf_budget(&workspace.join("tests/perf/lsp-l2-baseline.txt"));
+    let main_text = fs::read_to_string(workspace.join("tests/perf/lsp-l2.aru"))
+        .expect("read versioned LSP corpus");
+
+    let fixture = FixtureDir::new();
+    let main_uri = file_uri(&fixture.path().join("lsp-l2.aru"));
+
+    let mut lsp = LspProcess::spawn();
+    lsp.initialize(fixture.path(), 1);
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didOpen",
+        "params": {
+            "textDocument": {
+                "uri": main_uri,
+                "languageId": "arandu",
+                "version": 1,
+                "text": main_text
+            }
+        }
+    }));
+    let initial_diagnostics = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && message.pointer("/params/uri").and_then(Value::as_str) == Some(main_uri.as_str())
+            && message.pointer("/params/version") == Some(&json!(1))
+    });
+    assert_eq!(
+        initial_diagnostics
+            .pointer("/params/diagnostics")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(0),
+        "versioned performance corpus must be valid: {initial_diagnostics}"
+    );
+
+    let definition = main_text.find("add").expect("function definition");
+    let completion_position = utf16_position(&main_text, definition + 2);
+    let symbol_position = utf16_position(&main_text, definition + 2);
+
+    let mut next_id = 2_i64;
+    for _ in 0..budget.warmup {
+        let _ = timed_request(
+            &mut lsp,
+            next_id,
+            "textDocument/completion",
+            json!({
+                "textDocument": { "uri": main_uri },
+                "position": completion_position
+            }),
+        );
+        next_id += 1;
+    }
+
+    let mut completion = Vec::with_capacity(budget.samples);
+    let mut goto = Vec::with_capacity(budget.samples);
+    let mut rename = Vec::with_capacity(budget.samples);
+    for sample in 0..budget.samples {
+        let (elapsed, response) = timed_request(
+            &mut lsp,
+            next_id,
+            "textDocument/completion",
+            json!({
+                "textDocument": { "uri": main_uri },
+                "position": completion_position
+            }),
+        );
+        assert!(
+            response.get("error").is_none(),
+            "completion failed: {response}"
+        );
+        completion.push(elapsed);
+        next_id += 1;
+
+        let (elapsed, response) = timed_request(
+            &mut lsp,
+            next_id,
+            "textDocument/definition",
+            json!({
+                "textDocument": { "uri": main_uri },
+                "position": symbol_position
+            }),
+        );
+        assert_eq!(
+            response.pointer("/result/uri").and_then(Value::as_str),
+            Some(main_uri.as_str()),
+            "goto must resolve the function from the measured snapshot: {response}"
+        );
+        goto.push(elapsed);
+        next_id += 1;
+
+        let new_name = format!("measured_boxed_{sample}");
+        let (elapsed, response) = timed_request(
+            &mut lsp,
+            next_id,
+            "textDocument/rename",
+            json!({
+                "textDocument": { "uri": main_uri },
+                "position": symbol_position,
+                "newName": new_name
+            }),
+        );
+        assert!(
+            response
+                .pointer("/result/changes")
+                .and_then(Value::as_object)
+                .is_some_and(|changes| changes.contains_key(&main_uri)),
+            "rename must produce a workspace edit for the measured document: {response}"
+        );
+        rename.push(elapsed);
+        next_id += 1;
+    }
+
+    let invalid_text = main_text.replace("return add(20, 22)", "return missing_performance_symbol");
+    let mut diagnostics = Vec::with_capacity(budget.samples);
+    for (sample, version) in (0..budget.samples).zip(2_i32..) {
+        let text = if sample.is_multiple_of(2) {
+            &invalid_text
+        } else {
+            &main_text
+        };
+        let started = Instant::now();
+        lsp.send(&json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didChange",
+            "params": {
+                "textDocument": { "uri": main_uri, "version": version },
+                "contentChanges": [{ "text": text }]
+            }
+        }));
+        lsp.send(&json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didSave",
+            "params": { "textDocument": { "uri": main_uri } }
+        }));
+        let published = lsp.wait_for(|message| {
+            message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+                && message.pointer("/params/uri").and_then(Value::as_str) == Some(main_uri.as_str())
+                && message.pointer("/params/version") == Some(&json!(version))
+        });
+        let count = published
+            .pointer("/params/diagnostics")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
+        assert_eq!(
+            count > 0,
+            sample.is_multiple_of(2),
+            "diagnostic result must match the measured revision: {published}"
+        );
+        diagnostics.push(started.elapsed());
+    }
+
+    let diagnostics_p50 = percentile(&diagnostics, 50);
+    let diagnostics_p95 = percentile(&diagnostics, 95);
+    let completion_p50 = percentile(&completion, 50);
+    let completion_p95 = percentile(&completion, 95);
+    let goto_p50 = percentile(&goto, 50);
+    let goto_p95 = percentile(&goto, 95);
+    let rename_p50 = percentile(&rename, 50);
+    let rename_p95 = percentile(&rename, 95);
+    assert!(
+        diagnostics_p95 <= budget.diagnostics_p95,
+        "diagnostics p95 {diagnostics_p95:?} exceeds {:?}",
+        budget.diagnostics_p95
+    );
+    assert!(
+        completion_p95 <= budget.completion_p95,
+        "completion p95 {completion_p95:?} exceeds {:?}",
+        budget.completion_p95
+    );
+    assert!(
+        goto_p95 <= budget.goto_p95,
+        "goto p95 {goto_p95:?} exceeds {:?}",
+        budget.goto_p95
+    );
+    assert!(
+        rename_p95 <= budget.rename_p95,
+        "rename p95 {rename_p95:?} exceeds {:?}",
+        budget.rename_p95
+    );
+
+    let report = format!(
+        "check-lsp-performance: ok\nprotocol=1 corpus=tests/perf/lsp-l2.aru samples={} warmup={}\nplatform={} arch={} commit={}\ndiagnostics_p50_us={} diagnostics_p95_us={}\ncompletion_p50_us={} completion_p95_us={}\ngoto_p50_us={} goto_p95_us={}\nrename_p50_us={} rename_p95_us={}\n",
+        budget.samples,
+        budget.warmup,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        std::env::var("GITHUB_SHA").unwrap_or_else(|_| "local-working-tree".into()),
+        diagnostics_p50.as_micros(),
+        diagnostics_p95.as_micros(),
+        completion_p50.as_micros(),
+        completion_p95.as_micros(),
+        goto_p50.as_micros(),
+        goto_p95.as_micros(),
+        rename_p50.as_micros(),
+        rename_p95.as_micros(),
+    );
+    let report_path = workspace.join("target/l2-lsp-performance-report.txt");
+    fs::write(&report_path, &report).expect("write L2 LSP performance report");
+    eprintln!("{report}");
+    lsp.shutdown(next_id);
+}
+
+fn timed_request(lsp: &mut LspProcess, id: i64, method: &str, params: Value) -> (Duration, Value) {
+    let started = Instant::now();
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": method,
+        "params": params
+    }));
+    let response = lsp.wait_for_response(id);
+    (started.elapsed(), response)
+}
+
+fn load_lsp_perf_budget(path: &Path) -> LspPerfBudget {
+    let text = fs::read_to_string(path).expect("read L2 LSP performance budget");
+    let values = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| {
+            line.split_once('=')
+                .expect("performance budget uses key=value")
+        })
+        .collect::<BTreeMap<_, _>>();
+    let number = |key: &str| {
+        values
+            .get(key)
+            .unwrap_or_else(|| panic!("missing LSP performance budget {key}"))
+            .parse::<u64>()
+            .unwrap_or_else(|error| panic!("invalid LSP performance budget {key}: {error}"))
+    };
+    LspPerfBudget {
+        samples: usize::try_from(number("samples")).expect("samples fit usize"),
+        warmup: usize::try_from(number("warmup")).expect("warmup fits usize"),
+        diagnostics_p95: Duration::from_micros(number("max_diagnostics_p95_us")),
+        completion_p95: Duration::from_micros(number("max_completion_p95_us")),
+        goto_p95: Duration::from_micros(number("max_goto_p95_us")),
+        rename_p95: Duration::from_micros(number("max_rename_p95_us")),
+    }
+}
+
 fn read_message(reader: &mut impl BufRead) -> std::io::Result<Option<Value>> {
     let mut content_length = None;
     loop {
@@ -1454,12 +1716,21 @@ fn utf16_position(text: &str, byte_offset: usize) -> Value {
 
 fn percentile(samples: &[Duration], percentile: usize) -> Duration {
     assert!(!samples.is_empty());
+    let mut ordered = samples.to_vec();
+    ordered.sort_unstable();
     let rank = percentile
-        .saturating_mul(samples.len())
+        .saturating_mul(ordered.len())
         .div_ceil(100)
         .saturating_sub(1)
-        .min(samples.len() - 1);
-    samples[rank]
+        .min(ordered.len() - 1);
+    ordered[rank]
+}
+
+#[test]
+fn percentile_is_nearest_rank_and_order_independent() {
+    let samples = [9, 1, 5, 3, 7].map(Duration::from_micros);
+    assert_eq!(percentile(&samples, 50), Duration::from_micros(5));
+    assert_eq!(percentile(&samples, 95), Duration::from_micros(9));
 }
 
 #[test]

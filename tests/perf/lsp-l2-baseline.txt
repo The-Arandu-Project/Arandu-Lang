@@ -1,0 +1,9 @@
+# L2 LSP end-to-end performance contract. The corpus and protocol are versioned;
+# p95 budgets are deliberately user-facing and run on native CI hosts.
+protocol=1
+samples=21
+warmup=3
+max_diagnostics_p95_us=250000
+max_completion_p95_us=100000
+max_goto_p95_us=100000
+max_rename_p95_us=300000
