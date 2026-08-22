@@ -929,7 +929,7 @@ pub fn semantic_tokens_legend() -> SemanticTokensLegend {
     }
 }
 
-/// Format entire document (F3a) → LSP text edits (usually one full replace).
+/// Format entire document (F3a) → minimal, non-overlapping LSP text edits.
 #[must_use]
 pub fn format_document(text: &str) -> Vec<LspTextEdit> {
     let edits = arandu_fmt::format_edits(text);

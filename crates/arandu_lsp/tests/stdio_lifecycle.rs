@@ -504,6 +504,61 @@ fn stdio_rename_prepares_and_rejects_unsafe_names() {
 }
 
 #[test]
+fn stdio_formatting_is_local_and_idempotent() {
+    let fixture = FixtureDir::new();
+    let document = fixture.path().join("format.aru");
+    let uri = file_uri(&document);
+    let source = "func main(): int {\nreturn 1   \n}\n";
+    let formatted = "func main(): int {\n    return 1\n}\n";
+    let mut lsp = LspProcess::spawn();
+    lsp.initialize(fixture.path(), 1);
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "method": "textDocument/didOpen",
+        "params": { "textDocument": {
+            "uri": uri, "languageId": "arandu", "version": 1, "text": source
+        }}
+    }));
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "id": 2, "method": "textDocument/formatting",
+        "params": {
+            "textDocument": { "uri": uri },
+            "options": { "tabSize": 2, "insertSpaces": false }
+        }
+    }));
+    let response = lsp.wait_for_response(2);
+    let edits = response
+        .pointer("/result")
+        .and_then(Value::as_array)
+        .expect("formatting edits");
+    assert_eq!(
+        edits.len(),
+        1,
+        "one changed line should produce one edit: {response}"
+    );
+    assert_eq!(edits[0].pointer("/range/start/line"), Some(&json!(1)));
+    assert_eq!(edits[0].pointer("/range/end/line"), Some(&json!(1)));
+    assert_eq!(edits[0].pointer("/newText"), Some(&json!("    return 1")));
+
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "method": "textDocument/didChange",
+        "params": {
+            "textDocument": { "uri": uri, "version": 2 },
+            "contentChanges": [{ "text": formatted }]
+        }
+    }));
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "id": 3, "method": "textDocument/formatting",
+        "params": {
+            "textDocument": { "uri": uri },
+            "options": { "tabSize": 4, "insertSpaces": true }
+        }
+    }));
+    let stable = lsp.wait_for_response(3);
+    assert_eq!(stable.pointer("/result"), Some(&json!([])));
+    lsp.shutdown(4);
+}
+
+#[test]
 fn stdio_semantic_requests_use_utf16_around_unicode() {
     let fixture = FixtureDir::new();
     let document = fixture.path().join("unicode-requests.aru");

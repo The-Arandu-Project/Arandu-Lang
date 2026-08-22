@@ -33,18 +33,68 @@ pub fn format_source(source: &str) -> String {
     normalize_whitespace(source)
 }
 
-/// Full-document replace if formatting changes the buffer.
+/// Minimal, non-overlapping edits that transform `source` into canonical form.
+///
+/// When line structure is unchanged, each changed line gets its own smallest
+/// UTF-8-boundary edit. If formatting inserts/removes lines, one smallest
+/// contiguous hunk is returned. This keeps editor cursors outside the changed
+/// region stable instead of replacing the entire document.
 #[must_use]
 pub fn format_edits(source: &str) -> Vec<TextEdit> {
     let formatted = format_source(source);
     if formatted == source {
         return Vec::new();
     }
-    vec![TextEdit {
-        start: 0,
-        end: source.len() as u32,
-        new_text: formatted,
-    }]
+    let source_lines = source.split_inclusive('\n').collect::<Vec<_>>();
+    let formatted_lines = formatted.split_inclusive('\n').collect::<Vec<_>>();
+    if source_lines.len() != formatted_lines.len() {
+        return minimal_edit(source, &formatted, 0).into_iter().collect();
+    }
+
+    let mut edits = Vec::new();
+    let mut base = 0usize;
+    for (old_line, new_line) in source_lines.into_iter().zip(formatted_lines) {
+        if let Some(edit) = minimal_edit(old_line, new_line, base) {
+            edits.push(edit);
+        }
+        let Some(next) = base.checked_add(old_line.len()) else {
+            return Vec::new();
+        };
+        base = next;
+    }
+    edits
+}
+
+fn minimal_edit(old: &str, new: &str, base: usize) -> Option<TextEdit> {
+    if old == new {
+        return None;
+    }
+    let mut prefix = 0usize;
+    for (old_char, new_char) in old.chars().zip(new.chars()) {
+        if old_char != new_char {
+            break;
+        }
+        prefix += old_char.len_utf8();
+    }
+
+    let old_tail = &old[prefix..];
+    let new_tail = &new[prefix..];
+    let mut suffix = 0usize;
+    for (old_char, new_char) in old_tail.chars().rev().zip(new_tail.chars().rev()) {
+        if old_char != new_char {
+            break;
+        }
+        suffix += old_char.len_utf8();
+    }
+    let old_end = old.len().saturating_sub(suffix);
+    let new_end = new.len().saturating_sub(suffix);
+    let start = u32::try_from(base.checked_add(prefix)?).ok()?;
+    let end = u32::try_from(base.checked_add(old_end)?).ok()?;
+    Some(TextEdit {
+        start,
+        end,
+        new_text: new[prefix..new_end].to_string(),
+    })
 }
 
 fn parses_clean(source: &str) -> bool {
@@ -309,9 +359,7 @@ mod tests {
     #[test]
     fn format_edits_empty_when_stable() {
         let src = "func main(): int {\n    return 1\n}\n";
-        let out = format_source(src);
-        // Pretty may still normalize; must parse.
-        assert!(parses_clean(&out));
+        assert!(format_edits(src).is_empty());
     }
 
     #[test]
@@ -332,6 +380,40 @@ mod tests {
         let once = format_source(src);
         assert_eq!(once, format_source(&once));
         assert!(!once.contains('\r'));
+    }
+
+    #[test]
+    fn formatting_returns_line_local_edits_instead_of_full_document_replace() {
+        let src = "func main(): int {\nreturn 1   \n}\n";
+        let edits = format_edits(src);
+        assert_eq!(edits.len(), 1);
+        let return_start = u32::try_from(src.find("return").unwrap()).unwrap();
+        assert!(edits[0].start <= return_start);
+        assert!(edits[0].start > 0, "must preserve the unchanged header");
+        assert!(edits[0].end < u32::try_from(src.len()).unwrap());
+        assert_eq!(apply_edits(src, &edits), format_source(src));
+    }
+
+    #[test]
+    fn formatting_edits_are_utf8_safe_and_idempotent_after_application() {
+        let src = "func main(): str {\nlet greeting = \"olá 😀\"\nreturn greeting\n}\n";
+        let edits = format_edits(src);
+        assert!(edits.len() >= 2, "distant indentation should remain local");
+        for edit in &edits {
+            assert!(src.is_char_boundary(edit.start as usize));
+            assert!(src.is_char_boundary(edit.end as usize));
+        }
+        let applied = apply_edits(src, &edits);
+        assert_eq!(applied, format_source(src));
+        assert!(format_edits(&applied).is_empty());
+    }
+
+    fn apply_edits(source: &str, edits: &[TextEdit]) -> String {
+        let mut out = source.to_string();
+        for edit in edits.iter().rev() {
+            out.replace_range(edit.start as usize..edit.end as usize, &edit.new_text);
+        }
+        out
     }
 
     #[test]

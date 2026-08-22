@@ -91,6 +91,10 @@
     spans vêm dos tokens do CST cruzados com a identidade semântica. O LSP
     revalida no pedido efetivo, produz edits multi-file determinísticos e deixa
     qualquer preview para o cliente.
+15. Formatação permanece pura em `arandu_fmt` e canônica, sem depender das
+    preferências transitórias do cliente. O wire converte edits UTF-8 mínimos
+    por linha/hunk para UTF-16; a extensão define o formatter padrão, mas mantém
+    `editor.formatOnSave` desligado até opção explícita do usuário.
 
 ## F4 / P3 — delta on-type
 

@@ -20,3 +20,15 @@ void test('TextMate grammar delegates colors to the active theme', () => {
         assert.match(grammar, new RegExp(scope.replaceAll('.', '\\.'), 'u'));
     }
 });
+
+void test('format on save is opt-in and Arandu owns its manual formatter', () => {
+    const manifestPath = path.resolve(__dirname, '..', '..', '..', 'package.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
+        contributes?: {
+            configurationDefaults?: Record<string, Record<string, unknown>>;
+        };
+    };
+    const defaults = manifest.contributes?.configurationDefaults?.['[arandu]'];
+    assert.equal(defaults?.['editor.defaultFormatter'], 'arandu.arandu-lang');
+    assert.equal(defaults?.['editor.formatOnSave'], false);
+});

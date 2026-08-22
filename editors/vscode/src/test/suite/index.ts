@@ -28,9 +28,9 @@ export async function run(): Promise<void> {
 
         const diagnostics = await poll(() => {
             const current = vscode.languages.getDiagnostics(uri);
-            return current.length > 0 ? current : undefined;
+            return current.some(diagnostic => diagnosticCode(diagnostic) === 'N001') ? current : undefined;
         });
-        assert.ok(diagnostics.some(diagnostic => diagnostic.code === 'N001'));
+        assert.ok(diagnostics.some(diagnostic => diagnosticCode(diagnostic) === 'N001'));
 
         const completions = await poll(async () => {
             const result = await vscode.commands.executeCommand<vscode.CompletionList>(
@@ -41,6 +41,31 @@ export async function run(): Promise<void> {
             return result && result.items.length > 0 ? result : undefined;
         });
         assert.ok(completions.items.some(item => item.label === 'func'));
+
+        const formatUri = vscode.Uri.joinPath(workspace.uri, 'format.aru');
+        const formatDocument = await vscode.workspace.openTextDocument(formatUri);
+        await vscode.window.showTextDocument(formatDocument);
+        const formatOptions = { tabSize: 2, insertSpaces: false };
+        const formatEdits = await poll(() =>
+            vscode.commands.executeCommand<vscode.TextEdit[]>(
+                'vscode.executeFormatDocumentProvider',
+                formatUri,
+                formatOptions
+            ).then(edits => edits && edits.length > 0 ? edits : undefined)
+        );
+        assert.ok(formatEdits.length > 0);
+        assert.ok(formatEdits.some(edit => edit.range.start.line === 1 && edit.range.end.line === 1));
+        assert.ok(formatEdits.every(edit => edit.range.start.line > 0), 'unchanged header must not be replaced');
+        const workspaceEdit = new vscode.WorkspaceEdit();
+        workspaceEdit.set(formatUri, formatEdits);
+        assert.equal(await vscode.workspace.applyEdit(workspaceEdit), true);
+        assert.equal(formatDocument.getText(), 'func main(): int {\n    return 1\n}\n');
+        const stableEdits = await vscode.commands.executeCommand<vscode.TextEdit[]>(
+            'vscode.executeFormatDocumentProvider',
+            formatUri,
+            formatOptions
+        );
+        assert.ok(stableEdits === undefined || stableEdits.length === 0);
 
         await verifyHighlightingAcrossBuiltInThemes(uri);
 
@@ -57,6 +82,11 @@ export async function run(): Promise<void> {
         await configuration.update('server.path', undefined, vscode.ConfigurationTarget.Global);
         await vscode.commands.executeCommand('workbench.action.closeAllEditors');
     }
+}
+
+function diagnosticCode(diagnostic: vscode.Diagnostic): string | number | undefined {
+    const code = diagnostic.code;
+    return typeof code === 'object' ? code.value : code;
 }
 
 async function verifyHighlightingAcrossBuiltInThemes(uri: vscode.Uri): Promise<void> {

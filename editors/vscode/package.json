@@ -87,6 +87,12 @@
                 }
             }
         },
+        "configurationDefaults": {
+            "[arandu]": {
+                "editor.defaultFormatter": "arandu.arandu-lang",
+                "editor.formatOnSave": false
+            }
+        },
         "commands": [
             {
                 "command": "arandu.restartServer",
