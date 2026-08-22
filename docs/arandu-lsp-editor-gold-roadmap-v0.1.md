@@ -187,7 +187,8 @@ do editor e contrato próprio no roadmap mestre.
 - [ ] Crash, restart e logs apresentam estado acionável ao usuário.
 - [ ] Manifest completo, identidade visual e package `.vsix` auditado.
 - [ ] TextMate/semantic tokens testados em Dark+, Light+ e High Contrast.
-- [ ] Harness stdio mede initialize/diagnóstico/requests e detecta regressão p95.
+- [x] Harness stdio executa processo real, mede initialize/diagnóstico/requests
+      e aplica gate de 250 ms ao p95 do handshake com workspace adversarial.
 - [x] `initialize` responde antes de qualquer caminhada ou análise do workspace.
 - [ ] Descoberta pós-handshake prioriza arquivos abertos e não bloqueia requests.
 
