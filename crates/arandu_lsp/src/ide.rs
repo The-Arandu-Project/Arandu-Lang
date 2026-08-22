@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::conv::{position_to_offset, span_to_range};
+use crate::conv::{offset_to_position, position_to_offset, span_to_range, utf16_len};
 
 /// Snapshot of open docs for multi-file IDE features.
 #[derive(Clone)]
@@ -538,19 +538,39 @@ pub fn signature_help(
     text: &str,
     position: Position,
 ) -> Option<lsp_types::SignatureHelp> {
-    // Minimal: show type of symbol under / before cursor if it's a function.
+    // Minimal: show the type of the callee immediately before `(`.
     let index = LineIndex::new(text);
     let offset = position_to_offset(&index, position, text);
-    // Walk back to an identifier near `(`
-    let mut probe = offset.saturating_sub(1);
     let bytes = text.as_bytes();
-    while probe > 0
-        && (bytes[probe as usize].is_ascii_whitespace() || bytes[probe as usize] == b'(')
-    {
-        probe -= 1;
+    let mut cursor = usize::try_from(offset)
+        .unwrap_or(text.len())
+        .min(text.len());
+    while cursor > 0 && (bytes[cursor - 1].is_ascii_whitespace() || bytes[cursor - 1] == b'(') {
+        cursor -= 1;
     }
+    let name_end = cursor;
+    while cursor > 0 && (bytes[cursor - 1].is_ascii_alphanumeric() || bytes[cursor - 1] == b'_') {
+        cursor -= 1;
+    }
+    let name = text.get(cursor..name_end)?;
+    if name.is_empty() {
+        return None;
+    }
+
     let tc = typecheck(snap, source);
-    let sym = symbol_at(&tc, probe)?;
+    let probe = u32::try_from(cursor).ok()?;
+    let sym = symbol_at(&tc, probe).or_else(|| {
+        tc.symbols
+            .iter()
+            .find(|symbol| {
+                symbol.name.as_str() == name
+                    && matches!(
+                        symbol.kind,
+                        SymbolKind::Func | SymbolKind::AssociatedFunc | SymbolKind::ExternFunc
+                    )
+            })
+            .map(|symbol| symbol.id)
+    })?;
     let symbol = tc.symbols.try_get(sym)?;
     if !matches!(
         symbol.kind,
@@ -618,8 +638,8 @@ pub fn format_document(text: &str) -> Vec<LspTextEdit> {
     edits
         .into_iter()
         .map(|e| {
-            let start = offset_to_position_local(&index, e.start);
-            let end = offset_to_position_local(&index, e.end);
+            let start = offset_to_position(&index, e.start);
+            let end = offset_to_position(&index, e.end);
             LspTextEdit {
                 range: lsp_types::Range { start, end },
                 new_text: e.new_text,
@@ -693,13 +713,16 @@ pub fn semantic_tokens_range(
 
 fn encode_highlights(highlights: &[arandu_query::HlToken], text: &str) -> SemanticTokens {
     let index = LineIndex::new(text);
-    let mut data = Vec::with_capacity(highlights.len());
+    let mut absolute = Vec::with_capacity(highlights.len());
+    for hl in highlights {
+        split_highlight_lines(hl, text, &index, &mut absolute);
+    }
+    absolute.sort_by_key(|token| (token.0.line, token.0.character));
+
+    let mut data = Vec::with_capacity(absolute.len());
     let mut prev_line = 0u32;
     let mut prev_start = 0u32;
-    for hl in highlights {
-        let token_type = hl.kind.legend_index();
-        let start_pos = offset_to_position_local(&index, hl.start);
-        let length = hl.end.saturating_sub(hl.start);
+    for (start_pos, length, token_type, mods) in absolute {
         let delta_line = start_pos.line.saturating_sub(prev_line);
         let delta_start = if delta_line == 0 {
             start_pos.character.saturating_sub(prev_start)
@@ -711,7 +734,7 @@ fn encode_highlights(highlights: &[arandu_query::HlToken], text: &str) -> Semant
             delta_start,
             length,
             token_type,
-            token_modifiers_bitset: u32::from(hl.mods),
+            token_modifiers_bitset: mods,
         });
         prev_line = start_pos.line;
         prev_start = start_pos.character;
@@ -722,11 +745,49 @@ fn encode_highlights(highlights: &[arandu_query::HlToken], text: &str) -> Semant
     }
 }
 
-fn offset_to_position_local(index: &LineIndex, offset: u32) -> Position {
-    let (line1, col1) = index.line_col(offset);
-    Position {
-        line: line1.saturating_sub(1),
-        character: col1.saturating_sub(1),
+fn split_highlight_lines(
+    hl: &arandu_query::HlToken,
+    text: &str,
+    index: &LineIndex,
+    out: &mut Vec<(Position, u32, u32, u32)>,
+) {
+    let mut start = usize::try_from(hl.start)
+        .unwrap_or(text.len())
+        .min(text.len());
+    let end = usize::try_from(hl.end)
+        .unwrap_or(text.len())
+        .min(text.len());
+    while start < end {
+        while start < end && matches!(text.as_bytes()[start], b'\r' | b'\n') {
+            start += 1;
+        }
+        if start >= end {
+            break;
+        }
+        let line = index
+            .line_starts
+            .partition_point(|&line_start| usize::try_from(line_start).is_ok_and(|s| s <= start))
+            .saturating_sub(1);
+        let next_line = index
+            .line_starts
+            .get(line + 1)
+            .and_then(|&offset| usize::try_from(offset).ok())
+            .unwrap_or(text.len());
+        let mut content_end = next_line.min(text.len());
+        while content_end > start && matches!(text.as_bytes()[content_end - 1], b'\r' | b'\n') {
+            content_end -= 1;
+        }
+        let segment_end = end.min(content_end);
+        if segment_end > start {
+            let start_u32 = u32::try_from(start).unwrap_or(u32::MAX);
+            out.push((
+                offset_to_position(index, start_u32),
+                utf16_len(&text[start..segment_end]),
+                hl.kind.legend_index(),
+                u32::from(hl.mods),
+            ));
+        }
+        start = next_line.max(segment_end);
     }
 }
 
@@ -761,6 +822,39 @@ mod tests {
             "expected keyword or main in completions, got {} items",
             items.len()
         );
+    }
+
+    #[test]
+    fn unicode_position_resolves_symbol_after_astral_character() {
+        let text = "/* 😀 */ func soma(value: int): int { return value } // ação\n";
+        let mut host = AnalysisHost::new();
+        let file = host.new_file("unicode.aru".into(), text.into());
+        let snap = host.snapshot();
+        let byte_offset = text.find("soma").expect("soma definition") + 1;
+        let position = offset_to_position(
+            &LineIndex::new(text),
+            u32::try_from(byte_offset).expect("fixture offset fits u32"),
+        );
+        let tc = typecheck(&snap, file);
+        assert!(
+            symbol_at(
+                &tc,
+                u32::try_from(byte_offset).expect("fixture offset fits u32")
+            )
+            .is_some(),
+            "resolved maps: definitions={:?}, values={:?}",
+            tc.resolved.definitions,
+            tc.resolved.value_refs
+        );
+        assert!(hover(&snap, file, text, position).is_some());
+    }
+
+    #[test]
+    fn signature_help_is_safe_for_an_empty_document() {
+        let mut host = AnalysisHost::new();
+        let file = host.new_file("empty.aru".into(), String::new());
+        let snap = host.snapshot();
+        assert!(signature_help(&snap, file, "", Position::new(0, 0)).is_none());
     }
 
     #[test]
@@ -844,8 +938,8 @@ mod tests {
             assert!(hl.end <= content.len() as u32);
             let substring = &content[hl.start as usize..hl.end as usize];
 
-            // Token length must match the highlight span length.
-            assert_eq!(tok.length, hl.end - hl.start);
+            // Semantic token lengths use negotiated UTF-16 code units, not bytes.
+            assert_eq!(tok.length, utf16_len(substring));
 
             // Spot-check: `tcp_listen` public decl in stdlib is a FUNCTION token.
             // Line is 0-based (LSP semantic tokens); file line 285 → index 284.
@@ -853,6 +947,26 @@ mod tests {
                 assert_eq!(tok.token_type, 1); // FUNCTION
             }
         }
+    }
+
+    #[test]
+    fn semantic_tokens_split_multiline_unicode_without_newlines() {
+        let text = "/* ação\r\n😀 fim */";
+        let highlight = arandu_query::HlToken {
+            start: 0,
+            end: u32::try_from(text.len()).expect("fixture length fits u32"),
+            kind: arandu_query::HlKind::Comment,
+            mods: 0,
+        };
+
+        let tokens = encode_highlights(&[highlight], text);
+        assert_eq!(tokens.data.len(), 2);
+        assert_eq!(tokens.data[0].delta_line, 0);
+        assert_eq!(tokens.data[0].delta_start, 0);
+        assert_eq!(tokens.data[0].length, utf16_len("/* ação"));
+        assert_eq!(tokens.data[1].delta_line, 1);
+        assert_eq!(tokens.data[1].delta_start, 0);
+        assert_eq!(tokens.data[1].length, utf16_len("😀 fim */"));
     }
 
     #[test]

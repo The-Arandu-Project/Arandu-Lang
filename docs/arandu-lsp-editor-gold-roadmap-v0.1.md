@@ -198,10 +198,10 @@ do editor e contrato próprio no roadmap mestre.
 
 ## L1 — Correção de protocolo e texto
 
-- [ ] Negociar e testar position encoding suportado; UTF-16 permanece correto para clientes que o exigem.
-- [ ] Cobrir Unicode antes/depois do cursor em todos os requests semânticos.
-- [ ] Dividir semantic tokens multi-linha em tokens válidos por linha.
-- [ ] Testar mudanças incrementais múltiplas, arquivo vazio e edição no fim do arquivo.
+- [x] Negociar e testar position encoding suportado; UTF-16 permanece correto para clientes que o exigem.
+- [x] Cobrir Unicode antes/depois do cursor em todos os requests semânticos.
+- [x] Dividir semantic tokens multi-linha em tokens válidos por linha.
+- [x] Testar mudanças incrementais múltiplas, arquivo vazio e edição no fim do arquivo.
 - [x] Validar cancelamento/descarte de jobs obsoletos sob rajadas de edição.
 - [x] Implementar `$/cancelRequest`, fila limitada, coalescing por documento e
       prioridade interativa sobre index/diagnóstico amplo.

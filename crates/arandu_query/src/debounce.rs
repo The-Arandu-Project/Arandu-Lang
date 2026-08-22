@@ -7,6 +7,7 @@
 //! [`DebouncedMap`] accumulates updates and only yields them after a quiet
 //! window ([`DEFAULT_DEBOUNCE`]), so one logical edit becomes one commit.
 
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::time::{Duration, Instant};
@@ -80,6 +81,15 @@ where
     #[must_use]
     pub fn pending_count(&self) -> usize {
         self.pending.len()
+    }
+
+    #[must_use]
+    pub fn get<Q>(&self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: Eq + Hash + ?Sized,
+    {
+        self.pending.get(key).map(|pending| &pending.value)
     }
 
     /// Time until the soonest pending entry becomes due.

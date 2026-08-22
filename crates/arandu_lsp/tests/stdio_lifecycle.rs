@@ -101,7 +101,11 @@ impl LspProcess {
             "method": "initialize",
             "params": {
                 "processId": null,
-                "capabilities": {},
+                "capabilities": {
+                    "general": {
+                        "positionEncodings": ["utf-8", "utf-16"]
+                    }
+                },
                 "workspaceFolders": [{
                     "uri": file_uri(root),
                     "name": "stdio-fixture"
@@ -112,6 +116,13 @@ impl LspProcess {
         assert!(
             response.get("error").is_none(),
             "initialize failed: {response}"
+        );
+        assert_eq!(
+            response
+                .pointer("/result/capabilities/positionEncoding")
+                .and_then(Value::as_str),
+            Some("utf-16"),
+            "server must explicitly negotiate its mandatory UTF-16 support: {response}"
         );
         let elapsed = started.elapsed();
         self.send(&json!({
@@ -281,6 +292,229 @@ fn stdio_lifecycle_publishes_diagnostics_and_answers_completion() {
 }
 
 #[test]
+fn stdio_incremental_unicode_edits_compose_before_debounce() {
+    let fixture = FixtureDir::new();
+    let document = fixture.path().join("unicode-edits.aru");
+    let uri = file_uri(&document);
+    let mut lsp = LspProcess::spawn();
+    lsp.initialize(fixture.path(), 1);
+
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didOpen",
+        "params": {
+            "textDocument": {
+                "uri": uri,
+                "languageId": "arandu",
+                "version": 1,
+                "text": "func main() {\n    missing;\n    let nome = \"😀ação\";\n}\n"
+            }
+        }
+    }));
+    let initial = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && message.pointer("/params/uri").and_then(Value::as_str) == Some(uri.as_str())
+    });
+    assert!(
+        initial
+            .pointer("/params/diagnostics")
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty()),
+        "fixture must begin invalid: {initial}"
+    );
+
+    // Two notifications arrive inside the debounce window. The second one
+    // must use the first notification's pending buffer, not the committed DB.
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didChange",
+        "params": {
+            "textDocument": { "uri": uri, "version": 2 },
+            "contentChanges": [{
+                "range": {
+                    "start": { "line": 1, "character": 4 },
+                    "end": { "line": 1, "character": 11 }
+                },
+                "text": "let fixed: int = 1"
+            }]
+        }
+    }));
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didChange",
+        "params": {
+            "textDocument": { "uri": uri, "version": 3 },
+            "contentChanges": [
+                {
+                    "range": {
+                        "start": { "line": 2, "character": 18 },
+                        "end": { "line": 2, "character": 22 }
+                    },
+                    "text": "ok"
+                },
+                {
+                    "range": {
+                        "start": { "line": 3, "character": 1 },
+                        "end": { "line": 3, "character": 1 }
+                    },
+                    "text": " // fim"
+                }
+            ]
+        }
+    }));
+
+    // Any semantic request is a consistency barrier and flushes the VFS.
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "textDocument/completion",
+        "params": {
+            "textDocument": { "uri": uri },
+            "position": { "line": 2, "character": 12 }
+        }
+    }));
+    let response = lsp.wait_for_response(2);
+    assert!(
+        response.get("error").is_none(),
+        "completion failed: {response}"
+    );
+
+    let updated = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && message.pointer("/params/uri").and_then(Value::as_str) == Some(uri.as_str())
+    });
+    assert_eq!(
+        updated
+            .pointer("/params/diagnostics")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(0),
+        "the second edit must retain the first edit and preserve UTF-16 coordinates: {updated}"
+    );
+
+    lsp.shutdown(3);
+}
+
+#[test]
+fn stdio_semantic_requests_use_utf16_around_unicode() {
+    let fixture = FixtureDir::new();
+    let document = fixture.path().join("unicode-requests.aru");
+    let uri = file_uri(&document);
+    let source = concat!(
+        "/* 😀 */ func soma(value: int): int { return value } // ação\n",
+        "func main(): int { return soma(1) }\n"
+    );
+    let definition_start = source.find("soma").expect("soma definition");
+    let call_start = source.rmatch_indices("soma").next().expect("soma call").0;
+    let hover_position = utf16_position(source, definition_start + 1);
+    let completion_position = utf16_position(source, definition_start + 2);
+    let signature_position = utf16_position(source, call_start + "soma(".len());
+
+    let mut lsp = LspProcess::spawn();
+    lsp.initialize(fixture.path(), 1);
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didOpen",
+        "params": {
+            "textDocument": {
+                "uri": uri,
+                "languageId": "arandu",
+                "version": 1,
+                "text": source
+            }
+        }
+    }));
+    let initial_diagnostics = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && message.pointer("/params/uri").and_then(Value::as_str) == Some(uri.as_str())
+    });
+    assert_eq!(
+        initial_diagnostics
+            .pointer("/params/diagnostics")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(0),
+        "Unicode semantic fixture must be valid: {initial_diagnostics}"
+    );
+
+    let requests = [
+        (
+            2,
+            "textDocument/hover",
+            json!({
+                "textDocument": { "uri": uri }, "position": hover_position
+            }),
+        ),
+        (
+            3,
+            "textDocument/definition",
+            json!({
+                "textDocument": { "uri": uri }, "position": hover_position
+            }),
+        ),
+        (
+            4,
+            "textDocument/references",
+            json!({
+                "textDocument": { "uri": uri }, "position": hover_position,
+                "context": { "includeDeclaration": true }
+            }),
+        ),
+        (
+            5,
+            "textDocument/rename",
+            json!({
+                "textDocument": { "uri": uri }, "position": hover_position,
+                "newName": "somar"
+            }),
+        ),
+        (
+            6,
+            "textDocument/completion",
+            json!({
+                "textDocument": { "uri": uri }, "position": completion_position
+            }),
+        ),
+        (
+            7,
+            "textDocument/signatureHelp",
+            json!({
+                "textDocument": { "uri": uri }, "position": signature_position
+            }),
+        ),
+        (
+            8,
+            "textDocument/semanticTokens/range",
+            json!({
+                "textDocument": { "uri": uri },
+                "range": {
+                    "start": { "line": 0, "character": 0 },
+                    "end": { "line": 0, "character": 70 }
+                }
+            }),
+        ),
+    ];
+    for (id, method, params) in requests {
+        lsp.send(&json!({
+            "jsonrpc": "2.0", "id": id, "method": method, "params": params
+        }));
+        let response = lsp.wait_for_response(id);
+        assert!(
+            response.get("error").is_none(),
+            "{method} failed: {response}"
+        );
+        assert!(
+            response
+                .get("result")
+                .is_some_and(|result| !result.is_null()),
+            "{method} returned no semantic result at a UTF-16 position: {response}"
+        );
+    }
+
+    lsp.shutdown(9);
+}
+
+#[test]
 fn stdio_cancel_request_returns_request_cancelled() {
     let fixture = FixtureDir::new();
     let document = fixture.path().join("cancel.aru");
@@ -399,6 +633,18 @@ fn encode_uri_path(path: &str) -> String {
         }
     }
     encoded
+}
+
+fn utf16_position(text: &str, byte_offset: usize) -> Value {
+    assert!(text.is_char_boundary(byte_offset));
+    let prefix = &text[..byte_offset];
+    let line = prefix.bytes().filter(|&byte| byte == b'\n').count();
+    let line_start = prefix.rfind('\n').map_or(0, |offset| offset + 1);
+    json!({
+        "line": u32::try_from(line).expect("fixture line fits u32"),
+        "character": u32::try_from(text[line_start..byte_offset].encode_utf16().count())
+            .expect("fixture UTF-16 column fits u32")
+    })
 }
 
 fn percentile(samples: &[Duration], percentile: usize) -> Duration {

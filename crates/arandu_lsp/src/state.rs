@@ -114,6 +114,18 @@ impl ServerState {
         self.vfs.push_full_text(uri.as_str().to_string(), text);
     }
 
+    #[must_use]
+    pub fn text_for_change(&self, uri: &Uri) -> String {
+        if let Some(text) = self.vfs.pending_text(uri.as_str()) {
+            return text.to_string();
+        }
+        self.by_uri
+            .get(uri.as_str())
+            .and_then(|&id| self.docs.get(id))
+            .map(|doc| doc.source.text(self.host.db()).to_string())
+            .unwrap_or_default()
+    }
+
     /// Commit due VFS edits; returns (uri, DocumentId) pairs that were committed.
     pub fn flush_due(&mut self) -> Vec<(Uri, DocumentId)> {
         let due = self.vfs.take_due();
@@ -291,6 +303,19 @@ mod tests {
         assert_eq!(committed.len(), 1);
         // One flush of one file → one set_text → one bump from r0.
         assert_eq!(st.revision().as_u64(), r0.as_u64() + 1);
+    }
+
+    #[test]
+    fn text_for_change_prefers_latest_pending_vfs_text() {
+        let mut st = ServerState::new();
+        let uri = file_url("rapid.aru");
+        st.open_or_commit(&uri, "committed".into());
+
+        st.queue_change(&uri, "pending-1".into());
+        assert_eq!(st.text_for_change(&uri), "pending-1");
+
+        st.queue_change(&uri, "pending-2".into());
+        assert_eq!(st.text_for_change(&uri), "pending-2");
     }
 
     #[test]

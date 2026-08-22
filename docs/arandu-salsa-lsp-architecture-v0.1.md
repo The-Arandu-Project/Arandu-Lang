@@ -64,6 +64,11 @@
    antes da fila ampla, coalesce diagnósticos por `DocumentId` e cancela
    requests obsoletos antes de uma revisão nova. `$/cancelRequest` responde
    com `RequestCancelled`, inclusive quando o job ainda não começou.
+8. O servidor negocia UTF-16 explicitamente e todas as conversões entre bytes
+   UTF-8 e posições LSP passam pelo mesmo `LineIndex`; semantic tokens usam
+   comprimentos UTF-16 e são divididos por linha.
+9. Edições recebidas dentro do debounce compõem sobre o buffer pendente da VFS,
+   inclusive múltiplas mudanças por notificação, Unicode, arquivo vazio e EOF.
 
 ## F4 / P3 — delta on-type
 

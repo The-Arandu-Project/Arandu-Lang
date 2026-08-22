@@ -27,10 +27,10 @@ use lsp_types::{
     CancelParams, CodeActionOptions, CodeActionProviderCapability, CompletionOptions,
     CompletionResponse, Diagnostic, DiagnosticSeverity, DocumentSymbolResponse,
     GotoDefinitionResponse, HoverProviderCapability, InitializeResult, Location, NumberOrString,
-    OneOf, Position, PublishDiagnosticsParams, RenameOptions, SemanticTokensFullOptions,
-    SemanticTokensOptions, SemanticTokensServerCapabilities, ServerCapabilities, ServerInfo,
-    SignatureHelpOptions, TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
-    WorkDoneProgressOptions, WorkspaceSymbolParams,
+    OneOf, Position, PositionEncodingKind, PublishDiagnosticsParams, RenameOptions,
+    SemanticTokensFullOptions, SemanticTokensOptions, SemanticTokensServerCapabilities,
+    ServerCapabilities, ServerInfo, SignatureHelpOptions, TextDocumentSyncCapability,
+    TextDocumentSyncKind, Uri, WorkDoneProgressOptions, WorkspaceSymbolParams,
 };
 use pool::{CancellationToken, JobKey, Priority, WorkerPool};
 use rustc_hash::FxHashMap;
@@ -127,6 +127,9 @@ fn initialize_connection(
     workspace_roots.dedup();
 
     let server_caps = ServerCapabilities {
+        // UTF-16 is the mandatory LSP encoding. Advertise it explicitly even
+        // when a client prefers optional encodings we do not implement yet.
+        position_encoding: Some(PositionEncodingKind::UTF16),
         text_document_sync: Some(TextDocumentSyncCapability::Kind(
             TextDocumentSyncKind::INCREMENTAL,
         )),
@@ -279,12 +282,7 @@ fn on_notification(
                 not.extract(DidChangeTextDocument::METHOD)?;
             let uri = params.text_document.uri;
             // Incremental: apply each range change onto the current buffer text.
-            let mut text = state
-                .by_uri
-                .get(uri.as_str())
-                .and_then(|&id| state.docs.get(id))
-                .map(|doc| doc.source.text(state.host.db()).to_string())
-                .unwrap_or_default();
+            let mut text = state.text_for_change(&uri);
             for change in params.content_changes {
                 if let Some(range) = change.range {
                     text = apply_lsp_range_edit(&text, range, &change.text);

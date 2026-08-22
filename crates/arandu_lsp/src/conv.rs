@@ -73,6 +73,12 @@ pub fn span_to_range(index: &LineIndex, span: Span) -> Range {
     Range { start, end }
 }
 
+/// Number of UTF-16 code units in a valid UTF-8 source slice.
+#[must_use]
+pub fn utf16_len(text: &str) -> u32 {
+    u32::try_from(text.encode_utf16().count()).unwrap_or(u32::MAX)
+}
+
 /// Apply an incremental LSP text edit (`range` + `new_text`) to a document buffer.
 #[must_use]
 pub fn apply_lsp_range_edit(text: &str, range: Range, new_text: &str) -> String {
@@ -160,5 +166,44 @@ mod tests {
             "!",
         );
         assert_eq!(edited, "abc!\r\ndef");
+    }
+
+    #[test]
+    fn unicode_incremental_edit_uses_utf16_units() {
+        let text = "let nome = \"😀ação\";";
+        let edited = apply_lsp_range_edit(
+            text,
+            Range {
+                start: Position::new(0, 14),
+                end: Position::new(0, 18),
+            },
+            "ok",
+        );
+        assert_eq!(edited, "let nome = \"😀ok\";");
+    }
+
+    #[test]
+    fn incremental_insert_supports_empty_document_and_eof() {
+        let origin = Position::new(0, 0);
+        let from_empty = apply_lsp_range_edit(
+            "",
+            Range {
+                start: origin,
+                end: origin,
+            },
+            "abc",
+        );
+        assert_eq!(from_empty, "abc");
+
+        let past_eof = Position::new(u32::MAX, u32::MAX);
+        let at_eof = apply_lsp_range_edit(
+            &from_empty,
+            Range {
+                start: past_eof,
+                end: past_eof,
+            },
+            "!",
+        );
+        assert_eq!(at_eof, "abc!");
     }
 }
