@@ -42,6 +42,8 @@ export async function run(): Promise<void> {
         });
         assert.ok(completions.items.some(item => item.label === 'func'));
 
+        await verifyHighlightingAcrossBuiltInThemes(uri);
+
         await vscode.commands.executeCommand('arandu.restartServer');
         const afterRestart = await poll(() =>
             vscode.commands.executeCommand<vscode.CompletionList>(
@@ -54,6 +56,47 @@ export async function run(): Promise<void> {
     } finally {
         await configuration.update('server.path', undefined, vscode.ConfigurationTarget.Global);
         await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    }
+}
+
+async function verifyHighlightingAcrossBuiltInThemes(uri: vscode.Uri): Promise<void> {
+    const workbench = vscode.workspace.getConfiguration('workbench');
+    const previousTheme = workbench.get<string>('colorTheme');
+    const legend = await poll(() =>
+        vscode.commands.executeCommand<vscode.SemanticTokensLegend>(
+            'vscode.provideDocumentSemanticTokensLegend',
+            uri
+        )
+    );
+    assert.ok(legend.tokenTypes.includes('function'));
+    assert.ok(legend.tokenTypes.includes('variable'));
+
+    let baseline: number[] | undefined;
+    const themes: ReadonlyArray<readonly [string, vscode.ColorThemeKind]> = [
+        ['Default Dark+', vscode.ColorThemeKind.Dark],
+        ['Default Light+', vscode.ColorThemeKind.Light],
+        ['Default High Contrast', vscode.ColorThemeKind.HighContrast]
+    ];
+    try {
+        for (const [theme, expectedKind] of themes) {
+            await workbench.update('colorTheme', theme, vscode.ConfigurationTarget.Global);
+            await poll(() => vscode.window.activeColorTheme.kind === expectedKind ? true : undefined);
+            const tokens = await poll(() =>
+                vscode.commands.executeCommand<vscode.SemanticTokens>(
+                    'vscode.provideDocumentSemanticTokens',
+                    uri
+                ).then(value => value.data.length > 0 ? value : undefined)
+            );
+            assert.equal(tokens.data.length % 5, 0);
+            const data = Array.from(tokens.data);
+            if (baseline === undefined) {
+                baseline = data;
+            } else {
+                assert.deepEqual(data, baseline, `semantic classification changed under ${theme}`);
+            }
+        }
+    } finally {
+        await workbench.update('colorTheme', previousTheme, vscode.ConfigurationTarget.Global);
     }
 }
 
