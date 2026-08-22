@@ -33,6 +33,14 @@ primeiro foi removido em L0-A; o segundo pertence a L1-A:
 - [gopls workspace](https://go.dev/gopls/workspace): escopo orientado aos
   arquivos abertos reduz configuração, mas workspaces amplos podem elevar
   startup e memória; Arandu terá descoberta progressiva e limites explícitos.
+- [gopls file watching](https://github.com/golang/tools/blob/master/gopls/internal/settings/settings.go):
+  clientes e sistemas de arquivos perdem ou duplicam eventos de diretório e
+  padrões amplos têm custo alto; overlays abertos vencem eventos do disco e os
+  filtros do Arandu ficam restritos a `**/*.aru`.
+- [Watchman case-insensitivity](https://facebook.github.io/watchman/docs/casefolding):
+  caixa, caminhos verbatim e renames podem representar um arquivo de formas
+  diferentes; a fronteira URI/caminho do Arandu normaliza essas identidades e
+  nunca reutiliza `FileId` depois de delete/rename.
 - [gopls scalability](https://go.dev/blog/gopls-scalability): resumos e índices
   persistentes reduzem recomputação; cache em disco só entra depois de formato,
   invalidação, versão e corrupção terem contrato e testes próprios.
@@ -212,7 +220,7 @@ do editor e contrato próprio no roadmap mestre.
 
 ## L2 — Dogfooding multi-file
 
-- [ ] Abrir, fechar, criar, excluir e renomear arquivos durante uma sessão.
+- [x] Abrir, fechar, criar, excluir e renomear arquivos durante uma sessão.
 - [ ] Imports locais e stdlib atualizam completion/goto/diagnósticos sem restart.
 - [ ] Rename detecta nome inválido e conflitos; preview pertence à extensão, não à query pura.
 - [ ] Formatter-on-save é opt-in, idempotente e não move o cursor de forma surpreendente.

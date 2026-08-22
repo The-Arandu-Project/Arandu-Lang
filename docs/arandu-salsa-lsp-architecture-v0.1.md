@@ -72,6 +72,13 @@
 10. `IdeDiagnostic` preserva labels, notes, hints e replacements nas queries;
     o wire publica versão, `codeDescription`, `relatedInformation`, tags e
     `Diagnostic.data`. Quick fixes consomem apenas replacements estruturados.
+11. Hover, completion e signature help compartilham apresentação de assinatura,
+    tipos e doc comments; nenhum DTO expõe `Debug` de IR ou `SymbolId`.
+12. Fontes conhecidas do workspace e overlays abertos têm autoridades distintas:
+    overlay vence enquanto aberto, `didClose` restaura o disco e invalida o
+    `DocumentId`, e create/delete/rename usam filtros `**/*.aru`. URI Windows
+    padrão e caminho verbatim convergem para uma identidade; `FileId` removido
+    nunca é reutilizado.
 
 ## F4 / P3 — delta on-type
 

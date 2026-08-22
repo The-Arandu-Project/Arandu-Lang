@@ -9,6 +9,38 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use std::sync::Arc;
 
+#[derive(Clone)]
+pub struct ModuleSignatures {
+    value: Arc<TypeCheckResult>,
+    hash: blake3::Hash,
+}
+
+impl ModuleSignatures {
+    fn new(value: TypeCheckResult) -> Self {
+        let hash = crate::stable_hash::type_signature_hash(&value);
+        Self {
+            value: Arc::new(value),
+            hash,
+        }
+    }
+}
+
+impl PartialEq for ModuleSignatures {
+    fn eq(&self, other: &Self) -> bool {
+        self.hash == other.hash
+    }
+}
+
+impl Eq for ModuleSignatures {}
+
+impl std::ops::Deref for ModuleSignatures {
+    type Target = TypeCheckResult;
+
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
 #[cfg(any(test, debug_assertions))]
 pub static TYPE_CHECK_EXEC_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -158,14 +190,14 @@ pub fn cycle_recover_module_signatures(
     _db: &dyn ArandCompilerDb,
     _id: salsa::Id,
     _file: SourceFile,
-) -> HashEq<TypeCheckResult> {
+) -> ModuleSignatures {
     let mut res = TypeCheckResult::empty();
     res.diagnostics.push(arandu_middle::Diagnostic::error(
         arandu_middle::DiagCode::N006ImportConflict,
         "cyclic module signature dependency detected".to_string(),
         arandu_middle::Span::new(0, 0, 0),
     ));
-    HashEq::new(res)
+    ModuleSignatures::new(res)
 }
 
 #[salsa::tracked(cycle_result = cycle_recover_module_signatures)]
@@ -173,7 +205,7 @@ pub fn cycle_recover_module_signatures(
     query = "module_signatures",
     file = ?file.file_id(db),
 ))]
-pub fn module_signatures(db: &dyn ArandCompilerDb, file: SourceFile) -> HashEq<TypeCheckResult> {
+pub fn module_signatures(db: &dyn ArandCompilerDb, file: SourceFile) -> ModuleSignatures {
     let program_res = parse(db, file);
     let resolved_arc = resolve(db, file);
 
@@ -225,7 +257,7 @@ pub fn module_signatures(db: &dyn ArandCompilerDb, file: SourceFile) -> HashEq<T
         },
     };
 
-    HashEq::new(res)
+    ModuleSignatures::new(res)
 }
 
 /// Per-item input for body typeck: holds current [`Program`] but **HashEq**
@@ -392,7 +424,7 @@ pub fn file_typeck_view(db: &dyn ArandCompilerDb, file: SourceFile) -> HashEq<Ty
     let signatures = module_signatures(db, file);
 
     let Ok(program) = &**program_res else {
-        return HashEq::share(signatures);
+        return HashEq::from_arc(Arc::clone(&signatures.value));
     };
 
     let item_syms = arandu_semantics::body_item_symbols(program, signatures.resolved.as_ref());

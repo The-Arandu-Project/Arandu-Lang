@@ -124,6 +124,17 @@ impl LspProcess {
             Some("utf-16"),
             "server must explicitly negotiate its mandatory UTF-16 support: {response}"
         );
+        for operation in ["didCreate", "didRename", "didDelete"] {
+            assert_eq!(
+                response
+                    .pointer(&format!(
+                        "/result/capabilities/workspace/fileOperations/{operation}/filters/0/pattern/glob"
+                    ))
+                    .and_then(Value::as_str),
+                Some("**/*.aru"),
+                "server must scope {operation} notifications to Arandu files: {response}"
+            );
+        }
         let elapsed = started.elapsed();
         self.send(&json!({
             "jsonrpc": "2.0",
@@ -631,6 +642,114 @@ fn stdio_presents_one_signature_and_documentation_contract() {
     );
 
     lsp.shutdown(5);
+}
+
+#[test]
+fn stdio_workspace_files_follow_open_close_create_rename_and_delete() {
+    let fixture = FixtureDir::new();
+    let base = fixture.path().join("base.aru");
+    let base_uri = file_uri(&base);
+    let mut lsp = LspProcess::spawn();
+    lsp.initialize(fixture.path(), 1);
+    fs::write(&base, "func disk_symbol(): int { return 1 }\n").expect("write base file");
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "method": "workspace/didCreateFiles",
+        "params": { "files": [{ "uri": base_uri }] }
+    }));
+    request_workspace_symbol(&mut lsp, 2, "disk_symbol", true);
+
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "method": "textDocument/didOpen",
+        "params": { "textDocument": {
+            "uri": base_uri, "languageId": "arandu", "version": 1,
+            "text": "func overlay_symbol(): int { return 2 }\n"
+        }}
+    }));
+    let diagnostics = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && message.pointer("/params/uri").and_then(Value::as_str) == Some(base_uri.as_str())
+    });
+    assert_eq!(
+        diagnostics
+            .pointer("/params/diagnostics")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(0),
+        "overlay must be valid: {diagnostics}"
+    );
+    request_workspace_symbol(&mut lsp, 3, "overlay_symbol", true);
+
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "method": "textDocument/didClose",
+        "params": { "textDocument": { "uri": base_uri }}
+    }));
+    let _clear = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && message.pointer("/params/uri").and_then(Value::as_str) == Some(base_uri.as_str())
+    });
+    request_workspace_symbol(&mut lsp, 4, "overlay_symbol", false);
+    request_workspace_symbol(&mut lsp, 5, "disk_symbol", true);
+
+    let created = fixture.path().join("created.aru");
+    fs::write(&created, "func created_symbol(): int { return 3 }\n").expect("create source");
+    let created_uri = file_uri(&created);
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "method": "workspace/didCreateFiles",
+        "params": { "files": [{ "uri": created_uri }] }
+    }));
+    request_workspace_symbol(&mut lsp, 6, "created_symbol", true);
+
+    let renamed = fixture.path().join("renamed.aru");
+    fs::rename(&created, &renamed).expect("rename source");
+    let renamed_uri = file_uri(&renamed);
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "method": "workspace/didRenameFiles",
+        "params": { "files": [{ "oldUri": created_uri, "newUri": renamed_uri }] }
+    }));
+    let renamed_response = request_workspace_symbol(&mut lsp, 7, "created_symbol", true);
+    assert_eq!(
+        renamed_response
+            .pointer("/result/0/location/uri")
+            .and_then(Value::as_str),
+        Some(renamed_uri.as_str()),
+        "renamed symbol must point only at the new URI: {renamed_response}"
+    );
+
+    fs::remove_file(&renamed).expect("delete source");
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "method": "workspace/didDeleteFiles",
+        "params": { "files": [{ "uri": renamed_uri }] }
+    }));
+    request_workspace_symbol(&mut lsp, 8, "created_symbol", false);
+
+    lsp.shutdown(9);
+}
+
+fn request_workspace_symbol(lsp: &mut LspProcess, id: i64, query: &str, expected: bool) -> Value {
+    let response = loop {
+        lsp.send(&json!({
+            "jsonrpc": "2.0", "id": id, "method": "workspace/symbol",
+            "params": { "query": query }
+        }));
+        let response = lsp.wait_for_response(id);
+        if response.pointer("/error/code").and_then(Value::as_i64) != Some(-32801) {
+            break response;
+        }
+    };
+    assert!(
+        response.get("error").is_none(),
+        "workspace/symbol failed: {response}"
+    );
+    let symbols = response
+        .pointer("/result")
+        .and_then(Value::as_array)
+        .expect("workspace symbol array");
+    assert_eq!(
+        !symbols.is_empty(),
+        expected,
+        "workspace symbol presence mismatch for {query}: {response}"
+    );
+    response
 }
 
 #[test]

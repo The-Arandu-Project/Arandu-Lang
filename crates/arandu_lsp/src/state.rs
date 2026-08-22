@@ -10,6 +10,7 @@ use arandu_query::{AnalysisHost, AnalysisRevision, AnalysisSnapshot, DocumentId,
 use arandu_semantics::TypeCheckResult;
 use lsp_types::Uri;
 use rustc_hash::FxHashMap;
+use rustc_hash::FxHashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -18,6 +19,9 @@ pub struct ServerState {
     pub docs: DocumentStore,
     pub vfs: Vfs,
     pub by_uri: FxHashMap<String, DocumentId>,
+    /// URIs currently owned by editor overlays. Known workspace files may be
+    /// registered and queryable without being open.
+    pub open_uris: FxHashSet<String>,
     /// Numeric compiler `file_id` → open document (multi-file workspace).
     pub by_file_id: FxHashMap<u32, DocumentId>,
     /// Latest client document version for each open buffer.
@@ -37,6 +41,7 @@ impl ServerState {
             docs: DocumentStore::new(),
             vfs: Vfs::new(),
             by_uri: FxHashMap::default(),
+            open_uris: FxHashSet::default(),
             by_file_id: FxHashMap::default(),
             versions: FxHashMap::default(),
             last_diag_fp: FxHashMap::default(),
@@ -68,6 +73,10 @@ impl ServerState {
                 let source = doc.source;
                 let fid = *source.file_id(self.host.db());
                 self.host.set_text(source, Arc::from(text));
+                let path_key = registry_path_key(&path);
+                if !self.host.db().is_registered(&path_key) {
+                    self.host.register_source_file(path_key, source);
+                }
                 self.by_file_id.insert(fid, id);
                 return id;
             }
@@ -82,26 +91,121 @@ impl ServerState {
             Arc::new(path.clone()),
         );
         self.host
-            .register_source_file(path.to_string_lossy().into_owned(), source);
+            .register_source_file(registry_path_key(&path), source);
         let id = self.docs.open(path, source);
         self.by_uri.insert(uri_s, id);
         self.by_file_id.insert(file_id, id);
         id
     }
 
+    pub fn mark_open(&mut self, uri: &Uri) {
+        self.open_uris.insert(uri.as_str().to_string());
+    }
+
+    #[must_use]
+    pub fn is_open(&self, uri: &Uri) -> bool {
+        self.open_uris.contains(uri.as_str())
+    }
+
+    /// Close an editor overlay. Restore the authoritative disk contents when
+    /// the workspace file still exists; otherwise remove its registration.
     pub fn close_uri(&mut self, uri: &Uri) {
+        self.open_uris.remove(uri.as_str());
+        self.discard_pending(uri);
+        let path = Self::path_of(uri);
+        if path.extension().and_then(|ext| ext.to_str()) == Some("aru") {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                self.replace_closed_overlay(uri, path, text);
+                return;
+            }
+        }
+        self.remove_uri(uri);
+    }
+
+    fn replace_closed_overlay(&mut self, uri: &Uri, path: PathBuf, text: String) {
+        let uri_s = uri.as_str().to_string();
+        let Some(old_id) = self.by_uri.get(&uri_s).copied() else {
+            self.open_or_commit(uri, text);
+            return;
+        };
+        let Some(old_doc) = self.docs.get(old_id).cloned() else {
+            self.by_uri.remove(&uri_s);
+            self.open_or_commit(uri, text);
+            return;
+        };
+        let source = old_doc.source;
+        let file_id = *source.file_id(self.host.db());
+        self.host.set_text(source, Arc::from(text));
+        self.docs.close(old_id);
+        let disk_id = self.docs.open(path, source);
+        self.by_uri.insert(uri_s, disk_id);
+        self.by_file_id.insert(file_id, disk_id);
+        self.versions.remove(&old_id);
+        self.last_diag_fp.remove(&old_id);
+        self.last_item_diag_fp
+            .retain(|&(doc, _, _), _| doc != old_id);
+    }
+
+    /// Remove a workspace source. An open overlay remains locally usable but
+    /// is unregistered so imports cannot resolve a file deleted on disk.
+    pub fn remove_uri(&mut self, uri: &Uri) {
         let uri_s = uri.as_str();
-        if let Some(id) = self.by_uri.remove(uri_s) {
+        self.discard_pending(uri);
+        let path = Self::path_of(uri);
+        let path_key = registry_path_key(&path);
+        if self.host.db().is_registered(&path_key) {
+            self.host.unregister_source_file(&path_key);
+        }
+        let id = self.by_uri.get(uri_s).copied();
+        if let Some(id) = id {
+            self.versions.remove(&id);
+            self.last_diag_fp.remove(&id);
+            self.last_item_diag_fp.retain(|&(doc, _, _), _| doc != id);
+        }
+        if !self.open_uris.contains(uri_s) {
+            let Some(id) = self.by_uri.remove(uri_s) else {
+                return;
+            };
             if let Some(doc) = self.docs.get(id) {
                 let fid = doc.source.file_id(self.host.db());
                 self.by_file_id.remove(fid);
             }
             self.docs.close(id);
-            self.versions.remove(&id);
-            self.last_diag_fp.remove(&id);
-            self.last_item_diag_fp.retain(|&(doc, _, _), _| doc != id);
         }
+    }
+
+    /// Reload a closed `.aru` file after a client filesystem notification.
+    pub fn reload_uri_from_disk(&mut self, uri: &Uri) -> Option<DocumentId> {
+        if self.is_open(uri) {
+            return self.by_uri.get(uri.as_str()).copied();
+        }
+        let path = Self::path_of(uri);
+        if path.extension().and_then(|ext| ext.to_str()) != Some("aru") {
+            return None;
+        }
+        let text = std::fs::read_to_string(path).ok()?;
+        Some(self.open_or_commit(uri, text))
+    }
+
+    /// Move a known source to a fresh path/identity after a filesystem rename.
+    pub fn rename_uri(&mut self, old_uri: &Uri, new_uri: &Uri) -> Option<DocumentId> {
+        let was_open = self.open_uris.remove(old_uri.as_str());
+        let overlay_text = was_open.then(|| self.text_for_change(old_uri));
+        self.remove_uri(old_uri);
+        let text = overlay_text.or_else(|| {
+            let path = Self::path_of(new_uri);
+            std::fs::read_to_string(path).ok()
+        })?;
+        let id = self.open_or_commit(new_uri, text);
+        if was_open {
+            self.mark_open(new_uri);
+        }
+        Some(id)
+    }
+
+    fn discard_pending(&mut self, uri: &Uri) {
         // Drop pending edits for this URI; re-queue the rest.
+        let uri_s = uri.as_str();
         let remaining: Vec<(String, String)> = self
             .vfs
             .take_all()
@@ -184,6 +288,13 @@ impl ServerState {
         consider(&tc.resolved.definitions, &mut best);
         best.map(|(_, s)| s)
     }
+}
+
+fn registry_path_key(path: &std::path::Path) -> String {
+    let text = path.to_string_lossy().replace('\\', "/");
+    #[cfg(windows)]
+    let text = text.strip_prefix("//?/").unwrap_or(&text).to_string();
+    text
 }
 
 impl Default for ServerState {
@@ -357,6 +468,103 @@ mod tests {
         assert!(st.flush_all().is_empty());
         assert!(st.docs.get(id).is_none());
         assert!(!st.by_uri.contains_key(uri.as_str()));
+    }
+
+    #[test]
+    fn close_stales_overlay_and_restores_disk_source() {
+        let root = std::env::temp_dir().join(format!(
+            "arandu-lsp-close-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock after Unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("create close fixture");
+        let path = root.join("close.aru");
+        std::fs::write(&path, "func disk(): int { return 1 }").expect("write disk fixture");
+        let uri = uri_from_path(&path).expect("file URI");
+        let mut st = ServerState::new();
+        let overlay = st.open_or_commit(&uri, "func overlay(): int { return 2 }".into());
+        st.mark_open(&uri);
+        {
+            let snap = st.snapshot();
+            let source = st.docs.get(overlay).expect("overlay document").source;
+            assert!(
+                crate::ide::workspace_symbols(
+                    &snap,
+                    &[crate::ide::DocSnap {
+                        source,
+                        path: Arc::new(path.clone()),
+                        uri: uri.clone(),
+                    }],
+                    "overlay",
+                )
+                .iter()
+                .any(|symbol| symbol.name == "overlay"),
+                "workspace symbols must observe the open overlay"
+            );
+        }
+
+        st.close_uri(&uri);
+
+        assert!(
+            st.docs.get(overlay).is_none(),
+            "closed overlay ID must be stale"
+        );
+        let disk_id = st.by_uri[uri.as_str()];
+        assert_ne!(disk_id, overlay);
+        let disk = st.docs.get(disk_id).expect("known disk source");
+        assert_eq!(
+            disk.source.text(st.host.db()).as_ref(),
+            "func disk(): int { return 1 }"
+        );
+        assert!(!st.is_open(&uri));
+        std::fs::remove_dir_all(root).expect("remove close fixture");
+    }
+
+    #[test]
+    fn delete_and_rename_never_reuse_file_identity() {
+        let root = std::env::temp_dir().join(format!(
+            "arandu-lsp-rename-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock after Unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("create rename fixture");
+        let old_path = root.join("old.aru");
+        let new_path = root.join("new.aru");
+        std::fs::write(&old_path, "func value(): int { return 1 }").expect("write old");
+        let old_uri = uri_from_path(&old_path).expect("old URI");
+        let new_uri = uri_from_path(&new_path).expect("new URI");
+        let mut st = ServerState::new();
+        let old_doc = st.reload_uri_from_disk(&old_uri).expect("load old");
+        let old_file = *st
+            .docs
+            .get(old_doc)
+            .expect("old document")
+            .source
+            .file_id(st.host.db());
+        std::fs::rename(&old_path, &new_path).expect("rename fixture");
+
+        let new_doc = st.rename_uri(&old_uri, &new_uri).expect("apply rename");
+        let new_file = *st
+            .docs
+            .get(new_doc)
+            .expect("new document")
+            .source
+            .file_id(st.host.db());
+        assert!(st.docs.get(old_doc).is_none());
+        assert!(new_file > old_file, "FileId allocation must be monotonic");
+        assert!(!st.host.db().is_registered(&registry_path_key(&old_path)));
+        assert!(st.host.db().is_registered(&registry_path_key(&new_path)));
+
+        st.remove_uri(&new_uri);
+        assert!(st.docs.get(new_doc).is_none());
+        assert!(!st.host.db().is_registered(&registry_path_key(&new_path)));
+        std::fs::remove_dir_all(root).expect("remove rename fixture");
     }
 
     #[test]

@@ -150,6 +150,13 @@ impl AnalysisHost {
         self.revision = self.revision.next();
     }
 
+    /// Remove a source registration and advance the observable analysis revision.
+    /// A later registration for the same path must receive a fresh `FileId`.
+    pub fn unregister_source_file(&mut self, path: &str) {
+        self.db.unregister_source_file(path);
+        self.revision = self.revision.next();
+    }
+
     /// Create + register a new file (CLI/test helper); bumps revision.
     pub fn new_file(&mut self, path: String, text: String) -> SourceFile {
         let file = self.db.new_file(path, text);

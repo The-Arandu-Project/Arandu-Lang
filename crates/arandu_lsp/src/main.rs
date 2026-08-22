@@ -15,8 +15,9 @@ use conv::{apply_lsp_range_edit, position_to_offset, span_to_range};
 use crossbeam_channel::{bounded, never, select_biased, Receiver, Sender};
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::notification::{
-    Cancel, DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, DidSaveTextDocument,
-    Notification as _, PublishDiagnostics,
+    Cancel, DidChangeTextDocument, DidChangeWatchedFiles, DidCloseTextDocument, DidCreateFiles,
+    DidDeleteFiles, DidOpenTextDocument, DidRenameFiles, DidSaveTextDocument, Notification as _,
+    PublishDiagnostics,
 };
 use lsp_types::request::{
     CodeActionRequest, Completion, DocumentSymbolRequest, Formatting, GotoDefinition, HoverRequest,
@@ -26,12 +27,14 @@ use lsp_types::request::{
 use lsp_types::{
     CancelParams, CodeActionOptions, CodeActionProviderCapability, CodeDescription,
     CompletionOptions, CompletionResponse, Diagnostic, DiagnosticRelatedInformation,
-    DiagnosticSeverity, DiagnosticTag, DocumentSymbolResponse, GotoDefinitionResponse,
-    HoverProviderCapability, InitializeResult, Location, NumberOrString, OneOf, Position,
-    PositionEncodingKind, PublishDiagnosticsParams, RenameOptions, SemanticTokensFullOptions,
-    SemanticTokensOptions, SemanticTokensServerCapabilities, ServerCapabilities, ServerInfo,
-    SignatureHelpOptions, TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
-    WorkDoneProgressOptions, WorkspaceSymbolParams,
+    DiagnosticSeverity, DiagnosticTag, DocumentSymbolResponse, FileChangeType, FileOperationFilter,
+    FileOperationPattern, FileOperationPatternKind, FileOperationRegistrationOptions,
+    GotoDefinitionResponse, HoverProviderCapability, InitializeResult, Location, NumberOrString,
+    OneOf, Position, PositionEncodingKind, PublishDiagnosticsParams, RenameOptions,
+    SemanticTokensFullOptions, SemanticTokensOptions, SemanticTokensServerCapabilities,
+    ServerCapabilities, ServerInfo, SignatureHelpOptions, TextDocumentSyncCapability,
+    TextDocumentSyncKind, Uri, WorkDoneProgressOptions, WorkspaceFileOperationsServerCapabilities,
+    WorkspaceServerCapabilities, WorkspaceSymbolParams,
 };
 use pool::{CancellationToken, JobKey, Priority, WorkerPool};
 use rustc_hash::FxHashMap;
@@ -128,6 +131,16 @@ fn initialize_connection(
     workspace_roots.sort();
     workspace_roots.dedup();
 
+    let aru_file_operations = || FileOperationRegistrationOptions {
+        filters: vec![FileOperationFilter {
+            scheme: Some("file".into()),
+            pattern: FileOperationPattern {
+                glob: "**/*.aru".into(),
+                matches: Some(FileOperationPatternKind::File),
+                options: None,
+            },
+        }],
+    };
     let server_caps = ServerCapabilities {
         // UTF-16 is the mandatory LSP encoding. Advertise it explicitly even
         // when a client prefers optional encodings we do not implement yet.
@@ -168,6 +181,15 @@ fn initialize_connection(
             work_done_progress_options: WorkDoneProgressOptions::default(),
             resolve_provider: None,
         })),
+        workspace: Some(WorkspaceServerCapabilities {
+            workspace_folders: None,
+            file_operations: Some(WorkspaceFileOperationsServerCapabilities {
+                did_create: Some(aru_file_operations()),
+                did_rename: Some(aru_file_operations()),
+                did_delete: Some(aru_file_operations()),
+                ..WorkspaceFileOperationsServerCapabilities::default()
+            }),
+        }),
         ..ServerCapabilities::default()
     };
     let init_result = InitializeResult {
@@ -278,6 +300,7 @@ fn on_notification(
             let version = params.text_document.version;
             pool.cancel_requests();
             let id = state.open_or_commit(&uri, params.text_document.text);
+            state.mark_open(&uri);
             state.set_version(id, version);
             spawn_diagnostics(state, pool, job_tx, uri, id);
         }
@@ -330,6 +353,59 @@ fn on_notification(
             let uri = params.text_document.uri;
             state.close_uri(&uri);
             publish_diagnostics(connection, uri, Vec::new(), None)?;
+        }
+        DidCreateFiles::METHOD => {
+            let params: lsp_types::CreateFilesParams = not.extract(DidCreateFiles::METHOD)?;
+            pool.cancel_requests();
+            for file in params.files {
+                let Some(uri) = parse_uri(&file.uri) else {
+                    continue;
+                };
+                let _ = state.reload_uri_from_disk(&uri);
+            }
+        }
+        DidRenameFiles::METHOD => {
+            let params: lsp_types::RenameFilesParams = not.extract(DidRenameFiles::METHOD)?;
+            pool.cancel_requests();
+            for file in params.files {
+                let (Some(old_uri), Some(new_uri)) =
+                    (parse_uri(&file.old_uri), parse_uri(&file.new_uri))
+                else {
+                    continue;
+                };
+                let was_open = state.is_open(&old_uri);
+                let renamed = state.rename_uri(&old_uri, &new_uri);
+                publish_diagnostics(connection, old_uri, Vec::new(), None)?;
+                if was_open {
+                    if let Some(id) = renamed {
+                        spawn_diagnostics(state, pool, job_tx, new_uri, id);
+                    }
+                }
+            }
+        }
+        DidDeleteFiles::METHOD => {
+            let params: lsp_types::DeleteFilesParams = not.extract(DidDeleteFiles::METHOD)?;
+            pool.cancel_requests();
+            for file in params.files {
+                let Some(uri) = parse_uri(&file.uri) else {
+                    continue;
+                };
+                state.remove_uri(&uri);
+                publish_diagnostics(connection, uri, Vec::new(), None)?;
+            }
+        }
+        DidChangeWatchedFiles::METHOD => {
+            let params: lsp_types::DidChangeWatchedFilesParams =
+                not.extract(DidChangeWatchedFiles::METHOD)?;
+            pool.cancel_requests();
+            for change in params.changes {
+                if change.typ == FileChangeType::DELETED {
+                    state.remove_uri(&change.uri);
+                    publish_diagnostics(connection, change.uri, Vec::new(), None)?;
+                } else {
+                    let _ = state.reload_uri_from_disk(&change.uri);
+                }
+            }
         }
         _ => {}
     }
