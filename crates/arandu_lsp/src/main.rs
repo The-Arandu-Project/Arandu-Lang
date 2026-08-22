@@ -144,7 +144,7 @@ fn initialize_connection(
         }),
         signature_help_provider: Some(SignatureHelpOptions {
             trigger_characters: Some(vec!["(".into(), ",".into()]),
-            retrigger_characters: None,
+            retrigger_characters: Some(vec![",".into()]),
             work_done_progress_options: WorkDoneProgressOptions::default(),
         }),
         references_provider: Some(OneOf::Left(true)),

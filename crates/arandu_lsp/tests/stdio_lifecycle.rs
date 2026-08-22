@@ -515,6 +515,125 @@ fn stdio_semantic_requests_use_utf16_around_unicode() {
 }
 
 #[test]
+fn stdio_presents_one_signature_and_documentation_contract() {
+    let fixture = FixtureDir::new();
+    let document = fixture.path().join("presentation.aru");
+    let uri = file_uri(&document);
+    let source = concat!(
+        "/// Adds two values.\n",
+        "/// Keeps integer precision.\n",
+        "func add(left: int, right: int): int { return left + right }\n",
+        "func main(): int { return add(1, 2) }\n",
+    );
+    let expected_signature = "func add(left: int, right: int): int";
+    let definition = source.find("add").expect("add definition");
+    let call = source.rfind("add").expect("add call");
+
+    let mut lsp = LspProcess::spawn();
+    lsp.initialize(fixture.path(), 1);
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didOpen",
+        "params": {
+            "textDocument": {
+                "uri": uri,
+                "languageId": "arandu",
+                "version": 1,
+                "text": source
+            }
+        }
+    }));
+    let diagnostics = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && message.pointer("/params/uri").and_then(Value::as_str) == Some(uri.as_str())
+    });
+    assert_eq!(
+        diagnostics
+            .pointer("/params/diagnostics")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(0),
+        "presentation fixture must be valid: {diagnostics}"
+    );
+
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "id": 2, "method": "textDocument/hover",
+        "params": {
+            "textDocument": { "uri": uri },
+            "position": utf16_position(source, definition + 1)
+        }
+    }));
+    let hover = lsp.wait_for_response(2);
+    let hover_markdown = hover
+        .pointer("/result/contents/value")
+        .and_then(Value::as_str)
+        .expect("Markdown hover");
+    assert!(hover_markdown.contains(expected_signature), "{hover}");
+    assert!(hover_markdown.contains("Adds two values."), "{hover}");
+    assert!(!hover_markdown.contains("SymbolId"), "{hover}");
+
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "id": 3, "method": "textDocument/completion",
+        "params": {
+            "textDocument": { "uri": uri },
+            "position": utf16_position(source, definition + 2)
+        }
+    }));
+    let completion = lsp.wait_for_response(3);
+    let add_item = completion
+        .pointer("/result")
+        .and_then(Value::as_array)
+        .and_then(|items| {
+            items
+                .iter()
+                .find(|item| item.get("label") == Some(&json!("add")))
+        })
+        .expect("add completion item");
+    assert_eq!(
+        add_item.get("detail").and_then(Value::as_str),
+        Some(expected_signature)
+    );
+    assert_eq!(
+        add_item
+            .pointer("/documentation/value")
+            .and_then(Value::as_str),
+        Some("Adds two values.\nKeeps integer precision.")
+    );
+
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "id": 4, "method": "textDocument/signatureHelp",
+        "params": {
+            "textDocument": { "uri": uri },
+            "position": utf16_position(source, call + "add(1, ".len())
+        }
+    }));
+    let signature = lsp.wait_for_response(4);
+    assert_eq!(
+        signature
+            .pointer("/result/signatures/0/label")
+            .and_then(Value::as_str),
+        Some(expected_signature),
+        "{signature}"
+    );
+    assert_eq!(
+        signature
+            .pointer("/result/activeParameter")
+            .and_then(Value::as_u64),
+        Some(1),
+        "{signature}"
+    );
+    assert_eq!(
+        signature
+            .pointer("/result/signatures/0/documentation/value")
+            .and_then(Value::as_str),
+        Some("Adds two values.\nKeeps integer precision."),
+        "{signature}"
+    );
+
+    lsp.shutdown(5);
+}
+
+#[test]
 fn stdio_diagnostics_preserve_context_and_structured_quick_fix() {
     let fixture = FixtureDir::new();
     let document = fixture.path().join("rich-diagnostic.aru");

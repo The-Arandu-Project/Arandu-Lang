@@ -85,9 +85,9 @@ nunca para esconder regressão.
 | VFS, debounce, snapshots e stale safety | `done` | startup progressivo, cancelamento e stress | LSP/query |
 | Diagnósticos on-type | `partial` | preservar labels, notes, hints, replacements, versão e links dos códigos | query/LSP |
 | Goto e references | `done` | multi-file/Unicode e operação durante index parcial | LSP |
-| Hover | `partial` | assinatura legível e doc comments; remover IDs internos da UI | LSP, dados já existem |
-| Completion | `partial` | contexto/escopo, ranking, snippets, detalhes, docs, resolve e índice parcial | LSP |
-| Signature help | `done` | overload/active parameter e Unicode E2E | LSP |
+| Hover | `done` | — | LSP, dados já existem |
+| Completion | `partial` | contexto/escopo, ranking, snippets, resolve e índice parcial | LSP |
+| Signature help | `done` | — | LSP |
 | Rename | `partial` | `prepareRename`, nomes inválidos, conflitos e preview | LSP/extensão |
 | Document/workspace symbols | `partial` | hierarquia, container, filtro fuzzy e índice progressivo | LSP/index |
 | Semantic tokens | `partial` | corrigir enum/constant, tokens multi-linha, encoding e snapshots de temas | query/LSP/extensão |
@@ -206,7 +206,7 @@ do editor e contrato próprio no roadmap mestre.
 - [x] Implementar `$/cancelRequest`, fila limitada, coalescing por documento e
       prioridade interativa sobre index/diagnóstico amplo.
 - [x] Preservar diagnósticos ricos e replacements end-to-end.
-- [ ] Completar hover/completion/signature com docs e apresentação consistente.
+- [x] Completar hover/completion/signature com docs e apresentação consistente.
 
 **DoD L1:** nenhuma posição, token ou diagnóstico incorreto em ASCII/Unicode no protocolo suportado.
 

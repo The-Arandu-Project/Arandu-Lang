@@ -3,14 +3,16 @@
 //! Pure queries on typeck/resolve results — no Salsa writes.
 
 use arandu_base::LineIndex;
-use arandu_middle::{NodeKey, SymbolId, SymbolKind};
+use arandu_middle::types::ArType;
+use arandu_middle::{NodeKey, Symbol, SymbolId, SymbolKind};
 use arandu_query::{AnalysisSnapshot, SourceFile};
 use arandu_semantics::TypeCheckResult;
 use lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionResponse, CompletionItem,
-    CompletionItemKind, Documentation, Hover, HoverContents, Location, MarkedString, Position,
-    SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens, SemanticTokensLegend,
-    SymbolInformation, SymbolKind as LspSymbolKind, TextEdit as LspTextEdit, Uri, WorkspaceEdit,
+    CompletionItemKind, Documentation, Hover, HoverContents, Location, MarkupContent, MarkupKind,
+    ParameterInformation, ParameterLabel, Position, SemanticToken, SemanticTokenModifier,
+    SemanticTokenType, SemanticTokens, SemanticTokensLegend, SymbolInformation,
+    SymbolKind as LspSymbolKind, TextEdit as LspTextEdit, Uri, WorkspaceEdit,
 };
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
@@ -54,8 +56,170 @@ pub fn typecheck(
     arandu_query::passes::type_check(&snap.db, source).clone()
 }
 
-fn ty_str(t: &arandu_middle::types::ArType) -> String {
-    format!("{t:?}")
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ParameterPresentation {
+    label: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SymbolPresentation {
+    signature: String,
+    documentation: Option<String>,
+    parameters: Vec<ParameterPresentation>,
+}
+
+fn display_type(tc: &TypeCheckResult, ty: &ArType) -> String {
+    ty.display(&tc.symbols, &tc.type_info.type_interner)
+}
+
+fn symbol_presentation(
+    snap: &AnalysisSnapshot,
+    source: SourceFile,
+    tc: &TypeCheckResult,
+    symbol: &Symbol,
+) -> SymbolPresentation {
+    let ty = tc.type_info.decl_type(symbol.id);
+    let parameter_names = function_parameter_names(snap, source, symbol);
+    let (signature, parameters) = match ty.as_ref() {
+        Some(ArType::Func(param_types, return_type)) => {
+            let labels: Vec<_> = param_types
+                .iter()
+                .enumerate()
+                .map(|(index, type_id)| {
+                    let ty = tc.type_info.type_interner.resolve(*type_id);
+                    let ty = display_type(tc, &ty);
+                    parameter_names
+                        .get(index)
+                        .filter(|name| !name.is_empty())
+                        .map_or_else(|| ty.clone(), |name| format!("{name}: {ty}"))
+                })
+                .collect();
+            let return_ty = tc.type_info.type_interner.resolve(*return_type);
+            let return_suffix = if matches!(return_ty, ArType::Void) {
+                String::new()
+            } else {
+                format!(": {}", display_type(tc, &return_ty))
+            };
+            (
+                format!("func {}({}){return_suffix}", symbol.name, labels.join(", ")),
+                labels
+                    .into_iter()
+                    .map(|label| ParameterPresentation { label })
+                    .collect(),
+            )
+        }
+        Some(ty) => {
+            let prefix = match symbol.kind {
+                SymbolKind::Const => "const",
+                SymbolKind::Field => "field",
+                SymbolKind::Param => "param",
+                SymbolKind::Local => "let",
+                _ => "type",
+            };
+            (
+                format!("{prefix} {}: {}", symbol.name, display_type(tc, ty)),
+                Vec::new(),
+            )
+        }
+        None => (
+            format!("{} {}", symbol_kind_name(symbol.kind), symbol.name),
+            Vec::new(),
+        ),
+    };
+    SymbolPresentation {
+        signature,
+        documentation: symbol_documentation(snap, source, symbol),
+        parameters,
+    }
+}
+
+fn markdown_documentation(value: String) -> Documentation {
+    Documentation::MarkupContent(MarkupContent {
+        kind: MarkupKind::Markdown,
+        value,
+    })
+}
+
+fn symbol_kind_name(kind: SymbolKind) -> &'static str {
+    match kind {
+        SymbolKind::Func | SymbolKind::AssociatedFunc | SymbolKind::ExternFunc => "func",
+        SymbolKind::Struct => "struct",
+        SymbolKind::Enum => "enum",
+        SymbolKind::Interface => "interface",
+        SymbolKind::TypeAlias => "type",
+        SymbolKind::EnumVariant => "variant",
+        SymbolKind::Module => "module",
+        SymbolKind::NamespaceMember => "member",
+        SymbolKind::ImportValue | SymbolKind::ImportType => "import",
+        SymbolKind::TypeParam => "type parameter",
+        SymbolKind::Const => "const",
+        SymbolKind::Field => "field",
+        SymbolKind::Param => "param",
+        SymbolKind::Local => "let",
+    }
+}
+
+fn symbol_documentation(
+    snap: &AnalysisSnapshot,
+    source: SourceFile,
+    symbol: &Symbol,
+) -> Option<String> {
+    let resolved = arandu_query::passes::resolve(&snap.db, source);
+    let docs = resolved
+        .docs
+        .iter()
+        .filter(|(target, _)| target.start <= symbol.span.start && symbol.span.end <= target.end)
+        .min_by_key(|(target, _)| target.end.saturating_sub(target.start))?
+        .1;
+    let text = docs
+        .iter()
+        .map(|line| line.strip_prefix("///").unwrap_or(line).trim_start())
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.is_empty()).then_some(text)
+}
+
+fn function_parameter_names(
+    snap: &AnalysisSnapshot,
+    source: SourceFile,
+    symbol: &Symbol,
+) -> Vec<String> {
+    let program = arandu_query::passes::parse(&snap.db, source);
+    let Ok(program) = &**program else {
+        return Vec::new();
+    };
+    for &decl_id in &program.decls {
+        match program.pool.decl(decl_id) {
+            arandu_parser::TopLevelDecl::Func(func) => {
+                let (span, name) = match &func.name {
+                    arandu_parser::FuncName::Free { span, name }
+                    | arandu_parser::FuncName::Method { span, name, .. } => (*span, name),
+                };
+                if span == symbol.span && name.as_str() == symbol.name.as_str() {
+                    return func
+                        .params
+                        .iter()
+                        .map(|param| param.name.to_string())
+                        .collect();
+                }
+            }
+            arandu_parser::TopLevelDecl::Extern(extern_decl) => {
+                if let Some(member) = extern_decl.members.iter().find(|member| {
+                    member.name.as_str() == symbol.name.as_str()
+                        && member.span.start <= symbol.span.start
+                        && symbol.span.end <= member.span.end
+                }) {
+                    return member
+                        .params
+                        .iter()
+                        .map(|param| param.name.to_string())
+                        .collect();
+                }
+            }
+            _ => {}
+        }
+    }
+    Vec::new()
 }
 
 /// Tightest name/ref/definition containing `offset`.
@@ -107,17 +271,18 @@ pub fn hover(
     let tc = typecheck(snap, source);
     let sym = symbol_at(&tc, offset)?;
     let symbol = tc.symbols.try_get(sym)?;
-    let ty = tc
-        .type_info
-        .decl_type(sym)
-        .map(|t| ty_str(&t))
-        .unwrap_or_else(|| "?".into());
-    let kind = format!("{:?}", symbol.kind);
-    let name = symbol.name.to_string();
-    let md = format!("```arandu\n{name}: {ty}\n```\n\n_{kind}_ (`{sym:?}`)");
+    let presentation = symbol_presentation(snap, source, &tc, symbol);
+    let mut md = format!("```arandu\n{}\n```", presentation.signature);
+    if let Some(documentation) = presentation.documentation {
+        md.push_str("\n\n");
+        md.push_str(&documentation);
+    }
     let range = span_to_range(&index, symbol.span);
     Some(Hover {
-        contents: HoverContents::Scalar(MarkedString::String(md)),
+        contents: HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: md,
+        }),
         range: Some(range),
     })
 }
@@ -199,12 +364,12 @@ pub fn completions(
             SymbolKind::Param | SymbolKind::Local => CompletionItemKind::VARIABLE,
             _ => CompletionItemKind::TEXT,
         };
-        let detail = tc.type_info.decl_type(symbol.id).map(|t| ty_str(&t));
+        let presentation = symbol_presentation(snap, source, &tc, symbol);
         items.push(CompletionItem {
             label: name,
             kind: Some(kind),
-            detail,
-            documentation: Some(Documentation::String(format!("{:?}", symbol.kind))),
+            detail: Some(presentation.signature),
+            documentation: presentation.documentation.map(markdown_documentation),
             ..CompletionItem::default()
         });
     }
@@ -353,10 +518,9 @@ fn module_member_completions(
         {
             continue;
         }
-        let kind = tc
-            .symbols
-            .try_get(sym_id)
-            .map(|s| match s.kind {
+        let symbol = tc.symbols.try_get(sym_id);
+        let kind = symbol
+            .map(|symbol| match symbol.kind {
                 SymbolKind::Func | SymbolKind::AssociatedFunc | SymbolKind::ExternFunc => {
                     CompletionItemKind::FUNCTION
                 }
@@ -368,10 +532,20 @@ fn module_member_completions(
                 _ => CompletionItemKind::TEXT,
             })
             .unwrap_or(CompletionItemKind::TEXT);
+        let presentation = symbol.and_then(|symbol| {
+            let symbol_source = snap.db.source_file_by_id(symbol.id.file_id)?;
+            Some(symbol_presentation(snap, symbol_source, &tc, symbol))
+        });
         items.push(CompletionItem {
             label: name_s.into(),
             kind: Some(kind),
-            detail: Some(format!("from `{alias}`")),
+            detail: Some(presentation.as_ref().map_or_else(
+                || format!("from `{alias}`"),
+                |presentation| format!("{} — from `{alias}`", presentation.signature),
+            )),
+            documentation: presentation
+                .and_then(|presentation| presentation.documentation)
+                .map(markdown_documentation),
             ..CompletionItem::default()
         });
     }
@@ -556,32 +730,16 @@ pub fn signature_help(
     text: &str,
     position: Position,
 ) -> Option<lsp_types::SignatureHelp> {
-    // Minimal: show the type of the callee immediately before `(`.
     let index = LineIndex::new(text);
     let offset = position_to_offset(&index, position, text);
-    let bytes = text.as_bytes();
-    let mut cursor = usize::try_from(offset)
-        .unwrap_or(text.len())
-        .min(text.len());
-    while cursor > 0 && (bytes[cursor - 1].is_ascii_whitespace() || bytes[cursor - 1] == b'(') {
-        cursor -= 1;
-    }
-    let name_end = cursor;
-    while cursor > 0 && (bytes[cursor - 1].is_ascii_alphanumeric() || bytes[cursor - 1] == b'_') {
-        cursor -= 1;
-    }
-    let name = text.get(cursor..name_end)?;
-    if name.is_empty() {
-        return None;
-    }
+    let context = call_context(snap, source, offset)?;
 
     let tc = typecheck(snap, source);
-    let probe = u32::try_from(cursor).ok()?;
-    let sym = symbol_at(&tc, probe).or_else(|| {
+    let sym = symbol_at(&tc, context.callee_start).or_else(|| {
         tc.symbols
             .iter()
             .find(|symbol| {
-                symbol.name.as_str() == name
+                symbol.name.as_str() == context.name
                     && matches!(
                         symbol.kind,
                         SymbolKind::Func | SymbolKind::AssociatedFunc | SymbolKind::ExternFunc
@@ -596,21 +754,87 @@ pub fn signature_help(
     ) {
         return None;
     }
-    let ty = tc
-        .type_info
-        .decl_type(sym)
-        .map(|t| ty_str(&t))
-        .unwrap_or_else(|| "func".into());
-    let label = format!("{}: {}", symbol.name, ty);
+    let presentation = symbol_presentation(snap, source, &tc, symbol);
+    let active_parameter = (!presentation.parameters.is_empty()).then(|| {
+        context
+            .active_parameter
+            .min(u32::try_from(presentation.parameters.len() - 1).unwrap_or(u32::MAX))
+    });
+    let parameters = presentation
+        .parameters
+        .into_iter()
+        .map(|parameter| ParameterInformation {
+            label: ParameterLabel::Simple(parameter.label),
+            documentation: None,
+        })
+        .collect();
     Some(lsp_types::SignatureHelp {
         signatures: vec![lsp_types::SignatureInformation {
-            label,
-            documentation: None,
-            parameters: None,
-            active_parameter: None,
+            label: presentation.signature,
+            documentation: presentation.documentation.map(markdown_documentation),
+            parameters: Some(parameters),
+            active_parameter,
         }],
         active_signature: Some(0),
-        active_parameter: None,
+        active_parameter,
+    })
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct CallContext {
+    name: String,
+    callee_start: u32,
+    active_parameter: u32,
+}
+
+fn call_context(
+    snap: &AnalysisSnapshot,
+    source: SourceFile,
+    cursor_offset: u32,
+) -> Option<CallContext> {
+    let tree = arandu_query::passes::syntax_tree(&snap.db, source);
+    let tokens: Vec<_> = tree
+        .root()
+        .descendants_with_tokens()
+        .filter_map(|element| element.into_token())
+        .filter(|token| {
+            !token.kind().is_trivia() && u32::from(token.text_range().start()) < cursor_offset
+        })
+        .collect();
+
+    let mut parenthesis_depth = 0_u32;
+    let open_index = tokens.iter().enumerate().rev().find_map(|(index, token)| {
+        match token.text() {
+            ")" => parenthesis_depth = parenthesis_depth.saturating_add(1),
+            "(" if parenthesis_depth == 0 => return Some(index),
+            "(" => parenthesis_depth = parenthesis_depth.saturating_sub(1),
+            _ => {}
+        }
+        None
+    })?;
+    let callee = tokens[..open_index].iter().rev().find(|token| {
+        matches!(
+            token.kind(),
+            arandu_parser::SyntaxKind::IDENT | arandu_parser::SyntaxKind::TYPE_IDENT
+        )
+    })?;
+
+    let mut delimiter_depth = 0_u32;
+    let mut active_parameter = 0_u32;
+    for token in &tokens[open_index + 1..] {
+        match token.text() {
+            "(" | "[" | "{" => delimiter_depth = delimiter_depth.saturating_add(1),
+            ")" | "]" | "}" => delimiter_depth = delimiter_depth.saturating_sub(1),
+            "," if delimiter_depth == 0 => {
+                active_parameter = active_parameter.saturating_add(1);
+            }
+            _ => {}
+        }
+    }
+    Some(CallContext {
+        name: callee.text().to_string(),
+        callee_start: u32::from(callee.text_range().start()),
+        active_parameter,
     })
 }
 
@@ -874,6 +1098,90 @@ mod tests {
         let file = host.new_file("empty.aru".into(), String::new());
         let snap = host.snapshot();
         assert!(signature_help(&snap, file, "", Position::new(0, 0)).is_none());
+    }
+
+    #[test]
+    fn hover_completion_and_signature_share_user_facing_presentation() {
+        let text = concat!(
+            "/// Adds two values.\n",
+            "/// Keeps integer precision.\n",
+            "func add(left: int, right: int): int { return left + right }\n",
+            "func main(): int { return add(1, 2) }\n",
+        );
+        let mut host = AnalysisHost::new();
+        let file = host.new_file("presentation.aru".into(), text.into());
+        let snap = host.snapshot();
+        let signature = "func add(left: int, right: int): int";
+        let documentation = "Adds two values.\nKeeps integer precision.";
+        let definition = text.find("add").expect("add definition");
+        let call = text.rfind("add").expect("add call");
+
+        let hover = hover(
+            &snap,
+            file,
+            text,
+            offset_to_position(&LineIndex::new(text), definition as u32),
+        )
+        .expect("hover for add");
+        let HoverContents::Markup(hover) = hover.contents else {
+            panic!("hover must use Markdown markup");
+        };
+        assert!(hover.value.contains(signature));
+        assert!(hover.value.contains(documentation));
+        assert!(!hover.value.contains("SymbolId"));
+
+        let completion = completions(
+            &snap,
+            file,
+            text,
+            offset_to_position(&LineIndex::new(text), (definition + 2) as u32),
+        )
+        .into_iter()
+        .find(|item| item.label == "add")
+        .expect("add completion");
+        assert_eq!(completion.detail.as_deref(), Some(signature));
+        assert!(matches!(
+            completion.documentation,
+            Some(Documentation::MarkupContent(MarkupContent { value, .. }))
+                if value == documentation
+        ));
+
+        let second_argument = call + "add(1, ".len();
+        let help = signature_help(
+            &snap,
+            file,
+            text,
+            offset_to_position(&LineIndex::new(text), second_argument as u32),
+        )
+        .expect("signature help for add");
+        let shown = &help.signatures[0];
+        assert_eq!(shown.label, signature);
+        assert_eq!(help.active_parameter, Some(1));
+        assert_eq!(shown.active_parameter, Some(1));
+        assert_eq!(
+            shown.parameters.as_ref().expect("parameter labels")[1].label,
+            ParameterLabel::Simple("right: int".into())
+        );
+        assert!(matches!(
+            shown.documentation,
+            Some(Documentation::MarkupContent(MarkupContent { ref value, .. }))
+                if value == documentation
+        ));
+    }
+
+    #[test]
+    fn signature_context_ignores_nested_argument_commas() {
+        let text = concat!(
+            "func add(left: int, right: int): int { return left + right }\n",
+            "func main(): int { return add(add(1, 2), 3) }\n",
+        );
+        let mut host = AnalysisHost::new();
+        let file = host.new_file("nested-signature.aru".into(), text.into());
+        let snap = host.snapshot();
+        let outer_second = text.rfind(", 3").expect("outer second argument") + 2;
+        let context = call_context(&snap, file, outer_second as u32).expect("outer call context");
+        assert_eq!(context.name, "add");
+        assert_eq!(context.active_parameter, 1);
     }
 
     #[test]
