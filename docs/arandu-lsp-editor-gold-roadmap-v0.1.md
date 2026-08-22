@@ -180,10 +180,11 @@ do editor e contrato próprio no roadmap mestre.
 
 ## L0 — Gate da extensão
 
-- [ ] `npm ci` e `npm run compile` reproduzíveis.
-- [ ] ESLint ou gate equivalente real; remover o placeholder de lint.
-- [ ] Testes automatizados da extensão com VS Code Extension Host.
-- [ ] Descoberta do `arandu-lsp` testada para PATH, configuração explícita e layout de release.
+- [x] `npm ci` e `npm run compile` reproduzíveis.
+- [x] ESLint tipado com zero warnings; placeholder removido do gate.
+- [x] Testes automatizados no VS Code Extension Host mínimo suportado.
+- [x] Descoberta do `arandu-lsp` testada para PATH, configuração explícita,
+      `.exe` no Windows e layouts release/debug.
 - [ ] Crash, restart e logs apresentam estado acionável ao usuário.
 - [ ] Manifest completo, identidade visual e package `.vsix` auditado.
 - [ ] TextMate/semantic tokens testados em Dark+, Light+ e High Contrast.

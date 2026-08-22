@@ -1,7 +1,9 @@
 .vscode/**
 .vscodeignore
 tsconfig.json
+eslint.config.mjs
 src/**
 node_modules/**
-out/extension.js.map
+out/**/*.map
+out/test/**
 build.sh

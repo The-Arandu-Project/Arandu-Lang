@@ -4,6 +4,22 @@
     "description": "VS Code support for the Arandu Programming Language",
     "version": "0.1.0-rc.4",
     "publisher": "arandu",
+    "license": "MIT OR Apache-2.0",
+    "preview": true,
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/BrunoF2P/Arandu-Lang.git"
+    },
+    "homepage": "https://github.com/BrunoF2P/Arandu-Lang#readme",
+    "bugs": {
+        "url": "https://github.com/BrunoF2P/Arandu-Lang/issues"
+    },
+    "keywords": [
+        "arandu",
+        "language-server",
+        "lsp",
+        "compiler"
+    ],
     "engines": {
         "vscode": "^1.92.0"
     },
@@ -76,38 +92,77 @@
             {
                 "language": "arandu",
                 "scopes": {
-                    "keyword": ["keyword.control.arandu"],
-                    "function": ["entity.name.function.arandu"],
-                    "variable": ["variable.other.arandu"],
-                    "parameter": ["variable.parameter.arandu"],
-                    "type": ["entity.name.type.arandu"],
-                    "struct": ["entity.name.type.struct.arandu"],
-                    "enum": ["entity.name.type.enum.arandu"],
-                    "interface": ["entity.name.type.interface.arandu"],
-                    "namespace": ["entity.name.type.module.arandu"],
-                    "number": ["constant.numeric.arandu"],
-                    "string": ["string.quoted.double.arandu"],
-                    "comment": ["comment.line.double-slash.arandu"],
-                    "operator": ["keyword.operator.arandu"],
-                    "property": ["variable.other.property.arandu"],
-                    "enumMember": ["constant.other.enum-member.arandu"]
+                    "keyword": [
+                        "keyword.control.arandu"
+                    ],
+                    "function": [
+                        "entity.name.function.arandu"
+                    ],
+                    "variable": [
+                        "variable.other.arandu"
+                    ],
+                    "parameter": [
+                        "variable.parameter.arandu"
+                    ],
+                    "type": [
+                        "entity.name.type.arandu"
+                    ],
+                    "struct": [
+                        "entity.name.type.struct.arandu"
+                    ],
+                    "enum": [
+                        "entity.name.type.enum.arandu"
+                    ],
+                    "interface": [
+                        "entity.name.type.interface.arandu"
+                    ],
+                    "namespace": [
+                        "entity.name.type.module.arandu"
+                    ],
+                    "number": [
+                        "constant.numeric.arandu"
+                    ],
+                    "string": [
+                        "string.quoted.double.arandu"
+                    ],
+                    "comment": [
+                        "comment.line.double-slash.arandu"
+                    ],
+                    "operator": [
+                        "keyword.operator.arandu"
+                    ],
+                    "property": [
+                        "variable.other.property.arandu"
+                    ],
+                    "enumMember": [
+                        "constant.other.enum-member.arandu"
+                    ]
                 }
             }
         ]
     },
     "scripts": {
-        "vscode:prepublish": "npm run compile",
+        "vscode:prepublish": "npm run compile && npm run lint",
         "compile": "tsc -p ./",
         "watch": "tsc -watch -p ./",
-        "pretest": "npm run compile",
-        "lint": "echo 'No lint script configured'"
+        "lint": "eslint src --max-warnings=0",
+        "pretest": "npm run compile && npm run lint",
+        "test": "npm run test:unit && npm run test:extension",
+        "test:unit": "node --test out/test/unit/*.test.js",
+        "test:extension": "node ./out/test/runTest.js",
+        "package:check": "vsce ls"
     },
     "dependencies": {
         "vscode-languageclient": "^10.1.0"
     },
     "devDependencies": {
+        "@eslint/js": "10.0.1",
         "@types/node": "^20.14.9",
-        "@types/vscode": "^1.85.0",
-        "typescript": "^5.5.4"
+        "@types/vscode": "1.92.0",
+        "@vscode/test-electron": "3.1.0",
+        "@vscode/vsce": "3.9.2",
+        "eslint": "10.9.0",
+        "typescript": "5.9.3",
+        "typescript-eslint": "8.67.0"
     }
 }

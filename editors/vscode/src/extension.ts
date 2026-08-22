@@ -1,153 +1,170 @@
-import * as path from 'path';
-import * as fs from 'fs';
 import * as vscode from 'vscode';
 import {
     LanguageClient,
     LanguageClientOptions,
     ServerOptions,
+    State,
     TransportKind
 } from 'vscode-languageclient/node';
+import { discoverServer } from './serverDiscovery';
 
 let client: LanguageClient | undefined;
-let statusBarItem: vscode.StatusBarItem;
+let statusBarItem: vscode.StatusBarItem | undefined;
+let traceOutputChannel: vscode.LogOutputChannel | undefined;
+let clientStateSubscription: vscode.Disposable | undefined;
+let lifecycle = Promise.resolve();
+let deactivating = false;
 
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    statusBarItem.text = '$(sync~spin) Arandu';
-    statusBarItem.tooltip = 'Arandu Language Server: Starting...';
     statusBarItem.command = 'arandu.showServerLogs';
-    statusBarItem.show();
+    statusBarItem.accessibilityInformation = { label: 'Arandu language server status' };
     context.subscriptions.push(statusBarItem);
 
-    // Command to show server logs
-    const showLogsCommand = vscode.commands.registerCommand('arandu.showServerLogs', () => {
-        if (client) {
-            client.outputChannel.show();
-        }
-    });
-    context.subscriptions.push(showLogsCommand);
+    traceOutputChannel = vscode.window.createOutputChannel('Arandu Language Server', { log: true });
+    context.subscriptions.push(traceOutputChannel);
 
-    // Command to restart the server
-    const restartCommand = vscode.commands.registerCommand('arandu.restartServer', async () => {
-        if (client) {
-            vscode.window.showInformationMessage('Restarting Arandu Language Server...');
-            await client.stop();
-            client = undefined;
-        }
-        startLanguageServer(context);
-    });
-    context.subscriptions.push(restartCommand);
+    const fileWatcher = vscode.workspace.createFileSystemWatcher('**/*.aru');
+    context.subscriptions.push(fileWatcher);
 
-    startLanguageServer(context);
+    context.subscriptions.push(
+        vscode.commands.registerCommand('arandu.showServerLogs', () => {
+            traceOutputChannel?.show(true);
+        }),
+        vscode.commands.registerCommand('arandu.restartServer', () => restartLanguageServer(context, fileWatcher))
+    );
+
+    await restartLanguageServer(context, fileWatcher);
 }
 
-function startLanguageServer(context: vscode.ExtensionContext) {
-    statusBarItem.text = '$(sync~spin) Arandu';
-    statusBarItem.tooltip = 'Arandu Language Server: Starting...';
+export async function deactivate(): Promise<void> {
+    deactivating = true;
+    await lifecycle;
+    await stopClient();
+}
 
-    const serverPath = findServerPath(context);
-    if (!serverPath) {
-        vscode.window.showErrorMessage(
-            'Could not find the "arandu-lsp" executable. Make sure to compile it (cargo build -p arandu_lsp) or configure the path in settings ("arandu.server.path").'
-        );
-        statusBarItem.text = '$(error) Arandu';
-        statusBarItem.tooltip = 'Arandu Language Server: Executable not found';
+function restartLanguageServer(
+    context: vscode.ExtensionContext,
+    fileWatcher: vscode.FileSystemWatcher
+): Promise<void> {
+    lifecycle = lifecycle.then(async () => {
+        await stopClient();
+        await startLanguageServer(context, fileWatcher);
+    });
+    return lifecycle;
+}
+
+async function startLanguageServer(
+    context: vscode.ExtensionContext,
+    fileWatcher: vscode.FileSystemWatcher
+): Promise<void> {
+    setStatus('starting');
+    const configuration = vscode.workspace.getConfiguration('arandu');
+    const result = discoverServer({
+        configuredPath: configuration.get<string | null>('server.path'),
+        workspaceRoots: (vscode.workspace.workspaceFolders ?? [])
+            .filter(folder => folder.uri.scheme === 'file')
+            .map(folder => folder.uri.fsPath),
+        extensionPath: context.extensionPath
+    });
+    if (!result.resolution) {
+        setStatus('missing', result.failure.message);
+        traceOutputChannel?.error(result.failure.message);
+        for (const candidate of result.failure.checked) {
+            traceOutputChannel?.debug(`Checked ${candidate}`);
+        }
+        const action = await vscode.window.showErrorMessage(result.failure.message, 'Open Settings');
+        if (action === 'Open Settings') {
+            await vscode.commands.executeCommand('workbench.action.openSettings', 'arandu.server.path');
+        }
         return;
     }
 
-    const traceOutputChannel = vscode.window.createOutputChannel('Arandu Language Server Trace', { log: true });
-
-    // If it is an absolute path or a command in PATH
+    traceOutputChannel?.info(
+        `Starting ${result.resolution.command} (discovered via ${result.resolution.source})`
+    );
     const serverOptions: ServerOptions = {
-        run: { command: serverPath, transport: TransportKind.stdio },
-        debug: { command: serverPath, transport: TransportKind.stdio }
+        run: { command: result.resolution.command, transport: TransportKind.stdio },
+        debug: { command: result.resolution.command, transport: TransportKind.stdio }
     };
-
     const clientOptions: LanguageClientOptions = {
         documentSelector: [{ scheme: 'file', language: 'arandu' }],
-        synchronize: {
-            // Notify the server about changes in '.aru' files
-            fileEvents: vscode.workspace.createFileSystemWatcher('**/*.aru')
-        },
+        synchronize: { fileEvents: fileWatcher },
         traceOutputChannel
     };
-
-    client = new LanguageClient(
+    const nextClient = new LanguageClient(
         'aranduLanguageServer',
         'Arandu Language Server',
         serverOptions,
         clientOptions
     );
-
-    // Start the client. This will also start the server.
-    client.start().then(() => {
-        vscode.window.showInformationMessage('Arandu Language Server successfully activated.');
-        statusBarItem.text = '$(check) Arandu';
-        statusBarItem.tooltip = 'Arandu Language Server: Running';
-    }).catch((err: unknown) => {
-        vscode.window.showErrorMessage(`Failed to start Arandu Language Server: ${err}`);
-        statusBarItem.text = '$(error) Arandu';
-        statusBarItem.tooltip = `Arandu Language Server: Error — ${err}`;
+    client = nextClient;
+    clientStateSubscription = nextClient.onDidChangeState(event => {
+        if (event.newState === State.Starting) {
+            setStatus('starting');
+        } else if (event.newState === State.Running) {
+            setStatus('running');
+        } else if (!deactivating) {
+            setStatus('stopped', 'Arandu Language Server stopped. Run “Arandu: Restart Language Server”.');
+        }
     });
-}
 
-export function deactivate(): Thenable<void> | undefined {
-    if (!client) {
-        return undefined;
-    }
-    return client.stop();
-}
-
-function findServerPath(context: vscode.ExtensionContext): string | undefined {
-    const config = vscode.workspace.getConfiguration('arandu');
-    const customPath = config.get<string | null>('server.path');
-
-    if (customPath) {
-        if (fs.existsSync(customPath)) {
-            return customPath;
+    try {
+        await nextClient.start();
+        setStatus('running');
+    } catch (error: unknown) {
+        if (client === nextClient) {
+            client = undefined;
         }
-        // If it is just the binary name in PATH
-        return customPath;
-    }
-
-    // Try to find in the target/debug or target/release folder of the workspace
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (workspaceFolders) {
-        for (const folder of workspaceFolders) {
-            const rootPath = folder.uri.fsPath;
-            const debugPath = path.join(rootPath, 'target', 'debug', 'arandu-lsp');
-            if (fs.existsSync(debugPath)) {
-                return debugPath;
-            }
-            const releasePath = path.join(rootPath, 'target', 'release', 'arandu-lsp');
-            if (fs.existsSync(releasePath)) {
-                return releasePath;
-            }
+        clientStateSubscription?.dispose();
+        clientStateSubscription = undefined;
+        const message = error instanceof Error ? error.message : String(error);
+        traceOutputChannel?.error(`Failed to start Arandu Language Server: ${message}`);
+        setStatus('stopped', `Arandu Language Server failed: ${message}`);
+        const action = await vscode.window.showErrorMessage(
+            `Failed to start Arandu Language Server: ${message}`,
+            'Show Logs'
+        );
+        if (action === 'Show Logs') {
+            traceOutputChannel?.show(true);
         }
     }
+}
 
-    // Also try to find by going up two directories from the extension path (if running within the Arandu Lang repository)
-    const extensionRepoRoot = path.join(context.extensionPath, '..', '..');
-    const debugPath = path.join(extensionRepoRoot, 'target', 'debug', 'arandu-lsp');
-    if (fs.existsSync(debugPath)) {
-        return debugPath;
+async function stopClient(): Promise<void> {
+    clientStateSubscription?.dispose();
+    clientStateSubscription = undefined;
+    const activeClient = client;
+    client = undefined;
+    if (activeClient) {
+        await activeClient.stop();
     }
-    const releasePath = path.join(extensionRepoRoot, 'target', 'release', 'arandu-lsp');
-    if (fs.existsSync(releasePath)) {
-        return releasePath;
-    }
+}
 
-    // Also try to find by going up three directories from __dirname of the compiled script (highly robust for local dev testing)
-    const scriptRepoRoot = path.join(__dirname, '..', '..', '..');
-    const scriptDebugPath = path.join(scriptRepoRoot, 'target', 'debug', 'arandu-lsp');
-    if (fs.existsSync(scriptDebugPath)) {
-        return scriptDebugPath;
+function setStatus(
+    state: 'starting' | 'running' | 'missing' | 'stopped',
+    detail?: string
+): void {
+    if (!statusBarItem) {
+        return;
     }
-    const scriptReleasePath = path.join(scriptRepoRoot, 'target', 'release', 'arandu-lsp');
-    if (fs.existsSync(scriptReleasePath)) {
-        return scriptReleasePath;
+    switch (state) {
+        case 'starting':
+            statusBarItem.text = '$(sync~spin) Arandu';
+            statusBarItem.tooltip = 'Arandu Language Server: Starting';
+            break;
+        case 'running':
+            statusBarItem.text = '$(check) Arandu';
+            statusBarItem.tooltip = 'Arandu Language Server: Running';
+            break;
+        case 'missing':
+            statusBarItem.text = '$(warning) Arandu';
+            statusBarItem.tooltip = detail ?? 'Arandu Language Server: Executable not found';
+            break;
+        case 'stopped':
+            statusBarItem.text = '$(error) Arandu';
+            statusBarItem.tooltip = detail ?? 'Arandu Language Server: Stopped';
+            break;
     }
-
-    // Fallback: assume it is in the global PATH
-    return 'arandu-lsp';
+    statusBarItem.show();
 }
