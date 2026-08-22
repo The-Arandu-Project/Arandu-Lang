@@ -165,6 +165,7 @@
         "test": "npm run test:unit && npm run test:extension",
         "test:unit": "node --test out/test/unit/*.test.js",
         "test:extension": "node ./out/test/runTest.js",
+        "test:installed": "npm run package:vsix && node ./out/test/runInstalledTest.js",
         "package:check": "vsce ls",
         "package:vsix": "vsce package --no-dependencies --out .vscode-test/arandu-lang.vsix"
     },

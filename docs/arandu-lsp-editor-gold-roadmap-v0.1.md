@@ -246,8 +246,10 @@ do editor e contrato próprio no roadmap mestre.
 
 ## L3 — Beta gold do editor
 
-- [ ] Instalação da extensão e do servidor documentada e testada nos hosts suportados.
-- [ ] Matriz de capabilities publicada com limitações conhecidas.
+- [x] Instalação do VSIX e do SDK é documentada e exercitada em conjunto nos
+      runners nativos Windows x86-64, Linux x86-64 e macOS ARM64 do release.
+- [x] Matriz pública de hosts, capabilities e limitações conhecida vive em
+      `arandu-lsp-capabilities-v0.1.md` e não promove plataformas sem gate.
 - [ ] Sem crash, deadlock ou publicação stale em campanha de stress definida.
 - [ ] Diagnósticos, navigation, rename, tokens e format passam no Extension Host.
 - [ ] Release candidate dogfood sem bloqueador conhecido.

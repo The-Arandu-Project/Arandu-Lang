@@ -7,7 +7,10 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const MESSAGE_TIMEOUT: Duration = Duration::from_secs(3);
+// Functional protocol tests share the host with the whole workspace suite and
+// must tolerate scheduler contention. Latency regressions are enforced by the
+// explicit initialize/interactive p95 budgets below, not by this watchdog.
+const MESSAGE_TIMEOUT: Duration = Duration::from_secs(10);
 const INITIALIZE_P95_BUDGET: Duration = Duration::from_millis(250);
 const INTERACTIVE_BUDGET: Duration = Duration::from_millis(250);
 const COLD_SAMPLES: usize = 7;
@@ -168,6 +171,11 @@ impl LspProcess {
             "safe rename requires the prepareRename handshake: {response}"
         );
         for capability in [
+            "definitionProvider",
+            "referencesProvider",
+            "documentSymbolProvider",
+            "workspaceSymbolProvider",
+            "documentFormattingProvider",
             "foldingRangeProvider",
             "selectionRangeProvider",
             "documentHighlightProvider",
@@ -178,6 +186,63 @@ impl LspProcess {
                     .and_then(Value::as_bool),
                 Some(true),
                 "initialize must advertise {capability}: {response}"
+            );
+        }
+        assert_eq!(
+            response
+                .pointer("/result/capabilities/textDocumentSync")
+                .and_then(Value::as_i64),
+            Some(2),
+            "the public contract requires incremental text sync: {response}"
+        );
+        assert_eq!(
+            response
+                .pointer("/result/capabilities/hoverProvider")
+                .and_then(Value::as_bool),
+            Some(true),
+            "hover must remain advertised: {response}"
+        );
+        for capability in [
+            "completionProvider",
+            "signatureHelpProvider",
+            "semanticTokensProvider",
+            "codeActionProvider",
+        ] {
+            assert!(
+                response
+                    .pointer(&format!("/result/capabilities/{capability}"))
+                    .is_some_and(Value::is_object),
+                "initialize must advertise structured {capability}: {response}"
+            );
+        }
+        assert_eq!(
+            response
+                .pointer("/result/capabilities/semanticTokensProvider/full")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            response
+                .pointer("/result/capabilities/semanticTokensProvider/range")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        for unsupported in [
+            "declarationProvider",
+            "typeDefinitionProvider",
+            "implementationProvider",
+            "documentRangeFormattingProvider",
+            "documentOnTypeFormattingProvider",
+            "inlayHintProvider",
+            "codeLensProvider",
+            "callHierarchyProvider",
+            "typeHierarchyProvider",
+        ] {
+            assert!(
+                response
+                    .pointer(&format!("/result/capabilities/{unsupported}"))
+                    .is_none(),
+                "unimplemented capability must not be advertised: {unsupported}: {response}"
             );
         }
         let elapsed = started.elapsed();

@@ -2,6 +2,9 @@
 
 This extension adds support for the **Arandu** programming language to VS Code.
 
+The supported operating systems, protocol features and known limitations are
+published in the [LSP and editor support matrix](https://github.com/BrunoF2P/Arandu-Lang/blob/main/docs/arandu-lsp-capabilities-v0.1.md).
+
 ## Features
 
 - **Syntax Highlighting**: Basic offline highlighting via TextMate grammar and full, precise syntax coloring via LSP Semantic Tokens.

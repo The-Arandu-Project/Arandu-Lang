@@ -25,6 +25,13 @@ export async function run(): Promise<void> {
 
         const extension = vscode.extensions.getExtension('arandu.arandu-lang');
         assert.ok(extension, 'Arandu extension was not installed in the Extension Host');
+        if (process.env.ARANDU_EXPECT_INSTALLED_EXTENSION === '1') {
+            assert.equal(
+                extension.extensionPath.includes('installed-extensions-'),
+                true,
+                `test loaded a development extension instead of the installed VSIX: ${extension.extensionPath}`
+            );
+        }
         await extension.activate();
         const api = extension.exports as AranduExtensionApi;
         await poll(() => api.getRuntimeState().state === 'ready' ? true : undefined);

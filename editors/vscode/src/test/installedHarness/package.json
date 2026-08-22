@@ -1,0 +1,10 @@
+{
+    "name": "arandu-installed-test-harness",
+    "displayName": "Arandu Installed Test Harness",
+    "version": "0.0.0",
+    "publisher": "arandu-tests",
+    "private": true,
+    "engines": {
+        "vscode": "^1.92.0"
+    }
+}
