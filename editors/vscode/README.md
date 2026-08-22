@@ -48,9 +48,10 @@ Arandu files with:
 
 ## Troubleshooting
 
-The Arandu status item reports whether the language server is starting, ready,
-restarting, missing, or stopped. Select it, or run **Arandu: Show Language
-Server Logs**, to open the server log.
+The Arandu status item reports whether the language server is starting,
+indexing, ready, restarting, missing, or stopped. Workspace indexing is also
+reported through VS Code's native progress UI. Select the status item, or run
+**Arandu: Show Language Server Logs**, to open the server log.
 
 Transient crashes are restarted automatically up to three times in a rolling
 three-minute window. After a repeated crash loop, automatic recovery stops so

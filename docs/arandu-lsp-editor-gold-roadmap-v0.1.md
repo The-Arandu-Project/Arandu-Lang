@@ -237,7 +237,10 @@ do editor e contrato próprio no roadmap mestre.
 - [x] Folding de blocos e doc comments multilinha, selection ranges aninhados e
       document highlights usam respectivamente CST e identidade semântica; as
       três capabilities têm regressões unitárias e stdio UTF-16 estruturadas.
-- [ ] Validar Problems, Output, status, progress e recuperação de crash no editor.
+- [x] Problems preserva código/source/range, Output registra descoberta e estados,
+      status distingue indexing/ready/restarting, workspace discovery usa
+      work-done progress padrão e o Extension Host prova recuperação após matar
+      o processo real do servidor.
 
 **DoD L2:** o editor pode ser usado diariamente para desenvolver os projetos do corpus.
 

@@ -20,8 +20,33 @@ let traceOutputChannel: vscode.LogOutputChannel | undefined;
 let clientStateSubscription: vscode.Disposable | undefined;
 let lifecycle = Promise.resolve();
 let deactivating = false;
+let runtimeState: ServerUiState = 'stopped';
+let observedCrashCount = 0;
 
-export async function activate(context: vscode.ExtensionContext): Promise<void> {
+type ServerUiState = 'starting' | 'indexing' | 'ready' | 'restarting' | 'missing' | 'stopped';
+
+interface RuntimeState {
+    readonly state: ServerUiState;
+    readonly observedCrashCount: number;
+}
+
+interface AranduExtensionApi {
+    getRuntimeState(): RuntimeState;
+    testCrashServer(): Promise<void>;
+}
+
+function getRuntimeState(): RuntimeState {
+    return { state: runtimeState, observedCrashCount };
+}
+
+async function testCrashServer(): Promise<void> {
+    if (process.env.ARANDU_LSP_TEST_ALLOW_CRASH !== '1' || !client) {
+        throw new Error('The crash hook is available only in the Extension Host recovery test');
+    }
+    await client.sendNotification('arandu/testCrash');
+}
+
+export async function activate(context: vscode.ExtensionContext): Promise<AranduExtensionApi | undefined> {
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     statusBarItem.command = 'arandu.showServerLogs';
     statusBarItem.accessibilityInformation = { label: 'Arandu language server status' };
@@ -41,6 +66,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
 
     await restartLanguageServer(context, fileWatcher);
+    return process.env.ARANDU_LSP_TEST_ALLOW_CRASH === '1'
+        ? { getRuntimeState, testCrashServer }
+        : undefined;
 }
 
 export async function deactivate(): Promise<void> {
@@ -92,6 +120,11 @@ async function startLanguageServer(
     traceOutputChannel?.info(
         `Starting ${result.resolution.command} (discovered via ${result.resolution.source})`
     );
+    const packageInfo = context.extension.packageJSON as { version?: unknown };
+    const extensionVersion = typeof packageInfo.version === 'string' ? packageInfo.version : 'unknown';
+    traceOutputChannel?.info(`Arandu extension ${extensionVersion}`);
+    const roots = (vscode.workspace.workspaceFolders ?? []).map(folder => folder.uri.toString(true));
+    traceOutputChannel?.info(`Workspace roots: ${roots.length === 0 ? '(none)' : roots.join(', ')}`);
     const crashPolicy = new CrashRestartPolicy();
     const errorHandler: ErrorHandler = {
         error(error, _message, count) {
@@ -105,6 +138,7 @@ async function startLanguageServer(
                 return { action: CloseAction.DoNotRestart, handled: true };
             }
             const decision = crashPolicy.recordCrash(Date.now());
+            observedCrashCount = decision.crashCount;
             if (decision.restart) {
                 const detail = `Arandu Language Server crashed; restarting automatically (${decision.crashCount}/3).`;
                 traceOutputChannel?.warn(detail);
@@ -134,12 +168,20 @@ async function startLanguageServer(
         serverOptions,
         clientOptions
     );
+    nextClient.onNotification('arandu/status', (status: { state?: string; message?: string }) => {
+        if (status.state === 'indexing') {
+            setStatus('indexing', status.message);
+        } else if (status.state === 'ready') {
+            setStatus('ready', status.message);
+        }
+        traceOutputChannel?.info(`Server status: ${status.state ?? 'unknown'}${status.message ? ` — ${status.message}` : ''}`);
+    });
     client = nextClient;
     clientStateSubscription = nextClient.onDidChangeState(event => {
         if (event.newState === State.Starting) {
             setStatus('starting');
         } else if (event.newState === State.Running) {
-            setStatus('running');
+            setStatus('ready');
         } else if (!deactivating) {
             setStatus('stopped', 'Arandu Language Server stopped. Run “Arandu: Restart Language Server”.');
         }
@@ -147,7 +189,7 @@ async function startLanguageServer(
 
     try {
         await nextClient.start();
-        setStatus('running');
+        setStatus('ready');
     } catch (error: unknown) {
         if (client === nextClient) {
             client = undefined;
@@ -213,9 +255,10 @@ async function handleCrashLoopAction(
 }
 
 function setStatus(
-    state: 'starting' | 'running' | 'restarting' | 'missing' | 'stopped',
+    state: ServerUiState,
     detail?: string
 ): void {
+    runtimeState = state;
     if (!statusBarItem) {
         return;
     }
@@ -224,9 +267,13 @@ function setStatus(
             statusBarItem.text = '$(sync~spin) Arandu';
             statusBarItem.tooltip = 'Arandu Language Server: Starting';
             break;
-        case 'running':
+        case 'ready':
             statusBarItem.text = '$(check) Arandu';
-            statusBarItem.tooltip = 'Arandu Language Server: Running';
+            statusBarItem.tooltip = detail ?? 'Arandu Language Server: Ready';
+            break;
+        case 'indexing':
+            statusBarItem.text = '$(sync~spin) Arandu';
+            statusBarItem.tooltip = detail ?? 'Arandu Language Server: Indexing';
             break;
         case 'restarting':
             statusBarItem.text = '$(sync~spin) Arandu';

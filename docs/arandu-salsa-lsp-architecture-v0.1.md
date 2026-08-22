@@ -106,6 +106,11 @@
     document highlight reutiliza `prepare_rename`/`rename_occurrences` para
     obter identidade semântica e spans exatos. O servidor não infere
     read/write por texto quando o resolve ainda não classifica o acesso.
+19. A descoberta do workspace começa somente após o handshake completo, emite
+    `window/workDoneProgress/create` seguido por `$/progress` begin/end quando o
+    cliente declara suporte e publica estados `indexing`/`ready` para a UI. A
+    extensão limita reinícios automáticos e o Extension Host mata o processo
+    real para provar recuperação, diagnóstico e completion após o restart.
 
 ## F4 / P3 — delta on-type
 

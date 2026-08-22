@@ -20,7 +20,7 @@ use lsp_server::{Connection, Message, Notification, Request, RequestId, Response
 use lsp_types::notification::{
     Cancel, DidChangeTextDocument, DidChangeWatchedFiles, DidCloseTextDocument, DidCreateFiles,
     DidDeleteFiles, DidOpenTextDocument, DidRenameFiles, DidSaveTextDocument, Notification as _,
-    PublishDiagnostics,
+    Progress, PublishDiagnostics,
 };
 use lsp_types::request::{
     CodeActionRequest, Completion, DocumentHighlightRequest, DocumentSymbolRequest,
@@ -35,11 +35,11 @@ use lsp_types::{
     FileOperationPattern, FileOperationPatternKind, FileOperationRegistrationOptions,
     FoldingRangeProviderCapability, GotoDefinitionResponse, HoverProviderCapability,
     InitializeResult, Location, NumberOrString, OneOf, Position, PositionEncodingKind,
-    PublishDiagnosticsParams, RenameOptions, SelectionRangeProviderCapability,
-    SemanticTokensFullOptions, SemanticTokensOptions, SemanticTokensServerCapabilities,
-    ServerCapabilities, ServerInfo, SignatureHelpOptions, TextDocumentSyncCapability,
-    TextDocumentSyncKind, Uri, WorkDoneProgressOptions, WorkspaceFileOperationsServerCapabilities,
-    WorkspaceServerCapabilities, WorkspaceSymbolParams,
+    ProgressParams, ProgressParamsValue, ProgressToken, PublishDiagnosticsParams, RenameOptions,
+    SelectionRangeProviderCapability, SemanticTokensFullOptions, SemanticTokensOptions,
+    SemanticTokensServerCapabilities, ServerCapabilities, ServerInfo, SignatureHelpOptions,
+    TextDocumentSyncCapability, TextDocumentSyncKind, Uri, WorkDoneProgressOptions,
+    WorkspaceFileOperationsServerCapabilities, WorkspaceServerCapabilities, WorkspaceSymbolParams,
 };
 use pool::{CancellationToken, JobKey, Priority, WorkerPool};
 use rustc_hash::FxHashMap;
@@ -103,6 +103,9 @@ enum WorkspaceEvent {
     Done,
 }
 
+const WORKSPACE_PROGRESS_TOKEN: &str = "arandu-workspace-index";
+const WORKSPACE_PROGRESS_REQUEST_ID: &str = "arandu-workspace-progress-create";
+
 const LSP_CONTENT_MODIFIED: i32 = -32801;
 const LSP_REQUEST_CANCELLED: i32 = -32800;
 const LSP_SERVER_CANCELLED: i32 = -32802;
@@ -122,20 +125,33 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 }
 
 fn run(connection: Connection) -> Result<(), Box<dyn Error + Sync + Send>> {
-    let workspace_roots = initialize_connection(&connection)?;
+    let initialized = initialize_connection(&connection)?;
     let mut state = ServerState::new();
     let pool = WorkerPool::new(4)?;
     let (job_tx, job_rx) = crossbeam_channel::unbounded::<JobResult>();
-    let workspace_rx = spawn_workspace_discovery(&pool, workspace_roots);
+    if initialized.work_done_progress {
+        connection.sender.send(Message::Request(Request::new(
+            RequestId::from(WORKSPACE_PROGRESS_REQUEST_ID.to_owned()),
+            "window/workDoneProgress/create".into(),
+            serde_json::json!({ "token": WORKSPACE_PROGRESS_TOKEN }),
+        )))?;
+    }
+    send_server_status(&connection, "indexing", "Indexing workspace")?;
+    let workspace_rx = spawn_workspace_discovery(&pool, initialized.workspace_roots);
     event_loop(&connection, &mut state, &pool, job_tx, job_rx, workspace_rx)?;
     // Close lsp-server's sender before the stdio owner joins its writer thread.
     drop(connection);
     Ok(())
 }
 
+struct InitializedContext {
+    workspace_roots: Vec<PathBuf>,
+    work_done_progress: bool,
+}
+
 fn initialize_connection(
     connection: &Connection,
-) -> Result<Vec<PathBuf>, Box<dyn Error + Sync + Send>> {
+) -> Result<InitializedContext, Box<dyn Error + Sync + Send>> {
     let (initialize_id, initialize_params) = connection.initialize_start()?;
     let init: lsp_types::InitializeParams = serde_json::from_value(initialize_params)?;
     let mut workspace_roots = Vec::new();
@@ -228,15 +244,25 @@ fn initialize_connection(
             version: Some(env!("CARGO_PKG_VERSION").into()),
         }),
     };
+    let work_done_progress = init
+        .capabilities
+        .window
+        .as_ref()
+        .and_then(|window| window.work_done_progress)
+        .unwrap_or(false);
     connection.initialize_finish(initialize_id, serde_json::to_value(init_result)?)?;
-    Ok(workspace_roots)
+    Ok(InitializedContext {
+        workspace_roots,
+        work_done_progress,
+    })
 }
 
 fn spawn_workspace_discovery(pool: &WorkerPool, roots: Vec<PathBuf>) -> Receiver<WorkspaceEvent> {
     const DISCOVERY_BACKLOG: usize = 8;
     let (tx, rx) = bounded(DISCOVERY_BACKLOG);
     if roots.is_empty() {
-        return never();
+        let _ = tx.send(WorkspaceEvent::Done);
+        return rx;
     }
     let _ = pool.spawn(Priority::Background, None, move |cancellation| {
         // The compiler DB currently owns one ModuleRoots input. Select the
@@ -304,6 +330,8 @@ fn event_loop(
     job_rx: Receiver<JobResult>,
     mut workspace_rx: Receiver<WorkspaceEvent>,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
+    let mut workspace_progress_started = false;
+    let mut workspace_done = false;
     loop {
         let timeout = state
             .vfs
@@ -323,6 +351,23 @@ fn event_loop(
                     Message::Notification(not) => {
                         on_notification(connection, state, pool, &job_tx, not)?;
                     }
+                    Message::Response(response)
+                        if response.id == RequestId::from(WORKSPACE_PROGRESS_REQUEST_ID.to_owned())
+                            && response.response_result.is_ok() => {
+                            send_workspace_progress(connection, lsp_types::WorkDoneProgress::Begin(
+                                lsp_types::WorkDoneProgressBegin {
+                                    title: "Indexing Arandu workspace".into(),
+                                    cancellable: Some(false),
+                                    message: Some("Discovering packages and source files".into()),
+                                    percentage: None,
+                                },
+                            ))?;
+                            workspace_progress_started = true;
+                            if workspace_done {
+                                finish_workspace_progress(connection)?;
+                                workspace_progress_started = false;
+                            }
+                        }
                     Message::Response(_) => {}
                 }
             }
@@ -346,6 +391,12 @@ fn event_loop(
                     Ok(WorkspaceEvent::File(file)) => register_workspace_file(state, file),
                     Ok(WorkspaceEvent::Done) => {
                         spawn_open_diagnostics(state, pool, &job_tx);
+                        workspace_done = true;
+                        if workspace_progress_started {
+                            finish_workspace_progress(connection)?;
+                            workspace_progress_started = false;
+                        }
+                        send_server_status(connection, "ready", "Workspace ready")?;
                         workspace_rx = never();
                     }
                     Err(_) => workspace_rx = never(),
@@ -373,6 +424,9 @@ fn on_notification(
     not: Notification,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
     match not.method.as_str() {
+        "arandu/testCrash" if std::env::var_os("ARANDU_LSP_TEST_ALLOW_CRASH").is_some() => {
+            std::process::exit(86);
+        }
         Cancel::METHOD => {
             let params: CancelParams = not.extract(Cancel::METHOD)?;
             let id = match params.id {
@@ -506,6 +560,46 @@ fn on_notification(
         _ => {}
     }
     Ok(())
+}
+
+fn send_workspace_progress(
+    connection: &Connection,
+    progress: lsp_types::WorkDoneProgress,
+) -> Result<(), Box<dyn Error + Sync + Send>> {
+    let params = ProgressParams {
+        token: ProgressToken::String(WORKSPACE_PROGRESS_TOKEN.into()),
+        value: ProgressParamsValue::WorkDone(progress),
+    };
+    connection
+        .sender
+        .send(Message::Notification(Notification::new(
+            Progress::METHOD.into(),
+            serde_json::to_value(params)?,
+        )))?;
+    Ok(())
+}
+
+fn send_server_status(
+    connection: &Connection,
+    state: &str,
+    message: &str,
+) -> Result<(), Box<dyn Error + Sync + Send>> {
+    connection
+        .sender
+        .send(Message::Notification(Notification::new(
+            "arandu/status".into(),
+            serde_json::json!({ "state": state, "message": message }),
+        )))?;
+    Ok(())
+}
+
+fn finish_workspace_progress(connection: &Connection) -> Result<(), Box<dyn Error + Sync + Send>> {
+    send_workspace_progress(
+        connection,
+        lsp_types::WorkDoneProgress::End(lsp_types::WorkDoneProgressEnd {
+            message: Some("Workspace ready".into()),
+        }),
+    )
 }
 
 fn spawn_open_diagnostics(state: &ServerState, pool: &WorkerPool, job_tx: &Sender<JobResult>) {
@@ -1433,11 +1527,12 @@ mod startup_tests {
             )))
             .expect("send initialized");
 
-        let roots = server_thread
+        let initialized = server_thread
             .join()
             .expect("initialize thread")
             .expect("initialize result");
-        assert_eq!(roots.len(), 1);
+        assert_eq!(initialized.workspace_roots.len(), 1);
+        assert!(!initialized.work_done_progress);
     }
 
     #[test]

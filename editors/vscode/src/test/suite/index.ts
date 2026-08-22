@@ -4,6 +4,11 @@ import * as vscode from 'vscode';
 
 const TIMEOUT_MS = 10_000;
 
+interface AranduExtensionApi {
+    getRuntimeState(): { state: string; observedCrashCount: number };
+    testCrashServer(): Promise<void>;
+}
+
 export async function run(): Promise<void> {
     const serverPath = process.env.ARANDU_LSP_TEST_PATH;
     assert.ok(serverPath, 'ARANDU_LSP_TEST_PATH must point to the test server');
@@ -21,6 +26,8 @@ export async function run(): Promise<void> {
         const extension = vscode.extensions.getExtension('arandu.arandu-lang');
         assert.ok(extension, 'Arandu extension was not installed in the Extension Host');
         await extension.activate();
+        const api = extension.exports as AranduExtensionApi;
+        await poll(() => api.getRuntimeState().state === 'ready' ? true : undefined);
 
         const commands = await vscode.commands.getCommands(true);
         assert.ok(commands.includes('arandu.restartServer'));
@@ -31,6 +38,10 @@ export async function run(): Promise<void> {
             return current.some(diagnostic => diagnosticCode(diagnostic) === 'N001') ? current : undefined;
         });
         assert.ok(diagnostics.some(diagnostic => diagnosticCode(diagnostic) === 'N001'));
+        const unresolved = diagnostics.find(diagnostic => diagnosticCode(diagnostic) === 'N001');
+        assert.ok(unresolved, 'Problems must retain the compiler diagnostic code');
+        assert.equal(unresolved.source, 'arandu');
+        assert.ok(unresolved.range.end.isAfter(unresolved.range.start));
 
         const completions = await poll(async () => {
             const result = await vscode.commands.executeCommand<vscode.CompletionList>(
@@ -78,6 +89,19 @@ export async function run(): Promise<void> {
             ).then(result => result && result.items.length > 0 ? result : undefined)
         );
         assert.ok(afterRestart.items.length > 0);
+
+        const crashesBefore = api.getRuntimeState().observedCrashCount;
+        await api.testCrashServer();
+        await poll(() => api.getRuntimeState().observedCrashCount > crashesBefore ? true : undefined);
+        await poll(() => api.getRuntimeState().state === 'ready' ? true : undefined);
+        const afterCrashRecovery = await poll(() =>
+            vscode.commands.executeCommand<vscode.CompletionList>(
+                'vscode.executeCompletionItemProvider',
+                uri,
+                new vscode.Position(0, 4)
+            ).then(result => result && result.items.length > 0 ? result : undefined)
+        );
+        assert.ok(afterCrashRecovery.items.length > 0, 'completion must recover after a real server crash');
     } finally {
         await configuration.update('server.path', undefined, vscode.ConfigurationTarget.Global);
         await vscode.commands.executeCommand('workbench.action.closeAllEditors');

@@ -78,15 +78,19 @@ impl LspProcess {
 
     fn wait_for(&self, mut predicate: impl FnMut(&Value) -> bool) -> Value {
         let deadline = Instant::now() + MESSAGE_TIMEOUT;
+        let mut observed = Vec::new();
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             let message = self
                 .messages
                 .recv_timeout(remaining)
-                .expect("timed out waiting for LSP message");
+                .unwrap_or_else(|error| {
+                    panic!("timed out waiting for LSP message ({error:?}); observed: {observed:?}")
+                });
             if predicate(&message) {
                 return message;
             }
+            observed.push(message);
         }
     }
 
@@ -214,6 +218,80 @@ impl Drop for LspProcess {
             let _ = self.child.wait();
         }
     }
+}
+
+#[test]
+fn stdio_workspace_index_reports_standard_progress_and_status() {
+    let fixture = FixtureDir::new();
+    let mut lsp = LspProcess::spawn();
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "processId": null,
+            "capabilities": { "window": { "workDoneProgress": true } },
+            "workspaceFolders": [{
+                "uri": file_uri(fixture.path()),
+                "name": "progress-fixture"
+            }]
+        }
+    }));
+    assert!(lsp.wait_for_response(1).get("error").is_none());
+    lsp.send(&json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }));
+
+    let create = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("window/workDoneProgress/create")
+    });
+    assert_eq!(
+        create.pointer("/params/token").and_then(Value::as_str),
+        Some("arandu-workspace-index")
+    );
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "id": create.get("id").expect("progress request id"),
+        "result": null
+    }));
+
+    let indexing = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("arandu/status")
+            && message.pointer("/params/state").and_then(Value::as_str) == Some("indexing")
+    });
+    assert_eq!(
+        indexing.pointer("/params/message").and_then(Value::as_str),
+        Some("Indexing workspace")
+    );
+    let begin = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("$/progress")
+            && message
+                .pointer("/params/value/kind")
+                .and_then(Value::as_str)
+                == Some("begin")
+    });
+    assert_eq!(
+        begin.pointer("/params/token").and_then(Value::as_str),
+        Some("arandu-workspace-index")
+    );
+    let end = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("$/progress")
+            && message
+                .pointer("/params/value/kind")
+                .and_then(Value::as_str)
+                == Some("end")
+    });
+    assert_eq!(
+        end.pointer("/params/value/message").and_then(Value::as_str),
+        Some("Workspace ready")
+    );
+    let ready = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("arandu/status")
+            && message.pointer("/params/state").and_then(Value::as_str) == Some("ready")
+    });
+    assert_eq!(
+        ready.pointer("/params/message").and_then(Value::as_str),
+        Some("Workspace ready")
+    );
+    lsp.shutdown(2);
 }
 
 #[test]

@@ -23,7 +23,10 @@ async function main(): Promise<void> {
                 `--user-data-dir=${userDataPath}`,
                 `--extensions-dir=${extensionsPath}`
             ],
-            extensionTestsEnv: { ARANDU_LSP_TEST_PATH: serverPath }
+            extensionTestsEnv: {
+                ARANDU_LSP_TEST_PATH: serverPath,
+                ARANDU_LSP_TEST_ALLOW_CRASH: '1'
+            }
         });
     } finally {
         fs.rmSync(userDataPath, { recursive: true, force: true });
