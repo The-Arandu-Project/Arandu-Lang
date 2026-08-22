@@ -58,6 +58,8 @@
 3. didChange **não** commita Salsa por tecla; flush no debounce / didSave / goto.  
 4. Diagnostics via `file_ide_diagnostics` (F4); fingerprint blake3 evita republish no-op.  
 5. CST-first Rowan: `syntax_tree` tenta reparse do ITEM tocado e reutiliza os green nodes irmãos; fallback seguro faz parse completo.
+6. `initialize` conclui antes de I/O do workspace; a descoberta determinística e
+   limitada ocorre em worker, e cada fonte retorna à main para registro na DB.
 
 ## F4 / P3 — delta on-type
 

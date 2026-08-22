@@ -1,6 +1,8 @@
 //! Server state: AnalysisHost + DocumentStore + VFS + URI maps.
 
-use crate::uri_util::{parse_uri, path_from_uri, uri_from_path};
+#[cfg(test)]
+use crate::uri_util::uri_from_path;
+use crate::uri_util::{parse_uri, path_from_uri};
 use crate::vfs::Vfs;
 use arandu_middle::resolved::NodeKey;
 use arandu_query::db::SourceFile;
@@ -163,37 +165,52 @@ impl Default for ServerState {
     }
 }
 
-/// Register `.aru` files under `root` into the Salsa DB (without editor open).
-/// Caps at 256 files to keep initialize cheap.
-pub fn walk_register_aru(st: &mut ServerState, root: &std::path::Path) {
-    let mut stack = vec![root.to_path_buf()];
-    let mut n = 0u32;
+/// Read a deterministic, bounded set of workspace sources outside the LSP
+/// handshake. Registration remains on the main server thread.
+#[must_use]
+pub fn discover_aru_files(roots: &[PathBuf]) -> Vec<(PathBuf, String)> {
+    const MAX_FILES: usize = 256;
+
+    let mut stack = roots.to_vec();
+    stack.sort();
+    stack.reverse();
+    let mut paths = std::collections::BTreeSet::new();
+
     while let Some(dir) = stack.pop() {
         let Ok(rd) = std::fs::read_dir(&dir) else {
             continue;
         };
-        for ent in rd.flatten() {
+        let mut entries: Vec<_> = rd.flatten().collect();
+        entries.sort_by_key(std::fs::DirEntry::path);
+        for ent in entries.into_iter().rev() {
             let p = ent.path();
             if p.is_dir() {
-                if p.file_name().and_then(|s| s.to_str()) == Some("target") {
+                if matches!(
+                    p.file_name().and_then(|s| s.to_str()),
+                    Some("target" | ".git" | "node_modules")
+                ) {
                     continue;
                 }
                 stack.push(p);
             } else if p.extension().and_then(|s| s.to_str()) == Some("aru") {
-                if n >= 256 {
-                    return;
+                paths.insert(p);
+                if paths.len() >= MAX_FILES {
+                    break;
                 }
-                let Ok(text) = std::fs::read_to_string(&p) else {
-                    continue;
-                };
-                let Some(uri) = uri_from_path(&p) else {
-                    continue;
-                };
-                st.open_or_commit(&uri, text);
-                n += 1;
             }
         }
+        if paths.len() >= MAX_FILES {
+            break;
+        }
     }
+
+    paths
+        .into_iter()
+        .filter_map(|path| {
+            let text = std::fs::read_to_string(&path).ok()?;
+            Some((path, text))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -205,6 +222,34 @@ mod tests {
         uri_from_path(std::path::Path::new(&format!("/tmp/{name}")))
             .or_else(|| parse_uri(&format!("file:///tmp/{name}")))
             .expect("uri")
+    }
+
+    #[test]
+    fn workspace_discovery_is_sorted_bounded_and_skips_build_trees() {
+        let root = std::env::temp_dir().join(format!(
+            "arandu-lsp-discovery-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock after Unix epoch")
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).expect("create source fixture");
+        std::fs::create_dir_all(root.join("target")).expect("create ignored fixture");
+        std::fs::write(root.join("src/z.aru"), "func z() {}").expect("write z");
+        std::fs::write(root.join("src/a.aru"), "func a() {}").expect("write a");
+        std::fs::write(root.join("target/ignored.aru"), "func ignored() {}")
+            .expect("write ignored");
+
+        let files = discover_aru_files(std::slice::from_ref(&root));
+        let names: Vec<_> = files
+            .iter()
+            .filter_map(|(path, _)| path.file_name().and_then(|name| name.to_str()))
+            .collect();
+        assert_eq!(names, vec!["a.aru", "z.aru"]);
+
+        std::fs::remove_dir_all(root).expect("remove discovery fixture");
     }
 
     #[test]

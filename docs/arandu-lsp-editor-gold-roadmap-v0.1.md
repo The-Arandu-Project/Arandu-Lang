@@ -17,10 +17,11 @@ workspace inteiro a cada tecla. O Arandu combina:
 - operação parcial durante indexação, reload e código quebrado;
 - métricas reproduzíveis de cold start, latência, memória, backlog e stale work.
 
-Auditoria do código em 2026-08-21 encontrou dois bloqueadores imediatos:
+Auditoria do código em 2026-08-21 encontrou dois bloqueadores imediatos. O
+primeiro foi removido em L0-A; o segundo pertence a L1-A:
 
-1. `initialize` chama `walk_register_aru` e visita até 256 arquivos antes de
-   responder ao cliente;
+1. ~~`initialize` chama `walk_register_aru` e visita até 256 arquivos antes de
+   responder ao cliente~~ — resolvido: o handshake agora precede toda descoberta;
 2. revisões antigas são descartadas com segurança, mas os jobs continuam
    consumindo CPU em uma fila sem backpressure nem cancelamento LSP.
 
@@ -187,7 +188,7 @@ do editor e contrato próprio no roadmap mestre.
 - [ ] Manifest completo, identidade visual e package `.vsix` auditado.
 - [ ] TextMate/semantic tokens testados em Dark+, Light+ e High Contrast.
 - [ ] Harness stdio mede initialize/diagnóstico/requests e detecta regressão p95.
-- [ ] `initialize` responde antes de qualquer caminhada ou análise do workspace.
+- [x] `initialize` responde antes de qualquer caminhada ou análise do workspace.
 - [ ] Descoberta pós-handshake prioriza arquivos abertos e não bloqueia requests.
 
 **DoD L0:** a extensão tem o mesmo nível mínimo de gate que o workspace Rust.

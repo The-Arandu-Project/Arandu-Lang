@@ -34,7 +34,7 @@ use lsp_types::{
 };
 use pool::WorkerPool;
 use rustc_hash::FxHashMap;
-use state::{walk_register_aru, ServerState};
+use state::{discover_aru_files, ServerState};
 use std::error::Error;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
@@ -59,6 +59,10 @@ enum JobResult {
         id: Option<RequestId>,
         revision: AnalysisRevision,
     },
+    WorkspaceFile {
+        path: PathBuf,
+        text: String,
+    },
 }
 
 const LSP_CONTENT_MODIFIED: i32 = -32801;
@@ -72,28 +76,46 @@ struct DocInfo {
 
 fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let (connection, io_threads) = Connection::stdio();
+    run(connection)?;
+    io_threads.join()?;
+    Ok(())
+}
+
+fn run(connection: Connection) -> Result<(), Box<dyn Error + Sync + Send>> {
+    let workspace_roots = initialize_connection(&connection)?;
+    let mut state = ServerState::new();
+    let pool = WorkerPool::new(4)?;
+    let (job_tx, job_rx) = crossbeam_channel::unbounded::<JobResult>();
+    spawn_workspace_discovery(&pool, &job_tx, workspace_roots);
+    event_loop(&connection, &mut state, &pool, job_tx, job_rx)?;
+    // Close lsp-server's sender before the stdio owner joins its writer thread.
+    drop(connection);
+    Ok(())
+}
+
+fn initialize_connection(
+    connection: &Connection,
+) -> Result<Vec<PathBuf>, Box<dyn Error + Sync + Send>> {
     let (initialize_id, initialize_params) = connection.initialize_start()?;
     let init: lsp_types::InitializeParams = serde_json::from_value(initialize_params)?;
-
-    let mut state = ServerState::new();
-    if let Some(folders) = init.workspace_folders {
-        for folder in folders {
+    let mut workspace_roots = Vec::new();
+    if let Some(folders) = init.workspace_folders.as_ref() {
+        workspace_roots.extend(folders.iter().filter_map(|folder| {
             let root = path_from_uri(&folder.uri);
-            if root.as_os_str().is_empty() {
-                continue;
-            }
-            walk_register_aru(&mut state, &root);
-        }
+            (!root.as_os_str().is_empty()).then_some(root)
+        }));
     } else {
         // root_uri deprecated in favor of workspace_folders; still used by older clients.
         #[allow(deprecated)]
         if let Some(root_uri) = init.root_uri.as_ref() {
             let root = path_from_uri(root_uri);
             if !root.as_os_str().is_empty() {
-                walk_register_aru(&mut state, &root);
+                workspace_roots.push(root);
             }
         }
     }
+    workspace_roots.sort();
+    workspace_roots.dedup();
 
     let server_caps = ServerCapabilities {
         text_document_sync: Some(TextDocumentSyncCapability::Kind(
@@ -142,16 +164,21 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         }),
     };
     connection.initialize_finish(initialize_id, serde_json::to_value(init_result)?)?;
+    Ok(workspace_roots)
+}
 
-    let pool = WorkerPool::new(4)?;
-    let (job_tx, job_rx) = crossbeam_channel::unbounded::<JobResult>();
-    event_loop(&connection, &mut state, &pool, job_tx, job_rx)?;
-    // Close lsp-server's sender before joining its writer thread. Keeping the
-    // Connection alive here makes a clean shutdown wait forever for a channel
-    // that this process itself still owns.
-    drop(connection);
-    io_threads.join()?;
-    Ok(())
+fn spawn_workspace_discovery(pool: &WorkerPool, job_tx: &Sender<JobResult>, roots: Vec<PathBuf>) {
+    if roots.is_empty() {
+        return;
+    }
+    let tx = job_tx.clone();
+    pool.spawn(move || {
+        for (path, text) in discover_aru_files(&roots) {
+            if tx.send(JobResult::WorkspaceFile { path, text }).is_err() {
+                break;
+            }
+        }
+    });
 }
 
 fn event_loop(
@@ -777,6 +804,15 @@ fn handle_job_result(
                 )))?;
             }
         }
+        JobResult::WorkspaceFile { path, text } => {
+            let Some(uri) = uri_from_path(&path) else {
+                return Ok(());
+            };
+            // Never replace a newer editor buffer with a stale disk snapshot.
+            if !state.by_uri.contains_key(uri.as_str()) {
+                state.open_or_commit(&uri, text);
+            }
+        }
     }
     Ok(())
 }
@@ -797,4 +833,59 @@ fn publish_diagnostics(
     );
     connection.sender.send(Message::Notification(not))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod startup_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn initialize_finishes_before_workspace_discovery() {
+        let (server, client) = Connection::memory();
+        let root = uri_from_path(std::path::Path::new("/workspace/with-many-files"))
+            .or_else(|| parse_uri("file:///workspace/with-many-files"))
+            .expect("workspace URI");
+        let request = Request::new(
+            RequestId::from(1),
+            "initialize".into(),
+            serde_json::json!({
+                "processId": null,
+                "capabilities": {},
+                "workspaceFolders": [{ "uri": root, "name": "fixture" }]
+            }),
+        );
+
+        let server_thread = std::thread::spawn(move || initialize_connection(&server));
+        let started = Instant::now();
+        client
+            .sender
+            .send(Message::Request(request))
+            .expect("send initialize");
+        let response = client
+            .receiver
+            .recv_timeout(Duration::from_millis(250))
+            .expect("initialize must satisfy the cold p95 budget");
+        assert!(matches!(
+            response,
+            Message::Response(Response {
+                response_result: Ok(_),
+                ..
+            })
+        ));
+        assert!(started.elapsed() < Duration::from_millis(250));
+        client
+            .sender
+            .send(Message::Notification(Notification::new(
+                "initialized".into(),
+                serde_json::json!({}),
+            )))
+            .expect("send initialized");
+
+        let roots = server_thread
+            .join()
+            .expect("initialize thread")
+            .expect("initialize result");
+        assert_eq!(roots.len(), 1);
+    }
 }
