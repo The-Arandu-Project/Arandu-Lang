@@ -9,10 +9,11 @@ use arandu_query::{AnalysisSnapshot, SourceFile};
 use arandu_semantics::TypeCheckResult;
 use lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionResponse, CompletionItem,
-    CompletionItemKind, Documentation, Hover, HoverContents, Location, MarkupContent, MarkupKind,
-    ParameterInformation, ParameterLabel, Position, SemanticToken, SemanticTokenModifier,
-    SemanticTokenType, SemanticTokens, SemanticTokensLegend, SymbolInformation,
-    SymbolKind as LspSymbolKind, TextEdit as LspTextEdit, Uri, WorkspaceEdit,
+    CompletionItemKind, DocumentHighlight, DocumentHighlightKind, Documentation, FoldingRange,
+    FoldingRangeKind, Hover, HoverContents, Location, MarkupContent, MarkupKind,
+    ParameterInformation, ParameterLabel, Position, SelectionRange, SemanticToken,
+    SemanticTokenModifier, SemanticTokenType, SemanticTokens, SemanticTokensLegend,
+    SymbolInformation, SymbolKind as LspSymbolKind, TextEdit as LspTextEdit, Uri, WorkspaceEdit,
 };
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
@@ -627,6 +628,164 @@ pub fn references(
     locs.sort_by_key(|l| (l.range.start.line, l.range.start.character));
     locs.dedup_by(|a, b| a.range == b.range);
     locs
+}
+
+#[must_use]
+pub fn document_highlights(
+    snap: &AnalysisSnapshot,
+    source: SourceFile,
+    text: &str,
+    position: Position,
+) -> Vec<DocumentHighlight> {
+    let index = LineIndex::new(text);
+    let offset = position_to_offset(&index, position, text);
+    let Ok(target) = arandu_query::prepare_rename(&snap.db, source, offset) else {
+        return Vec::new();
+    };
+    arandu_query::rename_occurrences(&snap.db, source, target.symbol)
+        .into_iter()
+        .map(|span| DocumentHighlight {
+            range: span_to_range(&index, span),
+            // Resolution currently records identity, not access mode. Text is
+            // preferable to inventing read/write semantics from source text.
+            kind: Some(DocumentHighlightKind::TEXT),
+        })
+        .collect()
+}
+
+#[must_use]
+pub fn folding_ranges(
+    snap: &AnalysisSnapshot,
+    source: SourceFile,
+    text: &str,
+) -> Vec<FoldingRange> {
+    let tree = arandu_query::passes::syntax_tree(&snap.db, source);
+    let index = LineIndex::new(text);
+    let file_id = *source.file_id(&snap.db);
+    let mut ranges = Vec::new();
+
+    for node in tree.root().descendants() {
+        if node.kind() == arandu_parser::SyntaxKind::BLOCK {
+            push_folding_range(
+                &mut ranges,
+                &index,
+                file_id,
+                u32::from(node.text_range().start()),
+                u32::from(node.text_range().end()),
+                None,
+            );
+        }
+    }
+    for token in tree
+        .root()
+        .descendants_with_tokens()
+        .filter_map(|element| element.into_token())
+    {
+        if token.kind() == arandu_parser::SyntaxKind::COMMENT {
+            push_folding_range(
+                &mut ranges,
+                &index,
+                file_id,
+                u32::from(token.text_range().start()),
+                u32::from(token.text_range().end()),
+                Some(FoldingRangeKind::Comment),
+            );
+        }
+    }
+    ranges.sort_by_key(|range| {
+        (
+            range.start_line,
+            range.start_character,
+            range.end_line,
+            range.end_character,
+        )
+    });
+    ranges.dedup_by(|left, right| {
+        left.start_line == right.start_line
+            && left.start_character == right.start_character
+            && left.end_line == right.end_line
+            && left.end_character == right.end_character
+    });
+    ranges
+}
+
+fn push_folding_range(
+    ranges: &mut Vec<FoldingRange>,
+    index: &LineIndex,
+    file_id: u32,
+    start: u32,
+    end: u32,
+    kind: Option<FoldingRangeKind>,
+) {
+    let range = span_to_range(index, arandu_base::Span::new(file_id, start, end));
+    if range.start.line >= range.end.line {
+        return;
+    }
+    ranges.push(FoldingRange {
+        start_line: range.start.line,
+        start_character: Some(range.start.character),
+        end_line: range.end.line,
+        end_character: Some(range.end.character),
+        kind,
+        collapsed_text: None,
+    });
+}
+
+#[must_use]
+pub fn selection_ranges(
+    snap: &AnalysisSnapshot,
+    source: SourceFile,
+    text: &str,
+    positions: &[Position],
+) -> Vec<SelectionRange> {
+    let tree = arandu_query::passes::syntax_tree(&snap.db, source);
+    let root = tree.root();
+    let index = LineIndex::new(text);
+    let file_id = *source.file_id(&snap.db);
+    positions
+        .iter()
+        .map(|&position| {
+            let offset = position_to_offset(&index, position, text);
+            let token = root
+                .token_at_offset(offset.into())
+                .right_biased()
+                .or_else(|| root.token_at_offset(offset.into()).left_biased());
+            let mut byte_ranges = Vec::new();
+            if let Some(token) = token {
+                byte_ranges.push((
+                    u32::from(token.text_range().start()),
+                    u32::from(token.text_range().end()),
+                ));
+                byte_ranges.extend(token.parent().into_iter().flat_map(|parent| {
+                    parent.ancestors().map(|node| {
+                        (
+                            u32::from(node.text_range().start()),
+                            u32::from(node.text_range().end()),
+                        )
+                    })
+                }));
+            } else {
+                byte_ranges.push((0, u32::try_from(text.len()).unwrap_or(u32::MAX)));
+            }
+            byte_ranges.retain(|(start, end)| start < end && *start <= offset && offset <= *end);
+            byte_ranges.dedup();
+
+            let mut parent = None;
+            for (start, end) in byte_ranges.into_iter().rev() {
+                parent = Some(Box::new(SelectionRange {
+                    range: span_to_range(&index, arandu_base::Span::new(file_id, start, end)),
+                    parent,
+                }));
+            }
+            parent.map_or_else(
+                || SelectionRange {
+                    range: lsp_types::Range::new(position, position),
+                    parent: None,
+                },
+                |range| *range,
+            )
+        })
+        .collect()
 }
 
 pub fn prepare_rename(
@@ -1364,5 +1523,83 @@ mod tests {
         let text = file.text(&snap.db);
         let uri = crate::uri_util::parse_uri("file:///h.aru").expect("uri");
         let _syms = document_symbols(&snap, file, text, &uri);
+    }
+
+    #[test]
+    fn folding_ranges_come_from_multiline_cst_blocks_and_comments() {
+        let text = concat!(
+            "/** first\nsecond */\n",
+            "func main(): int {\n",
+            "    if true {\n",
+            "        return 1\n",
+            "    }\n",
+            "    return 0\n",
+            "}\n",
+        );
+        let mut host = AnalysisHost::new();
+        let file = host.new_file("folding.aru".into(), text.into());
+        let snap = host.snapshot();
+        let ranges = folding_ranges(&snap, file, text);
+        assert!(ranges.iter().any(|range| {
+            range.kind == Some(FoldingRangeKind::Comment)
+                && range.start_line == 0
+                && range.end_line == 1
+        }));
+        assert!(ranges
+            .iter()
+            .any(|range| { range.kind.is_none() && range.start_line == 2 && range.end_line == 7 }));
+        assert!(ranges
+            .iter()
+            .any(|range| { range.kind.is_none() && range.start_line == 3 && range.end_line == 5 }));
+        assert!(ranges.iter().all(|range| range.start_line < range.end_line));
+    }
+
+    #[test]
+    fn selection_ranges_are_strictly_nested_cst_ancestors() {
+        let text = "func main(): int {\n    return 1 + 2\n}\n";
+        let mut host = AnalysisHost::new();
+        let file = host.new_file("selection.aru".into(), text.into());
+        let snap = host.snapshot();
+        let offset = text.find('1').expect("integer expression");
+        let position = offset_to_position(
+            &LineIndex::new(text),
+            u32::try_from(offset).expect("fixture offset fits u32"),
+        );
+        let ranges = selection_ranges(&snap, file, text, &[position]);
+        assert_eq!(ranges.len(), 1);
+        let mut current = &ranges[0];
+        let mut depth = 1;
+        while let Some(parent) = current.parent.as_deref() {
+            assert!(parent.range.start <= current.range.start);
+            assert!(parent.range.end >= current.range.end);
+            assert_ne!(parent.range, current.range);
+            current = parent;
+            depth += 1;
+        }
+        assert!(
+            depth >= 4,
+            "expected token, expr, stmt, block and item ranges"
+        );
+    }
+
+    #[test]
+    fn document_highlights_share_resolved_symbol_identity() {
+        let text = concat!(
+            "func add(value: int): int { return value }\n",
+            "func main(): int { return add(1) }\n",
+        );
+        let mut host = AnalysisHost::new();
+        let file = host.new_file("highlights.aru".into(), text.into());
+        let snap = host.snapshot();
+        let definition = text.find("add").expect("function definition");
+        let position = offset_to_position(
+            &LineIndex::new(text),
+            u32::try_from(definition).expect("fixture offset fits u32"),
+        );
+        let highlights = document_highlights(&snap, file, text, position);
+        assert_eq!(highlights.len(), 2);
+        assert!(highlights
+            .iter()
+            .all(|highlight| highlight.kind == Some(DocumentHighlightKind::TEXT)));
     }
 }

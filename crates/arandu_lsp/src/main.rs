@@ -23,8 +23,9 @@ use lsp_types::notification::{
     PublishDiagnostics,
 };
 use lsp_types::request::{
-    CodeActionRequest, Completion, DocumentSymbolRequest, Formatting, GotoDefinition, HoverRequest,
-    PrepareRenameRequest, References, Rename, Request as _, SemanticTokensFullRequest,
+    CodeActionRequest, Completion, DocumentHighlightRequest, DocumentSymbolRequest,
+    FoldingRangeRequest, Formatting, GotoDefinition, HoverRequest, PrepareRenameRequest,
+    References, Rename, Request as _, SelectionRangeRequest, SemanticTokensFullRequest,
     SemanticTokensRangeRequest, SignatureHelpRequest, WorkspaceSymbolRequest,
 };
 use lsp_types::{
@@ -32,8 +33,9 @@ use lsp_types::{
     CompletionOptions, CompletionResponse, Diagnostic, DiagnosticRelatedInformation,
     DiagnosticSeverity, DiagnosticTag, DocumentSymbolResponse, FileChangeType, FileOperationFilter,
     FileOperationPattern, FileOperationPatternKind, FileOperationRegistrationOptions,
-    GotoDefinitionResponse, HoverProviderCapability, InitializeResult, Location, NumberOrString,
-    OneOf, Position, PositionEncodingKind, PublishDiagnosticsParams, RenameOptions,
+    FoldingRangeProviderCapability, GotoDefinitionResponse, HoverProviderCapability,
+    InitializeResult, Location, NumberOrString, OneOf, Position, PositionEncodingKind,
+    PublishDiagnosticsParams, RenameOptions, SelectionRangeProviderCapability,
     SemanticTokensFullOptions, SemanticTokensOptions, SemanticTokensServerCapabilities,
     ServerCapabilities, ServerInfo, SignatureHelpOptions, TextDocumentSyncCapability,
     TextDocumentSyncKind, Uri, WorkDoneProgressOptions, WorkspaceFileOperationsServerCapabilities,
@@ -185,6 +187,9 @@ fn initialize_connection(
             work_done_progress_options: WorkDoneProgressOptions::default(),
         }),
         references_provider: Some(OneOf::Left(true)),
+        document_highlight_provider: Some(OneOf::Left(true)),
+        folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+        selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
         rename_provider: Some(OneOf::Right(RenameOptions {
             prepare_provider: Some(true),
             work_done_progress_options: WorkDoneProgressOptions::default(),
@@ -541,6 +546,9 @@ fn on_request(
         | HoverRequest::METHOD
         | Completion::METHOD
         | References::METHOD
+        | DocumentHighlightRequest::METHOD
+        | FoldingRangeRequest::METHOD
+        | SelectionRangeRequest::METHOD
         | PrepareRenameRequest::METHOD
         | Rename::METHOD
         | SignatureHelpRequest::METHOD
@@ -619,6 +627,47 @@ fn on_request(
                 let text = info.source.text(&snap.db);
                 let locs = ide::references(snap, info.source, text, pos, &uri);
                 serde_json::to_value(locs).unwrap_or(serde_json::Value::Null)
+            });
+        }
+        DocumentHighlightRequest::METHOD => {
+            let (id, params) = req
+                .extract::<lsp_types::DocumentHighlightParams>(DocumentHighlightRequest::METHOD)?;
+            let uri = params.text_document_position_params.text_document.uri;
+            let pos = params.text_document_position_params.position;
+            spawn_json(state, pool, job_tx, id, move |snap, docs| {
+                let Some(info) = docs.get(uri.as_str()) else {
+                    return serde_json::Value::Null;
+                };
+                let text = info.source.text(&snap.db);
+                let highlights = ide::document_highlights(snap, info.source, text, pos);
+                serde_json::to_value(highlights).unwrap_or(serde_json::Value::Null)
+            });
+        }
+        FoldingRangeRequest::METHOD => {
+            let (id, params) =
+                req.extract::<lsp_types::FoldingRangeParams>(FoldingRangeRequest::METHOD)?;
+            let uri = params.text_document.uri;
+            spawn_json(state, pool, job_tx, id, move |snap, docs| {
+                let Some(info) = docs.get(uri.as_str()) else {
+                    return serde_json::Value::Null;
+                };
+                let text = info.source.text(&snap.db);
+                serde_json::to_value(ide::folding_ranges(snap, info.source, text))
+                    .unwrap_or(serde_json::Value::Null)
+            });
+        }
+        SelectionRangeRequest::METHOD => {
+            let (id, params) =
+                req.extract::<lsp_types::SelectionRangeParams>(SelectionRangeRequest::METHOD)?;
+            let uri = params.text_document.uri;
+            let positions = params.positions;
+            spawn_json(state, pool, job_tx, id, move |snap, docs| {
+                let Some(info) = docs.get(uri.as_str()) else {
+                    return serde_json::Value::Null;
+                };
+                let text = info.source.text(&snap.db);
+                serde_json::to_value(ide::selection_ranges(snap, info.source, text, &positions))
+                    .unwrap_or(serde_json::Value::Null)
             });
         }
         Rename::METHOD => {

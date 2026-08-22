@@ -163,6 +163,19 @@ impl LspProcess {
             Some(true),
             "safe rename requires the prepareRename handshake: {response}"
         );
+        for capability in [
+            "foldingRangeProvider",
+            "selectionRangeProvider",
+            "documentHighlightProvider",
+        ] {
+            assert_eq!(
+                response
+                    .pointer(&format!("/result/capabilities/{capability}"))
+                    .and_then(Value::as_bool),
+                Some(true),
+                "initialize must advertise {capability}: {response}"
+            );
+        }
         let elapsed = started.elapsed();
         self.send(&json!({
             "jsonrpc": "2.0",
@@ -1381,6 +1394,90 @@ fn stdio_concurrent_requests_keep_open_documents_isolated() {
     }
 
     lsp.shutdown(18);
+}
+
+#[test]
+fn stdio_cst_navigation_features_are_advertised_and_structured() {
+    let fixture = FixtureDir::new();
+    let uri = file_uri(&fixture.path().join("structure.aru"));
+    let source = concat!(
+        "/** heading\ncontinued */\n",
+        "func add(value: int): int {\n",
+        "    return value\n",
+        "}\n",
+        "func main(): int {\n",
+        "    return add(1)\n",
+        "}\n",
+    );
+    let mut lsp = LspProcess::spawn();
+    lsp.initialize(fixture.path(), 1);
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didOpen",
+        "params": {
+            "textDocument": {
+                "uri": uri,
+                "languageId": "arandu",
+                "version": 1,
+                "text": source
+            }
+        }
+    }));
+    let _ = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && message.pointer("/params/uri").and_then(Value::as_str) == Some(uri.as_str())
+    });
+
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "id": 2, "method": "textDocument/foldingRange",
+        "params": { "textDocument": { "uri": uri } }
+    }));
+    let folding = lsp.wait_for_response(2);
+    assert!(
+        folding
+            .pointer("/result")
+            .and_then(Value::as_array)
+            .is_some_and(|ranges| ranges
+                .iter()
+                .any(|range| range.get("kind") == Some(&json!("comment")))
+                && ranges
+                    .iter()
+                    .filter(|range| range.get("kind").is_none())
+                    .count()
+                    >= 2),
+        "folding must expose multiline comments and CST blocks: {folding}"
+    );
+
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "id": 3, "method": "textDocument/selectionRange",
+        "params": {
+            "textDocument": { "uri": uri },
+            "positions": [{ "line": 6, "character": 12 }]
+        }
+    }));
+    let selection = lsp.wait_for_response(3);
+    assert!(
+        selection.pointer("/result/0/parent/parent").is_some(),
+        "selection must return an enclosing CST chain: {selection}"
+    );
+
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "id": 4, "method": "textDocument/documentHighlight",
+        "params": {
+            "textDocument": { "uri": uri },
+            "position": { "line": 2, "character": 7 }
+        }
+    }));
+    let highlights = lsp.wait_for_response(4);
+    assert_eq!(
+        highlights
+            .pointer("/result")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(2),
+        "document highlights must use resolved identity: {highlights}"
+    );
+    lsp.shutdown(5);
 }
 
 #[derive(Debug)]

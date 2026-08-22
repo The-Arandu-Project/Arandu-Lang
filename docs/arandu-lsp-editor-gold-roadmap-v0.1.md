@@ -234,7 +234,9 @@ do editor e contrato próprio no roadmap mestre.
 - [x] Medir p50/p95 end-to-end de diagnóstico, completion, goto e rename no
       corpus IDE versionado, com warm-up, nearest-rank, validação semântica,
       budgets nativos e relatório histórico por commit/plataforma.
-- [ ] Folding, selection ranges e document highlights baseados no CST/resolve.
+- [x] Folding de blocos e doc comments multilinha, selection ranges aninhados e
+      document highlights usam respectivamente CST e identidade semântica; as
+      três capabilities têm regressões unitárias e stdio UTF-16 estruturadas.
 - [ ] Validar Problems, Output, status, progress e recuperação de crash no editor.
 
 **DoD L2:** o editor pode ser usado diariamente para desenvolver os projetos do corpus.

@@ -102,6 +102,10 @@
     versionado: warm-up e 21 amostras produzem p50/p95 de diagnóstico,
     completion, goto e rename; cada resposta é validada antes de entrar na
     amostra e o relatório identifica commit, SO e arquitetura.
+18. Folding e selection range caminham exclusivamente o CST congelado;
+    document highlight reutiliza `prepare_rename`/`rename_occurrences` para
+    obter identidade semântica e spans exatos. O servidor não infere
+    read/write por texto quando o resolve ainda não classifica o acesso.
 
 ## F4 / P3 — delta on-type
 
