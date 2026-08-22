@@ -222,7 +222,9 @@ do editor e contrato próprio no roadmap mestre.
 
 - [x] Abrir, fechar, criar, excluir e renomear arquivos durante uma sessão.
 - [x] Imports locais e stdlib atualizam completion/goto/diagnósticos sem restart.
-- [ ] Rename detecta nome inválido e conflitos; preview pertence à extensão, não à query pura.
+- [x] Rename detecta nome inválido e conflitos; `prepareRename` fornece o span
+      exato, edits multi-file são ordenados/deduplicados e o preview pertence à
+      extensão, não à query pura.
 - [ ] Formatter-on-save é opt-in, idempotente e não move o cursor de forma surpreendente.
 - [ ] Testar vários documentos abertos e requests concorrentes em snapshots.
 - [ ] Medir p50/p95 de diagnóstico, completion, goto e rename em corpus versionado.

@@ -135,6 +135,13 @@ impl LspProcess {
                 "server must scope {operation} notifications to Arandu files: {response}"
             );
         }
+        assert_eq!(
+            response
+                .pointer("/result/capabilities/renameProvider/prepareProvider")
+                .and_then(Value::as_bool),
+            Some(true),
+            "safe rename requires the prepareRename handshake: {response}"
+        );
         let elapsed = started.elapsed();
         self.send(&json!({
             "jsonrpc": "2.0",
@@ -404,6 +411,96 @@ fn stdio_incremental_unicode_edits_compose_before_debounce() {
     );
 
     lsp.shutdown(3);
+}
+
+#[test]
+fn stdio_rename_prepares_and_rejects_unsafe_names() {
+    let fixture = FixtureDir::new();
+    let document = fixture.path().join("rename.aru");
+    let uri = file_uri(&document);
+    let source = concat!(
+        "func choose(value: int): int {\n",
+        "    let taken: int = 1\n",
+        "    return value\n",
+        "}\n"
+    );
+    let position = utf16_position(source, source.find("value").expect("parameter") + 1);
+    let mut lsp = LspProcess::spawn();
+    lsp.initialize(fixture.path(), 1);
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "method": "textDocument/didOpen",
+        "params": { "textDocument": {
+            "uri": uri, "languageId": "arandu", "version": 1, "text": source
+        }}
+    }));
+
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "id": 2, "method": "textDocument/prepareRename",
+        "params": { "textDocument": { "uri": uri }, "position": position }
+    }));
+    let prepared = lsp.wait_for_response(2);
+    assert_eq!(
+        prepared
+            .pointer("/result/placeholder")
+            .and_then(Value::as_str),
+        Some("value"),
+        "prepareRename must return the source spelling: {prepared}"
+    );
+    assert_eq!(
+        prepared.pointer("/result/range/start/character"),
+        Some(&json!(12))
+    );
+    assert_eq!(
+        prepared.pointer("/result/range/end/character"),
+        Some(&json!(17))
+    );
+
+    for (id, new_name, message_fragment) in [
+        (3, "return", "non-reserved"),
+        (4, "Value", "capitalization"),
+        (5, "taken", "shadow"),
+    ] {
+        lsp.send(&json!({
+            "jsonrpc": "2.0", "id": id, "method": "textDocument/rename",
+            "params": {
+                "textDocument": { "uri": uri }, "position": position, "newName": new_name
+            }
+        }));
+        let rejected = lsp.wait_for_response(id);
+        assert_eq!(rejected.pointer("/error/code"), Some(&json!(-32602)));
+        assert!(
+            rejected
+                .pointer("/error/message")
+                .and_then(Value::as_str)
+                .is_some_and(|message| message.contains(message_fragment)),
+            "rename `{new_name}` should explain its rejection: {rejected}"
+        );
+    }
+
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "id": 6, "method": "textDocument/rename",
+        "params": {
+            "textDocument": { "uri": uri }, "position": position, "newName": "amount"
+        }
+    }));
+    let renamed = lsp.wait_for_response(6);
+    let edits = renamed
+        .pointer(&format!(
+            "/result/changes/{}",
+            uri.replace('~', "~0").replace('/', "~1")
+        ))
+        .and_then(Value::as_array)
+        .expect("workspace edit for document");
+    assert_eq!(
+        edits.len(),
+        2,
+        "declaration and use must both change: {renamed}"
+    );
+    assert!(edits
+        .iter()
+        .all(|edit| edit.pointer("/newText") == Some(&json!("amount"))));
+
+    lsp.shutdown(7);
 }
 
 #[test]

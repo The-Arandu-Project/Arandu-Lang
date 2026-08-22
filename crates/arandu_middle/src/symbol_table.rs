@@ -721,6 +721,28 @@ impl SymbolTable {
             .find(|symbol_id| self.get(*symbol_id).name == name)
     }
 
+    /// Whether either scope lexically contains the other.
+    ///
+    /// A rename to a name declared in a related scope can change which symbol
+    /// an existing reference resolves to, even when the declarations are not
+    /// direct duplicates in the same scope.
+    #[must_use]
+    pub fn scopes_are_related(&self, left: ScopeId, right: ScopeId) -> bool {
+        self.is_scope_ancestor(left, right) || self.is_scope_ancestor(right, left)
+    }
+
+    fn is_scope_ancestor(&self, ancestor: ScopeId, mut scope: ScopeId) -> bool {
+        loop {
+            if scope == ancestor {
+                return true;
+            }
+            let Some(parent) = self.scope(scope).parent else {
+                return false;
+            };
+            scope = parent;
+        }
+    }
+
     fn scope(&self, id: ScopeId) -> &Scope {
         &self.scopes[id.0 as usize]
     }

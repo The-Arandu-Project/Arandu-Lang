@@ -24,8 +24,8 @@ use lsp_types::notification::{
 };
 use lsp_types::request::{
     CodeActionRequest, Completion, DocumentSymbolRequest, Formatting, GotoDefinition, HoverRequest,
-    References, Rename, Request as _, SemanticTokensFullRequest, SemanticTokensRangeRequest,
-    SignatureHelpRequest, WorkspaceSymbolRequest,
+    PrepareRenameRequest, References, Rename, Request as _, SemanticTokensFullRequest,
+    SemanticTokensRangeRequest, SignatureHelpRequest, WorkspaceSymbolRequest,
 };
 use lsp_types::{
     CancelParams, CodeActionOptions, CodeActionProviderCapability, CodeDescription,
@@ -62,6 +62,12 @@ enum JobResult {
         id: RequestId,
         revision: AnalysisRevision,
         value: serde_json::Value,
+    },
+    JsonError {
+        id: RequestId,
+        revision: AnalysisRevision,
+        code: i32,
+        message: String,
     },
     Failed {
         id: Option<RequestId>,
@@ -180,7 +186,7 @@ fn initialize_connection(
         }),
         references_provider: Some(OneOf::Left(true)),
         rename_provider: Some(OneOf::Right(RenameOptions {
-            prepare_provider: Some(false),
+            prepare_provider: Some(true),
             work_done_progress_options: WorkDoneProgressOptions::default(),
         })),
         document_symbol_provider: Some(OneOf::Left(true)),
@@ -535,6 +541,7 @@ fn on_request(
         | HoverRequest::METHOD
         | Completion::METHOD
         | References::METHOD
+        | PrepareRenameRequest::METHOD
         | Rename::METHOD
         | SignatureHelpRequest::METHOD
         | DocumentSymbolRequest::METHOD
@@ -619,14 +626,46 @@ fn on_request(
             let uri = params.text_document_position.text_document.uri;
             let pos = params.text_document_position.position;
             let new_name = params.new_name;
-            spawn_json(state, pool, job_tx, id, move |snap, docs| {
+            spawn_json_result(state, pool, job_tx, id, move |snap, docs| {
                 let Some(info) = docs.get(uri.as_str()) else {
-                    return serde_json::Value::Null;
+                    return Ok(serde_json::Value::Null);
                 };
                 let text = info.source.text(&snap.db);
-                match ide::rename_edits(snap, info.source, text, pos, &uri, &new_name) {
-                    Some(edit) => serde_json::to_value(edit).unwrap_or(serde_json::Value::Null),
-                    None => serde_json::Value::Null,
+                let documents = docs
+                    .iter()
+                    .filter_map(|(uri, info)| {
+                        Some(ide::DocSnap {
+                            source: info.source,
+                            path: Arc::clone(&info.path),
+                            uri: parse_uri(uri)?,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                match ide::rename_edits(snap, info.source, text, pos, &documents, &new_name) {
+                    Ok(edit) => Ok(serde_json::to_value(edit).unwrap_or(serde_json::Value::Null)),
+                    Err(error) => {
+                        Err((lsp_server::ErrorCode::InvalidParams as i32, error.message()))
+                    }
+                }
+            });
+        }
+        PrepareRenameRequest::METHOD => {
+            let (id, params) =
+                req.extract::<lsp_types::TextDocumentPositionParams>(PrepareRenameRequest::METHOD)?;
+            let uri = params.text_document.uri;
+            let pos = params.position;
+            spawn_json_result(state, pool, job_tx, id, move |snap, docs| {
+                let Some(info) = docs.get(uri.as_str()) else {
+                    return Ok(serde_json::Value::Null);
+                };
+                let text = info.source.text(&snap.db);
+                match ide::prepare_rename(snap, info.source, text, pos) {
+                    Ok(prepared) => {
+                        Ok(serde_json::to_value(prepared).unwrap_or(serde_json::Value::Null))
+                    }
+                    Err(error) => {
+                        Err((lsp_server::ErrorCode::InvalidParams as i32, error.message()))
+                    }
                 }
             });
         }
@@ -897,6 +936,68 @@ fn spawn_json<F>(
     }
 }
 
+fn spawn_json_result<F>(
+    state: &ServerState,
+    pool: &WorkerPool,
+    job_tx: &Sender<JobResult>,
+    req_id: RequestId,
+    f: F,
+) where
+    F: FnOnce(
+            &AnalysisSnapshot,
+            &FxHashMap<String, DocInfo>,
+        ) -> Result<serde_json::Value, (i32, String)>
+        + Send
+        + 'static,
+{
+    let snap = state.snapshot();
+    let revision = snap.revision;
+    let docs = collect_docs_map(state);
+    let tx = job_tx.clone();
+    let request_key = JobKey::Request(req_id.clone());
+    let rejected_id = req_id.clone();
+    if pool
+        .spawn(
+            Priority::Interactive,
+            Some(request_key),
+            move |cancellation| {
+                if send_cancelled_if_needed(&tx, &req_id, &cancellation) {
+                    return;
+                }
+                match catch_unwind(AssertUnwindSafe(|| f(&snap, &docs))) {
+                    Ok(Ok(value)) => {
+                        if send_cancelled_if_needed(&tx, &req_id, &cancellation) {
+                            return;
+                        }
+                        let _ = tx.send(JobResult::JsonResponse {
+                            id: req_id,
+                            revision,
+                            value,
+                        });
+                    }
+                    Ok(Err((code, message))) => {
+                        let _ = tx.send(JobResult::JsonError {
+                            id: req_id,
+                            revision,
+                            code,
+                            message,
+                        });
+                    }
+                    Err(_) => {
+                        let _ = tx.send(JobResult::Failed {
+                            id: Some(req_id),
+                            revision,
+                        });
+                    }
+                }
+            },
+        )
+        .is_err()
+    {
+        let _ = job_tx.send(JobResult::Rejected { id: rejected_id });
+    }
+}
+
 fn send_cancelled_if_needed(
     tx: &Sender<JobResult>,
     id: &RequestId,
@@ -1148,6 +1249,24 @@ fn handle_job_result(
             connection
                 .sender
                 .send(Message::Response(Response::new_ok(id, value)))?;
+        }
+        JobResult::JsonError {
+            id,
+            revision,
+            code,
+            message,
+        } => {
+            let (code, message) = if revision == state.revision() {
+                (code, message)
+            } else {
+                (
+                    LSP_CONTENT_MODIFIED,
+                    "document changed while the request was running".into(),
+                )
+            };
+            connection
+                .sender
+                .send(Message::Response(Response::new_err(id, code, message)))?;
         }
         JobResult::Failed { id, revision } => {
             // The captured snapshot is dropped with the failed job. Never publish a

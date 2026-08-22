@@ -86,6 +86,11 @@
     edições somente de corpo preservam o cutoff de exports. Chaves absoluta,
     qualificada e relativa podem apontar ao mesmo `SourceFile`, sem perder o
     índice reverso enquanto algum alias continuar vivo.
+14. Rename usa análise pura em `arandu_query`: a gramática lexical rejeita
+    nomes reservados/inválidos, scopes relacionados bloqueiam conflitos e os
+    spans vêm dos tokens do CST cruzados com a identidade semântica. O LSP
+    revalida no pedido efetivo, produz edits multi-file determinísticos e deixa
+    qualquer preview para o cliente.
 
 ## F4 / P3 — delta on-type
 

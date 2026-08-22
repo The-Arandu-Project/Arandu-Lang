@@ -11,6 +11,7 @@ slotmap = { workspace = true }
 rustc-hash = { workspace = true }
 
 arandu_base = { path = "../arandu_base" }
+arandu_lexer = { path = "../arandu_lexer" }
 arandu_diagnostics = { path = "../arandu_diagnostics" }
 arandu_parser = { path = "../arandu_parser" }
 arandu_middle = { path = "../arandu_middle" }

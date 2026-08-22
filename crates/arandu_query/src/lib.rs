@@ -8,6 +8,7 @@ pub mod explain;
 pub mod highlight;
 pub mod manifest;
 pub mod passes;
+pub mod rename;
 pub mod stable_hash;
 pub mod stdlib;
 pub mod vfs;
@@ -32,6 +33,7 @@ pub use manifest::{
     find_manifest, hash_manifest_bytes, load_manifest, manifest_fingerprint, parse_manifest_str,
     register_manifest, ManifestData, ManifestError, ProjectManifest, MANIFEST_FILENAME,
 };
+pub use rename::{prepare_rename, rename_occurrences, validate_rename, RenameError, RenameTarget};
 // re-export for tests/CLI convenience
 pub use debounce::{DebouncedMap, DEFAULT_DEBOUNCE};
 pub use edit_vfs::{EditVfs, Vfs};
