@@ -13,6 +13,7 @@ use lsp_types::{
     SymbolInformation, SymbolKind as LspSymbolKind, TextEdit as LspTextEdit, Uri, WorkspaceEdit,
 };
 use rustc_hash::FxHashMap;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -25,6 +26,23 @@ pub struct DocSnap {
     pub source: SourceFile,
     pub path: Arc<PathBuf>,
     pub uri: Uri,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticFixData {
+    pub title: String,
+    pub uri: Uri,
+    pub range: lsp_types::Range,
+    pub new_text: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticData {
+    pub notes: Vec<String>,
+    pub hints: Vec<String>,
+    pub fixes: Vec<DiagnosticFixData>,
 }
 
 /// Type-check the file (composed P1/P2 view).
@@ -648,26 +666,27 @@ pub fn format_document(text: &str) -> Vec<LspTextEdit> {
         .collect()
 }
 
-/// Code actions from diagnostic messages (`;`, braces, parens).
+/// Code actions backed by structured compiler replacements carried in
+/// `Diagnostic.data`; messages are presentation only and are never parsed.
 #[must_use]
 #[allow(clippy::mutable_key_type)] // WorkspaceEdit keys are `Uri` in lsp-types 0.97
-pub fn code_actions(uri: &Uri, context: &lsp_types::CodeActionContext) -> CodeActionResponse {
+pub fn code_actions(_uri: &Uri, context: &lsp_types::CodeActionContext) -> CodeActionResponse {
     let mut out = Vec::new();
     for d in &context.diagnostics {
-        let actions = arandu_fmt::actions_for_diagnostic(0, 0, d.message.as_str());
-        for a in actions {
-            let start = d.range.start;
-            let new_text = a
-                .edits
-                .first()
-                .map(|e| e.new_text.clone())
-                .unwrap_or_default();
+        let Some(data) = d
+            .data
+            .clone()
+            .and_then(|value| serde_json::from_value::<DiagnosticData>(value).ok())
+        else {
+            continue;
+        };
+        for fix in data.fixes {
             let mut by_str: HashMap<String, Vec<LspTextEdit>> = HashMap::new();
             by_str.insert(
-                uri.as_str().to_string(),
+                fix.uri.as_str().to_string(),
                 vec![LspTextEdit {
-                    range: lsp_types::Range { start, end: start },
-                    new_text,
+                    range: fix.range,
+                    new_text: fix.new_text,
                 }],
             );
             let changes: HashMap<Uri, Vec<LspTextEdit>> = by_str
@@ -675,7 +694,7 @@ pub fn code_actions(uri: &Uri, context: &lsp_types::CodeActionContext) -> CodeAc
                 .filter_map(|(s, edits)| crate::uri_util::parse_uri(&s).map(|u| (u, edits)))
                 .collect();
             out.push(CodeActionOrCommand::CodeAction(CodeAction {
-                title: a.title.into(),
+                title: fix.title,
                 kind: Some(CodeActionKind::QUICKFIX),
                 diagnostics: Some(vec![d.clone()]),
                 edit: Some(WorkspaceEdit {

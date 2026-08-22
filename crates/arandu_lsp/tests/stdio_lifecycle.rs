@@ -515,6 +515,130 @@ fn stdio_semantic_requests_use_utf16_around_unicode() {
 }
 
 #[test]
+fn stdio_diagnostics_preserve_context_and_structured_quick_fix() {
+    let fixture = FixtureDir::new();
+    let document = fixture.path().join("rich-diagnostic.aru");
+    let uri = file_uri(&document);
+    let mut lsp = LspProcess::spawn();
+    lsp.initialize(fixture.path(), 1);
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didOpen",
+        "params": {
+            "textDocument": {
+                "uri": uri,
+                "languageId": "arandu",
+                "version": 7,
+                "text": "func main() { let value: int = 1; set value = 2; }\n"
+            }
+        }
+    }));
+    let published = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && message.pointer("/params/uri").and_then(Value::as_str) == Some(uri.as_str())
+            && message
+                .pointer("/params/diagnostics")
+                .and_then(Value::as_array)
+                .is_some_and(|diagnostics| {
+                    diagnostics
+                        .iter()
+                        .any(|diagnostic| diagnostic.get("code") == Some(&json!("T026")))
+                })
+    });
+    assert_eq!(published.pointer("/params/version"), Some(&json!(7)));
+    let diagnostic = published
+        .pointer("/params/diagnostics")
+        .and_then(Value::as_array)
+        .and_then(|diagnostics| {
+            diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.get("code") == Some(&json!("T026")))
+        })
+        .expect("T026 diagnostic")
+        .clone();
+    assert!(
+        diagnostic
+            .pointer("/codeDescription/href")
+            .and_then(Value::as_str)
+            .is_some_and(|href| href.ends_with("/docs/errors/T026.md")),
+        "diagnostic must link its documentation: {diagnostic}"
+    );
+    assert!(
+        diagnostic
+            .get("relatedInformation")
+            .and_then(Value::as_array)
+            .is_some_and(|labels| labels.len() >= 2),
+        "compiler labels must remain structured: {diagnostic}"
+    );
+    assert!(
+        diagnostic
+            .pointer("/data/fixes/0/newText")
+            .and_then(Value::as_str)
+            .is_some_and(|text| text == "mut value"),
+        "compiler replacement must remain structured: {diagnostic}"
+    );
+
+    // Prove the quick fix does not infer anything from presentation text.
+    let mut action_diagnostic = diagnostic;
+    action_diagnostic["message"] = json!("localized presentation text");
+    let range = action_diagnostic["range"].clone();
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "textDocument/codeAction",
+        "params": {
+            "textDocument": { "uri": uri },
+            "range": range,
+            "context": { "diagnostics": [action_diagnostic], "only": ["quickfix"] }
+        }
+    }));
+    let actions = lsp.wait_for_response(2);
+    assert_eq!(
+        actions
+            .pointer("/result/0/edit/changes")
+            .and_then(Value::as_object)
+            .and_then(|changes| changes.values().next())
+            .and_then(Value::as_array)
+            .and_then(|edits| edits.first())
+            .and_then(|edit| edit.get("newText"))
+            .and_then(Value::as_str),
+        Some("mut value"),
+        "quick fix must consume Diagnostic.data instead of parsing its message: {actions}"
+    );
+
+    // A new document version must be published even when diagnostics have the
+    // same semantic fingerprint, otherwise clients may reject them as stale.
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didChange",
+        "params": {
+            "textDocument": { "uri": uri, "version": 8 },
+            "contentChanges": [{
+                "text": "func main() { let value: int = 1; set value = 2; }\n"
+            }]
+        }
+    }));
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "textDocument/completion",
+        "params": {
+            "textDocument": { "uri": uri },
+            "position": { "line": 0, "character": 4 }
+        }
+    }));
+    let _ = lsp.wait_for_response(3);
+    let republished = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && message.pointer("/params/uri").and_then(Value::as_str) == Some(uri.as_str())
+            && message.pointer("/params/version") == Some(&json!(8))
+    });
+    assert_eq!(republished.pointer("/params/version"), Some(&json!(8)));
+
+    lsp.shutdown(4);
+}
+
+#[test]
 fn stdio_cancel_request_returns_request_cancelled() {
     let fixture = FixtureDir::new();
     let document = fixture.path().join("cancel.aru");

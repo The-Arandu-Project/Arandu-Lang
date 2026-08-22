@@ -122,3 +122,37 @@ fn file_ide_compose_matches_item_union() {
         );
     }
 }
+
+#[test]
+fn ide_diagnostic_preserves_labels_hints_and_replacements() {
+    let mut db = DatabaseImpl::new();
+    let file = db.new_file(
+        "rich.aru".into(),
+        "func main() { let value: int = 1; set value = 2; }\n".into(),
+    );
+    let diagnostics = file_ide_diagnostics(&db, file);
+    let diagnostic = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "T026")
+        .expect("immutable assignment diagnostic");
+
+    assert_eq!(diagnostic.labels.len(), 2);
+    assert!(diagnostic.notes.is_empty());
+    assert_eq!(diagnostic.hints.len(), 1);
+    let replacement = diagnostic.hints[0]
+        .replacement
+        .as_ref()
+        .expect("structured mutability replacement");
+    assert_eq!(replacement.new_text, "mut value");
+
+    let fingerprint = ide_diags_fingerprint(diagnostics);
+    let mut changed = diagnostics.iter().cloned().collect::<Vec<_>>();
+    changed
+        .iter_mut()
+        .find(|diagnostic| diagnostic.code == "T026")
+        .expect("mutable cloned diagnostic")
+        .hints[0]
+        .message
+        .push('!');
+    assert_ne!(fingerprint, ide_diags_fingerprint(&changed));
+}

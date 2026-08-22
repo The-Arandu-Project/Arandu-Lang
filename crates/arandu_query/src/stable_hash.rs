@@ -27,6 +27,11 @@ fn u64_le(n: u64) -> [u8; 8] {
     n.to_le_bytes()
 }
 
+fn hash_str(hasher: &mut Hasher, value: &str) {
+    hasher.update(&u64_le(value.len() as u64));
+    hasher.update(value.as_bytes());
+}
+
 fn hash_diag(hasher: &mut Hasher, d: &Diagnostic) {
     // Discriminant name is stable across builds for the same DiagCode variant.
     hasher.update(format!("{:?}", d.code).as_bytes());
@@ -289,6 +294,30 @@ impl StableHash for crate::dataflow::IdeDiagnostic {
         h.update(&u32_le(self.file_id));
         h.update(&u32_le(self.start));
         h.update(&u32_le(self.end));
+        h.update(&u64_le(self.labels.len() as u64));
+        for label in &self.labels {
+            h.update(&u32_le(label.file_id));
+            h.update(&u32_le(label.start));
+            h.update(&u32_le(label.end));
+            hash_str(&mut h, &label.message);
+        }
+        h.update(&u64_le(self.notes.len() as u64));
+        for note in &self.notes {
+            hash_str(&mut h, note);
+        }
+        h.update(&u64_le(self.hints.len() as u64));
+        for hint in &self.hints {
+            hash_str(&mut h, &hint.message);
+            if let Some(replacement) = &hint.replacement {
+                h.update(&[1]);
+                h.update(&u32_le(replacement.file_id));
+                h.update(&u32_le(replacement.start));
+                h.update(&u32_le(replacement.end));
+                hash_str(&mut h, &replacement.new_text);
+            } else {
+                h.update(&[0]);
+            }
+        }
         if let Some(f) = self.func {
             h.update(&[1]);
             hash_symbol_id(&mut h, f);

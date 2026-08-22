@@ -24,13 +24,14 @@ use lsp_types::request::{
     SignatureHelpRequest, WorkspaceSymbolRequest,
 };
 use lsp_types::{
-    CancelParams, CodeActionOptions, CodeActionProviderCapability, CompletionOptions,
-    CompletionResponse, Diagnostic, DiagnosticSeverity, DocumentSymbolResponse,
-    GotoDefinitionResponse, HoverProviderCapability, InitializeResult, Location, NumberOrString,
-    OneOf, Position, PositionEncodingKind, PublishDiagnosticsParams, RenameOptions,
-    SemanticTokensFullOptions, SemanticTokensOptions, SemanticTokensServerCapabilities,
-    ServerCapabilities, ServerInfo, SignatureHelpOptions, TextDocumentSyncCapability,
-    TextDocumentSyncKind, Uri, WorkDoneProgressOptions, WorkspaceSymbolParams,
+    CancelParams, CodeActionOptions, CodeActionProviderCapability, CodeDescription,
+    CompletionOptions, CompletionResponse, Diagnostic, DiagnosticRelatedInformation,
+    DiagnosticSeverity, DiagnosticTag, DocumentSymbolResponse, GotoDefinitionResponse,
+    HoverProviderCapability, InitializeResult, Location, NumberOrString, OneOf, Position,
+    PositionEncodingKind, PublishDiagnosticsParams, RenameOptions, SemanticTokensFullOptions,
+    SemanticTokensOptions, SemanticTokensServerCapabilities, ServerCapabilities, ServerInfo,
+    SignatureHelpOptions, TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
+    WorkDoneProgressOptions, WorkspaceSymbolParams,
 };
 use pool::{CancellationToken, JobKey, Priority, WorkerPool};
 use rustc_hash::FxHashMap;
@@ -46,6 +47,7 @@ enum JobResult {
     Diagnostics {
         uri: Uri,
         doc_id: DocumentId,
+        version: Option<i32>,
         revision: AnalysisRevision,
         fingerprint: [u8; 32],
         diags: Vec<Diagnostic>,
@@ -273,14 +275,17 @@ fn on_notification(
             let params: lsp_types::DidOpenTextDocumentParams =
                 not.extract(DidOpenTextDocument::METHOD)?;
             let uri = params.text_document.uri;
+            let version = params.text_document.version;
             pool.cancel_requests();
             let id = state.open_or_commit(&uri, params.text_document.text);
+            state.set_version(id, version);
             spawn_diagnostics(state, pool, job_tx, uri, id);
         }
         DidChangeTextDocument::METHOD => {
             let params: lsp_types::DidChangeTextDocumentParams =
                 not.extract(DidChangeTextDocument::METHOD)?;
             let uri = params.text_document.uri;
+            let version = params.text_document.version;
             // Incremental: apply each range change onto the current buffer text.
             let mut text = state.text_for_change(&uri);
             for change in params.content_changes {
@@ -291,9 +296,12 @@ fn on_notification(
                     text = change.text;
                 }
             }
-            if !state.by_uri.contains_key(uri.as_str()) {
-                let _ = state.open_or_commit(&uri, text.clone());
-            }
+            let id = state
+                .by_uri
+                .get(uri.as_str())
+                .copied()
+                .unwrap_or_else(|| state.open_or_commit(&uri, text.clone()));
+            state.set_version(id, version);
             state.queue_change(&uri, text);
         }
         DidSaveTextDocument::METHOD => {
@@ -321,7 +329,7 @@ fn on_notification(
                 not.extract(DidCloseTextDocument::METHOD)?;
             let uri = params.text_document.uri;
             state.close_uri(&uri);
-            publish_diagnostics(connection, uri, Vec::new())?;
+            publish_diagnostics(connection, uri, Vec::new(), None)?;
         }
         _ => {}
     }
@@ -574,6 +582,7 @@ fn spawn_diagnostics(
         return;
     };
     let source = doc.source;
+    let version = state.version(doc_id);
     let snap = state.snapshot();
     let revision = snap.revision;
     let tx = job_tx.clone();
@@ -592,6 +601,7 @@ fn spawn_diagnostics(
                     let _ = tx.send(JobResult::Diagnostics {
                         uri,
                         doc_id,
+                        version,
                         revision,
                         fingerprint,
                         diags,
@@ -726,6 +736,7 @@ fn send_cancelled_if_needed(
 fn compute_diagnostics(snap: &AnalysisSnapshot, source: SourceFile) -> (Vec<Diagnostic>, [u8; 32]) {
     let text = source.text(&snap.db);
     let index = LineIndex::new(text);
+    let source_uri = uri_from_path(source.path(&snap.db).as_ref());
     let ide = arandu_query::file_ide_diagnostics(&snap.db, source);
     let fp = arandu_query::ide_diags_fingerprint(ide);
     let mut bytes = [0u8; 32];
@@ -734,30 +745,106 @@ fn compute_diagnostics(snap: &AnalysisSnapshot, source: SourceFile) -> (Vec<Diag
         .iter()
         .map(|d| {
             let span = arandu_base::Span::new(d.file_id, d.start, d.end);
-            let range = span_to_range(&index, span);
+            let primary_location = diagnostic_location(snap, span).or_else(|| {
+                source_uri.clone().map(|uri| Location {
+                    uri,
+                    range: span_to_range(&index, span),
+                })
+            });
+            let range = primary_location
+                .as_ref()
+                .map_or_else(lsp_types::Range::default, |location| location.range);
             let severity = match d.severity {
                 0 => DiagnosticSeverity::ERROR,
                 1 => DiagnosticSeverity::WARNING,
                 2 => DiagnosticSeverity::INFORMATION,
                 _ => DiagnosticSeverity::HINT,
             };
-            // Include block id in related info when present (honesty: real block tags).
-            let message = if let Some(b) = d.block {
-                format!("{} [bb{}]", d.message, b.as_usize())
-            } else {
-                d.message.clone()
+            let related_information: Vec<_> = d
+                .labels
+                .iter()
+                .filter_map(|label| {
+                    diagnostic_location(
+                        snap,
+                        arandu_base::Span::new(label.file_id, label.start, label.end),
+                    )
+                    .map(|location| DiagnosticRelatedInformation {
+                        location,
+                        message: label.message.clone(),
+                    })
+                })
+                .collect();
+            let fixes = d
+                .hints
+                .iter()
+                .filter_map(|hint| {
+                    let replacement = hint.replacement.as_ref()?;
+                    let location = diagnostic_location(
+                        snap,
+                        arandu_base::Span::new(
+                            replacement.file_id,
+                            replacement.start,
+                            replacement.end,
+                        ),
+                    )?;
+                    Some(ide::DiagnosticFixData {
+                        title: hint.message.clone(),
+                        uri: location.uri,
+                        range: location.range,
+                        new_text: replacement.new_text.clone(),
+                    })
+                })
+                .collect();
+            let data = ide::DiagnosticData {
+                notes: d.notes.clone(),
+                hints: d.hints.iter().map(|hint| hint.message.clone()).collect(),
+                fixes,
             };
+            let mut message = d.message.clone();
+            for note in &d.notes {
+                message.push_str("\n\nnote: ");
+                message.push_str(note);
+            }
+            for hint in &d.hints {
+                message.push_str("\n\nhint: ");
+                message.push_str(&hint.message);
+            }
+            let code_description = (!d.code.starts_with("ICE"))
+                .then(|| {
+                    parse_uri(&format!(
+                        "https://github.com/BrunoF2P/Arandu-Lang/blob/main/docs/errors/{}.md",
+                        d.code
+                    ))
+                    .map(|href| CodeDescription { href })
+                })
+                .flatten();
+            let tags = matches!(d.code.as_str(), "W001" | "W002" | "W003" | "W005" | "W007")
+                .then(|| vec![DiagnosticTag::UNNECESSARY]);
             Diagnostic {
                 range,
                 severity: Some(severity),
                 code: Some(NumberOrString::String(d.code.clone())),
+                code_description,
                 message,
                 source: Some("arandu".into()),
-                ..Diagnostic::default()
+                related_information: (!related_information.is_empty())
+                    .then_some(related_information),
+                tags,
+                data: serde_json::to_value(data).ok(),
             }
         })
         .collect();
     (diags, bytes)
+}
+
+fn diagnostic_location(snap: &AnalysisSnapshot, span: arandu_base::Span) -> Option<Location> {
+    let source = snap.db.source_file_by_id(span.file_id)?;
+    let uri = uri_from_path(source.path(&snap.db).as_ref())?;
+    let index = LineIndex::new(source.text(&snap.db));
+    Some(Location {
+        uri,
+        range: span_to_range(&index, span),
+    })
 }
 
 fn collect_doc_infos(state: &ServerState) -> FxHashMap<DocumentId, DocInfo> {
@@ -842,6 +929,7 @@ fn handle_job_result(
         JobResult::Diagnostics {
             uri,
             doc_id,
+            version,
             revision,
             fingerprint,
             diags,
@@ -852,11 +940,14 @@ fn handle_job_result(
             if revision != state.revision() {
                 return Ok(());
             }
-            if state.last_diag_fp.get(&doc_id) == Some(&fingerprint) {
+            if state.last_diag_fp.get(&doc_id) == Some(&(fingerprint, version)) {
                 return Ok(());
             }
-            publish_diagnostics(connection, uri, diags)?;
-            state.last_diag_fp.insert(doc_id, fingerprint);
+            if version != state.version(doc_id) {
+                return Ok(());
+            }
+            publish_diagnostics(connection, uri, diags, version)?;
+            state.last_diag_fp.insert(doc_id, (fingerprint, version));
         }
         JobResult::JsonResponse {
             id,
@@ -929,11 +1020,12 @@ fn publish_diagnostics(
     connection: &Connection,
     uri: Uri,
     diagnostics: Vec<Diagnostic>,
+    version: Option<i32>,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
     let params = PublishDiagnosticsParams {
         uri,
         diagnostics,
-        version: None,
+        version,
     };
     let not = Notification::new(
         PublishDiagnostics::METHOD.to_string(),

@@ -18,7 +18,8 @@ pub use dataflow::{
     block_borrow_facts, block_dataflow_facts, block_diagnostics, file_func_symbols,
     file_ide_diagnostics, file_signature_ide_diagnostics, func_amir, func_analysis_diags,
     func_borrow_summaries, ide_diags_fingerprint, item_ide_diagnostics, item_ide_diags_fingerprint,
-    liveness_facts, BorrowFacts, DataflowFacts, IdeDiagnostic, LivenessMap,
+    liveness_facts, BorrowFacts, DataflowFacts, IdeDiagnostic, IdeHint, IdeLabel, IdeReplacement,
+    LivenessMap,
 };
 pub use db::{ArandCompilerDb, DatabaseImpl, RegistryMetrics, SourceFile};
 pub use doc_store::{DocumentId, DocumentStore, OpenDocument};

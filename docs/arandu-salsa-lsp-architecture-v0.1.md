@@ -69,6 +69,9 @@
    comprimentos UTF-16 e são divididos por linha.
 9. Edições recebidas dentro do debounce compõem sobre o buffer pendente da VFS,
    inclusive múltiplas mudanças por notificação, Unicode, arquivo vazio e EOF.
+10. `IdeDiagnostic` preserva labels, notes, hints e replacements nas queries;
+    o wire publica versão, `codeDescription`, `relatedInformation`, tags e
+    `Diagnostic.data`. Quick fixes consomem apenas replacements estruturados.
 
 ## F4 / P3 — delta on-type
 

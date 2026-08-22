@@ -20,8 +20,10 @@ pub struct ServerState {
     pub by_uri: FxHashMap<String, DocumentId>,
     /// Numeric compiler `file_id` → open document (multi-file workspace).
     pub by_file_id: FxHashMap<u32, DocumentId>,
+    /// Latest client document version for each open buffer.
+    pub versions: FxHashMap<DocumentId, i32>,
     /// Last published diagnostic fingerprint per document (skip no-op publish).
-    pub last_diag_fp: FxHashMap<DocumentId, [u8; 32]>,
+    pub last_diag_fp: FxHashMap<DocumentId, ([u8; 32], Option<i32>)>,
     /// P3: last per-item IDE diag fingerprints (DocumentId, item local key).
     pub last_item_diag_fp: FxHashMap<(DocumentId, u32, u32), [u8; 32]>,
     next_file_id: u32,
@@ -36,6 +38,7 @@ impl ServerState {
             vfs: Vfs::new(),
             by_uri: FxHashMap::default(),
             by_file_id: FxHashMap::default(),
+            versions: FxHashMap::default(),
             last_diag_fp: FxHashMap::default(),
             last_item_diag_fp: FxHashMap::default(),
             next_file_id: 10_000,
@@ -94,6 +97,7 @@ impl ServerState {
                 self.by_file_id.remove(fid);
             }
             self.docs.close(id);
+            self.versions.remove(&id);
             self.last_diag_fp.remove(&id);
             self.last_item_diag_fp.retain(|&(doc, _, _), _| doc != id);
         }
@@ -112,6 +116,17 @@ impl ServerState {
     /// Queue a change; does **not** bump Salsa revision until flush.
     pub fn queue_change(&mut self, uri: &Uri, text: String) {
         self.vfs.push_full_text(uri.as_str().to_string(), text);
+    }
+
+    pub fn set_version(&mut self, id: DocumentId, version: i32) {
+        if self.docs.get(id).is_some() {
+            self.versions.insert(id, version);
+        }
+    }
+
+    #[must_use]
+    pub fn version(&self, id: DocumentId) -> Option<i32> {
+        self.versions.get(&id).copied()
     }
 
     #[must_use]
