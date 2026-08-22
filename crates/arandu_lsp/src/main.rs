@@ -10,7 +10,10 @@ mod uri_util;
 mod vfs;
 
 use arandu_base::LineIndex;
-use arandu_query::{AnalysisRevision, AnalysisSnapshot, ArandCompilerDb, DocumentId, SourceFile};
+use arandu_query::{
+    find_manifest, load_manifest, resolve_stdlib_root, scan_aru_entries, AnalysisRevision,
+    AnalysisSnapshot, ArandCompilerDb, DocumentId, ManifestData, SourceFile, StdlibResolveOpts,
+};
 use conv::{apply_lsp_range_edit, position_to_offset, span_to_range};
 use crossbeam_channel::{bounded, never, select_biased, Receiver, Sender};
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
@@ -75,6 +78,21 @@ enum JobResult {
 struct WorkspaceFile {
     path: PathBuf,
     text: String,
+}
+
+struct WorkspaceProject {
+    manifest_path: PathBuf,
+    manifest_data: ManifestData,
+    manifest_hash: String,
+    package_src: PathBuf,
+    entries: Vec<String>,
+    stdlib_root: Option<PathBuf>,
+}
+
+enum WorkspaceEvent {
+    Project(WorkspaceProject),
+    File(WorkspaceFile),
+    Done,
 }
 
 const LSP_CONTENT_MODIFIED: i32 = -32801;
@@ -203,23 +221,68 @@ fn initialize_connection(
     Ok(workspace_roots)
 }
 
-fn spawn_workspace_discovery(pool: &WorkerPool, roots: Vec<PathBuf>) -> Receiver<WorkspaceFile> {
+fn spawn_workspace_discovery(pool: &WorkerPool, roots: Vec<PathBuf>) -> Receiver<WorkspaceEvent> {
     const DISCOVERY_BACKLOG: usize = 8;
     let (tx, rx) = bounded(DISCOVERY_BACKLOG);
     if roots.is_empty() {
         return never();
     }
     let _ = pool.spawn(Priority::Background, None, move |cancellation| {
+        // The compiler DB currently owns one ModuleRoots input. Select the
+        // first workspace package deterministically; multi-root ownership is a
+        // separate protocol capability, not an order-dependent overwrite.
+        if let Some(project) = discover_workspace_project(&roots) {
+            if tx.send(WorkspaceEvent::Project(project)).is_err() {
+                return;
+            }
+        }
         for (path, text) in discover_aru_files(&roots) {
             if cancellation.is_cancelled() {
                 break;
             }
-            if tx.send(WorkspaceFile { path, text }).is_err() {
+            if tx
+                .send(WorkspaceEvent::File(WorkspaceFile { path, text }))
+                .is_err()
+            {
                 break;
             }
         }
+        let _ = tx.send(WorkspaceEvent::Done);
     });
     rx
+}
+
+fn discover_workspace_project(roots: &[PathBuf]) -> Option<WorkspaceProject> {
+    for root in roots {
+        let Some(manifest_path) = find_manifest(root) else {
+            continue;
+        };
+        let Ok((manifest_data, manifest_hash, _)) = load_manifest(&manifest_path) else {
+            continue;
+        };
+        let package_root = manifest_path
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| root.clone());
+        let entry_path = package_root.join(&manifest_data.entry);
+        let package_src = entry_path
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or(package_root);
+        let entries = scan_aru_entries(&package_src);
+        let stdlib_root = resolve_stdlib_root(StdlibResolveOpts::default())
+            .ok()
+            .map(|stdlib| stdlib.path);
+        return Some(WorkspaceProject {
+            manifest_path,
+            manifest_data,
+            manifest_hash,
+            package_src,
+            entries,
+            stdlib_root,
+        });
+    }
+    None
 }
 
 fn event_loop(
@@ -228,7 +291,7 @@ fn event_loop(
     pool: &WorkerPool,
     job_tx: Sender<JobResult>,
     job_rx: Receiver<JobResult>,
-    mut workspace_rx: Receiver<WorkspaceFile>,
+    mut workspace_rx: Receiver<WorkspaceEvent>,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
     loop {
         let timeout = state
@@ -257,9 +320,23 @@ fn event_loop(
                     handle_job_result(connection, state, job)?;
                 }
             }
-            recv(workspace_rx) -> file => {
-                match file {
-                    Ok(file) => register_workspace_file(state, file),
+            recv(workspace_rx) -> event => {
+                match event {
+                    Ok(WorkspaceEvent::Project(project)) => {
+                        state.configure_package(
+                            project.manifest_path,
+                            project.manifest_data,
+                            project.manifest_hash,
+                            project.package_src,
+                            project.entries,
+                            project.stdlib_root,
+                        );
+                    }
+                    Ok(WorkspaceEvent::File(file)) => register_workspace_file(state, file),
+                    Ok(WorkspaceEvent::Done) => {
+                        spawn_open_diagnostics(state, pool, &job_tx);
+                        workspace_rx = never();
+                    }
                     Err(_) => workspace_rx = never(),
                 }
             }
@@ -363,6 +440,8 @@ fn on_notification(
                 };
                 let _ = state.reload_uri_from_disk(&uri);
             }
+            state.refresh_package_listing();
+            spawn_open_diagnostics(state, pool, job_tx);
         }
         DidRenameFiles::METHOD => {
             let params: lsp_types::RenameFilesParams = not.extract(DidRenameFiles::METHOD)?;
@@ -382,6 +461,8 @@ fn on_notification(
                     }
                 }
             }
+            state.refresh_package_listing();
+            spawn_open_diagnostics(state, pool, job_tx);
         }
         DidDeleteFiles::METHOD => {
             let params: lsp_types::DeleteFilesParams = not.extract(DidDeleteFiles::METHOD)?;
@@ -393,6 +474,8 @@ fn on_notification(
                 state.remove_uri(&uri);
                 publish_diagnostics(connection, uri, Vec::new(), None)?;
             }
+            state.refresh_package_listing();
+            spawn_open_diagnostics(state, pool, job_tx);
         }
         DidChangeWatchedFiles::METHOD => {
             let params: lsp_types::DidChangeWatchedFilesParams =
@@ -406,10 +489,27 @@ fn on_notification(
                     let _ = state.reload_uri_from_disk(&change.uri);
                 }
             }
+            state.refresh_package_listing();
+            spawn_open_diagnostics(state, pool, job_tx);
         }
         _ => {}
     }
     Ok(())
+}
+
+fn spawn_open_diagnostics(state: &ServerState, pool: &WorkerPool, job_tx: &Sender<JobResult>) {
+    let open: Vec<_> = state
+        .open_uris
+        .iter()
+        .filter_map(|uri| {
+            let parsed = parse_uri(uri)?;
+            let id = state.by_uri.get(uri).copied()?;
+            Some((parsed, id))
+        })
+        .collect();
+    for (uri, id) in open {
+        spawn_diagnostics(state, pool, job_tx, uri, id);
+    }
 }
 
 fn flush_for_request(state: &mut ServerState, pool: &WorkerPool, job_tx: &Sender<JobResult>) {
@@ -956,11 +1056,18 @@ fn goto_on_snapshot(
     let index = LineIndex::new(text);
     let offset = position_to_offset(&index, position, text);
     let tc = arandu_query::passes::type_check(&snap.db, info.source);
-    let sym_id = state::ServerState::symbol_at(tc, offset)?;
+    let program = arandu_query::passes::parse(&snap.db, info.source);
+    let sym_id = state::ServerState::symbol_at(tc, offset).or_else(|| {
+        program
+            .as_ref()
+            .as_ref()
+            .ok()
+            .and_then(|program| ide::expr_symbol_at(program, tc, offset))
+    })?;
     let lsp_sym = LspSymbolId::new(sym_id, snap.revision);
     let sym_id = lsp_sym.resolve(snap)?;
-    let symbol = tc.symbols.try_get(sym_id)?;
-    let def_span: Span = symbol.span;
+    let _symbol = tc.symbols.try_get(sym_id)?;
+    let def_span: Span = arandu_query::passes::symbol_span(&snap.db, sym_id);
     let def_uri = uri_for_file_id(by_file_id, docs, &snap.db, def_span.file_id)?;
     let def_text = if def_span.file_id == *info.source.file_id(&snap.db) {
         text.clone()
@@ -1163,5 +1270,35 @@ mod startup_tests {
             .expect("initialize thread")
             .expect("initialize result");
         assert_eq!(roots.len(), 1);
+    }
+
+    #[test]
+    fn workspace_project_discovery_loads_manifest_and_listing() {
+        let root = std::env::temp_dir().join(format!(
+            "arandu-lsp-project-discovery-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("src")).expect("create fixture");
+        std::fs::write(
+            root.join("Arandu.toml"),
+            "name = \"editor_gold\"\nversion = \"0.1.0\"\nentry = \"src/main.aru\"\n",
+        )
+        .expect("write manifest");
+        std::fs::write(root.join("src/main.aru"), "func main() {}\n").expect("write entry");
+
+        let project = discover_workspace_project(std::slice::from_ref(&root))
+            .expect("discover package metadata");
+        assert_eq!(project.manifest_data.name, "editor_gold");
+        assert_eq!(
+            project.package_src,
+            std::fs::canonicalize(root.join("src")).expect("canonical fixture source")
+        );
+        assert_eq!(project.entries, vec!["main.aru"]);
+
+        std::fs::remove_dir_all(root).expect("remove fixture");
     }
 }

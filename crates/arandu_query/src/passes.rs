@@ -169,6 +169,15 @@ pub fn parse(
     file = ?file.file_id(db),
 ))]
 pub fn resolve(db: &dyn ArandCompilerDb, file: SourceFile) -> HashEq<ResolutionResult> {
+    // Module existence is a first-class input of name resolution. Keep this
+    // dependency explicit at the tracked-query boundary: the pure resolver
+    // reaches it through `SourceDatabase`, which is intentionally unaware of
+    // Salsa and therefore must not be relied upon as the only dependency edge.
+    // Body-only edits do not touch the listing, preserving importer cutoff.
+    if let Some(roots) = db.as_db_impl().and_then(crate::DatabaseImpl::module_roots) {
+        let listing = roots.package_listing(db);
+        let _ = listing.entries(db);
+    }
     let program_res = parse(db, file);
     let locals_arc = local_symbols(db, file);
 

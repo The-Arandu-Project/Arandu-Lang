@@ -154,6 +154,61 @@ fn package_listing_miss_until_entries_updated() {
 }
 
 #[test]
+fn creating_missing_module_invalidates_composed_typecheck() {
+    let root = temp_pkg("create_typecheck");
+    let src = root.join("src");
+    fs::write(
+        src.join("main.aru"),
+        "module my_app\nimport my_app.util as util\nfunc main(): int { return util.answer() }\n",
+    )
+    .unwrap();
+
+    let mut db = DatabaseImpl::new();
+    let roots = install_roots(&mut db, "my_app", src.clone());
+    let main = db.new_file(
+        "my_app/main.aru".into(),
+        fs::read_to_string(src.join("main.aru")).unwrap(),
+    );
+    assert!(arandu_query::passes::type_check(&db, main)
+        .diagnostics
+        .iter()
+        .any(|diag| matches!(diag.code, arandu_middle::DiagCode::M001UnresolvedImport)));
+
+    fs::write(
+        src.join("util.aru"),
+        "public func answer(): int { return 42 }\n",
+    )
+    .unwrap();
+    let listing = roots.package_listing(&db);
+    listing
+        .set_entries(&mut db)
+        .to(Arc::new(scan_aru_entries(&src)));
+
+    let diagnostics = &arandu_query::passes::type_check(&db, main).diagnostics;
+    assert!(
+        diagnostics.is_empty(),
+        "structural listing input must invalidate composed typecheck: {diagnostics:?}"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn removing_one_registry_alias_keeps_reverse_file_identity() {
+    let mut db = DatabaseImpl::new();
+    let file = db.new_file(
+        "C:/workspace/util.aru".into(),
+        "public func answer(): int { return 42 }\n".into(),
+    );
+    let file_id = *file.file_id(&db);
+    db.register_source_file("my_app/util.aru".into(), file);
+    db.unregister_source_file("my_app/util.aru");
+
+    assert!(db.source_file_by_id(file_id).is_some());
+    assert!(db.source_file_by_path("C:/workspace/util.aru").is_some());
+}
+
+#[test]
 fn package_local_circular_import_reuses_cycle_recover() {
     let root = temp_pkg("cycle");
     let src = root.join("src");

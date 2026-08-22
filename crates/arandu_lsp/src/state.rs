@@ -6,13 +6,23 @@ use crate::uri_util::{parse_uri, path_from_uri};
 use crate::vfs::Vfs;
 use arandu_middle::resolved::NodeKey;
 use arandu_query::db::SourceFile;
-use arandu_query::{AnalysisHost, AnalysisRevision, AnalysisSnapshot, DocumentId, DocumentStore};
+use arandu_query::{
+    scan_aru_entries, AnalysisHost, AnalysisRevision, AnalysisSnapshot, DirectoryListing,
+    DocumentId, DocumentStore, ManifestData,
+};
 use arandu_semantics::TypeCheckResult;
 use lsp_types::Uri;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+pub struct PackageState {
+    pub package_src: PathBuf,
+    pub package_name: String,
+    pub listing: DirectoryListing,
+    entries: Vec<String>,
+}
 
 pub struct ServerState {
     pub host: AnalysisHost,
@@ -30,7 +40,9 @@ pub struct ServerState {
     pub last_diag_fp: FxHashMap<DocumentId, ([u8; 32], Option<i32>)>,
     /// P3: last per-item IDE diag fingerprints (DocumentId, item local key).
     pub last_item_diag_fp: FxHashMap<(DocumentId, u32, u32), [u8; 32]>,
-    next_file_id: u32,
+    /// Active package metadata. It is installed after the initialize handshake
+    /// and its directory listing is the watched Salsa input for local imports.
+    pub package: Option<PackageState>,
 }
 
 impl ServerState {
@@ -46,7 +58,7 @@ impl ServerState {
             versions: FxHashMap::default(),
             last_diag_fp: FxHashMap::default(),
             last_item_diag_fp: FxHashMap::default(),
-            next_file_id: 10_000,
+            package: None,
         }
     }
 
@@ -64,6 +76,124 @@ impl ServerState {
         path_from_uri(uri)
     }
 
+    pub fn configure_package(
+        &mut self,
+        manifest_path: PathBuf,
+        manifest_data: ManifestData,
+        manifest_hash: String,
+        package_src: PathBuf,
+        entries: Vec<String>,
+        stdlib_root: Option<PathBuf>,
+    ) {
+        let package_name = manifest_data.name.clone();
+        let (_, listing, _) = self.host.configure_package(
+            manifest_path,
+            manifest_data,
+            manifest_hash,
+            package_src.clone(),
+            entries.clone(),
+            stdlib_root,
+        );
+        self.package = Some(PackageState {
+            package_src,
+            package_name,
+            listing,
+            entries,
+        });
+
+        // Files may have been opened before background project discovery
+        // finished. Attach their import aliases without replacing overlays.
+        let known: Vec<_> = self
+            .by_uri
+            .values()
+            .filter_map(|&id| self.docs.get(id))
+            .map(|doc| (doc.path.as_ref().clone(), doc.source))
+            .collect();
+        for (path, source) in known {
+            self.register_package_aliases(&path, source);
+        }
+    }
+
+    /// Rescan package structure outside Salsa queries and commit one listing
+    /// input only when create/delete/rename changed its semantic contents.
+    pub fn refresh_package_listing(&mut self) -> bool {
+        let Some(package) = self.package.as_ref() else {
+            return false;
+        };
+        let entries = scan_aru_entries(&package.package_src);
+        if entries == package.entries {
+            return false;
+        }
+        let package_src = package.package_src.clone();
+        let package_name = package.package_name.clone();
+        let listing = package.listing;
+        self.host.set_directory_entries(listing, entries.clone());
+        if let Some(package) = self.package.as_mut() {
+            package.entries.clone_from(&entries);
+        }
+
+        // Register exact import keys from the authoritative relative listing.
+        // This avoids deriving package identity from platform-specific URI
+        // spellings and keeps goto attached to the already-known document.
+        for rel in &entries {
+            let absolute = package_src.join(rel);
+            let normalized = normalize_path_soft(&absolute);
+            let source = self
+                .by_uri
+                .values()
+                .filter_map(|&id| self.docs.get(id))
+                .find(|doc| normalize_path_soft(doc.path.as_ref()) == normalized)
+                .map(|doc| doc.source);
+            if let Some(source) = source {
+                self.register_import_key(format!("{package_name}/{rel}"), source);
+                self.register_import_key(rel.clone(), source);
+            }
+        }
+        true
+    }
+
+    fn package_keys_for_path(&self, path: &std::path::Path) -> Vec<String> {
+        let Some(package) = self.package.as_ref() else {
+            return Vec::new();
+        };
+        let path = normalize_path_soft(path);
+        let src = normalize_path_soft(&package.package_src);
+        let Ok(rel) = path.strip_prefix(src) else {
+            return Vec::new();
+        };
+        let rel = rel.to_string_lossy().replace('\\', "/");
+        vec![format!("{}/{}", package.package_name, rel), rel]
+    }
+
+    fn register_package_aliases(&mut self, path: &std::path::Path, source: SourceFile) {
+        for key in self.package_keys_for_path(path) {
+            self.register_import_key(key, source);
+        }
+    }
+
+    fn register_import_key(&mut self, key: String, source: SourceFile) {
+        let source_id = *source.file_id(self.host.db());
+        let already_current = self
+            .host
+            .db()
+            .source_file_by_path(&key)
+            .is_some_and(|known| *known.file_id(self.host.db()) == source_id);
+        if !already_current {
+            if self.host.db().is_registered(&key) {
+                self.host.unregister_source_file(&key);
+            }
+            self.host.register_source_file(key, source);
+        }
+    }
+
+    fn unregister_package_aliases(&mut self, path: &std::path::Path) {
+        for key in self.package_keys_for_path(path) {
+            if self.host.db().is_registered(&key) {
+                self.host.unregister_source_file(&key);
+            }
+        }
+    }
+
     /// Open document or apply committed text (after VFS flush).
     pub fn open_or_commit(&mut self, uri: &Uri, text: String) -> DocumentId {
         let path = Self::path_of(uri);
@@ -77,21 +207,17 @@ impl ServerState {
                 if !self.host.db().is_registered(&path_key) {
                     self.host.register_source_file(path_key, source);
                 }
+                self.register_package_aliases(&path, source);
                 self.by_file_id.insert(fid, id);
                 return id;
             }
             self.by_uri.remove(&uri_s);
         }
-        let file_id = self.next_file_id;
-        self.next_file_id = self.next_file_id.wrapping_add(1);
-        let source = SourceFile::new(
-            self.host.db(),
-            file_id,
-            Arc::from(text),
-            Arc::new(path.clone()),
-        );
-        self.host
-            .register_source_file(registry_path_key(&path), source);
+        // DatabaseImpl is the sole FileId allocator. A second LSP-side counter
+        // can collide with lazily loaded stdlib/package files and corrupt goto.
+        let source = self.host.new_file(registry_path_key(&path), text);
+        let file_id = *source.file_id(self.host.db());
+        self.register_package_aliases(&path, source);
         let id = self.docs.open(path, source);
         self.by_uri.insert(uri_s, id);
         self.by_file_id.insert(file_id, id);
@@ -153,6 +279,7 @@ impl ServerState {
         self.discard_pending(uri);
         let path = Self::path_of(uri);
         let path_key = registry_path_key(&path);
+        self.unregister_package_aliases(&path);
         if self.host.db().is_registered(&path_key) {
             self.host.unregister_source_file(&path_key);
         }
@@ -295,6 +422,11 @@ fn registry_path_key(path: &std::path::Path) -> String {
     #[cfg(windows)]
     let text = text.strip_prefix("//?/").unwrap_or(&text).to_string();
     text
+}
+
+fn normalize_path_soft(path: &std::path::Path) -> PathBuf {
+    let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    PathBuf::from(registry_path_key(&resolved))
 }
 
 impl Default for ServerState {
@@ -442,6 +574,167 @@ mod tests {
 
         st.queue_change(&uri, "pending-2".into());
         assert_eq!(st.text_for_change(&uri), "pending-2");
+    }
+
+    #[test]
+    fn package_create_registers_import_alias_and_invalidates_missing_import() {
+        let root = std::env::temp_dir().join(format!(
+            "arandu-lsp-package-state-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos()
+        ));
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).expect("create fixture");
+        let discovered_src = std::fs::canonicalize(&src).expect("canonical source root");
+        let main_path = src.join("main.aru");
+        let main_text = concat!(
+            "module editor_gold\n",
+            "import editor_gold.util as util\n",
+            "import std.path as path\n",
+            "func main(): int {\n",
+            "    if path.is_empty(\"\") { return util.answer() }\n",
+            "    return 0\n",
+            "}\n",
+        );
+        std::fs::write(&main_path, main_text).expect("write entry");
+        let mut state = ServerState::new();
+        state.configure_package(
+            root.join("Arandu.toml"),
+            ManifestData {
+                name: "editor_gold".into(),
+                version: "0.1.0".into(),
+                entry: "src/main.aru".into(),
+            },
+            "fixture".into(),
+            discovered_src,
+            vec!["main.aru".into()],
+            arandu_query::resolve_stdlib_root(arandu_query::StdlibResolveOpts::default())
+                .ok()
+                .map(|stdlib| stdlib.path),
+        );
+        let main_uri = uri_from_path(&main_path).expect("main URI");
+        let _discovered_id = state.open_or_commit(&main_uri, main_text.into());
+        let main_id = state.open_or_commit(&main_uri, main_text.into());
+        state.mark_open(&main_uri);
+        let main = state.docs.get(main_id).expect("main document").source;
+        let _ = arandu_query::passes::module_signatures(state.host.db(), main);
+        assert!(arandu_query::passes::type_check(state.host.db(), main)
+            .diagnostics
+            .iter()
+            .any(|diag| matches!(diag.code, arandu_middle::DiagCode::M001UnresolvedImport)));
+        let stdlib_file = state
+            .host
+            .db()
+            .source_file_by_path("stdlib/std/path.aru")
+            .expect("stdlib module loaded by initial typecheck");
+        let stdlib_file_id = *stdlib_file.file_id(state.host.db());
+
+        let util_path = src.join("util.aru");
+        std::fs::write(
+            &util_path,
+            "/// Package answer.\npublic func answer(): int { return 42 }\n",
+        )
+        .expect("write module");
+        let util_uri = uri_from_path(&util_path).expect("util URI");
+        state
+            .reload_uri_from_disk(&util_uri)
+            .expect("register module");
+        let util_id = state
+            .by_uri
+            .get(util_uri.as_str())
+            .and_then(|&id| state.docs.get(id))
+            .map(|doc| *doc.source.file_id(state.host.db()))
+            .expect("created module id");
+        assert_ne!(stdlib_file_id, util_id, "FileId allocator must be global");
+        assert_eq!(
+            state
+                .host
+                .db()
+                .source_file_by_id(stdlib_file_id)
+                .map(|file| *file.file_id(state.host.db())),
+            Some(stdlib_file_id),
+            "creating a workspace file must not replace stdlib reverse identity"
+        );
+        assert!(state.host.db().is_registered("editor_gold/util.aru"));
+        assert!(state.refresh_package_listing());
+        assert!(
+            arandu_middle::db::SourceDatabase::resolve_module_path(
+                state.host.db(),
+                "editor_gold/util.aru"
+            )
+            .is_some(),
+            "import registry must resolve the created module"
+        );
+        let resolved = arandu_query::passes::resolve(state.host.db(), main);
+        assert!(
+            resolved
+                .diagnostics
+                .iter()
+                .all(|diag| !matches!(diag.code, arandu_middle::DiagCode::M001UnresolvedImport)),
+            "stale resolve diagnostics: {:?}",
+            resolved.diagnostics
+        );
+        let signatures = arandu_query::passes::module_signatures(state.host.db(), main);
+        assert!(
+            signatures
+                .diagnostics
+                .iter()
+                .all(|diag| !matches!(diag.code, arandu_middle::DiagCode::M001UnresolvedImport)),
+            "stale signature diagnostics: {:?}",
+            signatures.diagnostics
+        );
+        let file_view = arandu_query::passes::file_typeck_view(state.host.db(), main);
+        assert!(
+            file_view
+                .diagnostics
+                .iter()
+                .all(|diag| !matches!(diag.code, arandu_middle::DiagCode::M001UnresolvedImport)),
+            "stale file view diagnostics: {:?}",
+            file_view.diagnostics
+        );
+        let diagnostics = &arandu_query::passes::type_check(state.host.db(), main).diagnostics;
+        assert!(diagnostics.is_empty(), "stale diagnostics: {diagnostics:?}");
+        let tc = arandu_query::passes::type_check(state.host.db(), main);
+        assert!(
+            tc.symbols
+                .module_members
+                .get("util")
+                .is_some_and(|members| members.contains_key("answer")),
+            "created module members must be available to completion"
+        );
+        let call = main_text.find("util.answer").expect("util call");
+        let items = crate::ide::completions(
+            &state.snapshot(),
+            main,
+            main_text,
+            crate::conv::offset_to_position(
+                &arandu_base::LineIndex::new(main_text),
+                u32::try_from(call + "util.".len()).expect("fixture offset"),
+            ),
+        );
+        assert!(
+            items.iter().any(|item| item.label == "answer"),
+            "completion must include created module member: {items:?}"
+        );
+        let answer_offset = u32::try_from(call + "util.".len() + 2).expect("answer offset");
+        let program = arandu_query::passes::parse(state.host.db(), main);
+        let symbol = crate::ide::expr_symbol_at(
+            program.as_ref().as_ref().expect("parsed entry"),
+            tc,
+            answer_offset,
+        )
+        .expect("symbol at imported member");
+        let definition = arandu_query::passes::symbol_span(state.host.db(), symbol);
+        assert_ne!(
+            definition.file_id,
+            *main.file_id(state.host.db()),
+            "imported member must retain its definition file identity"
+        );
+
+        std::fs::remove_dir_all(root).expect("remove fixture");
     }
 
     #[test]

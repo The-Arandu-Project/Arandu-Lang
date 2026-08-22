@@ -79,6 +79,13 @@
     `DocumentId`, e create/delete/rename usam filtros `**/*.aru`. URI Windows
     padrão e caminho verbatim convergem para uma identidade; `FileId` removido
     nunca é reutilizado.
+13. Depois do handshake, a descoberta em background instala manifesto,
+    `ModuleRoots`, stdlib e `DirectoryListing` na thread escritora. Mudanças
+    estruturais atualizam uma única listagem Salsa e reanalisam importadores
+    abertos; `resolve` declara essa listagem como dependência explícita, enquanto
+    edições somente de corpo preservam o cutoff de exports. Chaves absoluta,
+    qualificada e relativa podem apontar ao mesmo `SourceFile`, sem perder o
+    índice reverso enquanto algum alias continuar vivo.
 
 ## F4 / P3 — delta on-type
 

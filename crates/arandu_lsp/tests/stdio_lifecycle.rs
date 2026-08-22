@@ -725,16 +725,214 @@ fn stdio_workspace_files_follow_open_close_create_rename_and_delete() {
     lsp.shutdown(9);
 }
 
+#[test]
+fn stdio_package_imports_refresh_completion_goto_and_diagnostics() {
+    let fixture = FixtureDir::new();
+    let src = fixture.path().join("src");
+    fs::create_dir_all(&src).expect("create package source directory");
+    fs::write(
+        fixture.path().join("Arandu.toml"),
+        "name = \"editor_gold\"\nversion = \"0.1.0\"\nentry = \"src/main.aru\"\n",
+    )
+    .expect("write package manifest");
+    let main = src.join("main.aru");
+    let main_uri = file_uri(&main);
+    let missing_source = concat!(
+        "module editor_gold\n",
+        "import editor_gold.util as util\n",
+        "import std.path as path\n",
+        "func main(): int {\n",
+        "    if path.is_empty(\"\") { return util.answer() }\n",
+        "    return 0\n",
+        "}\n",
+    );
+    fs::write(&main, missing_source).expect("write package entry");
+
+    let mut lsp = LspProcess::spawn();
+    lsp.initialize(fixture.path(), 1);
+    // Wait until background discovery has installed package metadata and the
+    // entry source. Initialization itself remains non-blocking.
+    request_workspace_symbol(&mut lsp, 2, "main", true);
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "method": "textDocument/didOpen",
+        "params": { "textDocument": {
+            "uri": main_uri, "languageId": "arandu", "version": 1,
+            "text": missing_source
+        }}
+    }));
+    let missing = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && message.pointer("/params/uri").and_then(Value::as_str) == Some(main_uri.as_str())
+            && message
+                .pointer("/params/diagnostics")
+                .and_then(Value::as_array)
+                .is_some_and(|diagnostics| {
+                    diagnostics
+                        .iter()
+                        .any(|d| d.get("code") == Some(&json!("M001")))
+                })
+    });
+    assert!(
+        missing
+            .pointer("/params/diagnostics")
+            .and_then(Value::as_array)
+            .is_some_and(|diagnostics| diagnostics
+                .iter()
+                .all(|d| d.get("message") != Some(&json!("module not found: std.path")))),
+        "installed stdlib must resolve while the local module is missing: {missing}"
+    );
+
+    let util = src.join("util.aru");
+    let util_uri = file_uri(&util);
+    fs::write(
+        &util,
+        "/// Package answer.\npublic func answer(): int { return 42 }\n",
+    )
+    .expect("create imported module");
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "method": "workspace/didCreateFiles",
+        "params": { "files": [{ "uri": util_uri }] }
+    }));
+    request_workspace_symbol(&mut lsp, 3, "answer", true);
+    let util_call = missing_source.find("util.answer").expect("util call");
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "id": 4, "method": "textDocument/completion",
+        "params": {
+            "textDocument": { "uri": main_uri },
+            "position": utf16_position(missing_source, util_call + "util.".len())
+        }
+    }));
+    let completion = lsp.wait_for_response(4);
+    assert!(
+        completion
+            .pointer("/result")
+            .and_then(Value::as_array)
+            .is_some_and(|items| items
+                .iter()
+                .any(|item| item.get("label") == Some(&json!("answer")))),
+        "new module must update member completion without restart: {completion}"
+    );
+
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "id": 5, "method": "textDocument/definition",
+        "params": {
+            "textDocument": { "uri": main_uri },
+            "position": utf16_position(missing_source, util_call + "util.".len() + 2)
+        }
+    }));
+    let goto = lsp.wait_for_response(5);
+    assert_eq!(
+        goto.pointer("/result/uri").and_then(Value::as_str),
+        Some(util_uri.as_str()),
+        "goto must target the newly created module: {goto}"
+    );
+
+    let std_call = missing_source.find("path.is_empty").expect("stdlib call");
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "id": 6, "method": "textDocument/definition",
+        "params": {
+            "textDocument": { "uri": main_uri },
+            "position": utf16_position(missing_source, std_call + "path.".len() + 2)
+        }
+    }));
+    let std_goto = lsp.wait_for_response(6);
+    assert!(
+        std_goto
+            .pointer("/result/uri")
+            .and_then(Value::as_str)
+            .is_some_and(|uri| uri.replace('\\', "/").ends_with("/stdlib/std/path.aru")),
+        "goto must use the installed stdlib root: {std_goto}"
+    );
+
+    let helper = src.join("helper.aru");
+    let helper_uri = file_uri(&helper);
+    fs::rename(&util, &helper).expect("rename imported module");
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "method": "workspace/didRenameFiles",
+        "params": { "files": [{ "oldUri": util_uri, "newUri": helper_uri }] }
+    }));
+    let renamed_missing = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && message.pointer("/params/uri").and_then(Value::as_str) == Some(main_uri.as_str())
+            && message
+                .pointer("/params/diagnostics")
+                .and_then(Value::as_array)
+                .is_some_and(|diagnostics| {
+                    diagnostics
+                        .iter()
+                        .any(|d| d.get("code") == Some(&json!("M001")))
+                })
+    });
+    assert!(renamed_missing.get("params").is_some());
+
+    let renamed_source = missing_source
+        .replace("editor_gold.util as util", "editor_gold.helper as helper")
+        .replace("util.answer", "helper.answer");
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "method": "textDocument/didChange",
+        "params": {
+            "textDocument": { "uri": main_uri, "version": 2 },
+            "contentChanges": [{ "text": renamed_source }]
+        }
+    }));
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "id": 7, "method": "textDocument/completion",
+        "params": { "textDocument": { "uri": main_uri }, "position": { "line": 4, "character": 47 } }
+    }));
+    let _ = lsp.wait_for_response(7);
+    let renamed_valid = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && message.pointer("/params/uri").and_then(Value::as_str) == Some(main_uri.as_str())
+            && message.pointer("/params/version") == Some(&json!(2))
+            && message
+                .pointer("/params/diagnostics")
+                .and_then(Value::as_array)
+                .is_some_and(Vec::is_empty)
+    });
+    assert_eq!(renamed_valid.pointer("/params/version"), Some(&json!(2)));
+
+    fs::remove_file(&helper).expect("delete renamed module");
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "method": "workspace/didDeleteFiles",
+        "params": { "files": [{ "uri": helper_uri }] }
+    }));
+    let deleted = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && message.pointer("/params/uri").and_then(Value::as_str) == Some(main_uri.as_str())
+            && message
+                .pointer("/params/diagnostics")
+                .and_then(Value::as_array)
+                .is_some_and(|diagnostics| {
+                    diagnostics
+                        .iter()
+                        .any(|d| d.get("code") == Some(&json!("M001")))
+                })
+    });
+    assert_eq!(deleted.pointer("/params/version"), Some(&json!(2)));
+
+    lsp.shutdown(8);
+}
+
 fn request_workspace_symbol(lsp: &mut LspProcess, id: i64, query: &str, expected: bool) -> Value {
+    let deadline = Instant::now() + MESSAGE_TIMEOUT;
     let response = loop {
         lsp.send(&json!({
             "jsonrpc": "2.0", "id": id, "method": "workspace/symbol",
             "params": { "query": query }
         }));
         let response = lsp.wait_for_response(id);
-        if response.pointer("/error/code").and_then(Value::as_i64) != Some(-32801) {
-            break response;
+        if response.pointer("/error/code").and_then(Value::as_i64) == Some(-32801) {
+            continue;
         }
+        let found = response
+            .pointer("/result")
+            .and_then(Value::as_array)
+            .is_some_and(|symbols| !symbols.is_empty());
+        if expected && !found && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+            continue;
+        }
+        break response;
     };
     assert!(
         response.get("error").is_none(),

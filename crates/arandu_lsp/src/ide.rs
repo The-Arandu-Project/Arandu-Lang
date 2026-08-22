@@ -242,6 +242,35 @@ pub fn symbol_at(tc: &TypeCheckResult, offset: u32) -> Option<SymbolId> {
     best.map(|(_, s)| s)
 }
 
+/// Tightest resolved expression containing `offset`.
+///
+/// Namespace members such as `util.answer` are recorded by the resolver in
+/// the dense `expr_symbols` table rather than in `value_refs`; navigation must
+/// consume that existing semantic identity instead of reparsing the text.
+#[must_use]
+pub fn expr_symbol_at(
+    program: &arandu_parser::Program,
+    tc: &TypeCheckResult,
+    offset: u32,
+) -> Option<SymbolId> {
+    let mut best: Option<(u32, SymbolId)> = None;
+    for (index, symbol) in tc.resolved.expr_symbols.iter().enumerate() {
+        let Some(symbol) = *symbol else {
+            continue;
+        };
+        let Some(span) = program.pool.expr_spans.get(index) else {
+            continue;
+        };
+        if span.start <= offset && offset < span.end {
+            let width = span.end.saturating_sub(span.start);
+            if best.is_none_or(|(best_width, _)| width < best_width) {
+                best = Some((width, symbol));
+            }
+        }
+    }
+    best.map(|(_, symbol)| symbol)
+}
+
 /// Word prefix before `offset` for completion filtering.
 #[must_use]
 pub fn prefix_at(text: &str, offset: u32) -> String {

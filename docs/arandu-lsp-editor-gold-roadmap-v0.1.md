@@ -221,7 +221,7 @@ do editor e contrato próprio no roadmap mestre.
 ## L2 — Dogfooding multi-file
 
 - [x] Abrir, fechar, criar, excluir e renomear arquivos durante uma sessão.
-- [ ] Imports locais e stdlib atualizam completion/goto/diagnósticos sem restart.
+- [x] Imports locais e stdlib atualizam completion/goto/diagnósticos sem restart.
 - [ ] Rename detecta nome inválido e conflitos; preview pertence à extensão, não à query pura.
 - [ ] Formatter-on-save é opt-in, idempotente e não move o cursor de forma surpreendente.
 - [ ] Testar vários documentos abertos e requests concorrentes em snapshots.
