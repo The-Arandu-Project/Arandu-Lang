@@ -280,6 +280,68 @@ fn stdio_lifecycle_publishes_diagnostics_and_answers_completion() {
     lsp.shutdown(3);
 }
 
+#[test]
+fn stdio_cancel_request_returns_request_cancelled() {
+    let fixture = FixtureDir::new();
+    let document = fixture.path().join("cancel.aru");
+    let uri = file_uri(&document);
+    let mut source = String::new();
+    for index in 0..8_000 {
+        use std::fmt::Write as _;
+        writeln!(
+            source,
+            "func item{index}() {{ let value{index}: int = {index}; }}"
+        )
+        .expect("write cancellation fixture");
+    }
+
+    let mut lsp = LspProcess::spawn();
+    lsp.initialize(fixture.path(), 1);
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didOpen",
+        "params": {
+            "textDocument": {
+                "uri": uri,
+                "languageId": "arandu",
+                "version": 1,
+                "text": source
+            }
+        }
+    }));
+
+    for id in 2..=5 {
+        lsp.send(&json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "textDocument/semanticTokens/full",
+            "params": { "textDocument": { "uri": uri } }
+        }));
+    }
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "textDocument/completion",
+        "params": {
+            "textDocument": { "uri": uri },
+            "position": { "line": 0, "character": 4 }
+        }
+    }));
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "method": "$/cancelRequest",
+        "params": { "id": 6 }
+    }));
+
+    let response = lsp.wait_for_response(6);
+    assert_eq!(
+        response.pointer("/error/code").and_then(Value::as_i64),
+        Some(-32800),
+        "cancelled request must receive the LSP RequestCancelled error: {response}"
+    );
+    lsp.shutdown(7);
+}
+
 fn read_message(reader: &mut impl BufRead) -> std::io::Result<Option<Value>> {
     let mut content_length = None;
     loop {

@@ -202,8 +202,8 @@ do editor e contrato próprio no roadmap mestre.
 - [ ] Cobrir Unicode antes/depois do cursor em todos os requests semânticos.
 - [ ] Dividir semantic tokens multi-linha em tokens válidos por linha.
 - [ ] Testar mudanças incrementais múltiplas, arquivo vazio e edição no fim do arquivo.
-- [ ] Validar cancelamento/descarte de jobs obsoletos sob rajadas de edição.
-- [ ] Implementar `$/cancelRequest`, fila limitada, coalescing por documento e
+- [x] Validar cancelamento/descarte de jobs obsoletos sob rajadas de edição.
+- [x] Implementar `$/cancelRequest`, fila limitada, coalescing por documento e
       prioridade interativa sobre index/diagnóstico amplo.
 - [ ] Preservar diagnósticos ricos e replacements end-to-end.
 - [ ] Completar hover/completion/signature com docs e apresentação consistente.
@@ -238,7 +238,7 @@ do editor e contrato próprio no roadmap mestre.
 1. **L0-A — baseline e startup (concluído):** harness stdio, métricas,
    `initialize` sem scan e descoberta de baixa prioridade.
 2. **L0-B — extensão confiável:** lint, Extension Host, descoberta e restart.
-3. **L1-A — scheduler:** cancelamento, fila limitada, coalescing e prioridades.
+3. **L1-A — scheduler (concluído):** cancelamento, fila limitada, coalescing e prioridades.
 4. **L1-B — protocolo/texto:** encoding, Unicode, semantic tokens e edits.
 5. **L2 — sessão real:** workspace dinâmico, multi-file, rename e performance.
 6. **L3 — promoção:** matriz nativa, stress, dogfood e RC sem bloqueadores.

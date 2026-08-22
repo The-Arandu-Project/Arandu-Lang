@@ -15,7 +15,7 @@ use conv::{apply_lsp_range_edit, position_to_offset, span_to_range};
 use crossbeam_channel::{bounded, never, select_biased, Receiver, Sender};
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::notification::{
-    DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, DidSaveTextDocument,
+    Cancel, DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, DidSaveTextDocument,
     Notification as _, PublishDiagnostics,
 };
 use lsp_types::request::{
@@ -24,15 +24,15 @@ use lsp_types::request::{
     SignatureHelpRequest, WorkspaceSymbolRequest,
 };
 use lsp_types::{
-    CodeActionOptions, CodeActionProviderCapability, CompletionOptions, CompletionResponse,
-    Diagnostic, DiagnosticSeverity, DocumentSymbolResponse, GotoDefinitionResponse,
-    HoverProviderCapability, InitializeResult, Location, NumberOrString, OneOf, Position,
-    PublishDiagnosticsParams, RenameOptions, SemanticTokensFullOptions, SemanticTokensOptions,
-    SemanticTokensServerCapabilities, ServerCapabilities, ServerInfo, SignatureHelpOptions,
-    TextDocumentSyncCapability, TextDocumentSyncKind, Uri, WorkDoneProgressOptions,
-    WorkspaceSymbolParams,
+    CancelParams, CodeActionOptions, CodeActionProviderCapability, CompletionOptions,
+    CompletionResponse, Diagnostic, DiagnosticSeverity, DocumentSymbolResponse,
+    GotoDefinitionResponse, HoverProviderCapability, InitializeResult, Location, NumberOrString,
+    OneOf, Position, PublishDiagnosticsParams, RenameOptions, SemanticTokensFullOptions,
+    SemanticTokensOptions, SemanticTokensServerCapabilities, ServerCapabilities, ServerInfo,
+    SignatureHelpOptions, TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
+    WorkDoneProgressOptions, WorkspaceSymbolParams,
 };
-use pool::WorkerPool;
+use pool::{CancellationToken, JobKey, Priority, WorkerPool};
 use rustc_hash::FxHashMap;
 use state::{discover_aru_files, ServerState};
 use std::error::Error;
@@ -59,6 +59,12 @@ enum JobResult {
         id: Option<RequestId>,
         revision: AnalysisRevision,
     },
+    Cancelled {
+        id: RequestId,
+    },
+    Rejected {
+        id: RequestId,
+    },
 }
 
 struct WorkspaceFile {
@@ -67,6 +73,8 @@ struct WorkspaceFile {
 }
 
 const LSP_CONTENT_MODIFIED: i32 = -32801;
+const LSP_REQUEST_CANCELLED: i32 = -32800;
+const LSP_SERVER_CANCELLED: i32 = -32802;
 const JSON_RPC_INTERNAL_ERROR: i32 = -32603;
 
 #[derive(Clone)]
@@ -174,8 +182,11 @@ fn spawn_workspace_discovery(pool: &WorkerPool, roots: Vec<PathBuf>) -> Receiver
     if roots.is_empty() {
         return never();
     }
-    pool.spawn(move || {
+    let _ = pool.spawn(Priority::Background, None, move |cancellation| {
         for (path, text) in discover_aru_files(&roots) {
+            if cancellation.is_cancelled() {
+                break;
+            }
             if tx.send(WorkspaceFile { path, text }).is_err() {
                 break;
             }
@@ -226,6 +237,9 @@ fn event_loop(
                 }
             }
             default(timeout) => {
+                if state.vfs.has_pending() {
+                    pool.cancel_requests();
+                }
                 let committed = state.flush_due();
                 for (uri, doc_id) in committed {
                     spawn_diagnostics(state, pool, &job_tx, uri, doc_id);
@@ -244,10 +258,19 @@ fn on_notification(
     not: Notification,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
     match not.method.as_str() {
+        Cancel::METHOD => {
+            let params: CancelParams = not.extract(Cancel::METHOD)?;
+            let id = match params.id {
+                NumberOrString::Number(id) => RequestId::from(id),
+                NumberOrString::String(id) => RequestId::from(id),
+            };
+            let _ = pool.cancel(&JobKey::Request(id));
+        }
         DidOpenTextDocument::METHOD => {
             let params: lsp_types::DidOpenTextDocumentParams =
                 not.extract(DidOpenTextDocument::METHOD)?;
             let uri = params.text_document.uri;
+            pool.cancel_requests();
             let id = state.open_or_commit(&uri, params.text_document.text);
             spawn_diagnostics(state, pool, job_tx, uri, id);
         }
@@ -281,6 +304,9 @@ fn on_notification(
             if let Some(text) = params.text {
                 state.queue_change(&params.text_document.uri, text);
             }
+            if state.vfs.has_pending() {
+                pool.cancel_requests();
+            }
             let committed = state.flush_all();
             if committed.is_empty() {
                 if let Some(&id) = state.by_uri.get(params.text_document.uri.as_str()) {
@@ -305,6 +331,9 @@ fn on_notification(
 }
 
 fn flush_for_request(state: &mut ServerState, pool: &WorkerPool, job_tx: &Sender<JobResult>) {
+    if state.vfs.has_pending() {
+        pool.cancel_requests();
+    }
     let committed = state.flush_all();
     for (uri, doc_id) in committed {
         spawn_diagnostics(state, pool, job_tx, uri, doc_id);
@@ -550,22 +579,32 @@ fn spawn_diagnostics(
     let snap = state.snapshot();
     let revision = snap.revision;
     let tx = job_tx.clone();
-    pool.spawn(move || {
-        match catch_unwind(AssertUnwindSafe(|| compute_diagnostics(&snap, source))) {
-            Ok((diags, fingerprint)) => {
-                let _ = tx.send(JobResult::Diagnostics {
-                    uri,
-                    doc_id,
-                    revision,
-                    fingerprint,
-                    diags,
-                });
+    let _ = pool.spawn(
+        Priority::Background,
+        Some(JobKey::Diagnostics(doc_id)),
+        move |cancellation| {
+            if cancellation.is_cancelled() {
+                return;
             }
-            Err(_) => {
-                let _ = tx.send(JobResult::Failed { id: None, revision });
+            match catch_unwind(AssertUnwindSafe(|| compute_diagnostics(&snap, source))) {
+                Ok((diags, fingerprint)) => {
+                    if cancellation.is_cancelled() {
+                        return;
+                    }
+                    let _ = tx.send(JobResult::Diagnostics {
+                        uri,
+                        doc_id,
+                        revision,
+                        fingerprint,
+                        diags,
+                    });
+                }
+                Err(_) => {
+                    let _ = tx.send(JobResult::Failed { id: None, revision });
+                }
             }
-        }
-    });
+        },
+    );
 }
 
 fn spawn_goto(
@@ -582,30 +621,47 @@ fn spawn_goto(
     let by_file_id = state.by_file_id.clone();
     let docs = collect_doc_infos(state);
     let tx = job_tx.clone();
-    pool.spawn(move || {
-        match catch_unwind(AssertUnwindSafe(|| {
-            let location = goto_on_snapshot(&snap, &by_uri, &by_file_id, &docs, &uri, pos);
-            match location {
-                Some(loc) => serde_json::to_value(GotoDefinitionResponse::Scalar(loc))
-                    .unwrap_or(serde_json::Value::Null),
-                None => serde_json::Value::Null,
-            }
-        })) {
-            Ok(value) => {
-                let _ = tx.send(JobResult::JsonResponse {
-                    id: req_id,
-                    revision,
-                    value,
-                });
-            }
-            Err(_) => {
-                let _ = tx.send(JobResult::Failed {
-                    id: Some(req_id),
-                    revision,
-                });
-            }
-        }
-    });
+    let request_key = JobKey::Request(req_id.clone());
+    let rejected_id = req_id.clone();
+    if pool
+        .spawn(
+            Priority::Interactive,
+            Some(request_key),
+            move |cancellation| {
+                if send_cancelled_if_needed(&tx, &req_id, &cancellation) {
+                    return;
+                }
+                match catch_unwind(AssertUnwindSafe(|| {
+                    let location = goto_on_snapshot(&snap, &by_uri, &by_file_id, &docs, &uri, pos);
+                    match location {
+                        Some(loc) => serde_json::to_value(GotoDefinitionResponse::Scalar(loc))
+                            .unwrap_or(serde_json::Value::Null),
+                        None => serde_json::Value::Null,
+                    }
+                })) {
+                    Ok(value) => {
+                        if send_cancelled_if_needed(&tx, &req_id, &cancellation) {
+                            return;
+                        }
+                        let _ = tx.send(JobResult::JsonResponse {
+                            id: req_id,
+                            revision,
+                            value,
+                        });
+                    }
+                    Err(_) => {
+                        let _ = tx.send(JobResult::Failed {
+                            id: Some(req_id),
+                            revision,
+                        });
+                    }
+                }
+            },
+        )
+        .is_err()
+    {
+        let _ = job_tx.send(JobResult::Rejected { id: rejected_id });
+    }
 }
 
 fn spawn_json<F>(
@@ -621,23 +677,52 @@ fn spawn_json<F>(
     let revision = snap.revision;
     let docs = collect_docs_map(state);
     let tx = job_tx.clone();
-    pool.spawn(
-        move || match catch_unwind(AssertUnwindSafe(|| f(&snap, &docs))) {
-            Ok(value) => {
-                let _ = tx.send(JobResult::JsonResponse {
-                    id: req_id,
-                    revision,
-                    value,
-                });
-            }
-            Err(_) => {
-                let _ = tx.send(JobResult::Failed {
-                    id: Some(req_id),
-                    revision,
-                });
-            }
-        },
-    );
+    let request_key = JobKey::Request(req_id.clone());
+    let rejected_id = req_id.clone();
+    if pool
+        .spawn(
+            Priority::Interactive,
+            Some(request_key),
+            move |cancellation| {
+                if send_cancelled_if_needed(&tx, &req_id, &cancellation) {
+                    return;
+                }
+                match catch_unwind(AssertUnwindSafe(|| f(&snap, &docs))) {
+                    Ok(value) => {
+                        if send_cancelled_if_needed(&tx, &req_id, &cancellation) {
+                            return;
+                        }
+                        let _ = tx.send(JobResult::JsonResponse {
+                            id: req_id,
+                            revision,
+                            value,
+                        });
+                    }
+                    Err(_) => {
+                        let _ = tx.send(JobResult::Failed {
+                            id: Some(req_id),
+                            revision,
+                        });
+                    }
+                }
+            },
+        )
+        .is_err()
+    {
+        let _ = job_tx.send(JobResult::Rejected { id: rejected_id });
+    }
+}
+
+fn send_cancelled_if_needed(
+    tx: &Sender<JobResult>,
+    id: &RequestId,
+    cancellation: &CancellationToken,
+) -> bool {
+    if !cancellation.is_cancelled() {
+        return false;
+    }
+    let _ = tx.send(JobResult::Cancelled { id: id.clone() });
+    true
 }
 
 fn compute_diagnostics(snap: &AnalysisSnapshot, source: SourceFile) -> (Vec<Diagnostic>, [u8; 32]) {
@@ -813,6 +898,20 @@ fn handle_job_result(
                     message.into(),
                 )))?;
             }
+        }
+        JobResult::Cancelled { id } => {
+            connection.sender.send(Message::Response(Response::new_err(
+                id,
+                LSP_REQUEST_CANCELLED,
+                "request cancelled by client".into(),
+            )))?;
+        }
+        JobResult::Rejected { id } => {
+            connection.sender.send(Message::Response(Response::new_err(
+                id,
+                LSP_SERVER_CANCELLED,
+                "interactive scheduler is saturated; retry the request".into(),
+            )))?;
         }
     }
     Ok(())

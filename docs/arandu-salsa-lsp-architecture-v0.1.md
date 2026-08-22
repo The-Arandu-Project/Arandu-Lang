@@ -60,6 +60,10 @@
 5. CST-first Rowan: `syntax_tree` tenta reparse do ITEM tocado e reutiliza os green nodes irmãos; fallback seguro faz parse completo.
 6. `initialize` conclui antes de I/O do workspace; a descoberta determinística e
    limitada ocorre em worker, e cada fonte retorna à main para registro na DB.
+7. O scheduler mantém no máximo 64 jobs pendentes, serve a fila interativa
+   antes da fila ampla, coalesce diagnósticos por `DocumentId` e cancela
+   requests obsoletos antes de uma revisão nova. `$/cancelRequest` responde
+   com `RequestCancelled`, inclusive quando o job ainda não começou.
 
 ## F4 / P3 — delta on-type
 
