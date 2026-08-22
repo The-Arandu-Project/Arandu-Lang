@@ -1,5 +1,8 @@
 import * as vscode from 'vscode';
 import {
+    CloseAction,
+    ErrorAction,
+    ErrorHandler,
     LanguageClient,
     LanguageClientOptions,
     ServerOptions,
@@ -7,6 +10,9 @@ import {
     TransportKind
 } from 'vscode-languageclient/node';
 import { discoverServer } from './serverDiscovery';
+import { CrashRestartPolicy } from './serverLifecycle';
+
+const STOP_TIMEOUT_MS = 2_000;
 
 let client: LanguageClient | undefined;
 let statusBarItem: vscode.StatusBarItem | undefined;
@@ -16,7 +22,7 @@ let lifecycle = Promise.resolve();
 let deactivating = false;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-    statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     statusBarItem.command = 'arandu.showServerLogs';
     statusBarItem.accessibilityInformation = { label: 'Arandu language server status' };
     context.subscriptions.push(statusBarItem);
@@ -47,7 +53,10 @@ function restartLanguageServer(
     context: vscode.ExtensionContext,
     fileWatcher: vscode.FileSystemWatcher
 ): Promise<void> {
-    lifecycle = lifecycle.then(async () => {
+    lifecycle = lifecycle.catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        traceOutputChannel?.error(`Previous server lifecycle operation failed: ${message}`);
+    }).then(async () => {
         await stopClient();
         await startLanguageServer(context, fileWatcher);
     });
@@ -83,6 +92,32 @@ async function startLanguageServer(
     traceOutputChannel?.info(
         `Starting ${result.resolution.command} (discovered via ${result.resolution.source})`
     );
+    const crashPolicy = new CrashRestartPolicy();
+    const errorHandler: ErrorHandler = {
+        error(error, _message, count) {
+            traceOutputChannel?.error(
+                `Language Server Protocol transport error${count === undefined ? '' : ` #${count}`}: ${error.message}`
+            );
+            return { action: count !== undefined && count <= 3 ? ErrorAction.Continue : ErrorAction.Shutdown };
+        },
+        closed() {
+            if (deactivating) {
+                return { action: CloseAction.DoNotRestart, handled: true };
+            }
+            const decision = crashPolicy.recordCrash(Date.now());
+            if (decision.restart) {
+                const detail = `Arandu Language Server crashed; restarting automatically (${decision.crashCount}/3).`;
+                traceOutputChannel?.warn(detail);
+                setStatus('restarting', detail);
+                return { action: CloseAction.Restart, handled: true };
+            }
+            const detail = 'Arandu Language Server repeatedly crashed and automatic restart was stopped.';
+            traceOutputChannel?.error(`${detail} Use “Arandu: Restart Language Server” after checking the logs.`);
+            setStatus('stopped', detail);
+            promptAfterCrashLoop(context, fileWatcher);
+            return { action: CloseAction.DoNotRestart, handled: true };
+        }
+    };
     const serverOptions: ServerOptions = {
         run: { command: result.resolution.command, transport: TransportKind.stdio },
         debug: { command: result.resolution.command, transport: TransportKind.stdio }
@@ -90,7 +125,8 @@ async function startLanguageServer(
     const clientOptions: LanguageClientOptions = {
         documentSelector: [{ scheme: 'file', language: 'arandu' }],
         synchronize: { fileEvents: fileWatcher },
-        traceOutputChannel
+        traceOutputChannel,
+        errorHandler
     };
     const nextClient = new LanguageClient(
         'aranduLanguageServer',
@@ -137,12 +173,47 @@ async function stopClient(): Promise<void> {
     const activeClient = client;
     client = undefined;
     if (activeClient) {
-        await activeClient.stop();
+        try {
+            await activeClient.stop(STOP_TIMEOUT_MS);
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error);
+            traceOutputChannel?.warn(`Language server did not stop cleanly: ${message}`);
+        }
+    }
+}
+
+function promptAfterCrashLoop(
+    context: vscode.ExtensionContext,
+    fileWatcher: vscode.FileSystemWatcher
+): void {
+    void handleCrashLoopAction(context, fileWatcher);
+}
+
+async function handleCrashLoopAction(
+    context: vscode.ExtensionContext,
+    fileWatcher: vscode.FileSystemWatcher
+): Promise<void> {
+    try {
+        const action = await vscode.window.showErrorMessage(
+            'Arandu Language Server repeatedly crashed. Automatic restart was stopped.',
+            'Restart Server',
+            'Show Logs'
+        );
+        if (action === 'Restart Server') {
+            await restartLanguageServer(context, fileWatcher);
+            return;
+        }
+        if (action === 'Show Logs') {
+            traceOutputChannel?.show(true);
+        }
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        traceOutputChannel?.error(`Failed to handle crash recovery action: ${message}`);
     }
 }
 
 function setStatus(
-    state: 'starting' | 'running' | 'missing' | 'stopped',
+    state: 'starting' | 'running' | 'restarting' | 'missing' | 'stopped',
     detail?: string
 ): void {
     if (!statusBarItem) {
@@ -156,6 +227,10 @@ function setStatus(
         case 'running':
             statusBarItem.text = '$(check) Arandu';
             statusBarItem.tooltip = 'Arandu Language Server: Running';
+            break;
+        case 'restarting':
+            statusBarItem.text = '$(sync~spin) Arandu';
+            statusBarItem.tooltip = detail ?? 'Arandu Language Server: Restarting';
             break;
         case 'missing':
             statusBarItem.text = '$(warning) Arandu';

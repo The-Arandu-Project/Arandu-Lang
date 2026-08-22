@@ -34,3 +34,15 @@ You can customize the extension via your VS Code Settings:
 
 * `arandu.server.path`: Absolute path to the `arandu-lsp` executable. If null, the extension will automatically look up the binary under your workspace's `target/debug/arandu-lsp` or under the global `PATH`.
 * `arandu.trace.server`: Log detail level for tracing communication between VS Code and the server (`off`, `messages`, or `verbose`).
+
+## Troubleshooting
+
+The Arandu status item reports whether the language server is starting, ready,
+restarting, missing, or stopped. Select it, or run **Arandu: Show Language
+Server Logs**, to open the server log.
+
+Transient crashes are restarted automatically up to three times in a rolling
+three-minute window. After a repeated crash loop, automatic recovery stops so
+it cannot consume resources indefinitely. Inspect the log and choose **Restart
+Server**, or run **Arandu: Restart Language Server**, when the underlying issue
+has been corrected.
