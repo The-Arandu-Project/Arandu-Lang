@@ -190,7 +190,8 @@ do editor e contrato próprio no roadmap mestre.
 - [x] Harness stdio executa processo real, mede initialize/diagnóstico/requests
       e aplica gate de 250 ms ao p95 do handshake com workspace adversarial.
 - [x] `initialize` responde antes de qualquer caminhada ou análise do workspace.
-- [ ] Descoberta pós-handshake prioriza arquivos abertos e não bloqueia requests.
+- [x] Descoberta pós-handshake usa backlog limitado e prioridade inferior a
+      arquivos abertos, resultados interativos e requests do cliente.
 
 **DoD L0:** a extensão tem o mesmo nível mínimo de gate que o workspace Rust.
 
@@ -233,7 +234,8 @@ do editor e contrato próprio no roadmap mestre.
 
 ## Ordem de implementação
 
-1. **L0-A — baseline e startup:** harness stdio, métricas e `initialize` sem scan.
+1. **L0-A — baseline e startup (concluído):** harness stdio, métricas,
+   `initialize` sem scan e descoberta de baixa prioridade.
 2. **L0-B — extensão confiável:** lint, Extension Host, descoberta e restart.
 3. **L1-A — scheduler:** cancelamento, fila limitada, coalescing e prioridades.
 4. **L1-B — protocolo/texto:** encoding, Unicode, semantic tokens e edits.

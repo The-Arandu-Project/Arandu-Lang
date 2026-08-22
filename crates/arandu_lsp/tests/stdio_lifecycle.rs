@@ -8,6 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MESSAGE_TIMEOUT: Duration = Duration::from_secs(3);
 const INITIALIZE_P95_BUDGET: Duration = Duration::from_millis(250);
+const INTERACTIVE_BUDGET: Duration = Duration::from_millis(250);
 const COLD_SAMPLES: usize = 7;
 
 struct FixtureDir(PathBuf);
@@ -155,14 +156,7 @@ impl Drop for LspProcess {
 #[test]
 fn stdio_cold_initialize_p95_stays_within_budget() {
     let fixture = FixtureDir::new();
-    let source = "// startup must not read this file\n".repeat(1_024);
-    for index in 0..256 {
-        fs::write(
-            fixture.path().join(format!("module-{index:03}.aru")),
-            &source,
-        )
-        .expect("write startup fixture");
-    }
+    populate_adversarial_workspace(fixture.path());
 
     let mut samples = Vec::with_capacity(COLD_SAMPLES);
     for sample in 0..COLD_SAMPLES {
@@ -178,6 +172,51 @@ fn stdio_cold_initialize_p95_stays_within_budget() {
         p95 <= INITIALIZE_P95_BUDGET,
         "cold initialize p95 {p95:?} exceeded {INITIALIZE_P95_BUDGET:?}; workspace I/O may have returned to the handshake"
     );
+}
+
+#[test]
+fn stdio_open_document_stays_interactive_during_discovery() {
+    let fixture = FixtureDir::new();
+    populate_adversarial_workspace(fixture.path());
+    let document = fixture.path().join("open-buffer.aru");
+    let uri = file_uri(&document);
+    let mut lsp = LspProcess::spawn();
+    lsp.initialize(fixture.path(), 1);
+
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didOpen",
+        "params": {
+            "textDocument": {
+                "uri": uri,
+                "languageId": "arandu",
+                "version": 1,
+                "text": "func main() {}"
+            }
+        }
+    }));
+    let started = Instant::now();
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "textDocument/completion",
+        "params": {
+            "textDocument": { "uri": uri },
+            "position": { "line": 0, "character": 4 }
+        }
+    }));
+    let completion = lsp.wait_for_response(2);
+    let latency = started.elapsed();
+    assert!(
+        completion.get("error").is_none(),
+        "completion failed: {completion}"
+    );
+    assert!(
+        latency <= INTERACTIVE_BUDGET,
+        "completion took {latency:?} while workspace discovery was active"
+    );
+
+    lsp.shutdown(3);
 }
 
 #[test]
@@ -276,6 +315,14 @@ fn file_uri(path: &Path) -> String {
         format!("file://{encoded}")
     } else {
         format!("file:///{encoded}")
+    }
+}
+
+fn populate_adversarial_workspace(root: &Path) {
+    let source = "// discovery must remain background work\n".repeat(1_024);
+    for index in 0..256 {
+        fs::write(root.join(format!("module-{index:03}.aru")), &source)
+            .expect("write startup fixture");
     }
 }
 

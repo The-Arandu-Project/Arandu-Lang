@@ -12,7 +12,7 @@ mod vfs;
 use arandu_base::LineIndex;
 use arandu_query::{AnalysisRevision, AnalysisSnapshot, ArandCompilerDb, DocumentId, SourceFile};
 use conv::{apply_lsp_range_edit, position_to_offset, span_to_range};
-use crossbeam_channel::{select, Receiver, Sender};
+use crossbeam_channel::{bounded, never, select_biased, Receiver, Sender};
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::notification::{
     DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, DidSaveTextDocument,
@@ -59,10 +59,11 @@ enum JobResult {
         id: Option<RequestId>,
         revision: AnalysisRevision,
     },
-    WorkspaceFile {
-        path: PathBuf,
-        text: String,
-    },
+}
+
+struct WorkspaceFile {
+    path: PathBuf,
+    text: String,
 }
 
 const LSP_CONTENT_MODIFIED: i32 = -32801;
@@ -86,8 +87,8 @@ fn run(connection: Connection) -> Result<(), Box<dyn Error + Sync + Send>> {
     let mut state = ServerState::new();
     let pool = WorkerPool::new(4)?;
     let (job_tx, job_rx) = crossbeam_channel::unbounded::<JobResult>();
-    spawn_workspace_discovery(&pool, &job_tx, workspace_roots);
-    event_loop(&connection, &mut state, &pool, job_tx, job_rx)?;
+    let workspace_rx = spawn_workspace_discovery(&pool, workspace_roots);
+    event_loop(&connection, &mut state, &pool, job_tx, job_rx, workspace_rx)?;
     // Close lsp-server's sender before the stdio owner joins its writer thread.
     drop(connection);
     Ok(())
@@ -167,18 +168,20 @@ fn initialize_connection(
     Ok(workspace_roots)
 }
 
-fn spawn_workspace_discovery(pool: &WorkerPool, job_tx: &Sender<JobResult>, roots: Vec<PathBuf>) {
+fn spawn_workspace_discovery(pool: &WorkerPool, roots: Vec<PathBuf>) -> Receiver<WorkspaceFile> {
+    const DISCOVERY_BACKLOG: usize = 8;
+    let (tx, rx) = bounded(DISCOVERY_BACKLOG);
     if roots.is_empty() {
-        return;
+        return never();
     }
-    let tx = job_tx.clone();
     pool.spawn(move || {
         for (path, text) in discover_aru_files(&roots) {
-            if tx.send(JobResult::WorkspaceFile { path, text }).is_err() {
+            if tx.send(WorkspaceFile { path, text }).is_err() {
                 break;
             }
         }
     });
+    rx
 }
 
 fn event_loop(
@@ -187,6 +190,7 @@ fn event_loop(
     pool: &WorkerPool,
     job_tx: Sender<JobResult>,
     job_rx: Receiver<JobResult>,
+    mut workspace_rx: Receiver<WorkspaceFile>,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
     loop {
         let timeout = state
@@ -194,7 +198,7 @@ fn event_loop(
             .next_deadline()
             .unwrap_or(Duration::from_secs(3600));
 
-        select! {
+        select_biased! {
             recv(connection.receiver) -> msg => {
                 let Ok(msg) = msg else { break };
                 match msg {
@@ -213,6 +217,12 @@ fn event_loop(
             recv(job_rx) -> job => {
                 if let Ok(job) = job {
                     handle_job_result(connection, state, job)?;
+                }
+            }
+            recv(workspace_rx) -> file => {
+                match file {
+                    Ok(file) => register_workspace_file(state, file),
+                    Err(_) => workspace_rx = never(),
                 }
             }
             default(timeout) => {
@@ -804,17 +814,18 @@ fn handle_job_result(
                 )))?;
             }
         }
-        JobResult::WorkspaceFile { path, text } => {
-            let Some(uri) = uri_from_path(&path) else {
-                return Ok(());
-            };
-            // Never replace a newer editor buffer with a stale disk snapshot.
-            if !state.by_uri.contains_key(uri.as_str()) {
-                state.open_or_commit(&uri, text);
-            }
-        }
     }
     Ok(())
+}
+
+fn register_workspace_file(state: &mut ServerState, file: WorkspaceFile) {
+    let Some(uri) = uri_from_path(&file.path) else {
+        return;
+    };
+    // Never replace a newer editor buffer with a stale disk snapshot.
+    if !state.by_uri.contains_key(uri.as_str()) {
+        state.open_or_commit(&uri, file.text);
+    }
 }
 
 fn publish_diagnostics(
