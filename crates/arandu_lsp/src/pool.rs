@@ -363,4 +363,66 @@ mod tests {
         assert_eq!(rx.recv_timeout(Duration::from_millis(100)), Ok(true));
         release_tx.send(()).expect("release running job");
     }
+
+    #[test]
+    fn cancelling_one_active_request_does_not_cancel_another() {
+        let pool = WorkerPool::with_capacity(2, 4).expect("test workers must start");
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_first_tx, release_first_rx) = mpsc::channel();
+        let (release_second_tx, release_second_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+
+        let first_key = JobKey::Request(10.into());
+        pool.spawn(Priority::Interactive, Some(first_key.clone()), {
+            let started_tx = started_tx.clone();
+            let result_tx = result_tx.clone();
+            move |token| {
+                started_tx.send(10).expect("record first request start");
+                release_first_rx.recv().expect("release first request");
+                result_tx
+                    .send((10, token.is_cancelled()))
+                    .expect("record first request result");
+            }
+        })
+        .expect("first request must queue");
+
+        pool.spawn(Priority::Interactive, Some(JobKey::Request(11.into())), {
+            let started_tx = started_tx.clone();
+            let result_tx = result_tx.clone();
+            move |token| {
+                started_tx.send(11).expect("record second request start");
+                release_second_rx.recv().expect("release second request");
+                result_tx
+                    .send((11, token.is_cancelled()))
+                    .expect("record second request result");
+            }
+        })
+        .expect("second request must queue");
+
+        let mut started = [
+            started_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("one request must start"),
+            started_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("both workers must run concurrently"),
+        ];
+        started.sort_unstable();
+        assert_eq!(started, [10, 11]);
+
+        assert!(pool.cancel(&first_key));
+        release_first_tx.send(()).expect("release first request");
+        release_second_tx.send(()).expect("release second request");
+
+        let mut results = [
+            result_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("first result must arrive"),
+            result_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("second result must arrive"),
+        ];
+        results.sort_unstable_by_key(|result| result.0);
+        assert_eq!(results, [(10, true), (11, false)]);
+    }
 }

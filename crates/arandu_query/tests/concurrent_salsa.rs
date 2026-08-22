@@ -2,6 +2,7 @@
 
 use arandu_query::analysis::AnalysisHost;
 use arandu_query::file_ide_diagnostics;
+use std::sync::{Arc, Barrier};
 use std::thread;
 
 #[test]
@@ -69,4 +70,44 @@ fn test_concurrent_salsa_queries() {
         file_ide_diagnostics(host.db(), f).is_empty(),
         "fixing the file must discard diagnostics from the previous revision"
     );
+}
+
+#[test]
+fn concurrent_snapshots_keep_multiple_files_isolated() {
+    let mut host = AnalysisHost::new();
+    let alpha = host.new_file(
+        "alpha.aru".to_string(),
+        "func alpha(): int { return 1 }".to_string(),
+    );
+    let beta = host.new_file(
+        "beta.aru".to_string(),
+        "func beta(): int { return missing }".to_string(),
+    );
+    let revision = host.revision();
+    let barrier = Arc::new(Barrier::new(3));
+
+    let readers = [(alpha, false), (beta, true)].map(|(file, has_errors)| {
+        let snapshot = host.snapshot();
+        let barrier = Arc::clone(&barrier);
+        thread::spawn(move || {
+            assert_eq!(snapshot.revision, revision);
+            barrier.wait();
+            for _ in 0..50 {
+                assert_eq!(
+                    !file_ide_diagnostics(&snapshot.db, file).is_empty(),
+                    has_errors
+                );
+            }
+            barrier.wait();
+        })
+    });
+
+    barrier.wait();
+    barrier.wait();
+    for reader in readers {
+        reader.join().expect("snapshot reader must not panic");
+    }
+
+    assert!(file_ide_diagnostics(host.db(), alpha).is_empty());
+    assert!(!file_ide_diagnostics(host.db(), beta).is_empty());
 }

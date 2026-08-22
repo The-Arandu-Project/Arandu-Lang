@@ -1,4 +1,5 @@
 use serde_json::{json, Value};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -91,6 +92,26 @@ impl LspProcess {
 
     fn wait_for_response(&self, id: i64) -> Value {
         self.wait_for(|message| message.get("id").and_then(Value::as_i64) == Some(id))
+    }
+
+    fn wait_for_responses(&self, ids: impl IntoIterator<Item = i64>) -> BTreeMap<i64, Value> {
+        let mut pending = ids.into_iter().collect::<BTreeSet<_>>();
+        let mut responses = BTreeMap::new();
+        let deadline = Instant::now() + MESSAGE_TIMEOUT;
+        while !pending.is_empty() {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let message = self
+                .messages
+                .recv_timeout(remaining)
+                .expect("timed out waiting for concurrent LSP responses");
+            let Some(id) = message.get("id").and_then(Value::as_i64) else {
+                continue;
+            };
+            if pending.remove(&id) {
+                responses.insert(id, message);
+            }
+        }
+        responses
     }
 
     fn initialize(&mut self, root: &Path, id: i64) -> Duration {
@@ -1286,6 +1307,78 @@ fn stdio_cancel_request_returns_request_cancelled() {
         "cancelled request must receive the LSP RequestCancelled error: {response}"
     );
     lsp.shutdown(7);
+}
+
+#[test]
+fn stdio_concurrent_requests_keep_open_documents_isolated() {
+    let fixture = FixtureDir::new();
+    let alpha_uri = file_uri(&fixture.path().join("alpha.aru"));
+    let beta_uri = file_uri(&fixture.path().join("beta.aru"));
+    let mut lsp = LspProcess::spawn();
+    lsp.initialize(fixture.path(), 1);
+
+    for (uri, text) in [
+        (&alpha_uri, "func alpha_value(): int { return 1 }\n"),
+        (&beta_uri, "func beta_value(): int { return 2 }\n"),
+    ] {
+        lsp.send(&json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": {
+                "textDocument": {
+                    "uri": uri,
+                    "languageId": "arandu",
+                    "version": 1,
+                    "text": text
+                }
+            }
+        }));
+    }
+
+    for id in 2..=17 {
+        let uri = if id % 2 == 0 { &alpha_uri } else { &beta_uri };
+        lsp.send(&json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "textDocument/documentSymbol",
+            "params": { "textDocument": { "uri": uri } }
+        }));
+    }
+
+    let responses = lsp.wait_for_responses(2..=17);
+    for (id, response) in responses {
+        assert!(
+            response.get("error").is_none(),
+            "request {id} failed: {response}"
+        );
+        let names = response
+            .get("result")
+            .and_then(Value::as_array)
+            .expect("documentSymbol must return an array")
+            .iter()
+            .filter_map(|symbol| symbol.get("name").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        let expected = if id % 2 == 0 {
+            "alpha_value"
+        } else {
+            "beta_value"
+        };
+        let foreign = if id % 2 == 0 {
+            "beta_value"
+        } else {
+            "alpha_value"
+        };
+        assert!(
+            names.contains(&expected),
+            "request {id} lost its document snapshot: {response}"
+        );
+        assert!(
+            !names.contains(&foreign),
+            "request {id} leaked symbols from another document: {response}"
+        );
+    }
+
+    lsp.shutdown(18);
 }
 
 fn read_message(reader: &mut impl BufRead) -> std::io::Result<Option<Value>> {

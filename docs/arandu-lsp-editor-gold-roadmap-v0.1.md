@@ -228,7 +228,9 @@ do editor e contrato próprio no roadmap mestre.
 - [x] Formatter-on-save é opt-in; o formatter canônico é idempotente e retorna
       edits mínimos por linha ou por hunk para preservar cursor e seleção fora
       da região realmente alterada.
-- [ ] Testar vários documentos abertos e requests concorrentes em snapshots.
+- [x] Vários documentos abertos e requests concorrentes usam snapshots da mesma
+      revisão sem contaminar resultados; a campanha cobre fan-out stdio fora de
+      ordem, leitores Salsa paralelos e cancelamento isolado por request id.
 - [ ] Medir p50/p95 de diagnóstico, completion, goto e rename em corpus versionado.
 - [ ] Folding, selection ranges e document highlights baseados no CST/resolve.
 - [ ] Validar Problems, Output, status, progress e recuperação de crash no editor.

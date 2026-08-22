@@ -95,6 +95,9 @@
     preferências transitórias do cliente. O wire converte edits UTF-8 mínimos
     por linha/hunk para UTF-16; a extensão define o formatter padrão, mas mantém
     `editor.formatOnSave` desligado até opção explícita do usuário.
+16. Concorrência multi-documento é provada em três fronteiras: snapshots Salsa
+    paralelos preservam arquivo/revisão, o scheduler cancela somente a chave
+    solicitada e o stdio aceita respostas fora de ordem sem misturar documentos.
 
 ## F4 / P3 — delta on-type
 
