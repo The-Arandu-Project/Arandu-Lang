@@ -414,7 +414,7 @@ do repositório e regressões adicionadas para qualquer invariante tocada.
 
 ### Fase 1 — Middle-End: desmembramento do PassManager & AmirBuilder
 
-Estado: `in-progress`.
+Estado: `done`.
 
 - [x] 1.1 Criar `arandu_mir::pass_manager` com traits `FunctionPass` e
       pipelines O0/O1/O2.
@@ -423,12 +423,12 @@ Estado: `in-progress`.
 
 ### Fase 2 — Decomposição do `arandu_lsp` (eliminação do monólito main.rs)
 
-Estado: `planned`.
+Estado: `done`.
 
-- [ ] 2.1 Criar `arandu_lsp/src/dispatcher.rs` e `arandu_lsp/src/handlers/`.
-- [ ] 2.2 Migrar hover, completion, goto_def, semantic_tokens, rename para
+- [x] 2.1 Criar `arandu_lsp/src/dispatcher.rs` e `arandu_lsp/src/handlers/`.
+- [x] 2.2 Migrar hover, completion, goto_def, semantic_tokens, rename para
       handlers isolados.
-- [ ] 2.3 Executar testes stdio E2E de ciclo de vida e cancelamento.
+- [x] 2.3 Executar testes stdio E2E de ciclo de vida e cancelamento.
 
 ### Fase 3 — Extração do crate `arandu_runtime` e `arandu_codegen`
 

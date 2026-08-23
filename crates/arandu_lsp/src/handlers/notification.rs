@@ -1,0 +1,165 @@
+//! Document synchronization and file-event notification handlers.
+//!
+//! Ordering rules preserved from the monolith: every mutation path cancels
+//! in-flight requests before touching state (`pool.cancel_requests()`), open
+//! documents publish diagnostics immediately, and workspace-wide events refresh
+//! the package listing then re-run diagnostics for open buffers.
+
+use super::HandlerCtx;
+use crate::conv::apply_lsp_range_edit;
+use crate::diagnostics::{publish_diagnostics, spawn_diagnostics, spawn_open_diagnostics};
+use crate::uri_util::parse_uri;
+use lsp_server::Notification;
+use lsp_types::notification::{
+    Cancel, DidChangeTextDocument, DidChangeWatchedFiles, DidCloseTextDocument, DidCreateFiles,
+    DidDeleteFiles, DidOpenTextDocument, DidRenameFiles, DidSaveTextDocument, Notification as _,
+};
+use lsp_types::{CancelParams, FileChangeType, NumberOrString};
+
+pub(super) fn handle(
+    ctx: &mut HandlerCtx<'_>,
+    not: Notification,
+) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
+    let connection = ctx.connection;
+    let state = &mut *ctx.state;
+    let pool = ctx.pool;
+    let job_tx = ctx.job_tx;
+
+    match not.method.as_str() {
+        "arandu/testCrash" if std::env::var_os("ARANDU_LSP_TEST_ALLOW_CRASH").is_some() => {
+            std::process::exit(86);
+        }
+        Cancel::METHOD => {
+            let params: CancelParams = not.extract(Cancel::METHOD)?;
+            let id = match params.id {
+                NumberOrString::Number(id) => lsp_server::RequestId::from(id),
+                NumberOrString::String(id) => lsp_server::RequestId::from(id),
+            };
+            let _ = pool.cancel(&crate::pool::JobKey::Request(id));
+        }
+        DidOpenTextDocument::METHOD => {
+            let params: lsp_types::DidOpenTextDocumentParams =
+                not.extract(DidOpenTextDocument::METHOD)?;
+            let uri = params.text_document.uri;
+            let version = params.text_document.version;
+            pool.cancel_requests();
+            let id = state.open_or_commit(&uri, params.text_document.text);
+            state.mark_open(&uri);
+            state.set_version(id, version);
+            spawn_diagnostics(state, pool, job_tx, uri, id);
+        }
+        DidChangeTextDocument::METHOD => {
+            let params: lsp_types::DidChangeTextDocumentParams =
+                not.extract(DidChangeTextDocument::METHOD)?;
+            let uri = params.text_document.uri;
+            let version = params.text_document.version;
+            // Incremental: apply each range change onto the current buffer text.
+            let mut text = state.text_for_change(&uri);
+            for change in params.content_changes {
+                if let Some(range) = change.range {
+                    text = apply_lsp_range_edit(&text, range, &change.text);
+                } else {
+                    // Full replace (clients may still send this).
+                    text = change.text;
+                }
+            }
+            let id = state
+                .by_uri
+                .get(uri.as_str())
+                .copied()
+                .unwrap_or_else(|| state.open_or_commit(&uri, text.clone()));
+            state.set_version(id, version);
+            state.queue_change(&uri, text);
+        }
+        DidSaveTextDocument::METHOD => {
+            let params: lsp_types::DidSaveTextDocumentParams =
+                not.extract(DidSaveTextDocument::METHOD)?;
+            if let Some(text) = params.text {
+                state.queue_change(&params.text_document.uri, text);
+            }
+            if state.vfs.has_pending() {
+                pool.cancel_requests();
+            }
+            let committed = state.flush_all();
+            if committed.is_empty() {
+                if let Some(&id) = state.by_uri.get(params.text_document.uri.as_str()) {
+                    spawn_diagnostics(state, pool, job_tx, params.text_document.uri, id);
+                }
+            } else {
+                for (uri, doc_id) in committed {
+                    spawn_diagnostics(state, pool, job_tx, uri, doc_id);
+                }
+            }
+        }
+        DidCloseTextDocument::METHOD => {
+            let params: lsp_types::DidCloseTextDocumentParams =
+                not.extract(DidCloseTextDocument::METHOD)?;
+            let uri = params.text_document.uri;
+            state.close_uri(&uri);
+            publish_diagnostics(connection, uri, Vec::new(), None)?;
+        }
+        DidCreateFiles::METHOD => {
+            let params: lsp_types::CreateFilesParams = not.extract(DidCreateFiles::METHOD)?;
+            pool.cancel_requests();
+            for file in params.files {
+                let Some(uri) = parse_uri(&file.uri) else {
+                    continue;
+                };
+                let _ = state.reload_uri_from_disk(&uri);
+            }
+            state.refresh_package_listing();
+            spawn_open_diagnostics(state, pool, job_tx);
+        }
+        DidRenameFiles::METHOD => {
+            let params: lsp_types::RenameFilesParams = not.extract(DidRenameFiles::METHOD)?;
+            pool.cancel_requests();
+            for file in params.files {
+                let (Some(old_uri), Some(new_uri)) =
+                    (parse_uri(&file.old_uri), parse_uri(&file.new_uri))
+                else {
+                    continue;
+                };
+                let was_open = state.is_open(&old_uri);
+                let renamed = state.rename_uri(&old_uri, &new_uri);
+                publish_diagnostics(connection, old_uri, Vec::new(), None)?;
+                if was_open {
+                    if let Some(id) = renamed {
+                        spawn_diagnostics(state, pool, job_tx, new_uri, id);
+                    }
+                }
+            }
+            state.refresh_package_listing();
+            spawn_open_diagnostics(state, pool, job_tx);
+        }
+        DidDeleteFiles::METHOD => {
+            let params: lsp_types::DeleteFilesParams = not.extract(DidDeleteFiles::METHOD)?;
+            pool.cancel_requests();
+            for file in params.files {
+                let Some(uri) = parse_uri(&file.uri) else {
+                    continue;
+                };
+                state.remove_uri(&uri);
+                publish_diagnostics(connection, uri, Vec::new(), None)?;
+            }
+            state.refresh_package_listing();
+            spawn_open_diagnostics(state, pool, job_tx);
+        }
+        DidChangeWatchedFiles::METHOD => {
+            let params: lsp_types::DidChangeWatchedFilesParams =
+                not.extract(DidChangeWatchedFiles::METHOD)?;
+            pool.cancel_requests();
+            for change in params.changes {
+                if change.typ == FileChangeType::DELETED {
+                    state.remove_uri(&change.uri);
+                    publish_diagnostics(connection, change.uri, Vec::new(), None)?;
+                } else {
+                    let _ = state.reload_uri_from_disk(&change.uri);
+                }
+            }
+            state.refresh_package_listing();
+            spawn_open_diagnostics(state, pool, job_tx);
+        }
+        _ => {}
+    }
+    Ok(())
+}
