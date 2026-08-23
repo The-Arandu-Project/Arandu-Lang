@@ -734,6 +734,21 @@ mod tests {
             "imported member must retain its definition file identity"
         );
 
+        let helper_path = src.join("helper.aru");
+        std::fs::rename(&util_path, &helper_path).expect("rename module fixture");
+        let helper_uri = uri_from_path(&helper_path).expect("helper URI");
+        state
+            .rename_uri(&util_uri, &helper_uri)
+            .expect("apply module rename");
+        assert!(state.refresh_package_listing());
+        assert!(
+            arandu_query::passes::type_check(state.host.db(), main)
+                .diagnostics
+                .iter()
+                .any(|diag| matches!(diag.code, arandu_middle::DiagCode::M001UnresolvedImport)),
+            "renaming an imported module must invalidate its importers"
+        );
+
         std::fs::remove_dir_all(root).expect("remove fixture");
     }
 

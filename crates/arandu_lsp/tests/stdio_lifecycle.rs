@@ -1122,6 +1122,16 @@ fn stdio_package_imports_refresh_completion_goto_and_diagnostics() {
         "jsonrpc": "2.0", "method": "workspace/didCreateFiles",
         "params": { "files": [{ "uri": util_uri }] }
     }));
+    let created_valid = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && message.pointer("/params/uri").and_then(Value::as_str) == Some(main_uri.as_str())
+            && message.pointer("/params/version") == Some(&json!(1))
+            && message
+                .pointer("/params/diagnostics")
+                .and_then(Value::as_array)
+                .is_some_and(Vec::is_empty)
+    });
+    assert_eq!(created_valid.pointer("/params/version"), Some(&json!(1)));
     request_workspace_symbol(&mut lsp, 3, "answer", true);
     let util_call = missing_source.find("util.answer").expect("util call");
     lsp.send(&json!({
