@@ -414,12 +414,12 @@ do repositório e regressões adicionadas para qualquer invariante tocada.
 
 ### Fase 1 — Middle-End: desmembramento do PassManager & AmirBuilder
 
-Estado: `planned`.
+Estado: `in-progress`.
 
-- [ ] 1.1 Criar `arandu_mir::pass_manager` com traits `FunctionPass` e
+- [x] 1.1 Criar `arandu_mir::pass_manager` com traits `FunctionPass` e
       pipelines O0/O1/O2.
-- [ ] 1.2 Implementar `AmirBuilder` estruturado em `lower_amir/builder.rs`.
-- [ ] 1.3 Validar fixpoint e invariantes de CFG sem regressão.
+- [x] 1.2 Implementar `AmirBuilder` estruturado em `lower_amir/builder.rs`.
+- [x] 1.3 Validar fixpoint e invariantes de CFG sem regressão.
 
 ### Fase 2 — Decomposição do `arandu_lsp` (eliminação do monólito main.rs)
 

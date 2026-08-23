@@ -113,7 +113,7 @@ impl LowerCtx<'_> {
                 let resume = self.new_block();
                 self.emit_suspend(future_op, resume)?;
                 // Continue after the frontier; future still dominates resume (temps).
-                self.current_block = Some(resume);
+                self.builder.current_block = Some(resume);
                 let dest = target.unwrap_or_else(|| self.new_temp_id(expr_ty));
                 self.emit_assign_temp(
                     dest,

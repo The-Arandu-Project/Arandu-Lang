@@ -17,6 +17,7 @@ use arandu_lexer::Span;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 mod arg_modes;
+mod builder;
 mod ctx;
 mod expr;
 mod flow;
@@ -208,9 +209,8 @@ pub(crate) struct LowerCtx<'a> {
     coroutine_depth: u32,
     locals: Vec<AmirLocal>,
     temps: Vec<AmirTemp>,
-    blocks: Vec<AmirBasicBlock>,
-    stmts: AmirStmtTable,
-    current_block: Option<BlockId>,
+    /// Structural construction state (blocks, stmts, cursor, predecessors).
+    builder: builder::AmirBuilder,
     symbol_map: FxHashMap<SymbolId, LocalId>,
     /// (`continue_block`, `exit_block`, `defer_frame_depth_at_loop_entry`)
     loop_stack: Vec<(BlockId, BlockId, usize)>,
@@ -221,7 +221,6 @@ pub(crate) struct LowerCtx<'a> {
     local_states: Vec<MoveState>,
 
     // SSA builder fields (OSSA Braun et al.)
-    predecessors: FxHashMap<BlockId, Vec<BlockId>>,
     sealed_blocks: FxHashSet<BlockId>,
     current_def: FxHashMap<(BlockId, LocalId), AmirOperand>,
     incomplete_phis: FxHashMap<BlockId, Vec<(LocalId, TempId)>>,

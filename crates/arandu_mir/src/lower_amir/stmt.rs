@@ -47,7 +47,7 @@ impl LowerCtx<'_> {
         self.seal_block(bb_ok);
 
         // Err branch: err = payload; ok = zero/nil so both locals are defined on all paths.
-        self.current_block = Some(bb_err);
+        self.builder.current_block = Some(bb_err);
         let err_tmp = self.new_temp_id(err_b.ty);
         self.lower_result_err_field(result_op, err_tmp);
         let err_consumed = self.consume_operand(AmirOperand::Copy(err_tmp))?;
@@ -62,7 +62,7 @@ impl LowerCtx<'_> {
         self.emit_goto(bb_join);
 
         // Ok branch: ok = payload, err = nil.
-        self.current_block = Some(bb_ok);
+        self.builder.current_block = Some(bb_ok);
         let ok_tmp = self.new_temp_id(ok_b.ty);
         self.lower_result_ok_field(result_op, ok_tmp);
         let ok_consumed = self.consume_operand(AmirOperand::Copy(ok_tmp))?;
@@ -77,7 +77,7 @@ impl LowerCtx<'_> {
         self.emit_goto(bb_join);
 
         self.seal_block(bb_join);
-        self.current_block = Some(bb_join);
+        self.builder.current_block = Some(bb_join);
         Ok(())
     }
 
@@ -86,7 +86,7 @@ impl LowerCtx<'_> {
         stmt: &HirStmt,
         symbols: &SymbolTable,
     ) -> Result<(), Diagnostic> {
-        if self.current_block.is_none() {
+        if self.builder.current_block.is_none() {
             return Ok(());
         }
 
@@ -256,14 +256,14 @@ impl LowerCtx<'_> {
                     self.seal_block(bb_ok);
 
                     // BB Err: runs errdefers AND defers
-                    self.current_block = Some(bb_err);
+                    self.builder.current_block = Some(bb_err);
                     let saved_frames = self.defer_frames.clone();
                     self.exit_all_defer_frames(true, symbols)?;
                     self.set_terminator(AmirTerminator::Return);
 
                     // BB Ok: runs ONLY defers
                     self.defer_frames = saved_frames;
-                    self.current_block = Some(bb_ok);
+                    self.builder.current_block = Some(bb_ok);
                     self.exit_all_defer_frames(false, symbols)?;
                     self.set_terminator(AmirTerminator::Return);
                 } else {
@@ -272,21 +272,21 @@ impl LowerCtx<'_> {
                     self.set_terminator(AmirTerminator::Return);
                 }
 
-                self.current_block = None;
+                self.builder.current_block = None;
             }
 
             HirStmtKind::Break => {
                 if let Some((_, exit_block, defer_depth)) = self.loop_stack.last().copied() {
                     self.exit_defer_frames_from(defer_depth, false, symbols)?;
                     self.emit_goto(exit_block);
-                    self.current_block = None;
+                    self.builder.current_block = None;
                 }
             }
             HirStmtKind::Continue => {
                 if let Some((cont_block, _, defer_depth)) = self.loop_stack.last().copied() {
                     self.exit_defer_frames_from(defer_depth, false, symbols)?;
                     self.emit_goto(cont_block);
-                    self.current_block = None;
+                    self.builder.current_block = None;
                 }
             }
             HirStmtKind::Expr(expr) => {
@@ -307,18 +307,18 @@ impl LowerCtx<'_> {
                 self.seal_block(bb_else);
 
                 // Then
-                self.current_block = Some(bb_then);
+                self.builder.current_block = Some(bb_then);
                 self.lower_block(*then_block, symbols)?;
-                if self.current_block.is_some() {
+                if self.builder.current_block.is_some() {
                     self.emit_goto(bb_join);
                 }
 
                 // Else
-                self.current_block = Some(bb_else);
+                self.builder.current_block = Some(bb_else);
                 if let Some(eb) = else_block {
                     self.lower_block(*eb, symbols)?;
                 }
-                if self.current_block.is_some() {
+                if self.builder.current_block.is_some() {
                     self.emit_goto(bb_join);
                 }
 
@@ -331,7 +331,7 @@ impl LowerCtx<'_> {
 
                 self.emit_goto(bb_cond);
 
-                self.current_block = Some(bb_cond);
+                self.builder.current_block = Some(bb_cond);
                 let cond_op = self.lower_condition(condition, symbols)?;
                 self.set_bool_branch(cond_op, bb_body, bb_exit);
                 self.seal_block(bb_body);
@@ -339,15 +339,15 @@ impl LowerCtx<'_> {
 
                 let defer_depth = self.defer_frames.len();
                 self.loop_stack.push((bb_cond, bb_exit, defer_depth));
-                self.current_block = Some(bb_body);
+                self.builder.current_block = Some(bb_body);
                 self.lower_block(*body, symbols)?;
-                if self.current_block.is_some() {
+                if self.builder.current_block.is_some() {
                     self.emit_goto(bb_cond);
                 }
                 self.loop_stack.pop();
                 self.seal_block(bb_cond);
 
-                self.current_block = Some(bb_exit);
+                self.builder.current_block = Some(bb_exit);
             }
             HirStmtKind::For { clause, body } => match clause {
                 HirForClause::In {
@@ -385,7 +385,7 @@ impl LowerCtx<'_> {
 
                     self.emit_goto(bb_cond);
 
-                    self.current_block = Some(bb_cond);
+                    self.builder.current_block = Some(bb_cond);
                     let int_ty =
                         arandu_middle::types::TypeInterner::preinterned_primitive(Primitive::Int);
                     let idx_op = self.load_place(
@@ -417,7 +417,7 @@ impl LowerCtx<'_> {
 
                     let defer_depth = self.defer_frames.len();
                     self.loop_stack.push((bb_step, bb_exit, defer_depth));
-                    self.current_block = Some(bb_body);
+                    self.builder.current_block = Some(bb_body);
 
                     let bindings_slice = self.hir.pool.for_bindings_list(*bindings);
                     if let Some(binding) = bindings_slice.first() {
@@ -450,12 +450,12 @@ impl LowerCtx<'_> {
                     }
 
                     self.lower_block(*body, symbols)?;
-                    if self.current_block.is_some() {
+                    if self.builder.current_block.is_some() {
                         self.emit_goto(bb_step);
                     }
                     self.loop_stack.pop();
 
-                    self.current_block = Some(bb_step);
+                    self.builder.current_block = Some(bb_step);
                     self.seal_block(bb_step);
                     let idx_op3 = self.load_place(
                         &AmirPlace {
@@ -484,7 +484,7 @@ impl LowerCtx<'_> {
                     self.emit_goto(bb_cond);
                     self.seal_block(bb_cond);
 
-                    self.current_block = Some(bb_exit);
+                    self.builder.current_block = Some(bb_exit);
                 }
                 HirForClause::CStyle {
                     init,
@@ -503,7 +503,7 @@ impl LowerCtx<'_> {
 
                     self.emit_goto(bb_cond);
 
-                    self.current_block = Some(bb_cond);
+                    self.builder.current_block = Some(bb_cond);
                     let cond_op = if let Some(c) = condition {
                         self.lower_expr(*c, None, symbols)?
                     } else {
@@ -515,24 +515,24 @@ impl LowerCtx<'_> {
 
                     let defer_depth = self.defer_frames.len();
                     self.loop_stack.push((bb_step, bb_exit, defer_depth));
-                    self.current_block = Some(bb_body);
+                    self.builder.current_block = Some(bb_body);
                     self.lower_block(*body, symbols)?;
-                    if self.current_block.is_some() {
+                    if self.builder.current_block.is_some() {
                         self.emit_goto(bb_step);
                     }
                     self.loop_stack.pop();
 
-                    self.current_block = Some(bb_step);
+                    self.builder.current_block = Some(bb_step);
                     self.seal_block(bb_step);
                     if let Some(s) = step {
                         self.lower_simple_stmt(s, symbols)?;
                     }
-                    if self.current_block.is_some() {
+                    if self.builder.current_block.is_some() {
                         self.emit_goto(bb_cond);
                     }
                     self.seal_block(bb_cond);
 
-                    self.current_block = Some(bb_exit);
+                    self.builder.current_block = Some(bb_exit);
                 }
             },
             HirStmtKind::Match { value, arms } => {
@@ -565,7 +565,7 @@ impl LowerCtx<'_> {
         stmt: &HirSimpleStmt,
         symbols: &SymbolTable,
     ) -> Result<(), Diagnostic> {
-        if self.current_block.is_none() {
+        if self.builder.current_block.is_none() {
             return Ok(());
         }
         match stmt {
@@ -810,13 +810,13 @@ impl LowerCtx<'_> {
         });
         let blk = self.hir.pool.block(block);
         for &stmt_id in self.hir.pool.stmt_list(blk.statements) {
-            if self.current_block.is_none() {
+            if self.builder.current_block.is_none() {
                 break;
             }
             let stmt = self.hir.pool.stmt(stmt_id);
             self.lower_stmt(stmt, symbols)?;
         }
-        if self.current_block.is_some() {
+        if self.builder.current_block.is_some() {
             self.exit_current_defer_frame(false, symbols)?;
         }
         Ok(())
@@ -874,14 +874,14 @@ impl LowerCtx<'_> {
                     );
                 }
             }
-            if self.current_block.is_some() {
+            if self.builder.current_block.is_some() {
                 self.exit_current_defer_frame(false, symbols)?;
             }
             return Ok(());
         }
         let last_idx = statements_slice.len() - 1;
         for (i, &stmt_id) in statements_slice.iter().enumerate() {
-            if self.current_block.is_none() {
+            if self.builder.current_block.is_none() {
                 break;
             }
             let stmt = self.hir.pool.stmt(stmt_id);
@@ -903,7 +903,7 @@ impl LowerCtx<'_> {
                 } else {
                     self.lower_stmt(stmt, symbols)?;
                     if let Some(dest) = target
-                        && self.current_block.is_some()
+                        && self.builder.current_block.is_some()
                     {
                         if let Some(payload_ty) = async_payload_ty {
                             self.emit_assign_temp(
@@ -926,7 +926,7 @@ impl LowerCtx<'_> {
                 self.lower_stmt(stmt, symbols)?;
             }
         }
-        if self.current_block.is_some() {
+        if self.builder.current_block.is_some() {
             self.exit_current_defer_frame(false, symbols)?;
         }
         Ok(())

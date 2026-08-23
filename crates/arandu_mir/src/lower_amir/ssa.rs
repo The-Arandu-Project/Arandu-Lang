@@ -11,10 +11,6 @@ use rustc_hash::FxHashMap;
 impl LowerCtx<'_> {
     // --- SSA / OSSA Block Arguments & Braun et al. Helpers ---
 
-    pub(crate) fn add_predecessor(&mut self, from: BlockId, to: BlockId) {
-        self.predecessors.entry(to).or_default().push(from);
-    }
-
     pub(crate) fn seal_block(&mut self, block: BlockId) {
         if self.sealed_blocks.contains(&block) {
             return;
@@ -55,7 +51,7 @@ impl LowerCtx<'_> {
 
     /// Current basic block, or ICE diagnostic if lowering lost block context.
     pub(crate) fn require_block(&self) -> Result<BlockId, Diagnostic> {
-        self.current_block.ok_or_else(|| {
+        self.builder.current_block.ok_or_else(|| {
             Diagnostic::ice(
                 crate::DiagCode::ICEGEN001,
                 "AMIR lower: no current basic block",
@@ -175,7 +171,7 @@ impl LowerCtx<'_> {
                 from: from_name,
                 moved: !is_copy,
             };
-            self.blocks[block.as_usize()].params.push(param);
+            self.builder.blocks[block.as_usize()].params.push(param);
             let op = AmirOperand::Copy(temp_id);
             self.incomplete_phis
                 .entry(block)
@@ -183,7 +179,12 @@ impl LowerCtx<'_> {
                 .push((local, temp_id));
             op
         } else {
-            let preds = self.predecessors.get(&block).cloned().unwrap_or_default();
+            let preds = self
+                .builder
+                .predecessors
+                .get(&block)
+                .cloned()
+                .unwrap_or_default();
             if preds.len() == 1 {
                 self.read_variable(preds[0], local)
             } else {
@@ -202,7 +203,7 @@ impl LowerCtx<'_> {
                     from: from_name,
                     moved: !is_copy,
                 };
-                self.blocks[block.as_usize()].params.push(param);
+                self.builder.blocks[block.as_usize()].params.push(param);
                 let op = AmirOperand::Copy(temp_id);
                 self.write_variable(block, local, op);
                 self.add_block_parameter_operands(block, local, temp_id);
@@ -214,7 +215,12 @@ impl LowerCtx<'_> {
     }
 
     fn add_block_parameter_operands(&mut self, block: BlockId, local: LocalId, _temp_id: TempId) {
-        let preds = self.predecessors.get(&block).cloned().unwrap_or_default();
+        let preds = self
+            .builder
+            .predecessors
+            .get(&block)
+            .cloned()
+            .unwrap_or_default();
         for pred in preds {
             let val = self.read_variable(pred, local);
             self.append_terminator_arg(pred, block, val);
@@ -222,7 +228,12 @@ impl LowerCtx<'_> {
     }
 
     fn simplify_phi(&mut self, block: BlockId, local: LocalId, temp_id: TempId) -> AmirOperand {
-        let preds = self.predecessors.get(&block).cloned().unwrap_or_default();
+        let preds = self
+            .builder
+            .predecessors
+            .get(&block)
+            .cloned()
+            .unwrap_or_default();
         if preds.is_empty() {
             return AmirOperand::Copy(temp_id);
         }
@@ -260,12 +271,12 @@ impl LowerCtx<'_> {
     /// A3.5: resume blocks of `Suspend` keep explicit state params (do not
     /// fold away as trivial phis) so `Suspend.args` remains the task state.
     fn is_suspend_resume_target(&self, block: BlockId) -> bool {
-        let Some(preds) = self.predecessors.get(&block) else {
+        let Some(preds) = self.builder.predecessors.get(&block) else {
             return false;
         };
         preds.iter().any(|pred| {
             matches!(
-                &self.blocks[pred.as_usize()].terminator,
+                &self.builder.blocks[pred.as_usize()].terminator,
                 AmirTerminator::Suspend { resume, .. } if *resume == block
             )
         })
@@ -274,19 +285,20 @@ impl LowerCtx<'_> {
     pub(crate) fn eliminate_trivial_phis(&mut self) {
         loop {
             let mut changed = false;
-            for block_idx in 0..self.blocks.len() {
+            for block_idx in 0..self.builder.blocks.len() {
                 let block_id = BlockId::from_usize(block_idx);
                 // Keep coroutine state slots materialised on resume BBs.
                 if self.is_suspend_resume_target(block_id) {
                     continue;
                 }
-                let params = self.blocks[block_idx].params.clone();
+                let params = self.builder.blocks[block_idx].params.clone();
                 for (param_idx, p) in params.into_iter().enumerate() {
                     if self.redirected_temps.contains_key(&p.id) {
                         continue;
                     }
 
                     let preds = self
+                        .builder
                         .predecessors
                         .get(&block_id)
                         .cloned()
@@ -343,13 +355,13 @@ impl LowerCtx<'_> {
     }
 
     pub(crate) fn prune_eliminated_parameters(&mut self) {
-        for block_idx in 0..self.blocks.len() {
+        for block_idx in 0..self.builder.blocks.len() {
             let block_id = BlockId::from_usize(block_idx);
             // A3.5: never drop resume block params of a Suspend frontier.
             if self.is_suspend_resume_target(block_id) {
                 continue;
             }
-            let old_params = std::mem::take(&mut self.blocks[block_idx].params);
+            let old_params = std::mem::take(&mut self.builder.blocks[block_idx].params);
             let mut keep_indices = Vec::new();
             let mut new_params = Vec::new();
             for (i, p) in old_params.into_iter().enumerate() {
@@ -358,9 +370,10 @@ impl LowerCtx<'_> {
                     new_params.push(p);
                 }
             }
-            self.blocks[block_idx].params = new_params;
+            self.builder.blocks[block_idx].params = new_params;
 
             let preds = self
+                .builder
                 .predecessors
                 .get(&block_id)
                 .cloned()
@@ -373,21 +386,21 @@ impl LowerCtx<'_> {
 
     pub(crate) fn rewrite_all_operands(&mut self) {
         // Rewrite all statements
-        for stmt_idx in 0..self.stmts.len() {
+        for stmt_idx in 0..self.builder.stmts.len() {
             let stmt_id = crate::amir::stmt::InstrId::from_usize(stmt_idx);
-            if let Some(stmt) = self.stmts.get_mut(stmt_id) {
+            if let Some(stmt) = self.builder.stmts.get_mut(stmt_id) {
                 Self::resolve_stmt(&self.redirected_temps, stmt);
             }
         }
 
         // Rewrite all block terminators
-        for block_idx in 0..self.blocks.len() {
+        for block_idx in 0..self.builder.blocks.len() {
             let mut term = std::mem::replace(
-                &mut self.blocks[block_idx].terminator,
+                &mut self.builder.blocks[block_idx].terminator,
                 AmirTerminator::Unreachable,
             );
             Self::resolve_terminator(&self.redirected_temps, &mut term);
-            self.blocks[block_idx].terminator = term;
+            self.builder.blocks[block_idx].terminator = term;
         }
     }
 
@@ -597,7 +610,7 @@ impl LowerCtx<'_> {
         target_block: BlockId,
         param_idx: usize,
     ) -> Option<AmirOperand> {
-        let term = &self.blocks[pred.as_usize()].terminator;
+        let term = &self.builder.blocks[pred.as_usize()].terminator;
         match term {
             AmirTerminator::Goto { target, args }
             | AmirTerminator::Suspend {
@@ -645,7 +658,7 @@ impl LowerCtx<'_> {
     }
 
     fn append_terminator_arg(&mut self, pred: BlockId, target_block: BlockId, val: AmirOperand) {
-        let term = &mut self.blocks[pred.as_usize()].terminator;
+        let term = &mut self.builder.blocks[pred.as_usize()].terminator;
         match term {
             AmirTerminator::Goto { target, args } if *target == target_block => {
                 args.push(val);
@@ -689,7 +702,7 @@ impl LowerCtx<'_> {
         target_block: BlockId,
         keep_indices: &[usize],
     ) {
-        let term = &mut self.blocks[pred.as_usize()].terminator;
+        let term = &mut self.builder.blocks[pred.as_usize()].terminator;
         match term {
             AmirTerminator::Goto { target, args } if *target == target_block => {
                 *args = keep_indices.iter().map(|&i| args[i]).collect();
@@ -741,9 +754,9 @@ impl LowerCtx<'_> {
         if !self.sealed_blocks.contains(&target) {
             return Vec::new();
         }
-        let params = self.blocks[target.as_usize()].params.clone();
+        let params = self.builder.blocks[target.as_usize()].params.clone();
         let mut args = Vec::new();
-        let Some(curr) = self.current_block else {
+        let Some(curr) = self.builder.current_block else {
             return args;
         };
         for p in params {

@@ -622,7 +622,7 @@ impl LowerCtx<'_> {
                 else_block,
             } => {
                 let cond_op = self.lower_condition(condition, symbols)?;
-                if self.current_block.is_none() {
+                if self.builder.current_block.is_none() {
                     let dest = target.unwrap_or_else(|| self.new_temp_id(expr.ty));
                     return Ok(AmirOperand::Copy(dest));
                 }
@@ -637,22 +637,22 @@ impl LowerCtx<'_> {
                 self.seal_block(bb_else);
 
                 // Then branch
-                self.current_block = Some(bb_then);
+                self.builder.current_block = Some(bb_then);
                 self.lower_block_as_expr(*then_block, Some(dest), symbols)?;
-                if self.current_block.is_some() {
+                if self.builder.current_block.is_some() {
                     self.emit_goto(bb_join);
                 }
 
                 // Else branch
-                self.current_block = Some(bb_else);
+                self.builder.current_block = Some(bb_else);
                 self.lower_block_as_expr(*else_block, Some(dest), symbols)?;
-                if self.current_block.is_some() {
+                if self.builder.current_block.is_some() {
                     self.emit_goto(bb_join);
                 }
 
                 // Join
                 self.seal_block(bb_join);
-                self.current_block = Some(bb_join);
+                self.builder.current_block = Some(bb_join);
                 Ok(AmirOperand::Copy(dest))
             }
             HirExprKind::Cast { expr: sub_expr, .. } => {
@@ -745,7 +745,7 @@ impl LowerCtx<'_> {
             HirExprKind::SafeField { base, field } => {
                 let dest = target.unwrap_or_else(|| self.new_temp_id(expr.ty));
                 let base_op = self.lower_expr(*base, None, symbols)?;
-                if self.current_block.is_none() {
+                if self.builder.current_block.is_none() {
                     return Ok(AmirOperand::Copy(dest));
                 }
 
@@ -767,14 +767,14 @@ impl LowerCtx<'_> {
                 self.seal_block(bb_null);
                 self.seal_block(bb_access);
 
-                self.current_block = Some(bb_null);
+                self.builder.current_block = Some(bb_null);
                 self.emit_assign_temp(
                     dest,
                     AmirRvalue::Use(AmirOperand::Constant(AmirConstant::Nil)),
                 );
                 self.emit_goto(bb_join);
 
-                self.current_block = Some(bb_access);
+                self.builder.current_block = Some(bb_access);
                 let base_expr = self.hir.pool.expr(*base);
                 // Materialize base into a typed temp so FieldAccess never takes a
                 // bare Constant(Nil) operand (pretty-print `nil.0` / ZST layout).
@@ -793,13 +793,13 @@ impl LowerCtx<'_> {
                 self.emit_goto(bb_join);
 
                 self.seal_block(bb_join);
-                self.current_block = Some(bb_join);
+                self.builder.current_block = Some(bb_join);
                 Ok(AmirOperand::Copy(dest))
             }
             HirExprKind::SafeIndex { base, index } => {
                 let dest = target.unwrap_or_else(|| self.new_temp_id(expr.ty));
                 let base_op = self.lower_expr(*base, None, symbols)?;
-                if self.current_block.is_none() {
+                if self.builder.current_block.is_none() {
                     return Ok(AmirOperand::Copy(dest));
                 }
 
@@ -821,14 +821,14 @@ impl LowerCtx<'_> {
                 self.seal_block(bb_null);
                 self.seal_block(bb_access);
 
-                self.current_block = Some(bb_null);
+                self.builder.current_block = Some(bb_null);
                 self.emit_assign_temp(
                     dest,
                     AmirRvalue::Use(AmirOperand::Constant(AmirConstant::Nil)),
                 );
                 self.emit_goto(bb_join);
 
-                self.current_block = Some(bb_access);
+                self.builder.current_block = Some(bb_access);
                 let index_op = self.lower_expr(*index, None, symbols)?;
                 self.emit_assign_temp(
                     dest,
@@ -837,18 +837,18 @@ impl LowerCtx<'_> {
                         index: index_op,
                     },
                 );
-                if self.current_block.is_some() {
+                if self.builder.current_block.is_some() {
                     self.emit_goto(bb_join);
                 }
 
                 self.seal_block(bb_join);
-                self.current_block = Some(bb_join);
+                self.builder.current_block = Some(bb_join);
                 Ok(AmirOperand::Copy(dest))
             }
             HirExprKind::NullCoalesce { left, right } => {
                 let dest = target.unwrap_or_else(|| self.new_temp_id(expr.ty));
                 let left_op = self.lower_expr(*left, None, symbols)?;
-                if self.current_block.is_none() {
+                if self.builder.current_block.is_none() {
                     return Ok(AmirOperand::Copy(dest));
                 }
 
@@ -870,18 +870,18 @@ impl LowerCtx<'_> {
                 self.seal_block(bb_left);
                 self.seal_block(bb_right);
 
-                self.current_block = Some(bb_left);
+                self.builder.current_block = Some(bb_left);
                 self.emit_assign_temp(dest, AmirRvalue::Use(left_op));
                 self.emit_goto(bb_join);
 
-                self.current_block = Some(bb_right);
+                self.builder.current_block = Some(bb_right);
                 self.lower_expr(*right, Some(dest), symbols)?;
-                if self.current_block.is_some() {
+                if self.builder.current_block.is_some() {
                     self.emit_goto(bb_join);
                 }
 
                 self.seal_block(bb_join);
-                self.current_block = Some(bb_join);
+                self.builder.current_block = Some(bb_join);
                 Ok(AmirOperand::Copy(dest))
             }
             HirExprKind::Catch {

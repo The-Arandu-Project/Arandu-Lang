@@ -1,12 +1,10 @@
 use super::{DeferKind, LowerCtx, MoveState};
-use crate::amir::program::extend_block_range;
 use crate::amir::{
-    AmirBasicBlock, AmirConstant, AmirLocal, AmirOperand, AmirPlace, AmirRvalue, AmirStmt,
-    AmirTemp, AmirTerminator, BlockId, LocalId, TempId,
+    AmirConstant, AmirLocal, AmirOperand, AmirPlace, AmirRvalue, AmirStmt, AmirTemp,
+    AmirTerminator, BlockId, LocalId, TempId,
 };
 use crate::diagnostics::Diagnostic;
 use crate::hir::HirBlock;
-use crate::layout::DenseRange;
 use crate::literal_pool::AmirLiteralEntry;
 use crate::passes::type_checker::types::{ArType, Primitive};
 use crate::{SymbolId, SymbolTable};
@@ -230,74 +228,6 @@ impl LowerCtx<'_> {
         }
     }
 
-    pub(crate) fn new_block(&mut self) -> BlockId {
-        let id = BlockId::from_usize(self.blocks.len());
-        self.blocks.push(AmirBasicBlock {
-            id,
-            params: Vec::new(),
-            statements: DenseRange::empty(),
-            terminator: AmirTerminator::Unreachable,
-        });
-        id
-    }
-
-    /// Seal a join/exit block and resume after it **only if** some arm fell through.
-    ///
-    /// When every predecessor path diverged (`return` / `break` / …), nothing
-    /// targets `join`. Leaving `current_block = Some(join)` would later promote
-    /// the empty join from `Unreachable` → `Return` (end-of-func fill) and trip
-    /// CFG-5 (U001: block not reachable from bb0). With no preds, leave the
-    /// join as `Unreachable` (CFG-5 exempt) and clear `current_block`.
-    pub(crate) fn finish_join(&mut self, join: BlockId) {
-        self.seal_block(join);
-        let has_pred = self
-            .predecessors
-            .get(&join)
-            .is_some_and(|preds| !preds.is_empty());
-        if has_pred {
-            self.current_block = Some(join);
-        } else {
-            self.current_block = None;
-        }
-    }
-
-    pub(crate) fn push_stmt(&mut self, stmt: AmirStmt) {
-        if let Some(curr) = self.current_block {
-            let id = self.stmts.push(stmt);
-            extend_block_range(&mut self.blocks[curr.as_usize()].statements, id);
-        }
-    }
-
-    pub(crate) fn set_terminator(&mut self, term: AmirTerminator) {
-        if let Some(curr) = self.current_block {
-            match &term {
-                AmirTerminator::Goto { target, .. } => {
-                    self.add_predecessor(curr, *target);
-                }
-                AmirTerminator::Branch {
-                    if_true, if_false, ..
-                } => {
-                    self.add_predecessor(curr, *if_true);
-                    self.add_predecessor(curr, *if_false);
-                }
-                AmirTerminator::SwitchInt {
-                    targets, otherwise, ..
-                } => {
-                    for (_, dest, _) in targets {
-                        self.add_predecessor(curr, *dest);
-                    }
-                    self.add_predecessor(curr, otherwise.0);
-                }
-                // A3.1: suspend edge → resume block (same pred tracking as Goto).
-                AmirTerminator::Suspend { resume, .. } => {
-                    self.add_predecessor(curr, *resume);
-                }
-                _ => {}
-            }
-            self.blocks[curr.as_usize()].terminator = term;
-        }
-    }
-
     /// A3.1/A3.5: end the current block at an `await` frontier and continue in `resume`.
     ///
     /// **Dense live capture (gold design):** every local that currently has a definition
@@ -313,7 +243,7 @@ impl LowerCtx<'_> {
         future: AmirOperand,
         resume: BlockId,
     ) -> Result<(), Diagnostic> {
-        let Some(curr) = self.current_block else {
+        let Some(curr) = self.builder.current_block else {
             return Err(Diagnostic::ice(
                 crate::DiagCode::ICEGEN001,
                 "AMIR lower: emit_suspend without current block",
@@ -394,7 +324,7 @@ impl LowerCtx<'_> {
         symbols: &SymbolTable,
     ) -> Result<(), Diagnostic> {
         for &stmt_id in self.hir.pool.stmt_list(block.statements) {
-            if self.current_block.is_none() {
+            if self.builder.current_block.is_none() {
                 break;
             }
             let stmt = self.hir.pool.stmt(stmt_id);
@@ -467,7 +397,7 @@ impl LowerCtx<'_> {
         }
         if lhs.projections.is_empty() {
             self.local_states[lhs.local.as_usize()] = MoveState::Available;
-            if let Some(block) = self.current_block {
+            if let Some(block) = self.builder.current_block {
                 self.write_variable(block, lhs.local, rhs);
             }
         }

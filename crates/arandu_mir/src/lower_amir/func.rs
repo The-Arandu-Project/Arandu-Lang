@@ -2,7 +2,7 @@
 
 use super::{CalleeArgModes, LowerCtx, MoveState};
 use crate::TypeCheckResult;
-use crate::amir::{AmirFunc, AmirOperand, AmirStmtTable, AmirTemp, AmirTerminator, TempId};
+use crate::amir::{AmirFunc, AmirOperand, AmirTemp, AmirTerminator, TempId};
 use crate::diagnostics::Diagnostic;
 use crate::hir::{HirBlockId, HirFunc, HirProgram};
 use crate::literal_pool::AmirLiteralPool;
@@ -26,9 +26,7 @@ pub(crate) fn lower_func(
         coroutine_depth: 0,
         locals: Vec::new(),
         temps: Vec::new(),
-        blocks: Vec::new(),
-        stmts: AmirStmtTable::new(),
-        current_block: None,
+        builder: super::builder::AmirBuilder::new(),
         symbol_map: FxHashMap::default(),
         loop_stack: Vec::new(),
         literal_pool,
@@ -36,7 +34,6 @@ pub(crate) fn lower_func(
         temp_states: Vec::new(),
         temp_origins: Vec::new(),
         local_states: Vec::new(),
-        predecessors: FxHashMap::default(),
         sealed_blocks: FxHashSet::default(),
         current_def: FxHashMap::default(),
         incomplete_phis: FxHashMap::default(),
@@ -67,7 +64,7 @@ pub(crate) fn lower_func(
     // Start with bb0 so we can emit parameter store instructions there
     let bb0 = ctx.new_block();
     ctx.sealed_blocks.insert(bb0);
-    ctx.current_block = Some(bb0);
+    ctx.builder.current_block = Some(bb0);
 
     for param in hir.pool.params_list(f.params) {
         let p_temp = ctx.with_span(param.span, |this| this.new_temp_id(param.ty));
@@ -113,20 +110,23 @@ pub(crate) fn lower_func(
     }
 
     // If last block does not have a terminator, implicitly return
-    if let Some(curr) = ctx.current_block {
-        if ctx.blocks[curr.as_usize()].terminator.is_unreachable() {
-            ctx.blocks[curr.as_usize()].terminator = AmirTerminator::Return;
+    if let Some(curr) = ctx.builder.current_block {
+        if ctx.builder.blocks[curr.as_usize()]
+            .terminator
+            .is_unreachable()
+        {
+            ctx.builder.blocks[curr.as_usize()].terminator = AmirTerminator::Return;
         }
     }
 
     // Seal all remaining unsealed blocks
-    for i in 0..ctx.blocks.len() {
+    for i in 0..ctx.builder.blocks.len() {
         ctx.seal_block(crate::amir::BlockId::from_usize(i));
     }
 
     // OSSA Optimization passes
     // 1. Snapshot func for validation without cloning Vecs (take → check → put back).
-    let raw_cfg = crate::cfg::compute_cfg_edges(&ctx.blocks);
+    let raw_cfg = crate::cfg::compute_cfg_edges(&ctx.builder.blocks);
     let mut raw_func = AmirFunc {
         symbol: f.symbol,
         return_type: ret_ty,
@@ -134,8 +134,8 @@ pub(crate) fn lower_func(
         params: params.clone(),
         locals: std::mem::take(&mut ctx.locals),
         temps: std::mem::take(&mut ctx.temps),
-        blocks: std::mem::take(&mut ctx.blocks),
-        stmts: std::mem::take(&mut ctx.stmts),
+        blocks: std::mem::take(&mut ctx.builder.blocks),
+        stmts: std::mem::take(&mut ctx.builder.stmts),
         cfg: raw_cfg,
     };
 
@@ -154,8 +154,8 @@ pub(crate) fn lower_func(
     // Restore into ctx for phi elimination / rewrite.
     ctx.locals = std::mem::take(&mut raw_func.locals);
     ctx.temps = std::mem::take(&mut raw_func.temps);
-    ctx.blocks = std::mem::take(&mut raw_func.blocks);
-    ctx.stmts = std::mem::take(&mut raw_func.stmts);
+    ctx.builder.blocks = std::mem::take(&mut raw_func.blocks);
+    ctx.builder.stmts = std::mem::take(&mut raw_func.stmts);
     drop(raw_func);
 
     // 3. OSSA Optimization passes
@@ -163,7 +163,7 @@ pub(crate) fn lower_func(
     ctx.prune_eliminated_parameters();
     ctx.rewrite_all_operands();
 
-    let cfg = crate::cfg::compute_cfg_edges(&ctx.blocks);
+    let cfg = crate::cfg::compute_cfg_edges(&ctx.builder.blocks);
     let mut amir_f = AmirFunc {
         symbol: f.symbol,
         return_type: ret_ty,
@@ -171,8 +171,8 @@ pub(crate) fn lower_func(
         params,
         locals: ctx.locals,
         temps: ctx.temps,
-        blocks: ctx.blocks,
-        stmts: ctx.stmts,
+        blocks: ctx.builder.blocks,
+        stmts: ctx.builder.stmts,
         cfg,
     };
 
