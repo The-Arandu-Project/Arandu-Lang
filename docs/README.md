@@ -15,6 +15,7 @@ permanece como stub na raiz.
 - [Contrato de distribuição](arandu-distribution-contract-v0.1.md)
 - [Verificação de releases](release-verification.md)
 - [Especificação de diagnósticos](diagnostics/SPEC.md)
+- [Contrato de nomes de anotações](arandu-attribute-naming-v0.1.md)
 
 ## Contratos técnicos
 

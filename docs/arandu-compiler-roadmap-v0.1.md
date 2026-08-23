@@ -151,7 +151,7 @@ Fase 3 — OSSA Avançado, Semântica e OS Runtime (v0.3) · [PARCIAL; vários m
    ├─ [x] F2.3   Escape policy + O004/O010 + G2 promote (análise + GenRef nos backends i64 MVP)
    │    ├─ [x] F2.3.1 Escape detection (return → O010; heap-store → O004 path)
    │    ├─ [x] F2.3.2 O004 nota informativa (Magia Inspecionável — nunca silencioso)
-   │    └─ [x] F2.3.3 G2: `@no_fallback` / `--no-generational-fallback` promove O004→erro
+   │    └─ [x] F2.3.3 G2: `@NoFallback` / `--no-generational-fallback` promove O004→erro
    └─ [x] F2.3.runtime  GenRef MVP (i64 payload; promoção HeapStore para int)
         ├─ [x] Spec: `docs/arandu-genref-abi-rfc-v0.1.md`
         ├─ [x] `stdlib/core/intrinsics.aru` — `abort_generational_mismatch`
@@ -617,7 +617,7 @@ O compilador do Arandu rejeita abordagens extremas e escolhe a estratégia ótim
 * **Lazy Monomorphization (Caminhos Quentes)**: O compilador realiza a monomorfização cirúrgica (duplicação e especialização de código concreto) para:
   * Loops e hot-paths identificados por PGO ou análise estática.
   * Tipos primitivos numéricos e tipos pequenos de dados.
-  * Funções explicitamente anotadas com `@specialize`.
+  * Funções explicitamente anotadas com `@Specialize`.
   * Candidatos ideais para inlining de performance.
 
 #### 3.2 Otimizações Avançadas na AMIR
@@ -657,7 +657,7 @@ A alocação de registradores é o ponto onde a qualidade do código gerado vive
 
 Onde a análise de tempo de vida estática do OSSA falhar em garantir a liberação automática sem overhead, o Arandu insere tags geracionais dinâmicas. Contudo, essa inserção é restrita e controlada pelo desenvolvedor:
 
-* **Bloqueio Explícito**: O desenvolvedor pode proibir qualquer fallback de heap geracional ou alocação dinâmica anotando o escopo com `@no_fallback` ou passando a flag global `--no-generational-fallback`.
+* **Bloqueio Explícito**: O desenvolvedor pode proibir qualquer fallback de heap geracional ou alocação dinâmica anotando o escopo com `@NoFallback` ou passando a flag global `--no-generational-fallback`.
 * **Diagnósticos Informativos**: O compilador emite a nota informativa **O004** detalhando onde e por que o fallback dinâmico foi inserido, fornecendo hints claros de como refatorar o código para se manter stack-first.
 
 ---
@@ -813,7 +813,7 @@ O Arandu define explicitamente suas regras de ABI para garantir robustez em FFI,
 
 ### Garantias de Layout do Compilador
 
-* **Struct Layout Determinístico**: O reordenamento de campos para eliminação de padding segue um algoritmo canônico fixo. Caso o desenvolvedor precise de compatibilidade C pura, ele deve anotar a struct com `@repr(C)`;
+* **Struct Layout Determinístico**: O reordenamento de campos para eliminação de padding segue um algoritmo canônico fixo. Caso o desenvolvedor precise de compatibilidade C pura, ele deve anotar a struct com `@Repr(C)`;
 * **Enum Tagging Estável**: Tags de enums com valores de dados acoplados (como `Result`) utilizam nichos de bits nulos ou tags de tamanho previsível;
 * **Pointer Alignment & Calling Convention**: Alinhamento estrito baseado na plataforma de destino e passagens de parâmetros por registradores por padrão para Cranelift e LLVM.
 

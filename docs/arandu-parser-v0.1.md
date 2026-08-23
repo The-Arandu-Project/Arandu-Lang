@@ -154,6 +154,10 @@ KW_IMPORT
 
 ### Attributes and Visibility
 
+Public annotation names follow the normative
+[`@PascalCase` contract](./arandu-attribute-naming-v0.1.md). The parser
+preserves spelling; semantic analysis owns recognition and migration aliases.
+
 Before declarations that allow attributes:
 
 ```text
