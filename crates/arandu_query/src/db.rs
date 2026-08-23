@@ -306,7 +306,17 @@ impl DatabaseImpl {
         let mut reg = self.files.write().unwrap_or_else(|e| e.into_inner());
         if let Some(file) = reg.remove_path(path) {
             let fid = file.file_id(self.as_source_db());
-            reg.by_id.remove(fid);
+            // A file can deliberately have more than one registry key (for
+            // example its absolute editor path plus package-qualified and bare
+            // import keys). Keep the reverse index alive while any alias still
+            // refers to the same Salsa input.
+            let has_alias = reg
+                .by_path
+                .values()
+                .any(|candidate| candidate.file_id(self.as_source_db()) == fid);
+            if !has_alias {
+                reg.by_id.remove(fid);
+            }
         }
     }
 

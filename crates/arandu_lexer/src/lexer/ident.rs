@@ -38,7 +38,7 @@ pub(super) const CHAR_PROPERTIES: [u8; 128] = {
 };
 
 #[inline]
-pub(super) fn is_ident_start(ch: char) -> bool {
+pub(crate) fn is_ident_start(ch: char) -> bool {
     let val = ch as u32;
     if val < 128 {
         (CHAR_PROPERTIES[val as usize] & FLAG_IDENT_START) != 0
@@ -48,7 +48,7 @@ pub(super) fn is_ident_start(ch: char) -> bool {
 }
 
 #[inline]
-pub(super) fn is_ident_continue(ch: char) -> bool {
+pub(crate) fn is_ident_continue(ch: char) -> bool {
     let val = ch as u32;
     if val < 128 {
         (CHAR_PROPERTIES[val as usize] & FLAG_IDENT_CONTINUE) != 0
@@ -70,7 +70,7 @@ pub(super) fn is_digit(ch: char) -> bool {
     val < 128 && (CHAR_PROPERTIES[val as usize] & FLAG_DIGIT) != 0
 }
 
-pub(super) fn keyword_kind(text: &str) -> Option<TokenKind> {
+pub(crate) fn keyword_kind(text: &str) -> Option<TokenKind> {
     Some(match text {
         "if" => TokenKind::KwIf,
         "else" => TokenKind::KwElse,

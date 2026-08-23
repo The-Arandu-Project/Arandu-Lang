@@ -1,7 +1,7 @@
 # Arandu — Salsa, LSP e Identidades (v0.1)
 
 **Status:** caminho arquitetural implementado (F0–F5, inclusive delta por item/bloco); maturidade de produto acompanhada no [roadmap gold do LSP/editor](./arandu-lsp-editor-gold-roadmap-v0.1.md).
-**Plano:** [`arandu-salsa-lsp-gold-plan-v0.1.md`](./arandu-salsa-lsp-gold-plan-v0.1.md).  
+**Plano de produto:** [`arandu-lsp-editor-gold-roadmap-v0.1.md`](./arandu-lsp-editor-gold-roadmap-v0.1.md).
 **Dono do grafo de queries:** `arandu_query` apenas.
 
 ## Salsa toca / não toca
@@ -58,6 +58,63 @@
 3. didChange **não** commita Salsa por tecla; flush no debounce / didSave / goto.  
 4. Diagnostics via `file_ide_diagnostics` (F4); fingerprint blake3 evita republish no-op.  
 5. CST-first Rowan: `syntax_tree` tenta reparse do ITEM tocado e reutiliza os green nodes irmãos; fallback seguro faz parse completo.
+6. `initialize` conclui antes de I/O do workspace; a descoberta determinística e
+   limitada ocorre em worker, e cada fonte retorna à main para registro na DB.
+7. O scheduler mantém no máximo 64 jobs pendentes, serve a fila interativa
+   antes da fila ampla, coalesce diagnósticos por `DocumentId` e cancela
+   requests obsoletos antes de uma revisão nova. `$/cancelRequest` responde
+   com `RequestCancelled`, inclusive quando o job ainda não começou.
+8. O servidor negocia UTF-16 explicitamente e todas as conversões entre bytes
+   UTF-8 e posições LSP passam pelo mesmo `LineIndex`; semantic tokens usam
+   comprimentos UTF-16 e são divididos por linha.
+9. Edições recebidas dentro do debounce compõem sobre o buffer pendente da VFS,
+   inclusive múltiplas mudanças por notificação, Unicode, arquivo vazio e EOF.
+10. `IdeDiagnostic` preserva labels, notes, hints e replacements nas queries;
+    o wire publica versão, `codeDescription`, `relatedInformation`, tags e
+    `Diagnostic.data`. Quick fixes consomem apenas replacements estruturados.
+11. Hover, completion e signature help compartilham apresentação de assinatura,
+    tipos e doc comments; nenhum DTO expõe `Debug` de IR ou `SymbolId`.
+12. Fontes conhecidas do workspace e overlays abertos têm autoridades distintas:
+    overlay vence enquanto aberto, `didClose` restaura o disco e invalida o
+    `DocumentId`, e create/delete/rename usam filtros `**/*.aru`. URI Windows
+    padrão e caminho verbatim convergem para uma identidade; `FileId` removido
+    nunca é reutilizado.
+13. Depois do handshake, a descoberta em background instala manifesto,
+    `ModuleRoots`, stdlib e `DirectoryListing` na thread escritora. Mudanças
+    estruturais atualizam uma única listagem Salsa e reanalisam importadores
+    abertos; `resolve` declara essa listagem como dependência explícita, enquanto
+    edições somente de corpo preservam o cutoff de exports. Chaves absoluta,
+    qualificada e relativa podem apontar ao mesmo `SourceFile`, sem perder o
+    índice reverso enquanto algum alias continuar vivo.
+14. Rename usa análise pura em `arandu_query`: a gramática lexical rejeita
+    nomes reservados/inválidos, scopes relacionados bloqueiam conflitos e os
+    spans vêm dos tokens do CST cruzados com a identidade semântica. O LSP
+    revalida no pedido efetivo, produz edits multi-file determinísticos e deixa
+    qualquer preview para o cliente.
+15. Formatação permanece pura em `arandu_fmt` e canônica, sem depender das
+    preferências transitórias do cliente. O wire converte edits UTF-8 mínimos
+    por linha/hunk para UTF-16; a extensão define o formatter padrão, mas mantém
+    `editor.formatOnSave` desligado até opção explícita do usuário.
+16. Concorrência multi-documento é provada em três fronteiras: snapshots Salsa
+    paralelos preservam arquivo/revisão, o scheduler cancela somente a chave
+    solicitada e o stdio aceita respostas fora de ordem sem misturar documentos.
+17. Performance interativa é medida no processo stdio real sobre corpus
+    versionado: warm-up e 21 amostras produzem p50/p95 de diagnóstico,
+    completion, goto e rename; cada resposta é validada antes de entrar na
+    amostra e o relatório identifica commit, SO e arquitetura.
+18. Folding e selection range caminham exclusivamente o CST congelado;
+    document highlight reutiliza `prepare_rename`/`rename_occurrences` para
+    obter identidade semântica e spans exatos. O servidor não infere
+    read/write por texto quando o resolve ainda não classifica o acesso.
+19. A descoberta do workspace começa somente após o handshake completo, emite
+    `window/workDoneProgress/create` seguido por `$/progress` begin/end quando o
+    cliente declara suporte e publica estados `indexing`/`ready` para a UI. A
+    extensão limita reinícios automáticos e o Extension Host mata o processo
+    real para provar recuperação, diagnóstico e completion após o restart.
+20. A campanha L3 stdio intercala 119 revisões com requests interativos, drena
+    toda resposta exigindo sucesso ou cancelamento LSP conhecido e então aplica
+    uma revisão-oráculo válida. Nenhum diagnóstico de revisão anterior pode ser
+    publicado depois do oráculo; completion e shutdown devem continuar vivos.
 
 ## F4 / P3 — delta on-type
 

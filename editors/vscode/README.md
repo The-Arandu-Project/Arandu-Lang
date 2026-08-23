@@ -2,6 +2,9 @@
 
 This extension adds support for the **Arandu** programming language to VS Code.
 
+The supported operating systems, protocol features and known limitations are
+published in the [LSP and editor support matrix](https://github.com/BrunoF2P/Arandu-Lang/blob/main/docs/arandu-lsp-capabilities-v0.1.md).
+
 ## Features
 
 - **Syntax Highlighting**: Basic offline highlighting via TextMate grammar and full, precise syntax coloring via LSP Semantic Tokens.
@@ -9,7 +12,8 @@ This extension adds support for the **Arandu** programming language to VS Code.
 - **Signature Help**: Inline parameter help for functions and methods.
 - **Go to Definition**: Quickly navigate to the definition of types, functions, and variables.
 - **Diagnostics**: Real-time error and warning reporting directly in the editor.
-- **Document Formatting**: Automatic code formatting based on the official language style.
+- **Document Formatting**: Canonical formatting with minimal edits. Manual
+  formatting is available immediately; format-on-save is opt-in.
 
 ## Requirements
 
@@ -34,3 +38,26 @@ You can customize the extension via your VS Code Settings:
 
 * `arandu.server.path`: Absolute path to the `arandu-lsp` executable. If null, the extension will automatically look up the binary under your workspace's `target/debug/arandu-lsp` or under the global `PATH`.
 * `arandu.trace.server`: Log detail level for tracing communication between VS Code and the server (`off`, `messages`, or `verbose`).
+
+Formatting on save is intentionally disabled by default. Enable it only for
+Arandu files with:
+
+```json
+"[arandu]": {
+    "editor.defaultFormatter": "arandu.arandu-lang",
+    "editor.formatOnSave": true
+}
+```
+
+## Troubleshooting
+
+The Arandu status item reports whether the language server is starting,
+indexing, ready, restarting, missing, or stopped. Workspace indexing is also
+reported through VS Code's native progress UI. Select the status item, or run
+**Arandu: Show Language Server Logs**, to open the server log.
+
+Transient crashes are restarted automatically up to three times in a rolling
+three-minute window. After a repeated crash loop, automatic recovery stops so
+it cannot consume resources indefinitely. Inspect the log and choose **Restart
+Server**, or run **Arandu: Restart Language Server**, when the underlying issue
+has been corrected.

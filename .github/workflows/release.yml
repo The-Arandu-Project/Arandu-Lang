@@ -234,6 +234,39 @@ jobs:
             --lsp "$env:RUNNER_TEMP/arandu-sdk/arandu-$env:VERSION/bin/arandu-lsp.exe" `
             --corpus tests/projects --expected-version "$env:VERSION"
 
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+
+      - name: Install VS Code extension dependencies
+        working-directory: editors/vscode
+        run: npm ci --ignore-scripts
+
+      - name: L3 / installed VSIX + installed SDK (Linux)
+        if: runner.os == 'Linux'
+        working-directory: editors/vscode
+        shell: bash
+        env:
+          ARANDU_LSP_TEST_PATH: ${{ runner.temp }}/arandu-sdk/current/bin/arandu-lsp
+        run: xvfb-run -a npm run test:installed
+
+      - name: L3 / installed VSIX + installed SDK (macOS)
+        if: runner.os == 'macOS'
+        working-directory: editors/vscode
+        env:
+          ARANDU_LSP_TEST_PATH: ${{ runner.temp }}/arandu-sdk/current/bin/arandu-lsp
+        run: npm run test:installed
+
+      - name: L3 / installed VSIX + installed SDK (Windows)
+        if: runner.os == 'Windows'
+        working-directory: editors/vscode
+        shell: pwsh
+        env:
+          ARANDU_LSP_TEST_PATH: ${{ runner.temp }}/arandu-sdk/arandu-${{ env.VERSION }}/bin/arandu-lsp.exe
+        run: npm run test:installed
+
       - name: S3 / reinstall and reject bad packages (Unix)
         if: runner.os != 'Windows'
         shell: bash

@@ -52,14 +52,15 @@ jobs:
         run: cargo run --locked -p xtask -- check-diag-docs
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: editors/vscode/package-lock.json
-      - name: VS Code client compile and vulnerability gate
+      - name: VS Code client lint, unit and Extension Host tests
         working-directory: editors/vscode
         run: |
           npm ci --ignore-scripts
-          npm run compile
+          xvfb-run -a npm test
+          npm run package:check
           npm audit --audit-level=high
       - name: Generated files and snapshots leave the tree clean
         run: git diff --exit-code
@@ -230,12 +231,18 @@ jobs:
         run: cargo run --locked -p xtask -- check-fuzz-regressions
       - name: Stress LSP snapshots, debounce and stale document generations
         run: cargo test --locked -p arandu_lsp state::tests::s2_endurance_batches_edits_and_discards_stale_snapshots -- --exact
+      - name: Measure L2 LSP end-to-end latency budgets
+        run: cargo test --locked -p arandu_lsp --test stdio_lifecycle stdio_l2_corpus_performance_p50_p95 -- --ignored --exact --nocapture
+      - name: L3 stress LSP crash, deadlock and stale-publication oracle
+        run: cargo test --locked -p arandu_lsp --test stdio_lifecycle stdio_l3_stress_has_no_crash_deadlock_or_stale_publication -- --ignored --exact --nocapture
       - name: Publish performance and retention report
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: s2-performance-report-${{ github.sha }}
-          path: target/s2-performance-report.txt
+          path: |
+            target/s2-performance-report.txt
+            target/l2-lsp-performance-report.txt
           if-no-files-found: error
           retention-days: 30
 

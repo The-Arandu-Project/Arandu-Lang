@@ -14,6 +14,28 @@ pub use error::{LexError, LexErrorCode};
 pub use lexer::Lexer;
 pub use token::{Span, Token, TokenKind};
 
+/// Classify a complete source spelling as an identifier token.
+///
+/// This is the canonical lexical check used by refactorings: it rejects
+/// keywords, primitive types, literals and strings instead of maintaining a
+/// second reserved-word list in an IDE client.
+#[must_use]
+pub fn identifier_kind(text: &str) -> Option<TokenKind> {
+    let mut chars = text.chars();
+    let first = chars.next()?;
+    if !ident::is_ident_start(first) || !chars.all(ident::is_ident_continue) {
+        return None;
+    }
+    if ident::keyword_kind(text).is_some() {
+        return None;
+    }
+    Some(if first.is_ascii_uppercase() {
+        TokenKind::IdentType
+    } else {
+        TokenKind::IdentValue
+    })
+}
+
 /// Lexes source, stopping at the first error.
 ///
 /// # Errors
@@ -62,6 +84,17 @@ mod tests {
         assert!(dump.contains("KW_FUNC"));
         assert!(dump.contains("TYPE_INT"));
         assert!(dump.contains("KW_RETURN"));
+    }
+
+    #[test]
+    fn identifier_kind_uses_the_language_lexer_contract() {
+        assert_eq!(identifier_kind("value_2"), Some(TokenKind::IdentValue));
+        assert_eq!(identifier_kind("Point"), Some(TokenKind::IdentType));
+        assert_eq!(identifier_kind("ação"), Some(TokenKind::IdentValue));
+        assert_eq!(identifier_kind("2value"), None);
+        assert_eq!(identifier_kind("return"), None);
+        assert_eq!(identifier_kind("int"), None);
+        assert_eq!(identifier_kind("two words"), None);
     }
 
     #[test]

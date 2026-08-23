@@ -64,6 +64,11 @@ impl EditVfs {
     }
 
     #[must_use]
+    pub fn pending_text(&self, uri: &str) -> Option<&str> {
+        self.inner.get(uri).map(String::as_str)
+    }
+
+    #[must_use]
     pub fn debounce(&self) -> Duration {
         self.inner.debounce()
     }
@@ -89,5 +94,16 @@ mod tests {
         let due = vfs.take_due();
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].1, "v3");
+    }
+
+    #[test]
+    fn pending_text_tracks_the_coalesced_value() {
+        let mut vfs = EditVfs::new();
+        vfs.push_full_text("file:///a.aru".into(), "v1".into());
+        assert_eq!(vfs.pending_text("file:///a.aru"), Some("v1"));
+
+        vfs.push_full_text("file:///a.aru".into(), "v2".into());
+        assert_eq!(vfs.pending_text("file:///a.aru"), Some("v2"));
+        assert_eq!(vfs.pending_text("file:///missing.aru"), None);
     }
 }

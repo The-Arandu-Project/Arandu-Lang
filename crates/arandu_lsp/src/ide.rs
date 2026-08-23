@@ -3,21 +3,25 @@
 //! Pure queries on typeck/resolve results — no Salsa writes.
 
 use arandu_base::LineIndex;
-use arandu_middle::{NodeKey, SymbolId, SymbolKind};
+use arandu_middle::types::ArType;
+use arandu_middle::{NodeKey, Symbol, SymbolId, SymbolKind};
 use arandu_query::{AnalysisSnapshot, SourceFile};
 use arandu_semantics::TypeCheckResult;
 use lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionResponse, CompletionItem,
-    CompletionItemKind, Documentation, Hover, HoverContents, Location, MarkedString, Position,
-    SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens, SemanticTokensLegend,
+    CompletionItemKind, DocumentHighlight, DocumentHighlightKind, Documentation, FoldingRange,
+    FoldingRangeKind, Hover, HoverContents, Location, MarkupContent, MarkupKind,
+    ParameterInformation, ParameterLabel, Position, SelectionRange, SemanticToken,
+    SemanticTokenModifier, SemanticTokenType, SemanticTokens, SemanticTokensLegend,
     SymbolInformation, SymbolKind as LspSymbolKind, TextEdit as LspTextEdit, Uri, WorkspaceEdit,
 };
 use rustc_hash::FxHashMap;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::conv::{position_to_offset, span_to_range};
+use crate::conv::{offset_to_position, position_to_offset, span_to_range, utf16_len};
 
 /// Snapshot of open docs for multi-file IDE features.
 #[derive(Clone)]
@@ -25,6 +29,23 @@ pub struct DocSnap {
     pub source: SourceFile,
     pub path: Arc<PathBuf>,
     pub uri: Uri,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticFixData {
+    pub title: String,
+    pub uri: Uri,
+    pub range: lsp_types::Range,
+    pub new_text: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticData {
+    pub notes: Vec<String>,
+    pub hints: Vec<String>,
+    pub fixes: Vec<DiagnosticFixData>,
 }
 
 /// Type-check the file (composed P1/P2 view).
@@ -36,8 +57,170 @@ pub fn typecheck(
     arandu_query::passes::type_check(&snap.db, source).clone()
 }
 
-fn ty_str(t: &arandu_middle::types::ArType) -> String {
-    format!("{t:?}")
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ParameterPresentation {
+    label: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SymbolPresentation {
+    signature: String,
+    documentation: Option<String>,
+    parameters: Vec<ParameterPresentation>,
+}
+
+fn display_type(tc: &TypeCheckResult, ty: &ArType) -> String {
+    ty.display(&tc.symbols, &tc.type_info.type_interner)
+}
+
+fn symbol_presentation(
+    snap: &AnalysisSnapshot,
+    source: SourceFile,
+    tc: &TypeCheckResult,
+    symbol: &Symbol,
+) -> SymbolPresentation {
+    let ty = tc.type_info.decl_type(symbol.id);
+    let parameter_names = function_parameter_names(snap, source, symbol);
+    let (signature, parameters) = match ty.as_ref() {
+        Some(ArType::Func(param_types, return_type)) => {
+            let labels: Vec<_> = param_types
+                .iter()
+                .enumerate()
+                .map(|(index, type_id)| {
+                    let ty = tc.type_info.type_interner.resolve(*type_id);
+                    let ty = display_type(tc, &ty);
+                    parameter_names
+                        .get(index)
+                        .filter(|name| !name.is_empty())
+                        .map_or_else(|| ty.clone(), |name| format!("{name}: {ty}"))
+                })
+                .collect();
+            let return_ty = tc.type_info.type_interner.resolve(*return_type);
+            let return_suffix = if matches!(return_ty, ArType::Void) {
+                String::new()
+            } else {
+                format!(": {}", display_type(tc, &return_ty))
+            };
+            (
+                format!("func {}({}){return_suffix}", symbol.name, labels.join(", ")),
+                labels
+                    .into_iter()
+                    .map(|label| ParameterPresentation { label })
+                    .collect(),
+            )
+        }
+        Some(ty) => {
+            let prefix = match symbol.kind {
+                SymbolKind::Const => "const",
+                SymbolKind::Field => "field",
+                SymbolKind::Param => "param",
+                SymbolKind::Local => "let",
+                _ => "type",
+            };
+            (
+                format!("{prefix} {}: {}", symbol.name, display_type(tc, ty)),
+                Vec::new(),
+            )
+        }
+        None => (
+            format!("{} {}", symbol_kind_name(symbol.kind), symbol.name),
+            Vec::new(),
+        ),
+    };
+    SymbolPresentation {
+        signature,
+        documentation: symbol_documentation(snap, source, symbol),
+        parameters,
+    }
+}
+
+fn markdown_documentation(value: String) -> Documentation {
+    Documentation::MarkupContent(MarkupContent {
+        kind: MarkupKind::Markdown,
+        value,
+    })
+}
+
+fn symbol_kind_name(kind: SymbolKind) -> &'static str {
+    match kind {
+        SymbolKind::Func | SymbolKind::AssociatedFunc | SymbolKind::ExternFunc => "func",
+        SymbolKind::Struct => "struct",
+        SymbolKind::Enum => "enum",
+        SymbolKind::Interface => "interface",
+        SymbolKind::TypeAlias => "type",
+        SymbolKind::EnumVariant => "variant",
+        SymbolKind::Module => "module",
+        SymbolKind::NamespaceMember => "member",
+        SymbolKind::ImportValue | SymbolKind::ImportType => "import",
+        SymbolKind::TypeParam => "type parameter",
+        SymbolKind::Const => "const",
+        SymbolKind::Field => "field",
+        SymbolKind::Param => "param",
+        SymbolKind::Local => "let",
+    }
+}
+
+fn symbol_documentation(
+    snap: &AnalysisSnapshot,
+    source: SourceFile,
+    symbol: &Symbol,
+) -> Option<String> {
+    let resolved = arandu_query::passes::resolve(&snap.db, source);
+    let docs = resolved
+        .docs
+        .iter()
+        .filter(|(target, _)| target.start <= symbol.span.start && symbol.span.end <= target.end)
+        .min_by_key(|(target, _)| target.end.saturating_sub(target.start))?
+        .1;
+    let text = docs
+        .iter()
+        .map(|line| line.strip_prefix("///").unwrap_or(line).trim_start())
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.is_empty()).then_some(text)
+}
+
+fn function_parameter_names(
+    snap: &AnalysisSnapshot,
+    source: SourceFile,
+    symbol: &Symbol,
+) -> Vec<String> {
+    let program = arandu_query::passes::parse(&snap.db, source);
+    let Ok(program) = &**program else {
+        return Vec::new();
+    };
+    for &decl_id in &program.decls {
+        match program.pool.decl(decl_id) {
+            arandu_parser::TopLevelDecl::Func(func) => {
+                let (span, name) = match &func.name {
+                    arandu_parser::FuncName::Free { span, name }
+                    | arandu_parser::FuncName::Method { span, name, .. } => (*span, name),
+                };
+                if span == symbol.span && name.as_str() == symbol.name.as_str() {
+                    return func
+                        .params
+                        .iter()
+                        .map(|param| param.name.to_string())
+                        .collect();
+                }
+            }
+            arandu_parser::TopLevelDecl::Extern(extern_decl) => {
+                if let Some(member) = extern_decl.members.iter().find(|member| {
+                    member.name.as_str() == symbol.name.as_str()
+                        && member.span.start <= symbol.span.start
+                        && symbol.span.end <= member.span.end
+                }) {
+                    return member
+                        .params
+                        .iter()
+                        .map(|param| param.name.to_string())
+                        .collect();
+                }
+            }
+            _ => {}
+        }
+    }
+    Vec::new()
 }
 
 /// Tightest name/ref/definition containing `offset`.
@@ -58,6 +241,35 @@ pub fn symbol_at(tc: &TypeCheckResult, offset: u32) -> Option<SymbolId> {
     consider(&tc.resolved.type_refs, &mut best);
     consider(&tc.resolved.definitions, &mut best);
     best.map(|(_, s)| s)
+}
+
+/// Tightest resolved expression containing `offset`.
+///
+/// Namespace members such as `util.answer` are recorded by the resolver in
+/// the dense `expr_symbols` table rather than in `value_refs`; navigation must
+/// consume that existing semantic identity instead of reparsing the text.
+#[must_use]
+pub fn expr_symbol_at(
+    program: &arandu_parser::Program,
+    tc: &TypeCheckResult,
+    offset: u32,
+) -> Option<SymbolId> {
+    let mut best: Option<(u32, SymbolId)> = None;
+    for (index, symbol) in tc.resolved.expr_symbols.iter().enumerate() {
+        let Some(symbol) = *symbol else {
+            continue;
+        };
+        let Some(span) = program.pool.expr_spans.get(index) else {
+            continue;
+        };
+        if span.start <= offset && offset < span.end {
+            let width = span.end.saturating_sub(span.start);
+            if best.is_none_or(|(best_width, _)| width < best_width) {
+                best = Some((width, symbol));
+            }
+        }
+    }
+    best.map(|(_, symbol)| symbol)
 }
 
 /// Word prefix before `offset` for completion filtering.
@@ -89,17 +301,18 @@ pub fn hover(
     let tc = typecheck(snap, source);
     let sym = symbol_at(&tc, offset)?;
     let symbol = tc.symbols.try_get(sym)?;
-    let ty = tc
-        .type_info
-        .decl_type(sym)
-        .map(|t| ty_str(&t))
-        .unwrap_or_else(|| "?".into());
-    let kind = format!("{:?}", symbol.kind);
-    let name = symbol.name.to_string();
-    let md = format!("```arandu\n{name}: {ty}\n```\n\n_{kind}_ (`{sym:?}`)");
+    let presentation = symbol_presentation(snap, source, &tc, symbol);
+    let mut md = format!("```arandu\n{}\n```", presentation.signature);
+    if let Some(documentation) = presentation.documentation {
+        md.push_str("\n\n");
+        md.push_str(&documentation);
+    }
     let range = span_to_range(&index, symbol.span);
     Some(Hover {
-        contents: HoverContents::Scalar(MarkedString::String(md)),
+        contents: HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: md,
+        }),
         range: Some(range),
     })
 }
@@ -181,12 +394,12 @@ pub fn completions(
             SymbolKind::Param | SymbolKind::Local => CompletionItemKind::VARIABLE,
             _ => CompletionItemKind::TEXT,
         };
-        let detail = tc.type_info.decl_type(symbol.id).map(|t| ty_str(&t));
+        let presentation = symbol_presentation(snap, source, &tc, symbol);
         items.push(CompletionItem {
             label: name,
             kind: Some(kind),
-            detail,
-            documentation: Some(Documentation::String(format!("{:?}", symbol.kind))),
+            detail: Some(presentation.signature),
+            documentation: presentation.documentation.map(markdown_documentation),
             ..CompletionItem::default()
         });
     }
@@ -335,10 +548,9 @@ fn module_member_completions(
         {
             continue;
         }
-        let kind = tc
-            .symbols
-            .try_get(sym_id)
-            .map(|s| match s.kind {
+        let symbol = tc.symbols.try_get(sym_id);
+        let kind = symbol
+            .map(|symbol| match symbol.kind {
                 SymbolKind::Func | SymbolKind::AssociatedFunc | SymbolKind::ExternFunc => {
                     CompletionItemKind::FUNCTION
                 }
@@ -350,10 +562,20 @@ fn module_member_completions(
                 _ => CompletionItemKind::TEXT,
             })
             .unwrap_or(CompletionItemKind::TEXT);
+        let presentation = symbol.and_then(|symbol| {
+            let symbol_source = snap.db.source_file_by_id(symbol.id.file_id)?;
+            Some(symbol_presentation(snap, symbol_source, &tc, symbol))
+        });
         items.push(CompletionItem {
             label: name_s.into(),
             kind: Some(kind),
-            detail: Some(format!("from `{alias}`")),
+            detail: Some(presentation.as_ref().map_or_else(
+                || format!("from `{alias}`"),
+                |presentation| format!("{} — from `{alias}`", presentation.signature),
+            )),
+            documentation: presentation
+                .and_then(|presentation| presentation.documentation)
+                .map(markdown_documentation),
             ..CompletionItem::default()
         });
     }
@@ -409,6 +631,178 @@ pub fn references(
 }
 
 #[must_use]
+pub fn document_highlights(
+    snap: &AnalysisSnapshot,
+    source: SourceFile,
+    text: &str,
+    position: Position,
+) -> Vec<DocumentHighlight> {
+    let index = LineIndex::new(text);
+    let offset = position_to_offset(&index, position, text);
+    let Ok(target) = arandu_query::prepare_rename(&snap.db, source, offset) else {
+        return Vec::new();
+    };
+    arandu_query::rename_occurrences(&snap.db, source, target.symbol)
+        .into_iter()
+        .map(|span| DocumentHighlight {
+            range: span_to_range(&index, span),
+            // Resolution currently records identity, not access mode. Text is
+            // preferable to inventing read/write semantics from source text.
+            kind: Some(DocumentHighlightKind::TEXT),
+        })
+        .collect()
+}
+
+#[must_use]
+pub fn folding_ranges(
+    snap: &AnalysisSnapshot,
+    source: SourceFile,
+    text: &str,
+) -> Vec<FoldingRange> {
+    let tree = arandu_query::passes::syntax_tree(&snap.db, source);
+    let index = LineIndex::new(text);
+    let file_id = *source.file_id(&snap.db);
+    let mut ranges = Vec::new();
+
+    for node in tree.root().descendants() {
+        if node.kind() == arandu_parser::SyntaxKind::BLOCK {
+            push_folding_range(
+                &mut ranges,
+                &index,
+                file_id,
+                u32::from(node.text_range().start()),
+                u32::from(node.text_range().end()),
+                None,
+            );
+        }
+    }
+    for token in tree
+        .root()
+        .descendants_with_tokens()
+        .filter_map(|element| element.into_token())
+    {
+        if token.kind() == arandu_parser::SyntaxKind::COMMENT {
+            push_folding_range(
+                &mut ranges,
+                &index,
+                file_id,
+                u32::from(token.text_range().start()),
+                u32::from(token.text_range().end()),
+                Some(FoldingRangeKind::Comment),
+            );
+        }
+    }
+    ranges.sort_by_key(|range| {
+        (
+            range.start_line,
+            range.start_character,
+            range.end_line,
+            range.end_character,
+        )
+    });
+    ranges.dedup_by(|left, right| {
+        left.start_line == right.start_line
+            && left.start_character == right.start_character
+            && left.end_line == right.end_line
+            && left.end_character == right.end_character
+    });
+    ranges
+}
+
+fn push_folding_range(
+    ranges: &mut Vec<FoldingRange>,
+    index: &LineIndex,
+    file_id: u32,
+    start: u32,
+    end: u32,
+    kind: Option<FoldingRangeKind>,
+) {
+    let range = span_to_range(index, arandu_base::Span::new(file_id, start, end));
+    if range.start.line >= range.end.line {
+        return;
+    }
+    ranges.push(FoldingRange {
+        start_line: range.start.line,
+        start_character: Some(range.start.character),
+        end_line: range.end.line,
+        end_character: Some(range.end.character),
+        kind,
+        collapsed_text: None,
+    });
+}
+
+#[must_use]
+pub fn selection_ranges(
+    snap: &AnalysisSnapshot,
+    source: SourceFile,
+    text: &str,
+    positions: &[Position],
+) -> Vec<SelectionRange> {
+    let tree = arandu_query::passes::syntax_tree(&snap.db, source);
+    let root = tree.root();
+    let index = LineIndex::new(text);
+    let file_id = *source.file_id(&snap.db);
+    positions
+        .iter()
+        .map(|&position| {
+            let offset = position_to_offset(&index, position, text);
+            let token = root
+                .token_at_offset(offset.into())
+                .right_biased()
+                .or_else(|| root.token_at_offset(offset.into()).left_biased());
+            let mut byte_ranges = Vec::new();
+            if let Some(token) = token {
+                byte_ranges.push((
+                    u32::from(token.text_range().start()),
+                    u32::from(token.text_range().end()),
+                ));
+                byte_ranges.extend(token.parent().into_iter().flat_map(|parent| {
+                    parent.ancestors().map(|node| {
+                        (
+                            u32::from(node.text_range().start()),
+                            u32::from(node.text_range().end()),
+                        )
+                    })
+                }));
+            } else {
+                byte_ranges.push((0, u32::try_from(text.len()).unwrap_or(u32::MAX)));
+            }
+            byte_ranges.retain(|(start, end)| start < end && *start <= offset && offset <= *end);
+            byte_ranges.dedup();
+
+            let mut parent = None;
+            for (start, end) in byte_ranges.into_iter().rev() {
+                parent = Some(Box::new(SelectionRange {
+                    range: span_to_range(&index, arandu_base::Span::new(file_id, start, end)),
+                    parent,
+                }));
+            }
+            parent.map_or_else(
+                || SelectionRange {
+                    range: lsp_types::Range::new(position, position),
+                    parent: None,
+                },
+                |range| *range,
+            )
+        })
+        .collect()
+}
+
+pub fn prepare_rename(
+    snap: &AnalysisSnapshot,
+    source: SourceFile,
+    text: &str,
+    position: Position,
+) -> Result<lsp_types::PrepareRenameResponse, arandu_query::RenameError> {
+    let index = LineIndex::new(text);
+    let offset = position_to_offset(&index, position, text);
+    let target = arandu_query::prepare_rename(&snap.db, source, offset)?;
+    Ok(lsp_types::PrepareRenameResponse::RangeWithPlaceholder {
+        range: span_to_range(&index, target.occurrence),
+        placeholder: target.placeholder,
+    })
+}
+
 // lsp-types 0.97 Uri wraps fluent_uri with interior mutability; protocol map keys are still Uri.
 #[allow(clippy::mutable_key_type)]
 pub fn rename_edits(
@@ -416,29 +810,46 @@ pub fn rename_edits(
     source: SourceFile,
     text: &str,
     position: Position,
-    uri: &Uri,
+    documents: &[DocSnap],
     new_name: &str,
-) -> Option<lsp_types::WorkspaceEdit> {
-    let locs = references(snap, source, text, position, uri);
-    if locs.is_empty() {
-        return None;
-    }
+) -> Result<lsp_types::WorkspaceEdit, arandu_query::RenameError> {
+    let index = LineIndex::new(text);
+    let offset = position_to_offset(&index, position, text);
+    let target = arandu_query::validate_rename(&snap.db, source, offset, new_name)?;
     // Uri is not a plain Hash key (fluent_uri interior mutability); key by string.
     let mut changes: HashMap<String, Vec<lsp_types::TextEdit>> = HashMap::new();
-    for loc in locs {
-        changes
-            .entry(loc.uri.as_str().to_string())
-            .or_default()
-            .push(lsp_types::TextEdit {
-                range: loc.range,
-                new_text: new_name.to_string(),
-            });
+    for document in documents {
+        let document_text = document.source.text(&snap.db);
+        let document_index = LineIndex::new(document_text);
+        for span in arandu_query::rename_occurrences(&snap.db, document.source, target.symbol) {
+            changes
+                .entry(document.uri.as_str().to_string())
+                .or_default()
+                .push(lsp_types::TextEdit {
+                    range: span_to_range(&document_index, span),
+                    new_text: new_name.to_string(),
+                });
+        }
+    }
+    if changes.is_empty() {
+        return Err(arandu_query::RenameError::NotRenameable);
+    }
+    for edits in changes.values_mut() {
+        edits.sort_by_key(|edit| {
+            (
+                edit.range.start.line,
+                edit.range.start.character,
+                edit.range.end.line,
+                edit.range.end.character,
+            )
+        });
+        edits.dedup_by(|left, right| left.range == right.range);
     }
     let changes: HashMap<Uri, Vec<lsp_types::TextEdit>> = changes
         .into_iter()
         .filter_map(|(s, edits)| crate::uri_util::parse_uri(&s).map(|u| (u, edits)))
         .collect();
-    Some(lsp_types::WorkspaceEdit {
+    Ok(lsp_types::WorkspaceEdit {
         changes: Some(changes),
         ..lsp_types::WorkspaceEdit::default()
     })
@@ -538,19 +949,23 @@ pub fn signature_help(
     text: &str,
     position: Position,
 ) -> Option<lsp_types::SignatureHelp> {
-    // Minimal: show type of symbol under / before cursor if it's a function.
     let index = LineIndex::new(text);
     let offset = position_to_offset(&index, position, text);
-    // Walk back to an identifier near `(`
-    let mut probe = offset.saturating_sub(1);
-    let bytes = text.as_bytes();
-    while probe > 0
-        && (bytes[probe as usize].is_ascii_whitespace() || bytes[probe as usize] == b'(')
-    {
-        probe -= 1;
-    }
+    let context = call_context(snap, source, offset)?;
+
     let tc = typecheck(snap, source);
-    let sym = symbol_at(&tc, probe)?;
+    let sym = symbol_at(&tc, context.callee_start).or_else(|| {
+        tc.symbols
+            .iter()
+            .find(|symbol| {
+                symbol.name.as_str() == context.name
+                    && matches!(
+                        symbol.kind,
+                        SymbolKind::Func | SymbolKind::AssociatedFunc | SymbolKind::ExternFunc
+                    )
+            })
+            .map(|symbol| symbol.id)
+    })?;
     let symbol = tc.symbols.try_get(sym)?;
     if !matches!(
         symbol.kind,
@@ -558,21 +973,87 @@ pub fn signature_help(
     ) {
         return None;
     }
-    let ty = tc
-        .type_info
-        .decl_type(sym)
-        .map(|t| ty_str(&t))
-        .unwrap_or_else(|| "func".into());
-    let label = format!("{}: {}", symbol.name, ty);
+    let presentation = symbol_presentation(snap, source, &tc, symbol);
+    let active_parameter = (!presentation.parameters.is_empty()).then(|| {
+        context
+            .active_parameter
+            .min(u32::try_from(presentation.parameters.len() - 1).unwrap_or(u32::MAX))
+    });
+    let parameters = presentation
+        .parameters
+        .into_iter()
+        .map(|parameter| ParameterInformation {
+            label: ParameterLabel::Simple(parameter.label),
+            documentation: None,
+        })
+        .collect();
     Some(lsp_types::SignatureHelp {
         signatures: vec![lsp_types::SignatureInformation {
-            label,
-            documentation: None,
-            parameters: None,
-            active_parameter: None,
+            label: presentation.signature,
+            documentation: presentation.documentation.map(markdown_documentation),
+            parameters: Some(parameters),
+            active_parameter,
         }],
         active_signature: Some(0),
-        active_parameter: None,
+        active_parameter,
+    })
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct CallContext {
+    name: String,
+    callee_start: u32,
+    active_parameter: u32,
+}
+
+fn call_context(
+    snap: &AnalysisSnapshot,
+    source: SourceFile,
+    cursor_offset: u32,
+) -> Option<CallContext> {
+    let tree = arandu_query::passes::syntax_tree(&snap.db, source);
+    let tokens: Vec<_> = tree
+        .root()
+        .descendants_with_tokens()
+        .filter_map(|element| element.into_token())
+        .filter(|token| {
+            !token.kind().is_trivia() && u32::from(token.text_range().start()) < cursor_offset
+        })
+        .collect();
+
+    let mut parenthesis_depth = 0_u32;
+    let open_index = tokens.iter().enumerate().rev().find_map(|(index, token)| {
+        match token.text() {
+            ")" => parenthesis_depth = parenthesis_depth.saturating_add(1),
+            "(" if parenthesis_depth == 0 => return Some(index),
+            "(" => parenthesis_depth = parenthesis_depth.saturating_sub(1),
+            _ => {}
+        }
+        None
+    })?;
+    let callee = tokens[..open_index].iter().rev().find(|token| {
+        matches!(
+            token.kind(),
+            arandu_parser::SyntaxKind::IDENT | arandu_parser::SyntaxKind::TYPE_IDENT
+        )
+    })?;
+
+    let mut delimiter_depth = 0_u32;
+    let mut active_parameter = 0_u32;
+    for token in &tokens[open_index + 1..] {
+        match token.text() {
+            "(" | "[" | "{" => delimiter_depth = delimiter_depth.saturating_add(1),
+            ")" | "]" | "}" => delimiter_depth = delimiter_depth.saturating_sub(1),
+            "," if delimiter_depth == 0 => {
+                active_parameter = active_parameter.saturating_add(1);
+            }
+            _ => {}
+        }
+    }
+    Some(CallContext {
+        name: callee.text().to_string(),
+        callee_start: u32::from(callee.text_range().start()),
+        active_parameter,
     })
 }
 
@@ -607,7 +1088,7 @@ pub fn semantic_tokens_legend() -> SemanticTokensLegend {
     }
 }
 
-/// Format entire document (F3a) → LSP text edits (usually one full replace).
+/// Format entire document (F3a) → minimal, non-overlapping LSP text edits.
 #[must_use]
 pub fn format_document(text: &str) -> Vec<LspTextEdit> {
     let edits = arandu_fmt::format_edits(text);
@@ -618,8 +1099,8 @@ pub fn format_document(text: &str) -> Vec<LspTextEdit> {
     edits
         .into_iter()
         .map(|e| {
-            let start = offset_to_position_local(&index, e.start);
-            let end = offset_to_position_local(&index, e.end);
+            let start = offset_to_position(&index, e.start);
+            let end = offset_to_position(&index, e.end);
             LspTextEdit {
                 range: lsp_types::Range { start, end },
                 new_text: e.new_text,
@@ -628,26 +1109,27 @@ pub fn format_document(text: &str) -> Vec<LspTextEdit> {
         .collect()
 }
 
-/// Code actions from diagnostic messages (`;`, braces, parens).
+/// Code actions backed by structured compiler replacements carried in
+/// `Diagnostic.data`; messages are presentation only and are never parsed.
 #[must_use]
 #[allow(clippy::mutable_key_type)] // WorkspaceEdit keys are `Uri` in lsp-types 0.97
-pub fn code_actions(uri: &Uri, context: &lsp_types::CodeActionContext) -> CodeActionResponse {
+pub fn code_actions(_uri: &Uri, context: &lsp_types::CodeActionContext) -> CodeActionResponse {
     let mut out = Vec::new();
     for d in &context.diagnostics {
-        let actions = arandu_fmt::actions_for_diagnostic(0, 0, d.message.as_str());
-        for a in actions {
-            let start = d.range.start;
-            let new_text = a
-                .edits
-                .first()
-                .map(|e| e.new_text.clone())
-                .unwrap_or_default();
+        let Some(data) = d
+            .data
+            .clone()
+            .and_then(|value| serde_json::from_value::<DiagnosticData>(value).ok())
+        else {
+            continue;
+        };
+        for fix in data.fixes {
             let mut by_str: HashMap<String, Vec<LspTextEdit>> = HashMap::new();
             by_str.insert(
-                uri.as_str().to_string(),
+                fix.uri.as_str().to_string(),
                 vec![LspTextEdit {
-                    range: lsp_types::Range { start, end: start },
-                    new_text,
+                    range: fix.range,
+                    new_text: fix.new_text,
                 }],
             );
             let changes: HashMap<Uri, Vec<LspTextEdit>> = by_str
@@ -655,7 +1137,7 @@ pub fn code_actions(uri: &Uri, context: &lsp_types::CodeActionContext) -> CodeAc
                 .filter_map(|(s, edits)| crate::uri_util::parse_uri(&s).map(|u| (u, edits)))
                 .collect();
             out.push(CodeActionOrCommand::CodeAction(CodeAction {
-                title: a.title.into(),
+                title: fix.title,
                 kind: Some(CodeActionKind::QUICKFIX),
                 diagnostics: Some(vec![d.clone()]),
                 edit: Some(WorkspaceEdit {
@@ -693,13 +1175,16 @@ pub fn semantic_tokens_range(
 
 fn encode_highlights(highlights: &[arandu_query::HlToken], text: &str) -> SemanticTokens {
     let index = LineIndex::new(text);
-    let mut data = Vec::with_capacity(highlights.len());
+    let mut absolute = Vec::with_capacity(highlights.len());
+    for hl in highlights {
+        split_highlight_lines(hl, text, &index, &mut absolute);
+    }
+    absolute.sort_by_key(|token| (token.0.line, token.0.character));
+
+    let mut data = Vec::with_capacity(absolute.len());
     let mut prev_line = 0u32;
     let mut prev_start = 0u32;
-    for hl in highlights {
-        let token_type = hl.kind.legend_index();
-        let start_pos = offset_to_position_local(&index, hl.start);
-        let length = hl.end.saturating_sub(hl.start);
+    for (start_pos, length, token_type, mods) in absolute {
         let delta_line = start_pos.line.saturating_sub(prev_line);
         let delta_start = if delta_line == 0 {
             start_pos.character.saturating_sub(prev_start)
@@ -711,7 +1196,7 @@ fn encode_highlights(highlights: &[arandu_query::HlToken], text: &str) -> Semant
             delta_start,
             length,
             token_type,
-            token_modifiers_bitset: u32::from(hl.mods),
+            token_modifiers_bitset: mods,
         });
         prev_line = start_pos.line;
         prev_start = start_pos.character;
@@ -722,11 +1207,49 @@ fn encode_highlights(highlights: &[arandu_query::HlToken], text: &str) -> Semant
     }
 }
 
-fn offset_to_position_local(index: &LineIndex, offset: u32) -> Position {
-    let (line1, col1) = index.line_col(offset);
-    Position {
-        line: line1.saturating_sub(1),
-        character: col1.saturating_sub(1),
+fn split_highlight_lines(
+    hl: &arandu_query::HlToken,
+    text: &str,
+    index: &LineIndex,
+    out: &mut Vec<(Position, u32, u32, u32)>,
+) {
+    let mut start = usize::try_from(hl.start)
+        .unwrap_or(text.len())
+        .min(text.len());
+    let end = usize::try_from(hl.end)
+        .unwrap_or(text.len())
+        .min(text.len());
+    while start < end {
+        while start < end && matches!(text.as_bytes()[start], b'\r' | b'\n') {
+            start += 1;
+        }
+        if start >= end {
+            break;
+        }
+        let line = index
+            .line_starts
+            .partition_point(|&line_start| usize::try_from(line_start).is_ok_and(|s| s <= start))
+            .saturating_sub(1);
+        let next_line = index
+            .line_starts
+            .get(line + 1)
+            .and_then(|&offset| usize::try_from(offset).ok())
+            .unwrap_or(text.len());
+        let mut content_end = next_line.min(text.len());
+        while content_end > start && matches!(text.as_bytes()[content_end - 1], b'\r' | b'\n') {
+            content_end -= 1;
+        }
+        let segment_end = end.min(content_end);
+        if segment_end > start {
+            let start_u32 = u32::try_from(start).unwrap_or(u32::MAX);
+            out.push((
+                offset_to_position(index, start_u32),
+                utf16_len(&text[start..segment_end]),
+                hl.kind.legend_index(),
+                u32::from(hl.mods),
+            ));
+        }
+        start = next_line.max(segment_end);
     }
 }
 
@@ -761,6 +1284,123 @@ mod tests {
             "expected keyword or main in completions, got {} items",
             items.len()
         );
+    }
+
+    #[test]
+    fn unicode_position_resolves_symbol_after_astral_character() {
+        let text = "/* 😀 */ func soma(value: int): int { return value } // ação\n";
+        let mut host = AnalysisHost::new();
+        let file = host.new_file("unicode.aru".into(), text.into());
+        let snap = host.snapshot();
+        let byte_offset = text.find("soma").expect("soma definition") + 1;
+        let position = offset_to_position(
+            &LineIndex::new(text),
+            u32::try_from(byte_offset).expect("fixture offset fits u32"),
+        );
+        let tc = typecheck(&snap, file);
+        assert!(
+            symbol_at(
+                &tc,
+                u32::try_from(byte_offset).expect("fixture offset fits u32")
+            )
+            .is_some(),
+            "resolved maps: definitions={:?}, values={:?}",
+            tc.resolved.definitions,
+            tc.resolved.value_refs
+        );
+        assert!(hover(&snap, file, text, position).is_some());
+    }
+
+    #[test]
+    fn signature_help_is_safe_for_an_empty_document() {
+        let mut host = AnalysisHost::new();
+        let file = host.new_file("empty.aru".into(), String::new());
+        let snap = host.snapshot();
+        assert!(signature_help(&snap, file, "", Position::new(0, 0)).is_none());
+    }
+
+    #[test]
+    fn hover_completion_and_signature_share_user_facing_presentation() {
+        let text = concat!(
+            "/// Adds two values.\n",
+            "/// Keeps integer precision.\n",
+            "func add(left: int, right: int): int { return left + right }\n",
+            "func main(): int { return add(1, 2) }\n",
+        );
+        let mut host = AnalysisHost::new();
+        let file = host.new_file("presentation.aru".into(), text.into());
+        let snap = host.snapshot();
+        let signature = "func add(left: int, right: int): int";
+        let documentation = "Adds two values.\nKeeps integer precision.";
+        let definition = text.find("add").expect("add definition");
+        let call = text.rfind("add").expect("add call");
+
+        let hover = hover(
+            &snap,
+            file,
+            text,
+            offset_to_position(&LineIndex::new(text), definition as u32),
+        )
+        .expect("hover for add");
+        let HoverContents::Markup(hover) = hover.contents else {
+            panic!("hover must use Markdown markup");
+        };
+        assert!(hover.value.contains(signature));
+        assert!(hover.value.contains(documentation));
+        assert!(!hover.value.contains("SymbolId"));
+
+        let completion = completions(
+            &snap,
+            file,
+            text,
+            offset_to_position(&LineIndex::new(text), (definition + 2) as u32),
+        )
+        .into_iter()
+        .find(|item| item.label == "add")
+        .expect("add completion");
+        assert_eq!(completion.detail.as_deref(), Some(signature));
+        assert!(matches!(
+            completion.documentation,
+            Some(Documentation::MarkupContent(MarkupContent { value, .. }))
+                if value == documentation
+        ));
+
+        let second_argument = call + "add(1, ".len();
+        let help = signature_help(
+            &snap,
+            file,
+            text,
+            offset_to_position(&LineIndex::new(text), second_argument as u32),
+        )
+        .expect("signature help for add");
+        let shown = &help.signatures[0];
+        assert_eq!(shown.label, signature);
+        assert_eq!(help.active_parameter, Some(1));
+        assert_eq!(shown.active_parameter, Some(1));
+        assert_eq!(
+            shown.parameters.as_ref().expect("parameter labels")[1].label,
+            ParameterLabel::Simple("right: int".into())
+        );
+        assert!(matches!(
+            shown.documentation,
+            Some(Documentation::MarkupContent(MarkupContent { ref value, .. }))
+                if value == documentation
+        ));
+    }
+
+    #[test]
+    fn signature_context_ignores_nested_argument_commas() {
+        let text = concat!(
+            "func add(left: int, right: int): int { return left + right }\n",
+            "func main(): int { return add(add(1, 2), 3) }\n",
+        );
+        let mut host = AnalysisHost::new();
+        let file = host.new_file("nested-signature.aru".into(), text.into());
+        let snap = host.snapshot();
+        let outer_second = text.rfind(", 3").expect("outer second argument") + 2;
+        let context = call_context(&snap, file, outer_second as u32).expect("outer call context");
+        assert_eq!(context.name, "add");
+        assert_eq!(context.active_parameter, 1);
     }
 
     #[test]
@@ -844,8 +1484,8 @@ mod tests {
             assert!(hl.end <= content.len() as u32);
             let substring = &content[hl.start as usize..hl.end as usize];
 
-            // Token length must match the highlight span length.
-            assert_eq!(tok.length, hl.end - hl.start);
+            // Semantic token lengths use negotiated UTF-16 code units, not bytes.
+            assert_eq!(tok.length, utf16_len(substring));
 
             // Spot-check: `tcp_listen` public decl in stdlib is a FUNCTION token.
             // Line is 0-based (LSP semantic tokens); file line 285 → index 284.
@@ -856,6 +1496,26 @@ mod tests {
     }
 
     #[test]
+    fn semantic_tokens_split_multiline_unicode_without_newlines() {
+        let text = "/* ação\r\n😀 fim */";
+        let highlight = arandu_query::HlToken {
+            start: 0,
+            end: u32::try_from(text.len()).expect("fixture length fits u32"),
+            kind: arandu_query::HlKind::Comment,
+            mods: 0,
+        };
+
+        let tokens = encode_highlights(&[highlight], text);
+        assert_eq!(tokens.data.len(), 2);
+        assert_eq!(tokens.data[0].delta_line, 0);
+        assert_eq!(tokens.data[0].delta_start, 0);
+        assert_eq!(tokens.data[0].length, utf16_len("/* ação"));
+        assert_eq!(tokens.data[1].delta_line, 1);
+        assert_eq!(tokens.data[1].delta_start, 0);
+        assert_eq!(tokens.data[1].length, utf16_len("😀 fim */"));
+    }
+
+    #[test]
     fn document_symbols_does_not_panic() {
         let mut host = AnalysisHost::new();
         let file = host.new_file("h.aru".into(), "func main(): int { return 1 }\n".into());
@@ -863,5 +1523,83 @@ mod tests {
         let text = file.text(&snap.db);
         let uri = crate::uri_util::parse_uri("file:///h.aru").expect("uri");
         let _syms = document_symbols(&snap, file, text, &uri);
+    }
+
+    #[test]
+    fn folding_ranges_come_from_multiline_cst_blocks_and_comments() {
+        let text = concat!(
+            "/** first\nsecond */\n",
+            "func main(): int {\n",
+            "    if true {\n",
+            "        return 1\n",
+            "    }\n",
+            "    return 0\n",
+            "}\n",
+        );
+        let mut host = AnalysisHost::new();
+        let file = host.new_file("folding.aru".into(), text.into());
+        let snap = host.snapshot();
+        let ranges = folding_ranges(&snap, file, text);
+        assert!(ranges.iter().any(|range| {
+            range.kind == Some(FoldingRangeKind::Comment)
+                && range.start_line == 0
+                && range.end_line == 1
+        }));
+        assert!(ranges
+            .iter()
+            .any(|range| { range.kind.is_none() && range.start_line == 2 && range.end_line == 7 }));
+        assert!(ranges
+            .iter()
+            .any(|range| { range.kind.is_none() && range.start_line == 3 && range.end_line == 5 }));
+        assert!(ranges.iter().all(|range| range.start_line < range.end_line));
+    }
+
+    #[test]
+    fn selection_ranges_are_strictly_nested_cst_ancestors() {
+        let text = "func main(): int {\n    return 1 + 2\n}\n";
+        let mut host = AnalysisHost::new();
+        let file = host.new_file("selection.aru".into(), text.into());
+        let snap = host.snapshot();
+        let offset = text.find('1').expect("integer expression");
+        let position = offset_to_position(
+            &LineIndex::new(text),
+            u32::try_from(offset).expect("fixture offset fits u32"),
+        );
+        let ranges = selection_ranges(&snap, file, text, &[position]);
+        assert_eq!(ranges.len(), 1);
+        let mut current = &ranges[0];
+        let mut depth = 1;
+        while let Some(parent) = current.parent.as_deref() {
+            assert!(parent.range.start <= current.range.start);
+            assert!(parent.range.end >= current.range.end);
+            assert_ne!(parent.range, current.range);
+            current = parent;
+            depth += 1;
+        }
+        assert!(
+            depth >= 4,
+            "expected token, expr, stmt, block and item ranges"
+        );
+    }
+
+    #[test]
+    fn document_highlights_share_resolved_symbol_identity() {
+        let text = concat!(
+            "func add(value: int): int { return value }\n",
+            "func main(): int { return add(1) }\n",
+        );
+        let mut host = AnalysisHost::new();
+        let file = host.new_file("highlights.aru".into(), text.into());
+        let snap = host.snapshot();
+        let definition = text.find("add").expect("function definition");
+        let position = offset_to_position(
+            &LineIndex::new(text),
+            u32::try_from(definition).expect("fixture offset fits u32"),
+        );
+        let highlights = document_highlights(&snap, file, text, position);
+        assert_eq!(highlights.len(), 2);
+        assert!(highlights
+            .iter()
+            .all(|highlight| highlight.kind == Some(DocumentHighlightKind::TEXT)));
     }
 }

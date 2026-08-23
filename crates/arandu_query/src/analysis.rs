@@ -5,8 +5,11 @@
 //! buffer handle; dense compiler IDs stay dense.
 
 use crate::db::{DatabaseImpl, SourceFile};
+use crate::manifest::{register_manifest, ManifestData, ProjectManifest};
+use crate::vfs::{DirectoryListing, ModuleRoots};
 use arandu_middle::SymbolId;
 use salsa::Setter;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Monotonic analysis generation advanced on every input commit (`set_text` /
@@ -147,6 +150,51 @@ impl AnalysisHost {
     /// new files still bump revision so open/import order is observable.
     pub fn register_source_file(&mut self, path: String, file: SourceFile) {
         self.db.register_source_file(path, file);
+        self.revision = self.revision.next();
+    }
+
+    /// Remove a source registration and advance the observable analysis revision.
+    /// A later registration for the same path must receive a fresh `FileId`.
+    pub fn unregister_source_file(&mut self, path: &str) {
+        self.db.unregister_source_file(path);
+        self.revision = self.revision.next();
+    }
+
+    /// Install package metadata discovered outside the query graph.
+    ///
+    /// The LSP calls this only on its writer thread after `initialize`; workers
+    /// observe the resulting Salsa inputs through later snapshots.
+    pub fn configure_package(
+        &mut self,
+        manifest_path: PathBuf,
+        manifest_data: ManifestData,
+        manifest_hash: String,
+        package_src: PathBuf,
+        entries: Vec<String>,
+        stdlib_root: Option<PathBuf>,
+    ) -> (ProjectManifest, DirectoryListing, ModuleRoots) {
+        let listing =
+            DirectoryListing::new(&self.db, Arc::new(package_src.clone()), Arc::new(entries));
+        let roots = ModuleRoots::new(
+            &self.db,
+            manifest_data.name.clone(),
+            Arc::new(package_src),
+            stdlib_root.clone().map(Arc::new),
+            listing,
+        );
+        let manifest = register_manifest(&self.db, manifest_path, manifest_data, manifest_hash);
+        self.db.set_module_roots(roots);
+        self.db.set_project_manifest(manifest);
+        if let Some(root) = stdlib_root {
+            self.db.set_stdlib_root(root);
+        }
+        self.revision = self.revision.next();
+        (manifest, listing, roots)
+    }
+
+    /// Replace one package directory snapshot with one observable revision.
+    pub fn set_directory_entries(&mut self, listing: DirectoryListing, entries: Vec<String>) {
+        listing.set_entries(&mut self.db).to(Arc::new(entries));
         self.revision = self.revision.next();
     }
 

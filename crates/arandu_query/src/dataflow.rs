@@ -56,6 +56,29 @@ pub struct BorrowFacts {
 
 /// Stable IDE diagnostic (hashable for early cutoff / publish fingerprint).
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IdeLabel {
+    pub file_id: u32,
+    pub start: u32,
+    pub end: u32,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IdeReplacement {
+    pub file_id: u32,
+    pub start: u32,
+    pub end: u32,
+    pub new_text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IdeHint {
+    pub message: String,
+    pub replacement: Option<IdeReplacement>,
+}
+
+/// Stable IDE diagnostic (hashable for early cutoff / publish fingerprint).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IdeDiagnostic {
     pub code: String,
     pub severity: u8,
@@ -63,6 +86,9 @@ pub struct IdeDiagnostic {
     pub file_id: u32,
     pub start: u32,
     pub end: u32,
+    pub labels: Vec<IdeLabel>,
+    pub notes: Vec<String>,
+    pub hints: Vec<IdeHint>,
     /// Owning function, if partitioned.
     pub func: Option<SymbolId>,
     /// Owning block within that function, if partitioned.
@@ -78,6 +104,30 @@ impl IdeDiagnostic {
             file_id: d.span.file_id,
             start: d.span.start,
             end: d.span.end,
+            labels: d
+                .labels
+                .iter()
+                .map(|label| IdeLabel {
+                    file_id: label.span.file_id,
+                    start: label.span.start,
+                    end: label.span.end,
+                    message: label.message.clone(),
+                })
+                .collect(),
+            notes: d.notes.clone(),
+            hints: d
+                .hints
+                .iter()
+                .map(|hint| IdeHint {
+                    message: hint.message.clone(),
+                    replacement: hint.replacement.as_ref().map(|replacement| IdeReplacement {
+                        file_id: replacement.span.file_id,
+                        start: replacement.span.start,
+                        end: replacement.span.end,
+                        new_text: replacement.new_text.clone(),
+                    }),
+                })
+                .collect(),
             func,
             block,
         }
