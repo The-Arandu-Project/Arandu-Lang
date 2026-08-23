@@ -1623,6 +1623,155 @@ fn stdio_cst_navigation_features_are_advertised_and_structured() {
     lsp.shutdown(5);
 }
 
+#[test]
+#[ignore = "native L3 stress campaign; run explicitly in the endurance matrix"]
+fn stdio_l3_stress_has_no_crash_deadlock_or_stale_publication() {
+    const BURST_REVISIONS: i32 = 120;
+    const FIRST_REQUEST_ID: i64 = 10_000;
+
+    let fixture = FixtureDir::new();
+    let uri = file_uri(&fixture.path().join("stress.aru"));
+    let mut lsp = LspProcess::spawn();
+    lsp.initialize(fixture.path(), 1);
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didOpen",
+        "params": {
+            "textDocument": {
+                "uri": uri,
+                "languageId": "arandu",
+                "version": 1,
+                "text": "func main(): int { return 0 }\n"
+            }
+        }
+    }));
+    let _ = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && message.pointer("/params/uri").and_then(Value::as_str) == Some(uri.as_str())
+    });
+
+    for revision in 2..=BURST_REVISIONS {
+        let text = if revision % 2 == 0 {
+            format!("func main(): int {{ return {revision} }}\n")
+        } else {
+            "func main(): int { return unresolved }\n".to_owned()
+        };
+        lsp.send(&json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didChange",
+            "params": {
+                "textDocument": { "uri": uri, "version": revision },
+                "contentChanges": [{ "text": text }]
+            }
+        }));
+        lsp.send(&json!({
+            "jsonrpc": "2.0",
+            "id": FIRST_REQUEST_ID + i64::from(revision),
+            "method": "textDocument/completion",
+            "params": {
+                "textDocument": { "uri": uri },
+                "position": { "line": 0, "character": 4 }
+            }
+        }));
+    }
+
+    let mut pending: BTreeSet<_> = (2..=BURST_REVISIONS)
+        .map(|revision| FIRST_REQUEST_ID + i64::from(revision))
+        .collect();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !pending.is_empty() {
+        let message = lsp
+            .messages
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .unwrap_or_else(|error| {
+                panic!("stress response timeout ({error:?}); pending={pending:?}")
+            });
+        let Some(id) = message.get("id").and_then(Value::as_i64) else {
+            continue;
+        };
+        if !pending.remove(&id) {
+            continue;
+        }
+        if let Some(error) = message.get("error") {
+            let code = error.get("code").and_then(Value::as_i64);
+            assert!(
+                matches!(code, Some(-32802..=-32800)),
+                "stress request returned an unexpected/internal error: {message}"
+            );
+        } else {
+            assert!(
+                message.get("result").is_some(),
+                "malformed stress response: {message}"
+            );
+        }
+    }
+
+    // Establish a final oracle only after every burst response has drained.
+    let final_version = BURST_REVISIONS + 1;
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didChange",
+        "params": {
+            "textDocument": { "uri": uri, "version": final_version },
+            "contentChanges": [{ "text": "func main(): int { return 42 }\n" }]
+        }
+    }));
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didSave",
+        "params": { "textDocument": { "uri": uri } }
+    }));
+    let final_diagnostics = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && message.pointer("/params/uri").and_then(Value::as_str) == Some(uri.as_str())
+            && message.pointer("/params/version").and_then(Value::as_i64)
+                == Some(i64::from(final_version))
+    });
+    assert_eq!(
+        final_diagnostics
+            .pointer("/params/diagnostics")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(0),
+        "final valid revision must clear Problems: {final_diagnostics}"
+    );
+
+    let quiet_until = Instant::now() + Duration::from_millis(500);
+    while let Ok(message) = lsp
+        .messages
+        .recv_timeout(quiet_until.saturating_duration_since(Instant::now()))
+    {
+        if message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && message.pointer("/params/uri").and_then(Value::as_str) == Some(uri.as_str())
+        {
+            assert_eq!(
+                message.pointer("/params/version").and_then(Value::as_i64),
+                Some(i64::from(final_version)),
+                "stale diagnostics were published after the final oracle: {message}"
+            );
+        }
+        if Instant::now() >= quiet_until {
+            break;
+        }
+    }
+
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "id": 20_000,
+        "method": "textDocument/completion",
+        "params": {
+            "textDocument": { "uri": uri },
+            "position": { "line": 0, "character": 4 }
+        }
+    }));
+    let alive = lsp.wait_for_response(20_000);
+    assert!(
+        alive.get("result").is_some(),
+        "server did not survive stress: {alive}"
+    );
+    lsp.shutdown(20_001);
+}
+
 #[derive(Debug)]
 struct LspPerfBudget {
     samples: usize,

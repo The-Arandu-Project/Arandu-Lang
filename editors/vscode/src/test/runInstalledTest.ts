@@ -33,17 +33,29 @@ async function main(): Promise<void> {
     const vscodeExecutablePath = await downloadAndUnzipVSCode(VSCODE_VERSION);
     const [cliPath, ...cliArgs] = resolveCliArgsFromVSCodeExecutablePath(vscodeExecutablePath);
     fs.mkdirSync(extensionsPath, { recursive: true });
+    const profileArgs = cliArgs.filter(argument =>
+        !argument.startsWith('--user-data-dir=') && !argument.startsWith('--extensions-dir=')
+    );
+    const installArgs = [
+        ...profileArgs,
+        `--user-data-dir=${userDataPath}`,
+        `--extensions-dir=${extensionsPath}`,
+        '--install-extension',
+        vsixPath,
+        '--force'
+    ];
+    let installExecutable = cliPath;
+    let installEnvironment = process.env;
+    if (process.platform === 'win32') {
+        const vscodeRoot = path.resolve(path.dirname(cliPath), '..');
+        installExecutable = path.join(vscodeRoot, 'Code.exe');
+        installArgs.unshift(path.join(vscodeRoot, 'resources', 'app', 'out', 'cli.js'));
+        installEnvironment = { ...process.env, ELECTRON_RUN_AS_NODE: '1' };
+    }
     const install = childProcess.spawnSync(
-        cliPath,
-        [
-            ...cliArgs,
-            `--user-data-dir=${userDataPath}`,
-            `--extensions-dir=${extensionsPath}`,
-            '--install-extension',
-            vsixPath,
-            '--force'
-        ],
-        { encoding: 'utf8', stdio: 'inherit', shell: process.platform === 'win32' }
+        installExecutable,
+        installArgs,
+        { encoding: 'utf8', stdio: 'inherit', env: installEnvironment }
     );
     if (install.status !== 0) {
         throw new Error(`VSIX installation failed with status ${String(install.status)}`);

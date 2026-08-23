@@ -60,6 +60,8 @@ export async function run(): Promise<void> {
         });
         assert.ok(completions.items.some(item => item.label === 'func'));
 
+        await verifyNavigationAndRename(workspace);
+
         const formatUri = vscode.Uri.joinPath(workspace.uri, 'format.aru');
         const formatDocument = await vscode.workspace.openTextDocument(formatUri);
         await vscode.window.showTextDocument(formatDocument);
@@ -113,6 +115,60 @@ export async function run(): Promise<void> {
         await configuration.update('server.path', undefined, vscode.ConfigurationTarget.Global);
         await vscode.commands.executeCommand('workbench.action.closeAllEditors');
     }
+}
+
+async function verifyNavigationAndRename(workspace: vscode.WorkspaceFolder): Promise<void> {
+    const uri = vscode.Uri.joinPath(workspace.uri, 'navigation.aru');
+    const document = await vscode.workspace.openTextDocument(uri);
+    await vscode.window.showTextDocument(document);
+    const callLine = document.lineAt(5).text;
+    const callColumn = callLine.indexOf('add');
+    assert.ok(callColumn >= 0, 'navigation fixture must contain the add call');
+    const callPosition = new vscode.Position(5, callColumn + 1);
+
+    const definitions = await poll(() =>
+        vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(
+            'vscode.executeDefinitionProvider',
+            uri,
+            callPosition
+        ).then(result => result && result.length > 0 ? result : undefined)
+    );
+    const definition = definitions[0];
+    assert.ok(definition);
+    const definitionUri = definition instanceof vscode.Location
+        ? definition.uri
+        : definition.targetUri;
+    assert.equal(definitionUri.toString(), uri.toString());
+
+    const references = await vscode.commands.executeCommand<vscode.Location[]>(
+        'vscode.executeReferenceProvider',
+        uri,
+        callPosition
+    );
+    assert.ok(Array.isArray(references), 'references provider must return a structured result');
+
+    const symbols = await poll(() =>
+        vscode.commands.executeCommand<Array<vscode.DocumentSymbol | vscode.SymbolInformation>>(
+            'vscode.executeDocumentSymbolProvider',
+            uri
+        ).then(result => result && result.length >= 2 ? result : undefined)
+    );
+    assert.ok(symbols.some(symbol => symbol.name === 'add'));
+    assert.ok(symbols.some(symbol => symbol.name === 'main'));
+
+    const rename = await poll(() =>
+        vscode.commands.executeCommand<vscode.WorkspaceEdit>(
+            'vscode.executeDocumentRenameProvider',
+            uri,
+            callPosition,
+            'sum'
+        )
+    );
+    const renameEdits = rename.entries()
+        .filter(([editUri]) => editUri.toString() === uri.toString())
+        .flatMap(([, edits]) => edits);
+    assert.equal(renameEdits.length, 2);
+    assert.ok(renameEdits.every(edit => edit.newText === 'sum'));
 }
 
 function diagnosticCode(diagnostic: vscode.Diagnostic): string | number | undefined {

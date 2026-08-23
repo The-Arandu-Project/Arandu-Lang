@@ -250,8 +250,11 @@ do editor e contrato próprio no roadmap mestre.
       runners nativos Windows x86-64, Linux x86-64 e macOS ARM64 do release.
 - [x] Matriz pública de hosts, capabilities e limitações conhecida vive em
       `arandu-lsp-capabilities-v0.1.md` e não promove plataformas sem gate.
-- [ ] Sem crash, deadlock ou publicação stale em campanha de stress definida.
-- [ ] Diagnósticos, navigation, rename, tokens e format passam no Extension Host.
+- [x] Campanha L3 versionada força 119 revisões e requests concorrentes, aceita
+      apenas cancelamentos protocolares, instala uma revisão-oráculo e rejeita
+      crash, deadlock, erro interno ou diagnóstico stale após o oráculo.
+- [x] Problems, completion, definition, references estruturadas, symbols,
+      rename, semantic tokens em três temas e formatação passam no Extension Host.
 - [ ] Release candidate dogfood sem bloqueador conhecido.
 
 **DoD L3:** VS Code + `arandu-lsp` formam uma experiência beta gold dentro da matriz publicada.

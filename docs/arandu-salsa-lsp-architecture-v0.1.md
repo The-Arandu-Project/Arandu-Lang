@@ -111,6 +111,10 @@
     cliente declara suporte e publica estados `indexing`/`ready` para a UI. A
     extensão limita reinícios automáticos e o Extension Host mata o processo
     real para provar recuperação, diagnóstico e completion após o restart.
+20. A campanha L3 stdio intercala 119 revisões com requests interativos, drena
+    toda resposta exigindo sucesso ou cancelamento LSP conhecido e então aplica
+    uma revisão-oráculo válida. Nenhum diagnóstico de revisão anterior pode ser
+    publicado depois do oráculo; completion e shutdown devem continuar vivos.
 
 ## F4 / P3 — delta on-type
 
