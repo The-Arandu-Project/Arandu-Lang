@@ -156,12 +156,9 @@ impl ServerState {
         let Some(package) = self.package.as_ref() else {
             return Vec::new();
         };
-        let path = normalize_path_soft(path);
-        let src = normalize_path_soft(&package.package_src);
-        let Ok(rel) = path.strip_prefix(src) else {
+        let Some(rel) = package_relative_path(path, &package.package_src) else {
             return Vec::new();
         };
-        let rel = rel.to_string_lossy().replace('\\', "/");
         vec![format!("{}/{}", package.package_name, rel), rel]
     }
 
@@ -429,6 +426,27 @@ fn normalize_path_soft(path: &std::path::Path) -> PathBuf {
     PathBuf::from(registry_path_key(&resolved))
 }
 
+fn package_relative_path(path: &std::path::Path, package_src: &std::path::Path) -> Option<String> {
+    // Rename notifications arrive after the old path has ceased to exist.
+    // Derive its import key lexically before trying filesystem normalization,
+    // which may otherwise retain a Windows verbatim prefix on one side only.
+    let lexical_path = PathBuf::from(registry_path_key(path));
+    let lexical_src = PathBuf::from(registry_path_key(package_src));
+    let relative = lexical_path
+        .strip_prefix(&lexical_src)
+        .ok()
+        .map(std::path::Path::to_path_buf)
+        .or_else(|| {
+            let normalized_path = normalize_path_soft(path);
+            let normalized_src = normalize_path_soft(package_src);
+            normalized_path
+                .strip_prefix(normalized_src)
+                .ok()
+                .map(std::path::Path::to_path_buf)
+        })?;
+    Some(relative.to_string_lossy().replace('\\', "/"))
+}
+
 impl Default for ServerState {
     fn default() -> Self {
         Self::new()
@@ -492,6 +510,17 @@ mod tests {
         uri_from_path(std::path::Path::new(&format!("/tmp/{name}")))
             .or_else(|| parse_uri(&format!("file:///tmp/{name}")))
             .expect("uri")
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn missing_verbatim_path_keeps_package_relative_identity() {
+        let src = std::path::Path::new(r"\\?\D:\a\Arandu-Lang\src");
+        let removed = std::path::Path::new(r"D:\a\Arandu-Lang\src\util.aru");
+        assert_eq!(
+            package_relative_path(removed, src).as_deref(),
+            Some("util.aru")
+        );
     }
 
     #[test]
@@ -741,6 +770,8 @@ mod tests {
             .rename_uri(&util_uri, &helper_uri)
             .expect("apply module rename");
         assert!(state.refresh_package_listing());
+        assert!(!state.host.db().is_registered("editor_gold/util.aru"));
+        assert!(!state.host.db().is_registered("util.aru"));
         assert!(
             arandu_query::passes::type_check(state.host.db(), main)
                 .diagnostics
