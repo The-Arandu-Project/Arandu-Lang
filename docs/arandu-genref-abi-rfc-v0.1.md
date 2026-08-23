@@ -1,9 +1,13 @@
 # RFC: GenRef ABI & AMIR propagation (F2.3.runtime)
 
-**Status:** Accepted / implemented (i64 host MVP)  
+**Status:** Accepted / implemented (i64 host MVP; not Gold)
 **Depends on:** F2.3.1 escape analysis (done), F2.2 loan windows (done), G2 policy (done)  
 **Does not replace:** static OSSA for non-escaping refs  
 **Residual (not F2-blocking):** typed `GenArena<T>` slot tables in self-host; host remains i64.
+
+> The stabilization and replacement plan is normative in
+> `docs/arandu-genref-gold-strategy-v0.1.md`. This RFC records the MVP and must
+> not be read as claiming general-payload, cross-arena or ABA-safe Gold status.
 
 ---
 
