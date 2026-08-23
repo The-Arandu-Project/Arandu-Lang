@@ -40,6 +40,11 @@ pub struct ServerState {
     pub last_diag_fp: FxHashMap<DocumentId, ([u8; 32], Option<i32>)>,
     /// P3: last per-item IDE diag fingerprints (DocumentId, item local key).
     pub last_item_diag_fp: FxHashMap<(DocumentId, u32, u32), [u8; 32]>,
+    /// Import registry keys owned by each compiler file identity. Filesystem
+    /// events may arrive through a path spelling that cannot be reconstructed
+    /// after rename (Windows verbatim paths, junctions), so removal uses this
+    /// recorded ownership rather than guessing aliases from the stale path.
+    package_aliases: FxHashMap<u32, Vec<String>>,
     /// Active package metadata. It is installed after the initialize handshake
     /// and its directory listing is the watched Salsa input for local imports.
     pub package: Option<PackageState>,
@@ -58,6 +63,7 @@ impl ServerState {
             versions: FxHashMap::default(),
             last_diag_fp: FxHashMap::default(),
             last_item_diag_fp: FxHashMap::default(),
+            package_aliases: FxHashMap::default(),
             package: None,
         }
     }
@@ -179,12 +185,25 @@ impl ServerState {
             if self.host.db().is_registered(&key) {
                 self.host.unregister_source_file(&key);
             }
-            self.host.register_source_file(key, source);
+            self.host.register_source_file(key.clone(), source);
+        }
+        for owned in self.package_aliases.values_mut() {
+            owned.retain(|candidate| candidate != &key);
+        }
+        let owned = self.package_aliases.entry(source_id).or_default();
+        if !owned.contains(&key) {
+            owned.push(key);
         }
     }
 
-    fn unregister_package_aliases(&mut self, path: &std::path::Path) {
-        for key in self.package_keys_for_path(path) {
+    fn unregister_package_aliases(&mut self, path: &std::path::Path, source_id: Option<u32>) {
+        let mut keys = self.package_keys_for_path(path);
+        if let Some(source_id) = source_id {
+            keys.extend(self.package_aliases.remove(&source_id).unwrap_or_default());
+        }
+        keys.sort();
+        keys.dedup();
+        for key in keys {
             if self.host.db().is_registered(&key) {
                 self.host.unregister_source_file(&key);
             }
@@ -276,11 +295,14 @@ impl ServerState {
         self.discard_pending(uri);
         let path = Self::path_of(uri);
         let path_key = registry_path_key(&path);
-        self.unregister_package_aliases(&path);
+        let id = self.by_uri.get(uri_s).copied();
+        let source_id = id
+            .and_then(|id| self.docs.get(id))
+            .map(|doc| *doc.source.file_id(self.host.db()));
+        self.unregister_package_aliases(&path, source_id);
         if self.host.db().is_registered(&path_key) {
             self.host.unregister_source_file(&path_key);
         }
-        let id = self.by_uri.get(uri_s).copied();
         if let Some(id) = id {
             self.versions.remove(&id);
             self.last_diag_fp.remove(&id);
