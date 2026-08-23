@@ -1,5 +1,6 @@
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, BTreeSet};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -44,6 +45,7 @@ struct LspProcess {
     child: Child,
     stdin: ChildStdin,
     messages: Receiver<Value>,
+    pending: RefCell<VecDeque<Value>>,
 }
 
 impl LspProcess {
@@ -69,6 +71,7 @@ impl LspProcess {
             child,
             stdin,
             messages,
+            pending: RefCell::new(VecDeque::new()),
         }
     }
 
@@ -80,6 +83,14 @@ impl LspProcess {
     }
 
     fn wait_for(&self, mut predicate: impl FnMut(&Value) -> bool) -> Value {
+        let pending_index = self.pending.borrow().iter().position(&mut predicate);
+        if let Some(index) = pending_index {
+            return self
+                .pending
+                .borrow_mut()
+                .remove(index)
+                .expect("pending LSP message index must remain valid");
+        }
         let deadline = Instant::now() + MESSAGE_TIMEOUT;
         let mut observed = Vec::new();
         loop {
@@ -93,7 +104,8 @@ impl LspProcess {
             if predicate(&message) {
                 return message;
             }
-            observed.push(message);
+            observed.push(message.clone());
+            self.pending.borrow_mut().push_back(message);
         }
     }
 
@@ -102,21 +114,10 @@ impl LspProcess {
     }
 
     fn wait_for_responses(&self, ids: impl IntoIterator<Item = i64>) -> BTreeMap<i64, Value> {
-        let mut pending = ids.into_iter().collect::<BTreeSet<_>>();
+        let pending = ids.into_iter().collect::<BTreeSet<_>>();
         let mut responses = BTreeMap::new();
-        let deadline = Instant::now() + MESSAGE_TIMEOUT;
-        while !pending.is_empty() {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            let message = self
-                .messages
-                .recv_timeout(remaining)
-                .expect("timed out waiting for concurrent LSP responses");
-            let Some(id) = message.get("id").and_then(Value::as_i64) else {
-                continue;
-            };
-            if pending.remove(&id) {
-                responses.insert(id, message);
-            }
+        for id in pending {
+            responses.insert(id, self.wait_for_response(id));
         }
         responses
     }
