@@ -1,6 +1,7 @@
 //! Unit tests for the type checker core (extracted from mod.rs).
 
 use super::errors::constraint_to_diagnostic;
+use super::provenance::{ProvenanceRole, causal_chain};
 use super::types::InterfaceInfo;
 use super::types::Primitive;
 use super::*;
@@ -876,4 +877,213 @@ fn constraint_origin_debug() {
     for origin in origins {
         let _ = format!("{origin:?}");
     }
+}
+
+// ── Solver log (roadmap 4.1) ──
+
+#[test]
+fn solver_logs_failed_constraints_in_generation_order() {
+    let pool = AstPool::default();
+    let symbols = SymbolTable::new(0);
+    let resolved = ResolvedNames::default();
+    let mut checker = TypeChecker::new(symbols, resolved, Vec::new(), &pool);
+
+    let int_id = checker.intern(ArType::Primitive(Primitive::Int));
+    let str_id = checker.intern(ArType::Primitive(Primitive::Str));
+    let s = dummy_span();
+
+    checker.add_constraint(
+        ArTypeOrId::Id(int_id),
+        ArTypeOrId::Id(str_id),
+        ConstraintOrigin::Assignment {
+            lhs_span: s,
+            rhs_span: s,
+        },
+    );
+    checker.add_subtype_constraint(
+        ArTypeOrId::Type(ArType::Primitive(Primitive::Int)),
+        ArTypeOrId::Type(ArType::Primitive(Primitive::Str)),
+        ConstraintOrigin::ReturnType {
+            return_span: s,
+            declared_span: s,
+        },
+    );
+
+    assert_eq!(checker.diagnostics.len(), 2);
+    assert_eq!(checker.solved_constraints().len(), 2);
+
+    let first = &checker.solved_constraints()[0];
+    let second = &checker.solved_constraints()[1];
+    assert!(!first.constraint.is_subtype);
+    assert!(second.constraint.is_subtype);
+    assert_eq!(first.diag_index, 0);
+    assert_eq!(second.diag_index, 1);
+    assert_eq!(
+        checker.diagnostics[first.diag_index].code,
+        DiagCode::T002IncompatibleAssignment
+    );
+    assert_eq!(
+        checker.diagnostics[second.diag_index].code,
+        DiagCode::T004IncompatibleReturnType
+    );
+}
+
+// ── Causal provenance (roadmap 4.2) ──
+
+fn all_constraint_origins() -> Vec<ConstraintOrigin> {
+    let s = dummy_span();
+    vec![
+        ConstraintOrigin::Assignment {
+            lhs_span: s,
+            rhs_span: s,
+        },
+        ConstraintOrigin::CallArg {
+            call_span: s,
+            param_span: s,
+            arg_span: s,
+            arg_index: 0,
+        },
+        ConstraintOrigin::ReturnType {
+            return_span: s,
+            declared_span: s,
+        },
+        ConstraintOrigin::IfBranches {
+            then_span: s,
+            else_span: s,
+        },
+        ConstraintOrigin::MatchArms {
+            first_span: s,
+            mismatch_span: s,
+            arm_index: 1,
+        },
+        ConstraintOrigin::BinaryOp {
+            op_span: s,
+            left_span: s,
+            right_span: s,
+        },
+        ConstraintOrigin::UnaryOp {
+            op_span: s,
+            operand_span: s,
+        },
+        ConstraintOrigin::Condition { span: s },
+        ConstraintOrigin::FieldInit {
+            struct_span: s,
+            field_name: "name".to_string(),
+            field_span: s,
+            value_span: s,
+        },
+        ConstraintOrigin::SetTarget {
+            place_span: s,
+            value_span: s,
+        },
+        ConstraintOrigin::CastExpr {
+            expr_span: s,
+            target_span: s,
+        },
+        ConstraintOrigin::ImplicitWidening {
+            source_span: s,
+            target_span: s,
+        },
+        ConstraintOrigin::TryInvalid { span: s },
+        ConstraintOrigin::AwaitInvalid { span: s },
+        ConstraintOrigin::InvalidIndex {
+            base_span: s,
+            index_span: s,
+            is_base_error: true,
+        },
+        ConstraintOrigin::InvalidIndex {
+            base_span: s,
+            index_span: s,
+            is_base_error: false,
+        },
+        ConstraintOrigin::UndefinedField {
+            base_span: s,
+            field_span: s,
+            field_name: "nam".to_string(),
+        },
+        ConstraintOrigin::ArrayLiteral {
+            array_span: s,
+            item_span: s,
+            item_index: 1,
+        },
+        ConstraintOrigin::NullCoalesce {
+            left_span: s,
+            right_span: s,
+        },
+        ConstraintOrigin::CatchHandler {
+            expr_span: s,
+            handler_span: s,
+        },
+    ]
+}
+
+#[test]
+fn provenance_chain_is_total_and_ordered() {
+    for origin in all_constraint_origins() {
+        let constraint = Constraint {
+            is_subtype: false,
+            expected: ArType::Void,
+            found: ArType::Primitive(Primitive::Int),
+            origin,
+        };
+        let chain = causal_chain(&constraint);
+        assert!(!chain.is_empty());
+        let found_pos = chain
+            .iter()
+            .position(|step| step.role == ProvenanceRole::FoundOrigin)
+            .expect("chain must contain a found-origin");
+        if let Some(expected_pos) = chain
+            .iter()
+            .position(|step| step.role == ProvenanceRole::ExpectedOrigin)
+        {
+            assert!(
+                expected_pos < found_pos,
+                "expected-origin must precede found-origin"
+            );
+        }
+        assert!(chain.iter().all(|step| !step.description.is_empty()));
+    }
+}
+
+#[test]
+fn assignment_note_renders_clean_flow_without_debug_spans() {
+    let constraint = Constraint {
+        is_subtype: false,
+        expected: ArType::Primitive(Primitive::Int),
+        found: ArType::Primitive(Primitive::Str),
+        origin: ConstraintOrigin::Assignment {
+            lhs_span: Span::new(0, 0, 3),
+            rhs_span: Span::new(0, 6, 9),
+        },
+    };
+    let diag = constraint_to_diagnostic(&constraint, &empty_symbols(), &TypeInfo::new());
+    assert!(
+        diag.notes
+            .iter()
+            .any(|note| note == "flow: declaration → value"),
+        "notes: {:?}",
+        diag.notes
+    );
+    assert!(
+        diag.notes.iter().all(|note| !note.contains("Span")),
+        "notes must not leak debug span formatting"
+    );
+}
+
+#[test]
+fn field_init_diagnostic_carries_struct_context_label() {
+    let constraint = Constraint {
+        is_subtype: false,
+        expected: ArType::Primitive(Primitive::Int),
+        found: ArType::Primitive(Primitive::Str),
+        origin: ConstraintOrigin::FieldInit {
+            struct_span: dummy_span(),
+            field_name: "name".to_string(),
+            field_span: dummy_span(),
+            value_span: dummy_span(),
+        },
+    };
+    let diag = constraint_to_diagnostic(&constraint, &empty_symbols(), &TypeInfo::new());
+    assert_eq!(diag.labels.len(), 3);
+    assert!(diag.labels[0].message.contains("initializing field 'name'"));
 }

@@ -1,0 +1,408 @@
+//! Configurable AMIR optimization pass manager.
+//!
+//! Decomposes the former rigid `SCCP → DCE → SimplifyCFG` loop in
+//! [`crate::optimize`] into an explicit [`FunctionPass`] pipeline selected per
+//! [`OptLevel`]. The design follows two validated references:
+//!
+//! * **LLVM New Pass Manager**: pipelines are built per optimization level and
+//!   the O0 pipeline performs no speculative transformation
+//!   (<https://llvm.org/docs/NewPassManager.html>).
+//! * **rustc `MirPass`**: passes are stateless unit structs with a stable
+//!   `name()`, applied in place over a statically sequenced list
+//!   (<https://rustc-dev-guide.rust-lang.org/mir/passes.html>).
+//!
+//! Determinism contract: a pass is a pure function of the IR plus
+//! [`PassResources`]; the manager iterates the sequence to a bounded fixpoint
+//! and reports `Diagnostic::ice` instead of looping forever.
+
+mod fixpoint;
+mod pipeline;
+mod stats;
+
+pub use pipeline::pipeline_for_level;
+pub use stats::PassStats;
+
+use crate::Diagnostic;
+use crate::amir::{AmirFunc, AmirProgram};
+use crate::literal_pool::AmirLiteralPool;
+use bumpalo::Bump;
+
+/// Optimization levels for the AMIR middle-end pipeline.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum OptLevel {
+    /// No transformations: minimize compile time, the IR is left untouched.
+    O0,
+    /// Baseline simplification loop: SCCP → mark-sweep DCE → CFG
+    /// simplification (the historical behavior of `optimize_amir`).
+    #[default]
+    O1,
+    /// Speed-oriented pipeline. Shares the O1 core simplification loop today;
+    /// new speed passes join at named positions in [`pipeline_for_level`].
+    O2,
+    /// Size-oriented pipeline (`-Os`). Shares the O1 core today; size passes
+    /// join at dedicated positions as they land.
+    Os,
+}
+
+/// Shared per-function resources handed to every pass invocation.
+pub struct PassResources<'a> {
+    /// Literal pool shared by the whole program; interning must stay stable.
+    pub literal_pool: &'a mut AmirLiteralPool,
+    /// Per-function scratch arena, reset between mutating fixpoint rounds.
+    pub bump: &'a mut Bump,
+}
+
+/// A single AMIR function-to-function transformation step.
+///
+/// Implementations must:
+///
+/// * be deterministic and free of observable side effects (no I/O, no global
+///   state),
+/// * preserve AMIR invariants: SSA/OSSA dominance, block-parameter /
+///   terminator-argument alignment and dense ids,
+/// * converge: repeated application reaches a fixed point. The manager
+///   enforces a hard iteration bound regardless.
+pub trait FunctionPass {
+    /// Stable identifier used by [`PassStats`] and pipeline debugging.
+    fn name(&self) -> &'static str;
+
+    /// Applies the pass in place, returning whether the function changed.
+    ///
+    /// An `Err` aborts the whole pipeline run with that diagnostic.
+    fn run(
+        &self,
+        func: &mut AmirFunc,
+        resources: &mut PassResources<'_>,
+    ) -> Result<bool, Diagnostic>;
+}
+
+/// Sequences [`FunctionPass`] steps over functions until convergence.
+pub struct PassManager {
+    level: OptLevel,
+    passes: Vec<Box<dyn FunctionPass>>,
+}
+
+impl PassManager {
+    /// Builds the standard pipeline for `level`.
+    pub fn for_level(level: OptLevel) -> Self {
+        Self {
+            level,
+            passes: pipeline_for_level(level),
+        }
+    }
+
+    /// Extension point for tests and experimental pipelines: explicit pass list.
+    pub fn from_passes(level: OptLevel, passes: Vec<Box<dyn FunctionPass>>) -> Self {
+        Self { level, passes }
+    }
+
+    /// The optimization level this manager was built for.
+    pub fn level(&self) -> OptLevel {
+        self.level
+    }
+
+    /// Names of the passes in this pipeline, in execution order.
+    pub fn pass_names(&self) -> Vec<&'static str> {
+        self.passes.iter().map(|pass| pass.name()).collect()
+    }
+
+    /// Optimizes one function to a fixpoint.
+    ///
+    /// Empty pipelines (O0) return zeroed stats without touching the IR.
+    pub fn run_function(
+        &self,
+        func: &mut AmirFunc,
+        literal_pool: &mut AmirLiteralPool,
+    ) -> Result<PassStats, Diagnostic> {
+        if self.passes.is_empty() {
+            return Ok(PassStats::default());
+        }
+        fixpoint::run_pipeline_to_fixpoint(
+            &self.passes,
+            func,
+            literal_pool,
+            fixpoint::DEFAULT_MAX_FIXPOINT_ITERATIONS,
+        )
+    }
+
+    /// Optimizes every function in `program`, merging per-function stats.
+    pub fn run_program(&self, program: &mut AmirProgram) -> Result<PassStats, Diagnostic> {
+        let mut total = PassStats::default();
+        for func in &mut program.funcs {
+            let stats = self.run_function(func, &mut program.literal_pool)?;
+            total.merge(stats);
+        }
+        Ok(total)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::amir::{
+        AmirBasicBlock, AmirConstant, AmirOperand, AmirRvalue, AmirStmt, AmirStmtTable, AmirTemp,
+        AmirTerminator, BlockId, TempId,
+    };
+    use crate::cfg::compute_cfg_edges;
+    use crate::layout::DenseRange;
+    use crate::passes::type_checker::types::{ArType, Primitive};
+
+    fn intern_ty(ty: ArType) -> crate::types::TypeId {
+        // Fresh interner per call is OK in unit tests (pre-interns primitives).
+        crate::types::TypeInterner::new().intern(ty)
+    }
+
+    fn int_temp(id: usize) -> AmirTemp {
+        AmirTemp {
+            id: TempId::from_usize(id),
+            ty: intern_ty(ArType::Primitive(Primitive::Int)),
+            is_copy: true,
+            is_nullable: false,
+            span: arandu_lexer::Span::new(0, 0, 0),
+        }
+    }
+
+    fn func(statements: Vec<AmirStmt>, temps: Vec<AmirTemp>) -> AmirFunc {
+        let mut stmts = AmirStmtTable::new();
+        let mut range = DenseRange::empty();
+        for stmt in statements {
+            let instr = stmts.push(stmt);
+            crate::amir::program::extend_block_range(&mut range, instr);
+        }
+        let blocks = vec![AmirBasicBlock {
+            id: BlockId::from_usize(0),
+            statements: range,
+            params: Vec::new(),
+            terminator: AmirTerminator::Return,
+        }];
+        let cfg = compute_cfg_edges(&blocks);
+        AmirFunc {
+            symbol: crate::SymbolId::new(0, 0),
+            return_type: intern_ty(ArType::Void),
+            receiver: None,
+            params: Vec::new(),
+            locals: Vec::new(),
+            temps,
+            blocks,
+            stmts,
+            cfg,
+        }
+    }
+
+    struct AlwaysChangesPass;
+
+    impl FunctionPass for AlwaysChangesPass {
+        fn name(&self) -> &'static str {
+            "always_changes"
+        }
+
+        fn run(
+            &self,
+            _func: &mut AmirFunc,
+            _resources: &mut PassResources<'_>,
+        ) -> Result<bool, Diagnostic> {
+            Ok(true)
+        }
+    }
+
+    #[test]
+    fn o0_pipeline_is_empty_and_leaves_ir_untouched() {
+        let manager = PassManager::for_level(OptLevel::O0);
+        assert!(manager.pass_names().is_empty());
+
+        let mut f = func(
+            vec![AmirStmt::Assign {
+                lhs: TempId::from_usize(1),
+                rhs: AmirRvalue::Binary {
+                    op: crate::ops::BinaryOp::Add,
+                    left: AmirOperand::Constant(AmirConstant::Bool(true)),
+                    right: AmirOperand::Constant(AmirConstant::Bool(true)),
+                },
+            }],
+            vec![int_temp(0), int_temp(1)],
+        );
+        let before = f.blocks[0].statements.len;
+
+        let stats = manager
+            .run_function(&mut f, &mut AmirLiteralPool::default())
+            .unwrap();
+        assert_eq!(stats.iterations, 0);
+        assert_eq!(f.blocks[0].statements.len, before);
+    }
+
+    #[test]
+    fn o1_removes_dead_pure_assign_and_reports_stats() {
+        let mut pool = AmirLiteralPool::default();
+        let mut f = func(
+            vec![AmirStmt::Assign {
+                lhs: TempId::from_usize(1),
+                rhs: AmirRvalue::Binary {
+                    op: crate::ops::BinaryOp::Add,
+                    left: AmirOperand::Constant(AmirConstant::Bool(true)),
+                    right: AmirOperand::Constant(AmirConstant::Bool(true)),
+                },
+            }],
+            vec![int_temp(0), int_temp(1)],
+        );
+
+        let stats = PassManager::for_level(OptLevel::O1)
+            .run_function(&mut f, &mut pool)
+            .unwrap();
+
+        assert_eq!(f.blocks[0].statements.len, 0);
+        // Only DCE has work here: the assign is dead, and SCCP/CFG find no
+        // opportunities in a single-block function with no constants to fold.
+        assert_eq!(stats.changes(), &[("mark_sweep_dce", 1)]);
+        // One mutating round + one confirming round before the early return.
+        assert_eq!(stats.iterations, 2);
+        assert_eq!(stats.total_changes(), 1);
+    }
+
+    #[test]
+    fn stats_are_deterministic_across_runs() {
+        let build = || {
+            func(
+                vec![AmirStmt::Assign {
+                    lhs: TempId::from_usize(1),
+                    rhs: AmirRvalue::Binary {
+                        op: crate::ops::BinaryOp::Add,
+                        left: AmirOperand::Constant(AmirConstant::Bool(true)),
+                        right: AmirOperand::Constant(AmirConstant::Bool(true)),
+                    },
+                }],
+                vec![int_temp(0), int_temp(1)],
+            )
+        };
+        let mut first = build();
+        let mut second = build();
+        let stats_a = PassManager::for_level(OptLevel::O2)
+            .run_function(&mut first, &mut AmirLiteralPool::default())
+            .unwrap();
+        let stats_b = PassManager::for_level(OptLevel::O2)
+            .run_function(&mut second, &mut AmirLiteralPool::default())
+            .unwrap();
+        assert_eq!(stats_a, stats_b);
+    }
+
+    #[test]
+    fn non_convergence_reports_ice_guardrail() {
+        let manager = PassManager::from_passes(OptLevel::O1, vec![Box::new(AlwaysChangesPass)]);
+        let mut f = func(Vec::new(), Vec::new());
+        let err = manager
+            .run_function(&mut f, &mut AmirLiteralPool::default())
+            .unwrap_err();
+        assert_eq!(err.code, crate::DiagCode::ICEO001);
+        assert_eq!(
+            err.kind,
+            crate::diagnostics::DiagnosticKind::InternalCompilerError
+        );
+    }
+
+    #[test]
+    fn pipelines_share_core_simplification_above_o0() {
+        assert!(PassManager::for_level(OptLevel::O0).pass_names().is_empty());
+        for level in [OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+            assert_eq!(
+                PassManager::for_level(level).pass_names(),
+                vec!["sccp", "mark_sweep_dce", "simplify_cfg"]
+            );
+        }
+    }
+
+    /// Regression (roadmap 1.3): the O1 pipeline must converge on pass
+    /// *interaction* — SCCP folds a constant branch, which makes DCE remove
+    /// the dead assign, which lets CFG simplification merge/join blocks.
+    /// Final shape: one block, `Return`, no statements.
+    #[test]
+    fn o1_converges_when_passes_enable_each_other() {
+        let bool_temp = AmirTemp {
+            id: TempId::from_usize(1),
+            ty: intern_ty(ArType::Primitive(Primitive::Bool)),
+            is_copy: true,
+            is_nullable: false,
+            span: arandu_lexer::Span::new(0, 0, 0),
+        };
+        let mut stmts = AmirStmtTable::new();
+        let instr = stmts.push(AmirStmt::Assign {
+            lhs: TempId::from_usize(1),
+            rhs: AmirRvalue::Use(AmirOperand::Constant(AmirConstant::Bool(true))),
+        });
+        let mut range = DenseRange::empty();
+        crate::amir::program::extend_block_range(&mut range, instr);
+
+        let blocks = vec![
+            AmirBasicBlock {
+                id: BlockId::from_usize(0),
+                params: Vec::new(),
+                statements: range,
+                terminator: AmirTerminator::Branch {
+                    condition: AmirOperand::Copy(TempId::from_usize(1)),
+                    if_true: BlockId::from_usize(1),
+                    true_args: Vec::new(),
+                    if_false: BlockId::from_usize(2),
+                    false_args: Vec::new(),
+                },
+            },
+            AmirBasicBlock {
+                id: BlockId::from_usize(1),
+                params: Vec::new(),
+                statements: DenseRange::empty(),
+                terminator: AmirTerminator::Goto {
+                    target: BlockId::from_usize(3),
+                    args: Vec::new(),
+                },
+            },
+            AmirBasicBlock {
+                id: BlockId::from_usize(2),
+                params: Vec::new(),
+                statements: DenseRange::empty(),
+                terminator: AmirTerminator::Goto {
+                    target: BlockId::from_usize(3),
+                    args: Vec::new(),
+                },
+            },
+            AmirBasicBlock {
+                id: BlockId::from_usize(3),
+                params: Vec::new(),
+                statements: DenseRange::empty(),
+                terminator: AmirTerminator::Return,
+            },
+        ];
+        let cfg = compute_cfg_edges(&blocks);
+        let mut f = AmirFunc {
+            symbol: crate::SymbolId::new(0, 0),
+            return_type: intern_ty(ArType::Void),
+            receiver: None,
+            params: Vec::new(),
+            locals: Vec::new(),
+            // TempId doubles as the SCCP lattice index — keep ids dense.
+            temps: vec![int_temp(0), bool_temp],
+            blocks,
+            stmts,
+            cfg,
+        };
+
+        let stats = PassManager::for_level(OptLevel::O1)
+            .run_function(&mut f, &mut AmirLiteralPool::default())
+            .unwrap();
+
+        // All three passes contributed at least once.
+        for name in ["sccp", "mark_sweep_dce", "simplify_cfg"] {
+            assert!(
+                stats.changes().iter().any(|(n, _)| *n == name),
+                "expected {name} to report changes"
+            );
+        }
+        // Converged IR: single entry block, no statements, direct Return.
+        assert_eq!(f.blocks.len(), 1);
+        assert_eq!(f.blocks[0].id, BlockId::from_usize(0));
+        assert_eq!(f.blocks[0].statements.len, 0);
+        assert!(matches!(f.blocks[0].terminator, AmirTerminator::Return));
+        // Terminator targets stay dense/in-range after every rewrite.
+        for block in &f.blocks {
+            if let AmirTerminator::Goto { target, .. } = &block.terminator {
+                assert!(target.as_usize() < f.blocks.len());
+            }
+        }
+    }
+}

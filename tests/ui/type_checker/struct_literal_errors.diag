@@ -1,5 +1,6 @@
 T002: incompatible type for field 'x': expected 'int', found 'bool'
   --> tests/ui/type_checker/struct_literal_errors.aru:7:32
+  label: 7:21-7:44 initializing field 'x' of this struct
   label: 7:29-7:36 field 'x' has type 'int'
   label: 7:32-7:36 value has type 'bool'
 T018: no field 'z' on type 'Point'

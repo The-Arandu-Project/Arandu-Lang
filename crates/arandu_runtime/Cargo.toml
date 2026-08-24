@@ -1,0 +1,22 @@
+[package]
+name = "arandu_runtime"
+version = "0.1.0-rc.4"
+edition = "2024"
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+# SL_R.2 reactor (epoll + timerfd on Linux); portable fallback elsewhere
+libc = "0.2.189"
+
+# SL_R.3 io_uring is Linux-only (MAP_POPULATE / SYS_io_uring_*). Do not pull
+# this crate on macOS/Windows or install-smoke matrix builds fail to compile.
+# Code paths are already #[cfg(target_os = "linux")]; keep the dep gated too.
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = "0.7.14"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.60.2", features = ["Win32_Networking_WinSock"] }
+
+[lib]
+path = "src/lib.rs"

@@ -42,7 +42,7 @@ pub unsafe extern "C" fn ar_time_monotonic_ns() -> i64 {
     i64::try_from(elapsed.as_nanos()).unwrap_or(i64::MAX)
 }
 
-/// Number of process arguments including argv[0] (like Go `len(os.Args)` / Rust `env::args().len()`).
+/// Number of process arguments including `argv[0]` (like Go `len(os.Args)` / Rust `env::args().len()`).
 ///
 /// # Safety
 /// No pointer args.

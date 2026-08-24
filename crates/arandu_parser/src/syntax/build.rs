@@ -473,7 +473,7 @@ fn emit_block_with_stmts(
     builder.finish_node();
 }
 
-/// Build a single item green node (for [`reparse_subtree`]).
+/// Build a single item green node (for [`crate::syntax::incremental::reparse_subtree`]).
 #[must_use]
 pub fn build_item_green(item_text: &str, tokens: &[Token]) -> GreenNode {
     let mut builder = GreenNodeBuilder::new();

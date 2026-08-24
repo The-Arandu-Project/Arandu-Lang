@@ -232,7 +232,7 @@ pub enum AmirTerminator {
     ///
     /// Ends the current basic block; control resumes at `resume` after the
     /// awaited coroutine yields a value. Live locals that must survive the
-    /// suspension are passed as `args` (same convention as [`Goto`]) — the
+    /// suspension are passed as `args` (same convention as [`Self::Goto`]) — the
     /// coroutine state at this frontier is exactly those args (block params
     /// of `resume`), derived from what the lowerer / liveness marks live.
     ///

@@ -4,7 +4,7 @@
 //! index `I` rather than a plain `usize`. This prevents accidental indexing
 //! into the wrong arena (e.g. using a `LocalId` to index into a temp table).
 //!
-//! Define a custom index type with the [`newtype_index!`] macro.
+//! Define a custom index type with the `newtype_index!` macro.
 
 use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};
@@ -12,7 +12,7 @@ use std::ops::{Index, IndexMut};
 /// A typed index suitable for use with [`IndexVec`].
 ///
 /// Implementors are cheap to copy and compare, and bijectively convert to/from
-/// `usize`. Use [`newtype_index!`] to derive this for a newtype wrapper.
+/// `usize`. Use `newtype_index!` to derive this for a newtype wrapper.
 pub trait IdIndex: Copy + PartialEq + Eq {
     /// Converts the index to a raw `usize` offset.
     fn to_usize(self) -> usize;

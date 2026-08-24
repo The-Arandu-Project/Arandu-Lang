@@ -1,16 +1,13 @@
-//! AMIR optimization pipeline (O1).
+//! AMIR optimization entry points.
 //!
-//! Runs SCCP → Mark-Sweep DCE → CFG Simplification in a fixpoint loop so
-//! each pass feeds the next.  The loop terminates when no pass changes
-//! anything.
+//! Thin, API-stable wrappers over [`crate::pass_manager`], which owns the
+//! pipeline composition (`O0`/`O1`/`O2`/`Os`), per-pass metrics and the
+//! bounded fixpoint driver with its ICE guardrail.
 
 use crate::amir::{AmirFunc, AmirProgram};
-use crate::dce::mark_sweep_dce;
-use crate::literal_pool::AmirLiteralPool;
-use crate::sccp::sccp;
-use crate::simplify_cfg::simplify_cfg;
+use crate::pass_manager::{OptLevel, PassManager};
 use crate::types::TypeInterner;
-use crate::{DiagCode, Diagnostic, Span, SymbolTable};
+use crate::{Diagnostic, SymbolTable};
 
 /// Validates AMIR before and after optimization, preventing malformed IR from
 /// reaching a mutating pass or backend.
@@ -35,52 +32,35 @@ pub fn optimize_amir_checked(
     Ok(())
 }
 
-/// Runs the full AMIR optimization pipeline on all functions in `program`.
-///
-/// Each function is independently optimized in a fixpoint loop.
-/// See [`optimize_amir_func`] for the per-function pass sequence.
+/// Runs the default AMIR optimization pipeline ([`OptLevel::O1`]) on all
+/// functions in `program`.
 pub fn optimize_amir(program: &mut AmirProgram) -> Result<(), Diagnostic> {
-    for func in &mut program.funcs {
-        optimize_amir_func(func, &mut program.literal_pool)?;
-    }
+    optimize_amir_with_level(program, OptLevel::O1)
+}
+
+/// Runs the AMIR optimization pipeline selected by `level` on all functions in
+/// `program`.
+///
+/// Each function is independently optimized in a fixpoint loop; see
+/// [`crate::pass_manager`] for pipeline composition and metrics.
+pub fn optimize_amir_with_level(
+    program: &mut AmirProgram,
+    level: OptLevel,
+) -> Result<(), Diagnostic> {
+    PassManager::for_level(level).run_program(program)?;
     Ok(())
 }
 
-/// Runs the per-function optimization loop until convergence.
+/// Runs the default ([`OptLevel::O1`]) per-function optimization loop until
+/// convergence.
 ///
-/// Pass order: SCCP (constant propagation) → Mark-Sweep DCE → CFG
-/// Simplification. Each iteration feeds the next; the loop terminates
-/// when no pass reports any change.
+/// Pass order at O1+: SCCP → mark-sweep DCE → CFG simplification. Each round
+/// feeds the next; the loop terminates when no pass reports any change.
 pub fn optimize_amir_func(
     func: &mut AmirFunc,
-    literal_pool: &mut AmirLiteralPool,
+    literal_pool: &mut crate::literal_pool::AmirLiteralPool,
 ) -> Result<(), Diagnostic> {
-    let mut bump = bumpalo::Bump::new();
-    let mut iterations = 0;
-    loop {
-        iterations += 1;
-        if iterations > 100 {
-            let span = func
-                .temps
-                .first()
-                .map(|temp| temp.span)
-                .or_else(|| func.locals.first().map(|local| local.span))
-                .unwrap_or_else(|| Span::new(func.symbol.file_id, 0, 0));
-            return Err(Diagnostic::ice(
-                DiagCode::ICEO001,
-                "AMIR optimization did not converge after 100 iterations",
-                span,
-            ));
-        }
-        let mut changed = false;
-        changed |= sccp(func, literal_pool, &bump);
-        changed |= mark_sweep_dce(func)?;
-        changed |= simplify_cfg(func, &bump)?;
-        if !changed {
-            break;
-        }
-        bump.reset();
-    }
+    PassManager::for_level(OptLevel::O1).run_function(func, literal_pool)?;
     Ok(())
 }
 
@@ -89,7 +69,7 @@ mod tests {
 
     fn sccp(func: &mut AmirFunc, pool: &mut AmirLiteralPool) -> bool {
         let bump = bumpalo::Bump::new();
-        super::sccp(func, pool, &bump)
+        crate::sccp::sccp(func, pool, &bump)
     }
 
     fn intern_ty(ty: crate::types::ArType) -> crate::types::TypeId {
@@ -105,6 +85,7 @@ mod tests {
     use crate::cfg::compute_cfg_edges;
     use crate::layout::DenseRange;
     use crate::literal_pool::AmirLiteralEntry;
+    use crate::literal_pool::AmirLiteralPool;
     use crate::ops::{BinaryOp, UnaryOp};
     use crate::passes::type_checker::types::{ArType, Primitive};
 

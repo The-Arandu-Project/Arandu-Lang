@@ -197,7 +197,7 @@ pub fn init_z_flags(flags: &[String]) {
     }
 }
 
-/// Build a [`TracingConfig`] from the current `-Z` flag atomics.
+/// Build a [`crate::tracing_bridge::TracingConfig`] from the current `-Z` flag atomics.
 ///
 /// Called once after `init_z_flags` to pass configuration into the tracing
 /// subsystem.
@@ -228,7 +228,7 @@ pub fn any_debug_flag_active() -> bool {
 
 /// RAII timer for a single compiler pass.
 ///
-/// Create via the [`time_pass!`] macro. When dropped, prints elapsed time
+/// Create via the `time_pass!` macro. When dropped, prints elapsed time
 /// to `stderr` when `-Ztime-passes` is enabled. If disabled, the timer is
 /// never created and `Instant::now()` is never called.
 pub struct PassTimer {

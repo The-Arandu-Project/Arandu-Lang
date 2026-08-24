@@ -1,6 +1,6 @@
 //! Thin abstraction over multi-file module loading for name resolution.
 //!
-//! Production uses the Salsa [`SourceDatabase`]; tests use [`EmptyModuleLoader`]
+//! Production uses the Salsa [`arandu_middle::db::SourceDatabase`]; tests use [`EmptyModuleLoader`]
 //! so they exercise the **same** import pipeline without on-disk modules
 //! (RC-DUAL-RESOLVE).
 

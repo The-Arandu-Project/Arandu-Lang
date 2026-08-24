@@ -7,7 +7,7 @@ pub enum ArType {
     /// Primitive types: int, float, bool, str, ...\
     Primitive(Primitive),
 
-    /// Named type with optional generic arguments: User, List<int>
+    /// Named type with optional generic arguments: `User`, `List<int>`
     Named(SymbolId, Vec<TypeId>),
 
     /// Function type: func(int, str) bool
@@ -19,10 +19,10 @@ pub enum ArType {
     /// Slice type: []int
     Slice(TypeId),
 
-    /// Fixed-size array: [4]float
+    /// Fixed-size array: `[4]float`
     Array(u64, TypeId),
 
-    /// Pointer type: ptr[Vec2] — raw, unsafe to deref without `unsafe`
+    /// Pointer type: `ptr[Vec2]` — raw, unsafe to deref without `unsafe`
     Ptr(TypeId),
 
     /// Shared reference: `&T` — safe first-class borrow (F2.0)

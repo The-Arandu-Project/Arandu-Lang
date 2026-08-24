@@ -9,6 +9,8 @@ pub mod constraints;
 pub mod context;
 pub mod errors;
 pub mod info;
+pub mod provenance;
+pub mod solver;
 pub mod synth;
 pub mod types;
 
@@ -140,6 +142,7 @@ pub struct TypeChecker<'a> {
     pub ctx: TyCtx,
     pub type_info: TypeInfo,
     pub diagnostics: Vec<Diagnostic>,
+    solved_constraints: Vec<solver::SolvedConstraint>,
     /// Scope for lowering type expressions inside the current function body.
     type_scope_id: Option<ScopeId>,
     pub pool: &'a AstPool,
@@ -170,6 +173,7 @@ impl<'a> TypeChecker<'a> {
             ctx: TyCtx::new(),
             type_info: TypeInfo::with_interner(type_interner),
             diagnostics,
+            solved_constraints: Vec::new(),
             type_scope_id: None,
             pool,
         }
@@ -317,8 +321,9 @@ impl From<TypeId> for ArTypeOrId {
 }
 
 impl TypeChecker<'_> {
-    /// Add a type constraint failure. Translates it immediately into a
-    /// flow-based error message and pushes it to the diagnostics list.
+    /// Add a type constraint failure. The solver records the structured
+    /// constraint, renders the flow-based error message and pushes it to
+    /// the diagnostics list.
     pub fn add_constraint(
         &mut self,
         expected: impl Into<ArTypeOrId>,
@@ -333,14 +338,15 @@ impl TypeChecker<'_> {
             ArTypeOrId::Type(t) => t,
             ArTypeOrId::Id(id) => self.resolve(id),
         };
-        let constraint = Constraint {
-            expected,
-            found,
-            is_subtype: false,
-            origin,
-        };
-        let diag = errors::constraint_to_diagnostic(&constraint, &self.symbols, &self.type_info);
-        self.diagnostics.push(diag);
+        solver::fail_constraint(
+            self,
+            Constraint {
+                expected,
+                found,
+                is_subtype: false,
+                origin,
+            },
+        );
     }
 
     pub fn add_subtype_constraint(
@@ -357,14 +363,15 @@ impl TypeChecker<'_> {
             ArTypeOrId::Type(t) => t,
             ArTypeOrId::Id(id) => self.resolve(id),
         };
-        let constraint = Constraint {
-            expected,
-            found,
-            is_subtype: true,
-            origin,
-        };
-        let diag = errors::constraint_to_diagnostic(&constraint, &self.symbols, &self.type_info);
-        self.diagnostics.push(diag);
+        solver::fail_constraint(
+            self,
+            Constraint {
+                expected,
+                found,
+                is_subtype: true,
+                origin,
+            },
+        );
     }
 
     pub(crate) fn record_expr_type(&mut self, expr: ExprId, id: TypeId) {

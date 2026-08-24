@@ -77,7 +77,7 @@ impl LowerCtx<'_> {
             }
         };
         let base = self.lower_expr(inner_id, None, symbols)?;
-        if self.current_block.is_none() {
+        if self.builder.current_block.is_none() {
             let dest = target.unwrap_or_else(|| self.new_temp_id(expr_ty));
             return Ok(AmirOperand::Copy(dest));
         }
@@ -106,7 +106,7 @@ impl LowerCtx<'_> {
         self.seal_block(bb_return_err);
         self.seal_block(bb_continue);
 
-        self.current_block = Some(bb_return_err);
+        self.builder.current_block = Some(bb_return_err);
         self.exit_all_defer_frames(true, symbols)?;
         // Clone once: new_temp_ref needs &mut self + &ArType simultaneously.
         let err_ctor_tmp = self.new_temp_id(self.func_return_type);
@@ -120,9 +120,9 @@ impl LowerCtx<'_> {
         self.emit_assign_temp(TempId(0), AmirRvalue::Use(AmirOperand::Copy(err_ctor_tmp)));
         self.set_terminator(AmirTerminator::Return);
 
-        self.current_block = None;
+        self.builder.current_block = None;
 
-        self.current_block = Some(bb_continue);
+        self.builder.current_block = Some(bb_continue);
         let dest = target.unwrap_or_else(|| self.new_temp_id(expr_ty));
         self.lower_result_ok_field(base, dest);
         Ok(AmirOperand::Copy(dest))
@@ -158,7 +158,7 @@ impl LowerCtx<'_> {
         let _ = ok_ty;
 
         let base = self.lower_expr(inner_id, None, symbols)?;
-        if self.current_block.is_none() {
+        if self.builder.current_block.is_none() {
             let dest = target.unwrap_or_else(|| self.new_temp_id(expr_ty));
             return Ok(AmirOperand::Copy(dest));
         }
@@ -188,7 +188,7 @@ impl LowerCtx<'_> {
         self.seal_block(bb_ok);
 
         // Err arm: evaluate handler (optionally bind error payload).
-        self.current_block = Some(bb_err);
+        self.builder.current_block = Some(bb_err);
         if let HirCatchHandler::Block {
             error_symbol: Some(err_sym),
             ..
@@ -208,17 +208,17 @@ impl LowerCtx<'_> {
                 self.lower_block_as_expr(*block, Some(dest), symbols)?;
             }
         }
-        if self.current_block.is_some() {
+        if self.builder.current_block.is_some() {
             self.emit_goto(bb_join);
         }
 
         // Ok arm: unwrap payload.
-        self.current_block = Some(bb_ok);
+        self.builder.current_block = Some(bb_ok);
         self.lower_result_ok_field(base, dest);
         self.emit_goto(bb_join);
 
         self.seal_block(bb_join);
-        self.current_block = Some(bb_join);
+        self.builder.current_block = Some(bb_join);
         Ok(AmirOperand::Copy(dest))
     }
 
@@ -230,7 +230,7 @@ impl LowerCtx<'_> {
         symbols: &SymbolTable,
     ) -> Result<AmirOperand, Diagnostic> {
         let base = self.lower_expr(inner_id, None, symbols)?;
-        if self.current_block.is_none() {
+        if self.builder.current_block.is_none() {
             let dest = target.unwrap_or_else(|| self.new_temp_id(expr_ty));
             return Ok(AmirOperand::Copy(dest));
         }
@@ -252,16 +252,16 @@ impl LowerCtx<'_> {
         self.seal_block(bb_return_nil);
         self.seal_block(bb_continue);
 
-        self.current_block = Some(bb_return_nil);
+        self.builder.current_block = Some(bb_return_nil);
         self.exit_all_defer_frames(true, symbols)?;
         self.emit_assign_temp(
             TempId(0),
             AmirRvalue::Use(AmirOperand::Constant(AmirConstant::Nil)),
         );
         self.set_terminator(AmirTerminator::Return);
-        self.current_block = None;
+        self.builder.current_block = None;
 
-        self.current_block = Some(bb_continue);
+        self.builder.current_block = Some(bb_continue);
         let dest = target.unwrap_or_else(|| self.new_temp_id(expr_ty));
         self.emit_assign_temp(dest, AmirRvalue::Use(base));
         Ok(AmirOperand::Copy(dest))

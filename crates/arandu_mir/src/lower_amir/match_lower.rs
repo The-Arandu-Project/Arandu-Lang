@@ -120,7 +120,7 @@ impl LowerCtx<'_> {
     }
 
     fn current_block_or_error(&self, span: Span) -> Result<BlockId, Diagnostic> {
-        self.current_block.ok_or_else(|| {
+        self.builder.current_block.ok_or_else(|| {
             Diagnostic::error(
                 DiagCode::L001LoweringUnresolvedSymbol,
                 "lowering error: missing current basic block for match switch",
@@ -251,7 +251,7 @@ impl LowerCtx<'_> {
         let entry_bb = self.current_block_or_error(ctx.span)?;
         let otherwise_bb = self.new_block();
 
-        self.current_block = Some(entry_bb);
+        self.builder.current_block = Some(entry_bb);
         self.emit_switch_int(plan.discriminant, targets, otherwise_bb);
         self.seal_block(otherwise_bb);
         for sw in &plan.arms {
@@ -259,11 +259,11 @@ impl LowerCtx<'_> {
         }
 
         for sw in &plan.arms {
-            self.current_block = Some(sw.block);
+            self.builder.current_block = Some(sw.block);
             self.lower_match_arm_body(&ctx.arms[sw.arm_index], dest, ctx.bb_end, ctx.symbols)?;
         }
 
-        self.current_block = Some(otherwise_bb);
+        self.builder.current_block = Some(otherwise_bb);
         match plan.otherwise {
             OtherwisePlan::Arm(idx) => {
                 self.lower_match_arm_body(&ctx.arms[idx], dest, ctx.bb_end, ctx.symbols)?;
@@ -295,17 +295,17 @@ impl LowerCtx<'_> {
         let entry_bb = self.current_block_or_error(ctx.span)?;
         let otherwise_bb = self.new_block();
 
-        self.current_block = Some(entry_bb);
+        self.builder.current_block = Some(entry_bb);
         self.emit_switch_int(plan.discriminant, targets, otherwise_bb);
         self.seal_block(otherwise_bb);
         for sw in &plan.arms {
             self.seal_block(sw.block);
         }
         for sw in &plan.arms {
-            self.current_block = Some(sw.block);
+            self.builder.current_block = Some(sw.block);
             self.lower_match_arm_stmt(&ctx.arms[sw.arm_index], ctx.bb_end, ctx.symbols)?;
         }
-        self.current_block = Some(otherwise_bb);
+        self.builder.current_block = Some(otherwise_bb);
         match plan.otherwise {
             OtherwisePlan::Arm(idx) => {
                 self.lower_match_arm_stmt(&ctx.arms[idx], ctx.bb_end, ctx.symbols)?;
@@ -367,7 +367,7 @@ impl LowerCtx<'_> {
                 let bb_guard = self.new_block();
                 self.set_bool_branch(is_match, bb_guard, bb_next);
                 self.seal_block(bb_guard);
-                self.current_block = Some(bb_guard);
+                self.builder.current_block = Some(bb_guard);
                 let guard_res = self.lower_expr(guard, None, symbols)?;
                 self.set_bool_branch(guard_res, bb_match, bb_next);
                 self.seal_block(bb_match);
@@ -375,9 +375,9 @@ impl LowerCtx<'_> {
                 self.set_bool_branch(is_match, bb_match, bb_next);
                 self.seal_block(bb_match);
             }
-            self.current_block = Some(bb_match);
+            self.builder.current_block = Some(bb_match);
             self.lower_match_arm_stmt(arm, bb_end, symbols)?;
-            self.current_block = Some(bb_next);
+            self.builder.current_block = Some(bb_next);
             self.seal_block(bb_next);
             if i + 1 == indices.len() {
                 self.set_terminator(AmirTerminator::Unreachable);
@@ -400,7 +400,7 @@ impl LowerCtx<'_> {
                 self.lower_block(*block, symbols)?;
             }
         }
-        if self.current_block.is_some() {
+        if self.builder.current_block.is_some() {
             self.emit_goto(bb_end);
         }
         Ok(())
@@ -427,7 +427,7 @@ impl LowerCtx<'_> {
                 let bb_guard = self.new_block();
                 self.set_bool_branch(is_match, bb_guard, bb_next);
                 self.seal_block(bb_guard);
-                self.current_block = Some(bb_guard);
+                self.builder.current_block = Some(bb_guard);
                 let guard_res = self.lower_expr(guard, None, symbols)?;
                 self.set_bool_branch(guard_res, bb_match, bb_next);
                 self.seal_block(bb_match);
@@ -436,9 +436,9 @@ impl LowerCtx<'_> {
                 self.seal_block(bb_match);
             }
 
-            self.current_block = Some(bb_match);
+            self.builder.current_block = Some(bb_match);
             self.lower_match_arm_body(arm, dest, bb_end, symbols)?;
-            self.current_block = Some(bb_next);
+            self.builder.current_block = Some(bb_next);
             self.seal_block(bb_next);
 
             if i + 1 == indices.len() {
@@ -463,7 +463,7 @@ impl LowerCtx<'_> {
                 self.lower_block_as_expr(*block, Some(dest), symbols)?;
             }
         }
-        if self.current_block.is_some() {
+        if self.builder.current_block.is_some() {
             self.emit_goto(bb_end);
         }
         Ok(())

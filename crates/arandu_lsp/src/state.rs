@@ -24,6 +24,13 @@ pub struct PackageState {
     entries: Vec<String>,
 }
 
+/// Cloneable view of a registered document handed to worker jobs.
+#[derive(Clone)]
+pub struct DocInfo {
+    pub source: SourceFile,
+    pub path: Arc<PathBuf>,
+}
+
 pub struct ServerState {
     pub host: AnalysisHost,
     pub docs: DocumentStore,
@@ -76,6 +83,40 @@ impl ServerState {
     #[must_use]
     pub fn revision(&self) -> AnalysisRevision {
         self.host.revision()
+    }
+
+    /// URI → document view for all registered documents.
+    pub(crate) fn doc_info_map(&self) -> FxHashMap<String, DocInfo> {
+        let mut map = FxHashMap::default();
+        for (uri, &id) in &self.by_uri {
+            if let Some(doc) = self.docs.get(id) {
+                map.insert(
+                    uri.clone(),
+                    DocInfo {
+                        source: doc.source,
+                        path: Arc::clone(&doc.path),
+                    },
+                );
+            }
+        }
+        map
+    }
+
+    /// DocumentId → document view for all registered documents.
+    pub(crate) fn doc_infos_by_id(&self) -> FxHashMap<DocumentId, DocInfo> {
+        let mut by_id = FxHashMap::default();
+        for &id in self.by_uri.values() {
+            if let Some(doc) = self.docs.get(id) {
+                by_id.insert(
+                    id,
+                    DocInfo {
+                        source: doc.source,
+                        path: Arc::clone(&doc.path),
+                    },
+                );
+            }
+        }
+        by_id
     }
 
     fn path_of(uri: &Uri) -> PathBuf {

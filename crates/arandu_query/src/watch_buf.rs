@@ -1,7 +1,7 @@
 //! Filesystem watch buffer + package session (CLI `arandu watch` / future LSP FS).
 //!
 //! Raw OS events are coalesced via [`crate::debounce::DebouncedMap`]. A single
-//! [`WatchBuffer::commit`] applies all due changes as **one** Salsa revision:
+//! `WatchBuffer::commit` applies all due changes as **one** Salsa revision:
 //! listing update, registry unregister/register, text `set_text`, optional
 //! manifest re-parse. No intermediate "module not found" flash on rename.
 

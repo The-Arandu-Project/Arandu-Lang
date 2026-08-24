@@ -12,6 +12,7 @@ workspace = true
 arandu_lexer = { path = "../arandu_lexer" }
 arandu_parser = { path = "../arandu_parser" }
 arandu_middle = { path = "../arandu_middle" }
+arandu_codegen = { path = "../arandu_codegen" }
 arandu_resolve = { path = "../arandu_resolve" }
 arandu_typeck = { path = "../arandu_typeck" }
 arandu_mir = { path = "../arandu_mir" }
