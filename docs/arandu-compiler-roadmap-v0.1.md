@@ -8,6 +8,10 @@ Este documento consolida as decisões arquiteturais sobre Data-Oriented Design (
 > Este é o único roadmap executivo; contratos técnicos vivos permanecem em
 > documentos próprios e campanhas concluídas permanecem recuperáveis no Git.
 
+> **Campanha ativa:** [Project & Package Lifecycle Gold](./arandu-project-package-lifecycle-gold-v0.1.md)
+> fecha manifesto, lockfile, artefatos, workspaces e dependências locais antes
+> de SL_T, compiler service/playground e runtime/stdlib completos.
+
 ### Semântica de status
 
 O checklist histórico `[x]` significa que a implementação prevista naquele
@@ -39,6 +43,14 @@ quando cumprir seu contrato atual.
 | Minimal 0.1 e CLI de projeto | `gold` | superfície exercitada por `examples/minimal/` e comandos `new/check/run/build/doctor` |
 | Anotações públicas | `gold` | contrato [PascalCase](./arandu-attribute-naming-v0.1.md), aliases legados apenas na janela de migração |
 | GenRef | `gold` no escopo seguro publicado | [RFC Gold](./arandu-genref-gold-rfc-v0.1.md), AMIR tipada, payload/drop, C/Cranelift, O004/LSP, fuzz, Miri e sanitizers |
+
+### Fila de execução
+
+1. [Project & Package Lifecycle Gold](./arandu-project-package-lifecycle-gold-v0.1.md).
+2. SL_T — testing e benchmark harness.
+3. Stdlib mínima necessária a aplicações e experimentos.
+4. Compiler service com sandbox e site/editor com compilação remota.
+5. SL_R e SL_S Gold para runtime assíncrono e sistema completos.
 
 ### Resíduos que continuam abertos
 

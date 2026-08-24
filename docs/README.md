@@ -7,6 +7,7 @@ permanece como stub na raiz.
 ## Fontes vivas
 
 - [Roadmap mestre do compilador](arandu-compiler-roadmap-v0.1.md)
+- [Campanha ativa: Project & Package Lifecycle Gold](arandu-project-package-lifecycle-gold-v0.1.md)
 - [Arquitetura Salsa/LSP](arandu-salsa-lsp-architecture-v0.1.md)
 - [Capacidades públicas do LSP/editor](arandu-lsp-capabilities-v0.1.md)
 - [RFC GenRef Gold](arandu-genref-gold-rfc-v0.1.md)
