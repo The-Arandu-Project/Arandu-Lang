@@ -442,13 +442,17 @@ Estado: `done`.
 
 ### Fase 4 — Refatoração do Typechecker: Flat Constraint Worklist Solver
 
-Estado: `planned`.
+Estado: `in_progress` (costura de `solver` e Provenance v1 aplicadas;
+two-phase integral adiado até existirem variáveis de inferência genérica).
 
 - [ ] 4.1 Separar geração de restrições (`constraint_gen`) da resolução
-      (`solver`).
-- [ ] 4.2 Integrar Causal Provenance Graph nos diagnósticos de tipo
-      (`T001..T020`).
-- [ ] 4.3 Validar determinismo via `scripts/check-diag-determinism.sh`.
+      (`solver`). Costura aplicada (`type_checker::solver` registra falhas
+      com `SolvedConstraint`); separação integral pendente.
+- [x] 4.2 Integrar Causal Provenance Graph nos diagnósticos de tipo
+      (`T001..T020`). Modelo `provenance::causal_chain` total sobre
+      `ConstraintOrigin`; note de assignment sem spans de Debug; FieldInit
+      ganhou label de contexto do struct literal.
+- [x] 4.3 Validar determinismo via `scripts/check-diag-determinism.sh`.
 
 ---
 

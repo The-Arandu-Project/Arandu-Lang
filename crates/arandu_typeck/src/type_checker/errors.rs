@@ -2,6 +2,7 @@ use crate::{DiagCode, Diagnostic, SymbolId, SymbolTable};
 
 use super::TypeInfo;
 use super::constraints::{Constraint, ConstraintOrigin};
+use super::provenance;
 use super::types::ArType;
 
 // ── Flow-based error message generation ─────────────────────────────
@@ -23,21 +24,25 @@ pub fn constraint_to_diagnostic(
     let found_str = constraint.found.display(symbols, &type_info.type_interner);
 
     match &constraint.origin {
-        ConstraintOrigin::Assignment { lhs_span, rhs_span } => Diagnostic::error(
-            DiagCode::T002IncompatibleAssignment,
-            format!(
-                "incompatible type in assignment: expected '{expected_str}', found '{found_str}'"
-            ),
-            *rhs_span,
-        )
-        .with_label(*lhs_span, format!("type '{expected_str}' declared here"))
-        .with_label(*rhs_span, format!("value has type '{found_str}'"))
-        .with_note(format!(
-            "flow: declaration ({expected_str}, {lhs_span:?}) → value ({found_str}, {rhs_span:?})"
-        ))
-        .with_hint(format!(
-            "convert with '{found_str} as {expected_str}' or change the declaration type"
-        )),
+        ConstraintOrigin::Assignment { lhs_span, rhs_span } => {
+            let flow = provenance::causal_chain(constraint);
+            Diagnostic::error(
+                DiagCode::T002IncompatibleAssignment,
+                format!(
+                    "incompatible type in assignment: expected '{expected_str}', found '{found_str}'"
+                ),
+                *rhs_span,
+            )
+            .with_label(*lhs_span, format!("type '{expected_str}' declared here"))
+            .with_label(*rhs_span, format!("value has type '{found_str}'"))
+            .with_note(format!(
+                "flow: {} → {}",
+                flow[0].description, flow[1].description
+            ))
+            .with_hint(format!(
+                "convert with '{found_str} as {expected_str}' or change the declaration type"
+            ))
+        }
 
         ConstraintOrigin::CallArg {
             call_span,
@@ -165,7 +170,7 @@ pub fn constraint_to_diagnostic(
         .with_hint(suggest_bool_conversion(&constraint.found)),
 
         ConstraintOrigin::FieldInit {
-            struct_span: _,
+            struct_span,
             field_name,
             field_span,
             value_span,
@@ -175,6 +180,10 @@ pub fn constraint_to_diagnostic(
                 "incompatible type for field '{field_name}': expected '{expected_str}', found '{found_str}'",
             ),
             *value_span,
+        )
+        .with_label(
+            *struct_span,
+            format!("initializing field '{field_name}' of this struct"),
         )
         .with_label(
             *field_span,

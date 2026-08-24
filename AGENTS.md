@@ -146,6 +146,7 @@ camadas é uma regressão arquitetural.
   3. `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`
   4. `cargo test --workspace --locked`
   5. `cargo run --locked -p xtask -- check-diag-docs`
+  6. `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked`
 
 - Para mudanças em diagnósticos, execute também
   `bash scripts/check-diag-determinism.sh arandu_typeck 8` quando Bash estiver
