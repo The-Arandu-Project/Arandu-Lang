@@ -151,6 +151,9 @@
                     ],
                     "enumMember": [
                         "constant.other.enum-member.arandu"
+                    ],
+                    "decorator": [
+                        "entity.name.tag.annotation.arandu"
                     ]
                 }
             }

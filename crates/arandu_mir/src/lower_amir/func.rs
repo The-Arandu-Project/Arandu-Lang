@@ -196,7 +196,7 @@ pub(crate) fn lower_func(
 
     promote_escaped_coroutines(&mut amir_f);
 
-    // F2.3 + G2: escape analysis (O010 / O004); `@no_fallback` promotes O004→error.
+    // F2.3 + G2: escape analysis (O010 / O004); `@NoFallback` promotes O004→error.
     let escape_opts = crate::escape_analysis::EscapeCheckOptions {
         no_fallback: f.no_fallback,
     };

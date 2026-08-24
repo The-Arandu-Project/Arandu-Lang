@@ -23,6 +23,21 @@ fn int_ty() -> arandu_middle::types::TypeId {
 }
 
 #[test]
+fn canonical_and_legacy_no_fallback_lower_to_the_same_hir_flag() {
+    for annotation in ["NoFallback", "no_fallback", "no_generational_fallback"] {
+        let source = format!("@{annotation}\nfunc critical() {{}}\n");
+        let (hir, _) = lower(&source);
+        let HirDecl::Func(function) = hir.pool.decl(hir.decls[0]) else {
+            panic!("expected function HIR");
+        };
+        assert!(
+            function.no_fallback,
+            "@{annotation} must enable no_fallback"
+        );
+    }
+}
+
+#[test]
 fn lowers_io_println_call() {
     lower(
         r#"

@@ -1,6 +1,29 @@
 use crate::ParseErrorCode;
 use crate::{parse, parse_recovering, parse_to_string};
 
+#[test]
+fn annotation_name_span_excludes_at_and_arguments_in_both_lowering_paths() {
+    let source = "@Link(\"m\")\nextern \"C\" {}\n";
+    let direct = parse(source).expect("direct parse");
+    let tree = crate::parse_syntax_arc(std::sync::Arc::<str>::from(source));
+    let cst = crate::lower_syntax_to_program(&tree, 0).expect("CST lowering");
+    for program in [&direct, &cst] {
+        let crate::TopLevelDecl::Extern(decl) = program.pool.decl(program.decls[0]) else {
+            panic!("expected extern declaration");
+        };
+        let attr = &decl.attrs[0];
+        assert_eq!((attr.name_span.start, attr.name_span.end), (1, 5));
+        assert_eq!(
+            &source[attr.name_span.start as usize..attr.name_span.end as usize],
+            "Link"
+        );
+        assert_eq!(
+            &source[attr.span.start as usize..attr.span.end as usize],
+            "@Link(\"m\")"
+        );
+    }
+}
+
 fn strip_spans(s: &str) -> String {
     // Remove @line:col-line:col annotations for easier assertion
     let mut out = String::with_capacity(s.len());

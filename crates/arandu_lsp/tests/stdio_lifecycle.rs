@@ -488,6 +488,122 @@ fn stdio_lifecycle_publishes_diagnostics_and_answers_completion() {
 }
 
 #[test]
+fn stdio_annotation_contract_uses_canonical_names_and_structured_migration() {
+    let fixture = FixtureDir::new();
+    let document = fixture.path().join("annotations.aru");
+    let uri = file_uri(&document);
+    let text = "// 😀\n@no_fallback\nfunc critical() {}\n";
+    let mut lsp = LspProcess::spawn();
+    lsp.initialize(fixture.path(), 1);
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didOpen",
+        "params": {
+            "textDocument": {
+                "uri": uri,
+                "languageId": "arandu",
+                "version": 1,
+                "text": text
+            }
+        }
+    }));
+    let published = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && message.pointer("/params/uri").and_then(Value::as_str) == Some(uri.as_str())
+            && message
+                .pointer("/params/diagnostics")
+                .and_then(Value::as_array)
+                .is_some_and(|diagnostics| {
+                    diagnostics
+                        .iter()
+                        .any(|diagnostic| diagnostic.get("code") == Some(&json!("W008")))
+                })
+    });
+    let diagnostic = published
+        .pointer("/params/diagnostics")
+        .and_then(Value::as_array)
+        .and_then(|diagnostics| {
+            diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.get("code") == Some(&json!("W008")))
+        })
+        .expect("W008 diagnostic")
+        .clone();
+    assert_eq!(diagnostic.pointer("/range/start/line"), Some(&json!(1)));
+    assert_eq!(
+        diagnostic.pointer("/range/start/character"),
+        Some(&json!(1))
+    );
+    assert_eq!(diagnostic.pointer("/range/end/character"), Some(&json!(12)));
+    assert_eq!(
+        diagnostic.pointer("/data/fixes/0/newText"),
+        Some(&json!("NoFallback"))
+    );
+
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "id": 2, "method": "textDocument/codeAction",
+        "params": {
+            "textDocument": { "uri": uri },
+            "range": diagnostic["range"].clone(),
+            "context": { "diagnostics": [diagnostic], "only": ["quickfix"] }
+        }
+    }));
+    let actions = lsp.wait_for_response(2);
+    assert_eq!(
+        actions
+            .pointer("/result/0/edit/changes")
+            .and_then(Value::as_object)
+            .and_then(|changes| changes.values().next())
+            .and_then(Value::as_array)
+            .and_then(|edits| edits.first())
+            .and_then(|edit| edit.get("newText")),
+        Some(&json!("NoFallback"))
+    );
+
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "id": 3, "method": "textDocument/hover",
+        "params": { "textDocument": { "uri": uri }, "position": { "line": 1, "character": 4 } }
+    }));
+    let hover = lsp.wait_for_response(3);
+    assert!(
+        hover
+            .pointer("/result/contents/value")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value.contains("@NoFallback") && value.contains("deprecated")),
+        "annotation hover must present the canonical contract: {hover}"
+    );
+
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "method": "textDocument/didChange",
+        "params": {
+            "textDocument": { "uri": uri, "version": 2 },
+            "contentChanges": [{ "text": "// 😀\n@Li\nextern \"C\" {}\n" }]
+        }
+    }));
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "id": 4, "method": "textDocument/completion",
+        "params": { "textDocument": { "uri": uri }, "position": { "line": 1, "character": 3 } }
+    }));
+    let completion = lsp.wait_for_response(4);
+    let link = completion
+        .pointer("/result")
+        .and_then(Value::as_array)
+        .and_then(|items| {
+            items
+                .iter()
+                .find(|item| item.get("label") == Some(&json!("Link")))
+        })
+        .expect("canonical Link completion");
+    assert_eq!(
+        link.get("insertText"),
+        Some(&json!("Link(\"${1:library}\")"))
+    );
+    assert_eq!(link.get("insertTextFormat"), Some(&json!(2)));
+
+    lsp.shutdown(5);
+}
+
+#[test]
 fn stdio_incremental_unicode_edits_compose_before_debounce() {
     let fixture = FixtureDir::new();
     let document = fixture.path().join("unicode-edits.aru");

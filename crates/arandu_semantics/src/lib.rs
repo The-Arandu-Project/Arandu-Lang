@@ -22,6 +22,7 @@ pub use arandu_middle::{
 
 pub use arandu_middle::ops::{BinaryOp, SetOp, UnaryOp};
 
+pub mod attributes;
 pub mod passes;
 
 pub use arandu_mir::{

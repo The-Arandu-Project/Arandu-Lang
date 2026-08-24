@@ -7,8 +7,8 @@ use crate::hir::{
 use crate::passes::lowering::require_def_symbol;
 use crate::passes::type_checker::types::ArType;
 use arandu_middle::types::{TypeId, TypeInterner};
-use arandu_parser::TopLevelDecl;
 use arandu_parser::ast_pool::AstPool;
+use arandu_parser::{FuncName, TopLevelDecl};
 
 fn error_ty() -> TypeId {
     TypeInterner::preinterned_error_id()
@@ -77,10 +77,14 @@ pub(crate) fn lower_decl(
                 });
             }
             let params = hir_pool.alloc_param_list(&params);
-            let no_fallback = d
-                .attrs
-                .iter()
-                .any(|a| a.name == "no_fallback" || a.name == "no_generational_fallback");
+            let annotation_target = if matches!(d.name, FuncName::Method { .. }) {
+                crate::attributes::AnnotationTarget::Method
+            } else {
+                crate::attributes::AnnotationTarget::Function
+            };
+            let no_fallback =
+                crate::attributes::validate_attributes(&d.attrs, annotation_target, pool)
+                    .contains(crate::attributes::AnnotationId::NoFallback);
             Ok(Some(HirDecl::Func(HirFunc {
                 symbol,
                 params,

@@ -163,7 +163,11 @@
             "patterns": [
                 {
                     "name": "meta.annotation.arandu",
-                    "match": "@[a-zA-Z_][a-zA-Z0-9_]*"
+                    "match": "(@)([a-zA-Z_][a-zA-Z0-9_]*)",
+                    "captures": {
+                        "1": { "name": "punctuation.definition.annotation.arandu" },
+                        "2": { "name": "entity.name.tag.annotation.arandu" }
+                    }
                 }
             ]
         },

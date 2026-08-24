@@ -313,6 +313,82 @@ pub fn block_borrow_facts(
 #[cfg(any(test, debug_assertions))]
 pub static ITEM_IDE_DIAGS_EXEC_COUNT: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
+#[cfg(any(test, debug_assertions))]
+pub static ITEM_ATTRIBUTE_VALIDATION_EXEC_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Semantic annotation validation for one top-level item.
+///
+/// The dependency is content-addressed by [`crate::passes::item_source_input`],
+/// so changing an annotation on one item does not invalidate sibling items.
+#[salsa::tracked]
+#[tracing::instrument(level = "trace", target = "arandu_query", skip(db), fields(
+    query = "item_attribute_diagnostics",
+    file = ?file.file_id(db),
+    item = ?item_sym,
+))]
+pub fn item_attribute_validation(
+    db: &dyn ArandCompilerDb,
+    file: SourceFile,
+    item_sym: SymbolId,
+) -> HashEq<Vec<Diagnostic>> {
+    #[cfg(any(test, debug_assertions))]
+    ITEM_ATTRIBUTE_VALIDATION_EXEC_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let item = crate::passes::item_source_input(db, file, item_sym);
+    let resolved = crate::passes::resolve(db, file);
+    let program = item.program.as_ref();
+    let mut diagnostics: Vec<Diagnostic> = Vec::new();
+
+    for decl_id in &program.decls {
+        let decl = program.pool.decl(*decl_id);
+        let matches = arandu_semantics::primary_def_key(decl)
+            .is_some_and(|key| resolved.resolved.definitions.get(&key) == Some(&item_sym))
+            || matches!(
+                decl,
+                arandu_parser::TopLevelDecl::Extern(ext)
+                    if ext.members.iter().any(|member| {
+                        resolved
+                            .resolved
+                            .definitions
+                            .get(&arandu_middle::NodeKey::from(member.span))
+                            == Some(&item_sym)
+                    })
+            );
+        if !matches {
+            continue;
+        }
+        diagnostics.extend(
+            arandu_semantics::attributes::validate_decl_attributes(decl, &program.pool).diagnostics,
+        );
+        break;
+    }
+
+    diagnostics.sort_by(|a, b| {
+        (a.span.start, a.span.end, a.code.as_str(), &a.message).cmp(&(
+            b.span.start,
+            b.span.end,
+            b.code.as_str(),
+            &b.message,
+        ))
+    });
+    diagnostics.dedup();
+    HashEq::new(diagnostics)
+}
+
+/// IDE projection of [`item_attribute_validation`].
+#[salsa::tracked]
+pub fn item_attribute_diagnostics(
+    db: &dyn ArandCompilerDb,
+    file: SourceFile,
+    item_sym: SymbolId,
+) -> HashEq<Vec<IdeDiagnostic>> {
+    HashEq::new(
+        item_attribute_validation(db, file, item_sym)
+            .iter()
+            .map(|diagnostic| IdeDiagnostic::from_diag(diagnostic, Some(item_sym), None))
+            .collect(),
+    )
+}
 
 /// P3: diagnostics for **one** top-level item (body typeck + AMIR analysis if func).
 ///
@@ -338,6 +414,11 @@ pub fn item_ide_diagnostics(
         .iter()
         .map(|d| IdeDiagnostic::from_diag(d, Some(item_sym), None))
         .collect();
+    out.extend(
+        item_attribute_diagnostics(db, file, item_sym)
+            .iter()
+            .cloned(),
+    );
 
     // AMIR analysis for function items (empty AmirFunc if not a func / not lowered).
     // Diags are tagged with the real AMIR block of the bad use (honesty: span→block).
@@ -359,7 +440,7 @@ pub fn item_ide_diagnostics(
             out.push(IdeDiagnostic::from_diag(&d, Some(item_sym), Some(bid)));
         }
         // Escape / O004: global `--no-generational-fallback` applies; per-func
-        // `@no_fallback` is applied in `lower_to_amir` (HIR flag).
+        // `@NoFallback` is applied in `lower_to_amir` (HIR flag).
         let no_fallback =
             arandu_base::NO_GENERATIONAL_FALLBACK.load(std::sync::atomic::Ordering::Relaxed);
         for (bid, d) in arandu_mir::escape_analysis::check_escapes_by_block(
@@ -422,6 +503,15 @@ pub fn block_diagnostics(
         for d in &body_tc.diagnostics {
             out.push(IdeDiagnostic::from_diag(d, Some(func_sym), Some(block)));
         }
+        out.extend(
+            item_attribute_diagnostics(db, file, func_sym)
+                .iter()
+                .cloned()
+                .map(|mut diagnostic| {
+                    diagnostic.block = Some(block);
+                    diagnostic
+                }),
+        );
     }
     if !amir.blocks.is_empty() {
         for (bid, d) in

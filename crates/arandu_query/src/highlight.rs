@@ -29,6 +29,7 @@ pub enum HlKind {
     Operator = 12,
     Property = 13,
     Constant = 14,
+    Decorator = 15,
 }
 
 impl HlKind {
@@ -56,6 +57,7 @@ impl HlKind {
             12 => Some(Self::Operator),
             13 => Some(Self::Property),
             14 => Some(Self::Constant),
+            15 => Some(Self::Decorator),
             _ => None,
         }
     }
@@ -148,6 +150,7 @@ pub fn compute_highlights(
         &resolved.resolved.definitions,
     ];
     let mut out: Vec<HlToken> = Vec::with_capacity(64);
+    let source = tree.text();
     arandu_parser::for_each_highlight_token(tree, |tok, class| {
         let r = tok.text_range();
         let start = u32::from(r.start());
@@ -160,7 +163,14 @@ pub fn compute_highlights(
             return;
         }
         let mut mods = 0u16;
-        let kind = if matches!(tok.kind(), SyntaxKind::IDENT | SyntaxKind::TYPE_IDENT) {
+        let is_annotation_name = matches!(tok.kind(), SyntaxKind::IDENT | SyntaxKind::TYPE_IDENT)
+            && usize::try_from(start)
+                .ok()
+                .and_then(|start| start.checked_sub(1))
+                .is_some_and(|at| source.as_bytes().get(at) == Some(&b'@'));
+        let kind = if is_annotation_name {
+            HlKind::Decorator
+        } else if matches!(tok.kind(), SyntaxKind::IDENT | SyntaxKind::TYPE_IDENT) {
             if let Some(sid) = symbol_for_span(start, end, &maps) {
                 // Definition site?
                 let key = NodeKey { start, end };

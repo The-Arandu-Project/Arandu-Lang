@@ -1,6 +1,6 @@
 # Arandu — Contrato de nomes de anotações v0.1
 
-**Status:** decisão aceita; migração da implementação pendente  
+**Status:** implementado; aliases legados mantidos durante a janela de migração
 **Escopo:** sintaxe pública iniciada por `@`; nomes internos e CLI não mudam  
 **Dono:** lexer/parser preservam a grafia, semântica reconhece anotações e o
 formatter apenas mantém a apresentação
@@ -85,18 +85,19 @@ roadmap da fase que implementa sua semântica.
 
 A migração ocorre antes de declarar o contrato estável:
 
-1. Implementar uma fonte única de metadados para anotações embutidas: nome
+1. [x] Implementar uma fonte única de metadados para anotações embutidas: nome
    canônico, aliases temporários, alvos, argumentos e estado de estabilidade.
-2. Fazer `@NoFallback` produzir exatamente o HIR `no_fallback` já existente.
-3. Aceitar temporariamente os aliases implementados, emitindo aviso com
+2. [x] Fazer `@NoFallback` produzir exatamente o HIR `no_fallback` já existente.
+3. [x] Aceitar temporariamente os aliases implementados, emitindo aviso com
    replacement estruturado; não alterar texto automaticamente no formatter.
-4. Atualizar exemplos, documentação, snippets, completion e semantic tokens.
-5. Remover aliases somente em uma fronteira de versão anunciada nas release
+4. [x] Atualizar exemplos, documentação, snippets, completion e semantic tokens.
+5. [ ] Remover aliases somente em uma fronteira de versão anunciada nas release
    notes e coberta por teste de migração.
 
-Enquanto a migração não for implementada, documentação nova deve usar apenas
-a grafia canônica. Documentos históricos podem citar a forma antiga quando ela
-for necessária para explicar o estado de uma versão.
+Documentação nova usa apenas a grafia canônica. Documentos históricos e testes
+de migração podem citar a forma antiga quando ela for necessária para explicar
+o estado de uma versão. Os aliases permanecem na linha `0.1.x` e só podem ser
+removidos em `0.2.0`, com release notes e regressão de migração.
 
 ## LSP e editor
 
@@ -146,4 +147,3 @@ modelo extensível dessas linguagens.
 - alterar nomes Rust, campos de HIR ou flags CLI;
 - implementar a semântica de anotações apenas planejadas;
 - escolher cores específicas para o editor.
-
