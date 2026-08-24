@@ -6,7 +6,7 @@
 //!
 //! Payload MVP: integer-sized locals only (host arena is i64).
 
-use crate::amir::{AmirFunc, AmirOperand, AmirRvalue, AmirStmt, AmirTemp, TempId};
+use crate::amir::{AmirFunc, AmirOperand, AmirRvalue, AmirStmt, AmirTemp, GenArenaDomain, TempId};
 use crate::escape_analysis::{EscapeCheckOptions, EscapeKind, find_escapes};
 use crate::ops::UnaryOp;
 use crate::types::{ArType, Primitive};
@@ -75,6 +75,9 @@ pub fn apply_gen_promotion(
                         lhs,
                         rhs: AmirRvalue::GenInsert {
                             value: AmirOperand::Copy(payload_temp),
+                            payload_ty,
+                            arena: GenArenaDomain::CompilerManaged,
+                            origin: span,
                         },
                     });
                     gen_temps.insert(lhs);
@@ -91,6 +94,9 @@ pub fn apply_gen_promotion(
                         lhs,
                         rhs: AmirRvalue::GenGet {
                             gen_ref: AmirOperand::Copy(src),
+                            payload_ty: func.temps[lhs.as_usize()].ty,
+                            arena: GenArenaDomain::CompilerManaged,
+                            origin: func.temps[lhs.as_usize()].span,
                         },
                     });
                 }

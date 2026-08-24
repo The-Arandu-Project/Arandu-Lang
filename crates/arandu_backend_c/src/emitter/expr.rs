@@ -441,15 +441,15 @@ impl<'a> CEmitter<'a> {
             AmirRvalue::RelativeBorrow { local, .. } => {
                 let _ = write!(&mut self.output, "((void*)(uintptr_t){})", local.as_usize());
             }
-            AmirRvalue::GenInsert { value } => {
+            AmirRvalue::GenInsert { value, .. } => {
                 let v = self.format_operand(value, func);
                 let _ = write!(&mut self.output, "ar_gen_insert_i64((int64_t)({v}))");
             }
-            AmirRvalue::GenGet { gen_ref } => {
+            AmirRvalue::GenGet { gen_ref, .. } => {
                 let r = self.format_operand(gen_ref, func);
                 let _ = write!(&mut self.output, "ar_gen_get_i64((int64_t)({r}))");
             }
-            AmirRvalue::GenRemove { gen_ref } => {
+            AmirRvalue::GenRemove { gen_ref, .. } => {
                 let r = self.format_operand(gen_ref, func);
                 let _ = write!(&mut self.output, "ar_gen_remove_i64((int64_t)({r}))");
             }

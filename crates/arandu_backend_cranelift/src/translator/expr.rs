@@ -707,9 +707,13 @@ impl FunctionTranslator<'_, '_> {
                 payload_ty,
                 stack,
             } => self.translate_coroutine_ready(value, *payload_ty, *stack),
-            AmirRvalue::GenInsert { value } => self.translate_gen_call("ar_gen_insert_i64", value),
-            AmirRvalue::GenGet { gen_ref } => self.translate_gen_call("ar_gen_get_i64", gen_ref),
-            AmirRvalue::GenRemove { gen_ref } => {
+            AmirRvalue::GenInsert { value, .. } => {
+                self.translate_gen_call("ar_gen_insert_i64", value)
+            }
+            AmirRvalue::GenGet { gen_ref, .. } => {
+                self.translate_gen_call("ar_gen_get_i64", gen_ref)
+            }
+            AmirRvalue::GenRemove { gen_ref, .. } => {
                 self.translate_gen_call("ar_gen_remove_i64", gen_ref)
             }
             AmirRvalue::ToStr { .. } | AmirRvalue::StringInterp { .. } => {

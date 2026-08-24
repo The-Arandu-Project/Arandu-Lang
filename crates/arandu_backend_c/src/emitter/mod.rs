@@ -937,9 +937,9 @@ static inline void* ar_co_await_ptr(uint8_t* aw) {{
                         AmirRvalue::RelativeBorrow { local, .. } => {
                             used_locals.insert(local.as_usize());
                         }
-                        AmirRvalue::GenInsert { value }
-                        | AmirRvalue::GenGet { gen_ref: value }
-                        | AmirRvalue::GenRemove { gen_ref: value } => {
+                        AmirRvalue::GenInsert { value, .. }
+                        | AmirRvalue::GenGet { gen_ref: value, .. }
+                        | AmirRvalue::GenRemove { gen_ref: value, .. } => {
                             if let AmirOperand::Copy(t) | AmirOperand::Move(t) = value {
                                 used_temps.insert(t.as_usize());
                             }

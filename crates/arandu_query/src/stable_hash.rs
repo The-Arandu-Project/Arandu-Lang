@@ -321,7 +321,77 @@ impl StableHash for arandu_middle::amir::AmirFunc {
         for kind in self.stmts.kinds.raw.iter() {
             h.update(&[(*kind) as u8]);
         }
+        // Gen operations carry semantic type/domain/source metadata that is
+        // invisible in `AmirStmtKind`. Hash it explicitly so Salsa cannot
+        // early-cutoff two operations requiring different layout, drop glue,
+        // or trap locations.
+        for id in self.stmts.iter_ids() {
+            let Some(arandu_middle::amir::AmirStmt::Assign { rhs, .. }) = self.stmts.get(id) else {
+                continue;
+            };
+            let (tag, operand, payload_ty, origin) = match rhs {
+                arandu_middle::amir::AmirRvalue::GenInsert {
+                    value,
+                    payload_ty,
+                    origin,
+                    ..
+                } => (0u8, value, payload_ty, origin),
+                arandu_middle::amir::AmirRvalue::GenGet {
+                    gen_ref,
+                    payload_ty,
+                    origin,
+                    ..
+                } => (1, gen_ref, payload_ty, origin),
+                arandu_middle::amir::AmirRvalue::GenRemove {
+                    gen_ref,
+                    payload_ty,
+                    origin,
+                    ..
+                } => (2, gen_ref, payload_ty, origin),
+                _ => continue,
+            };
+            h.update(b"GenOp/v1");
+            h.update(&[tag, 0]); // domain 0 = compiler-managed
+            h.update(&u64_le(payload_ty.as_usize() as u64));
+            h.update(&u32_le(origin.file_id));
+            h.update(&u32_le(origin.start));
+            h.update(&u32_le(origin.end));
+            hash_amir_operand(&mut h, operand);
+        }
         finish(h)
+    }
+}
+
+fn hash_amir_operand(hasher: &mut Hasher, operand: &arandu_middle::amir::AmirOperand) {
+    use arandu_middle::amir::{AmirConstant, AmirOperand};
+
+    match operand {
+        AmirOperand::Copy(temp) => {
+            hasher.update(&[0]);
+            hasher.update(&u64_le(temp.as_usize() as u64));
+        }
+        AmirOperand::Move(temp) => {
+            hasher.update(&[1]);
+            hasher.update(&u64_le(temp.as_usize() as u64));
+        }
+        AmirOperand::Constant(AmirConstant::Pool(id)) => {
+            hasher.update(&[2]);
+            hasher.update(&u32_le(id.0));
+        }
+        AmirOperand::Constant(AmirConstant::Bool(value)) => {
+            hasher.update(&[3, u8::from(*value)]);
+        }
+        AmirOperand::Constant(AmirConstant::Nil) => {
+            hasher.update(&[4]);
+        }
+        AmirOperand::FunctionRef(symbol) => {
+            hasher.update(&[5]);
+            hash_symbol_id(hasher, *symbol);
+        }
+        AmirOperand::GlobalRef(symbol) => {
+            hasher.update(&[6]);
+            hash_symbol_id(hasher, *symbol);
+        }
     }
 }
 

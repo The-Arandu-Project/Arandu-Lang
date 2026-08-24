@@ -296,6 +296,24 @@ triviais.
 
 **Saída:** AMIR inválido é rejeitado antes do backend.
 
+#### Registro de execução do contrato AMIR
+
+- [x] `GenInsert`, `GenGet` e `GenRemove` carregam `payload_ty`, domínio lógico
+  da arena e span de origem; backends não precisam recuperar `T` da ABI;
+- [x] o domínio compiler-managed é distinto da `GenArena<T>` explícita;
+- [x] visitors, pretty-printer e resolução SSA preservam os novos campos e
+  operandos;
+- [x] o validator rejeita handle, payload e resultado com tipos incompatíveis
+  usando ICE reportável antes do backend;
+- [x] o stable hash inclui metadados Gen, impedindo early-cutoff entre layouts,
+  drop glues ou locais de trap diferentes;
+- [x] DCE preserva todas as operações Gen porque alocação, trap, invalidação e
+  drop são efeitos observáveis;
+- [ ] unicidade de `GenRemove` e drop glue no CFG depende da promoção completa
+  da próxima etapa;
+- [ ] os adapters C/Cranelift ainda consomem apenas o subconjunto `i64` MVP; a
+  migração ABI permanece atômica para G4.
+
 ### G3 — Promoção completa no pipeline
 
 - substituir pattern rewrite local por transformação guiada pela análise de

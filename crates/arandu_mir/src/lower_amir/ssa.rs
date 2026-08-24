@@ -496,10 +496,10 @@ impl LowerCtx<'_> {
                 Self::resolve_place(redirected_temps, place);
             }
             AmirRvalue::RelativeBorrow { .. } => {}
-            AmirRvalue::GenInsert { value } => {
+            AmirRvalue::GenInsert { value, .. } => {
                 *value = Self::resolve_operand(redirected_temps, *value);
             }
-            AmirRvalue::GenGet { gen_ref } | AmirRvalue::GenRemove { gen_ref } => {
+            AmirRvalue::GenGet { gen_ref, .. } | AmirRvalue::GenRemove { gen_ref, .. } => {
                 *gen_ref = Self::resolve_operand(redirected_temps, *gen_ref);
             }
             AmirRvalue::StringInterp { parts } => {

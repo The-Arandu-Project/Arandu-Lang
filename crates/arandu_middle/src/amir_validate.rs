@@ -2,8 +2,8 @@
 
 use crate::SymbolTable;
 use crate::amir::{
-    AmirConstant, AmirFunc, AmirOperand, AmirProgram, AmirTerminator, BlockId,
-    reachable_blocks_dense,
+    AmirConstant, AmirFunc, AmirOperand, AmirProgram, AmirRvalue, AmirStmt, AmirTerminator,
+    BlockId, reachable_blocks_dense,
 };
 use crate::diagnostics::{DiagCode, Diagnostic};
 use crate::types::{ArType, Primitive, TypeId, TypeInterner};
@@ -224,7 +224,126 @@ pub fn validate_amir_func(
         }
     }
 
+    validate_gen_operations(func, interner, &mut diags);
+
     diags
+}
+
+fn validate_gen_operations(func: &AmirFunc, interner: &TypeInterner, diags: &mut Vec<Diagnostic>) {
+    for stmt_id in func.stmts.iter_ids() {
+        let Some(stmt) = func.stmts.get(stmt_id) else {
+            continue;
+        };
+        let AmirStmt::Assign { lhs, rhs } = stmt else {
+            continue;
+        };
+        let Some(result_ty) = func.temps.get(lhs.as_usize()).map(|temp| temp.ty) else {
+            continue;
+        };
+
+        match rhs {
+            AmirRvalue::GenInsert {
+                value,
+                payload_ty,
+                origin,
+                ..
+            } => {
+                require_gen_ref_type(interner, result_ty, *origin, "GenInsert result", diags);
+                require_payload_operand(
+                    func,
+                    interner,
+                    value,
+                    *payload_ty,
+                    *origin,
+                    "GenInsert payload",
+                    diags,
+                );
+            }
+            AmirRvalue::GenGet {
+                gen_ref,
+                payload_ty,
+                origin,
+                ..
+            }
+            | AmirRvalue::GenRemove {
+                gen_ref,
+                payload_ty,
+                origin,
+                ..
+            } => {
+                require_gen_ref_operand(func, interner, gen_ref, *origin, diags);
+                if result_ty != *payload_ty {
+                    diags.push(Diagnostic::ice(
+                        DiagCode::ICEGEN002,
+                        format!(
+                            "Gen operation result type {} differs from declared payload type {} (GEN-TYPE)",
+                            type_name(interner, result_ty),
+                            type_name(interner, *payload_ty)
+                        ),
+                        *origin,
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn require_payload_operand(
+    func: &AmirFunc,
+    interner: &TypeInterner,
+    operand: &AmirOperand,
+    expected: TypeId,
+    origin: arandu_lexer::Span,
+    label: &str,
+    diags: &mut Vec<Diagnostic>,
+) {
+    let Some(actual) = operand_type(func, operand, interner) else {
+        return;
+    };
+    if actual != expected {
+        diags.push(Diagnostic::ice(
+            DiagCode::ICEGEN002,
+            format!(
+                "{label} has type {}, but operation declares payload type {} (GEN-TYPE)",
+                type_name(interner, actual),
+                type_name(interner, expected)
+            ),
+            origin,
+        ));
+    }
+}
+
+fn require_gen_ref_operand(
+    func: &AmirFunc,
+    interner: &TypeInterner,
+    operand: &AmirOperand,
+    origin: arandu_lexer::Span,
+    diags: &mut Vec<Diagnostic>,
+) {
+    let Some(actual) = operand_type(func, operand, interner) else {
+        return;
+    };
+    require_gen_ref_type(interner, actual, origin, "Gen operation handle", diags);
+}
+
+fn require_gen_ref_type(
+    interner: &TypeInterner,
+    actual: TypeId,
+    origin: arandu_lexer::Span,
+    label: &str,
+    diags: &mut Vec<Diagnostic>,
+) {
+    if !matches!(interner.resolve(actual), ArType::GenRef) {
+        diags.push(Diagnostic::ice(
+            DiagCode::ICEGEN002,
+            format!(
+                "{label} has type {}, expected GenRef (GEN-TYPE)",
+                type_name(interner, actual)
+            ),
+            origin,
+        ));
+    }
 }
 
 fn is_valid_terminator(term: &AmirTerminator) -> bool {

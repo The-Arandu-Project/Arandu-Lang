@@ -1360,7 +1360,7 @@ fn jit_gen_insert_get_i64() {
     use arandu_base::span::Span;
     use arandu_semantics::amir::{
         AmirBasicBlock, AmirConstant, AmirFunc, AmirOperand, AmirProgram, AmirRvalue, AmirStmt,
-        AmirStmtTable, AmirTemp, AmirTerminator, BlockId, TempId,
+        AmirStmtTable, AmirTemp, AmirTerminator, BlockId, GenArenaDomain, TempId,
     };
     use arandu_semantics::cfg::compute_cfg_edges;
     use arandu_semantics::layout::DenseRange;
@@ -1382,6 +1382,9 @@ fn jit_gen_insert_get_i64() {
                 // Pool needs literal - use Constant from int via... AmirConstant only has Pool for ints
                 arandu_semantics::literal_pool::LiteralId(0),
             )),
+            payload_ty: int_ty,
+            arena: GenArenaDomain::CompilerManaged,
+            origin: Span::new(0, 0, 0),
         },
     });
     // t0 = gen_get(t1)  // return temp
@@ -1389,6 +1392,9 @@ fn jit_gen_insert_get_i64() {
         lhs: TempId::from_usize(0),
         rhs: AmirRvalue::GenGet {
             gen_ref: AmirOperand::Copy(TempId::from_usize(1)),
+            payload_ty: int_ty,
+            arena: GenArenaDomain::CompilerManaged,
+            origin: Span::new(0, 0, 0),
         },
     });
     let block = AmirBasicBlock {

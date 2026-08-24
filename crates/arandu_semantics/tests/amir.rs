@@ -4,7 +4,7 @@ use arandu_semantics::DenseRange;
 use arandu_semantics::amir::{
     AmirBasicBlock, AmirConstant, AmirFunc, AmirLocal, AmirOperand, AmirPlace, AmirProjection,
     AmirRvalue, AmirStmt, AmirStmtTable, AmirTemp, AmirTerminator, BlockId, BlockParam, Dominators,
-    LocalId, TempId, reachable_blocks_dense,
+    GenArenaDomain, LocalId, TempId, reachable_blocks_dense,
 };
 use arandu_semantics::literal_pool::AmirLiteralPool;
 use arandu_semantics::passes::liveness::analyze_local_liveness;
@@ -638,6 +638,89 @@ fn validate_amir_rejects_block_parameter_temp_type_mismatch() {
             issue.code == DiagCode::ICEGEN002 && issue.message.contains("SSA-PARAM")
         }),
         "block parameters and their defining temps must agree on type: {issues:?}"
+    );
+}
+
+#[test]
+fn validate_amir_rejects_inconsistent_gen_payload_and_handle_types() {
+    use arandu_middle::types::{Primitive, TypeInterner};
+
+    let interner = TypeInterner::new();
+    let int_ty = interner.intern(ArType::Primitive(Primitive::Int));
+    let bool_ty = interner.intern(ArType::Primitive(Primitive::Bool));
+    let gen_ty = interner.intern(ArType::GenRef);
+    let mut stmts = AmirStmtTable::new();
+    stmts.push(AmirStmt::Assign {
+        lhs: temp(0),
+        rhs: AmirRvalue::GenInsert {
+            value: AmirOperand::Copy(temp(1)),
+            payload_ty: int_ty,
+            arena: GenArenaDomain::CompilerManaged,
+            origin: dummy_span(),
+        },
+    });
+    stmts.push(AmirStmt::Assign {
+        lhs: temp(2),
+        rhs: AmirRvalue::GenGet {
+            gen_ref: AmirOperand::Copy(temp(1)),
+            payload_ty: int_ty,
+            arena: GenArenaDomain::CompilerManaged,
+            origin: dummy_span(),
+        },
+    });
+    let blocks = vec![AmirBasicBlock {
+        id: BlockId::from_usize(0),
+        statements: DenseRange::new(0, 2),
+        params: Vec::new(),
+        terminator: AmirTerminator::Return,
+    }];
+    let func = AmirFunc {
+        symbol: symbol(0),
+        return_type: int_ty,
+        receiver: None,
+        params: Vec::new(),
+        locals: Vec::new(),
+        temps: vec![
+            AmirTemp {
+                id: temp(0),
+                ty: bool_ty,
+                is_copy: true,
+                is_nullable: false,
+                span: dummy_span(),
+            },
+            AmirTemp {
+                id: temp(1),
+                ty: bool_ty,
+                is_copy: true,
+                is_nullable: false,
+                span: dummy_span(),
+            },
+            AmirTemp {
+                id: temp(2),
+                ty: gen_ty,
+                is_copy: true,
+                is_nullable: false,
+                span: dummy_span(),
+            },
+        ],
+        cfg: arandu_semantics::cfg::compute_cfg_edges(&blocks),
+        blocks,
+        stmts,
+    };
+    let program = arandu_semantics::amir::AmirProgram {
+        funcs: vec![func],
+        literal_pool: AmirLiteralPool::default(),
+        extern_funcs: Default::default(),
+    };
+
+    let issues = validate_amir_program(&program, &validation_symbols(), &interner);
+    let gen_type_issues = issues
+        .iter()
+        .filter(|issue| issue.code == DiagCode::ICEGEN002 && issue.message.contains("GEN-TYPE"))
+        .count();
+    assert_eq!(
+        gen_type_issues, 4,
+        "all malformed Gen type edges: {issues:?}"
     );
 }
 
