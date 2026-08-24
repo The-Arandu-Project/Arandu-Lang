@@ -353,6 +353,122 @@ verification only. Future build extensions require a separate RFC with an
 explicit capability sandbox; they cannot arrive as an incidental manifest
 field.
 
+### Supply-chain threat model
+
+A checksum proves that downloaded bytes equal expected bytes. It does **not**
+prove that those bytes are safe: a malicious maintainer can publish malicious
+source with a perfectly valid checksum, signature and provenance statement.
+Arandu therefore separates four claims:
+
+| Claim | Mechanism | What it does not prove |
+| --- | --- | --- |
+| integrity | content digest in lockfile/cache | author intent or code safety |
+| origin authenticity | canonical source plus signed registry metadata | that a legitimate publisher is uncompromised |
+| build provenance | signed source/build attestation and transparency record | absence of malicious source/build instructions |
+| policy/audit | explicit review, advisories, source/capability policy | mathematical safety of dependency behavior |
+
+#### Closed-world resolution
+
+- An import never searches a public registry. Only dependencies already named
+  in `arandu.toml` enter resolution; missing aliases are errors with no network.
+- Every dependency has exactly one explicit source class (`path`, `git`, later
+  `registry`) and canonical origin. A private/Git lookup never falls back to a
+  public package with the same name.
+- The lockfile records the complete transitive graph, canonical origin, exact
+  revision/version and normalized source-tree digest. A mirror may replace
+  transport only when it serves identical authenticated content.
+- CI and release builds use `--frozen`; manifest/lock mismatch, absent cache or
+  any attempted network access fails closed.
+- Resolver limits bound graph nodes, depth, manifest/archive size and expanded
+  file count before untrusted input can exhaust memory or disk.
+
+This blocks dependency-confusion auto-resolution, tag retargeting after lock,
+MITM/cache substitution and silent transitive drift. It deliberately gives up
+the convenience of discovering a dependency from a source import.
+
+#### Deliberate trust on first addition
+
+The first `arandu add` is the dangerous moment. It must be an explicit command,
+never a side effect of `check/build/run`, and must display before mutation:
+
+```text
+source identity
+selected immutable revision/version
+publisher/provenance status when available
+new direct and transitive packages
+license/advisory status when available
+whether any native/binary capability is requested
+```
+
+`--yes` is forbidden when trust-relevant information changed unless CI supplies
+an explicit policy file. Manifest and lockfile update atomically together only
+after resolution succeeds. `arandu update` defaults to a plan/diff and one
+named dependency; bulk/latest updates require an explicit flag. Ordinary builds
+never opportunistically select a newer version.
+
+For exact Git dependencies, the user specifies a canonical HTTPS/SSH origin and
+full commit ID. Arandu hashes the normalized source tree and records both commit
+and digest: Git identity aids audit, while the independent digest detects a
+different archive/tree. Floating branch/tag requirements are excluded from the
+first remote slice.
+
+#### Registry requirements before a registry exists
+
+The first Gold campaign does not launch a registry. A future Arandu registry
+must satisfy a separate security gate before `registry = ...` is accepted:
+
+- scoped package identity bound to a publisher/organization, with protected
+  names and no public fallback for configured private scopes;
+- immutable `(identity, version) → content digest`; yanks hide selection but do
+  not delete bytes required by old lockfiles;
+- signed, versioned and expiring root/snapshot/targets metadata with rollback,
+  freeze and mix-and-match protection (TUF-style roles/thresholds);
+- transparency log for publication metadata and provenance attestations;
+- trusted publishing with short-lived OIDC credentials instead of long-lived
+  upload tokens when supported;
+- publisher-key/identity rotation and compromise recovery defined before use;
+- staged publication, malware response, advisories and retraction metadata;
+- registry mirrors cannot alter identity, digest or provenance policy.
+
+Provenance is exposed to users and policy, but never presented as a “safe code”
+badge. npm explicitly documents this limitation: provenance connects an
+artifact to source/build context; consumers still have to decide whether to
+trust the code.
+
+#### Build-time and runtime authority
+
+- Resolving, fetching, parsing and compiling a dependency does not execute its
+  code. Arandu has no `preinstall`, `postinstall`, `build.rs` equivalent or
+  programmable manifest in v0.1.
+- Native libraries, proc-macro-like extensions and prebuilt binaries are not
+  ordinary source dependencies. Each needs a future capability contract,
+  explicit allowlist and sandbox/provenance policy.
+- A source dependency is eventually linked into the application and can be
+  malicious when the application runs. No package manager can hash this risk
+  away. `arandu audit`, review, least-authority stdlib APIs and application
+  sandboxing remain necessary.
+- Dependency tests are not trusted build hooks and are not run automatically
+  while consuming the package.
+
+#### Verification and incident response
+
+Planned user-visible tools:
+
+```text
+arandu tree                 exact direct/transitive graph and origins
+arandu metadata             machine-readable package/target/module graph
+arandu verify               lockfile, cached trees, signatures/provenance
+arandu audit                advisories, yanks/retractions and policy violations
+arandu update <package>     explicit resolution diff
+arandu vendor               verified offline source snapshot
+```
+
+The lockfile remains buildable after a version is retracted, but `audit` and
+updates warn or fail according to policy. A compromised version is never
+silently replaced, because doing so would destroy reproducibility and could
+substitute a different attack. Security response is an explicit reviewed
+lockfile transition.
+
 ### VCS behavior is conservative
 
 `arandu new` generates `.gitignore`, but does not require Git. Git initialization
@@ -390,6 +506,14 @@ The lockfile is not ignored for applications/workspaces.
 | module resolution probes several filesystem layouts | one canonical logical mapping; no extension/index probing |
 | source imports smuggle URLs, versions or host paths | dependency source belongs only to manifest/lockfile |
 | package and module graphs invalidate each other wholesale | separate immutable inputs and tracked module edges |
+| dependency confusion/private-name takeover | imports never discover packages; source/scopes are explicit and never fall back |
+| tag or archive changes after resolution | exact commit plus independent normalized tree digest |
+| malicious legitimate release | no automatic updates; provenance is not treated as safety; audit/review/policy remain required |
+| compromised registry or mirror | signed versioned metadata, immutable digests and future transparency log |
+| rollback/freeze/mix-and-match metadata attack | future registry must implement expiring TUF-style role metadata |
+| install-time dependency code execution | no lifecycle hooks, executable manifests or build scripts in v0.1 |
+| private package name leaks to public service | source routing is explicit; private origin has no public fallback |
+| dependency graph/archive resource exhaustion | strict graph, archive, expanded-size and file-count limits |
 
 ## Campaign
 
@@ -440,12 +564,15 @@ The lockfile is not ignored for applications/workspaces.
 - [ ] Store immutable content-addressed package sources with per-entry locking.
 - [ ] Add `arandu cache inspect|verify|prune` with bounded, recoverable behavior.
 - [ ] Never trust an extracted directory without rechecking its recorded digest.
+- [ ] Bound archive bytes, expanded bytes, file count, graph depth and graph size.
 
 ### P6 — Remote Git, intentionally narrow
 
 - [ ] Accept secure Git/HTTPS sources pinned to an exact commit.
 - [ ] Record canonical origin, commit and content digest in the lockfile.
 - [ ] Disable network in `--offline`; never fall back from private to public origins.
+- [ ] Make first trust and every update an explicit reviewable graph diff.
+- [ ] Add `tree`, `verify`, `audit` and verified `vendor` foundations.
 - [ ] Defer floating branches, arbitrary URLs, registries and dependency scripts.
 
 ### P7 — Gold promotion
@@ -454,6 +581,7 @@ The lockfile is not ignored for applications/workspaces.
 - [ ] Concurrent build/cache tests and crash-interrupted atomic-write recovery.
 - [ ] Determinism campaign for manifests, graphs, lockfiles and artifact metadata.
 - [ ] Adversarial path, symlink/junction, malformed archive and cache-tamper tests.
+- [ ] Dependency-confusion, origin-substitution, rollback and graph/archive-bomb tests.
 - [ ] Installed SDK smoke: `new → check → build → run → clean`.
 - [ ] Documentation and migration guide complete; no known P0/P1 defect.
 
@@ -492,6 +620,14 @@ already exist.
   and [registry integrity model](https://github.com/swiftlang/swift-package-manager/blob/main/Documentation/PackageRegistry/PackageRegistryUsage.md)
 - [Cargo build scripts](https://doc.rust-lang.org/cargo/reference/build-scripts.html),
   used here as a warning against ambient dependency code execution
+- [Go module authentication and checksum transparency](https://go.dev/ref/mod#authenticating-modules),
+  including its private-module fallback/privacy constraints
+- [npm provenance](https://docs.npmjs.com/generating-provenance-statements/),
+  [trusted publishing](https://docs.npmjs.com/trusted-publishers/) and
+  [script policy](https://docs.npmjs.com/cli/update.html#ignore-scripts)
+- [Cargo source replacement](https://doc.rust-lang.org/cargo/reference/source-replacement.html)
+- [The Update Framework](https://theupdateframework.io/), used as the future
+  registry baseline for rollback, freeze and mix-and-match resistance
 - [TOML 1.0 specification](https://toml.io/en/v1.0.0) and
   [PEP 518 format comparison](https://peps.python.org/pep-0518/#other-file-formats)
 - [Python static project metadata contract](https://packaging.python.org/specifications/declaring-project-metadata/)
