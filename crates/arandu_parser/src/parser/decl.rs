@@ -655,6 +655,7 @@ impl<'a> Parser<'a> {
         let mut attrs = Vec::new();
         while self.eat_name("AT") {
             let start = self.pos.saturating_sub(1);
+            let name_span = self.current().span(self.file_id);
             let name = self.expect_name_like()?;
             let args = if self.eat_name("LPAREN") {
                 let args = self.parse_arguments()?;
@@ -665,6 +666,7 @@ impl<'a> Parser<'a> {
             };
             attrs.push(Attribute {
                 span: self.span_from_mark(start),
+                name_span,
                 name,
                 args,
             });

@@ -16,7 +16,7 @@ escape is GenRef + gen-arena check (implemented for **int** promotion + host are
 live range closed in CFG  →  plain &T / &mut T (pointer-width)     [F2.2]
 return &local             →  O010 hard error                       [done]
 escape but compilable     →  GenRef + gen_arena check (i64 MVP)    [done]
-@no_fallback / CLI flag   →  O004 Error (no GenRef emission)       [G2]
+@NoFallback / CLI flag    →  O004 Error (no GenRef emission)       [G2]
 ```
 
 Lessons from `str` fat pointers: **ABI + AMIR + both backends** must agree
@@ -141,7 +141,7 @@ runtime) until full `stdlib` self-host; **ABI must still match** this RFC.
 
 ```text
 EscapeKind::Return     → O010 (+ O004 note). No GenRef. Unfixable.
-EscapeKind::HeapStore  → if !no_fallback:
+EscapeKind::HeapStore  → if !no_fallback: // internal HIR field
                            O004 note + mark local for GenRef promotion
                          else:
                            O004 Error (G2)

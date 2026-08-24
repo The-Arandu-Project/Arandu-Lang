@@ -446,6 +446,11 @@ pub fn file_typeck_view(db: &dyn ArandCompilerDb, file: SourceFile) -> HashEq<Ty
         let item = item_body_typeck(db, file, item_sym);
         Arc::make_mut(&mut merged_info).merge_from(item.type_info.as_ref());
         diagnostics.extend(item.diagnostics.iter().cloned());
+        diagnostics.extend(
+            crate::dataflow::item_attribute_validation(db, file, item_sym)
+                .iter()
+                .cloned(),
+        );
     }
 
     // Residual for decls without primary keys (normally empty).

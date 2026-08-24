@@ -10,7 +10,7 @@ use arandu_semantics::TypeCheckResult;
 use lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionResponse, CompletionItem,
     CompletionItemKind, DocumentHighlight, DocumentHighlightKind, Documentation, FoldingRange,
-    FoldingRangeKind, Hover, HoverContents, Location, MarkupContent, MarkupKind,
+    FoldingRangeKind, Hover, HoverContents, InsertTextFormat, Location, MarkupContent, MarkupKind,
     ParameterInformation, ParameterLabel, Position, SelectionRange, SemanticToken,
     SemanticTokenModifier, SemanticTokenType, SemanticTokens, SemanticTokensLegend,
     SymbolInformation, SymbolKind as LspSymbolKind, TextEdit as LspTextEdit, Uri, WorkspaceEdit,
@@ -298,6 +298,9 @@ pub fn hover(
 ) -> Option<Hover> {
     let index = LineIndex::new(text);
     let offset = position_to_offset(&index, position, text);
+    if let Some(hover) = annotation_hover(text, offset, &index) {
+        return Some(hover);
+    }
     let tc = typecheck(snap, source);
     let sym = symbol_at(&tc, offset)?;
     let symbol = tc.symbols.try_get(sym)?;
@@ -328,6 +331,10 @@ pub fn completions(
     let offset = position_to_offset(&index, position, text);
     let prefix = prefix_at(text, offset);
     let prefix_l = prefix.to_ascii_lowercase();
+
+    if is_annotation_completion(text, offset, &prefix) {
+        return annotation_completions(text, offset, &prefix);
+    }
 
     // W4 / T3.6: import path completion (`import std.core.▮` / `import std.▮`).
     if let Some(items) = import_path_completions(text, offset, &prefix) {
@@ -407,6 +414,118 @@ pub fn completions(
     items.dedup_by(|a, b| a.label == b.label);
     items.truncate(200);
     items
+}
+
+fn is_annotation_completion(text: &str, offset: u32, prefix: &str) -> bool {
+    usize::try_from(offset)
+        .ok()
+        .and_then(|offset| offset.checked_sub(prefix.len()))
+        .and_then(|name_start| name_start.checked_sub(1))
+        .is_some_and(|at| text.as_bytes().get(at) == Some(&b'@'))
+}
+
+fn annotation_target_after(
+    text: &str,
+    offset: u32,
+) -> Option<arandu_semantics::attributes::AnnotationTarget> {
+    let offset = usize::try_from(offset).ok()?.min(text.len());
+    let tail = &text[offset..];
+    let keyword = tail
+        .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .filter(|part| !part.is_empty())
+        .find(|part| !matches!(*part, "public" | "async"))?;
+    match keyword {
+        "func" => Some(arandu_semantics::attributes::AnnotationTarget::Function),
+        "extern" => Some(arandu_semantics::attributes::AnnotationTarget::ExternBlock),
+        "struct" => Some(arandu_semantics::attributes::AnnotationTarget::Struct),
+        "enum" => Some(arandu_semantics::attributes::AnnotationTarget::Enum),
+        "interface" => Some(arandu_semantics::attributes::AnnotationTarget::Interface),
+        "const" => Some(arandu_semantics::attributes::AnnotationTarget::Const),
+        "type" => Some(arandu_semantics::attributes::AnnotationTarget::TypeAlias),
+        _ => None,
+    }
+}
+
+fn annotation_completions(text: &str, offset: u32, prefix: &str) -> Vec<CompletionItem> {
+    let target = annotation_target_after(text, offset);
+    let mut items = arandu_semantics::attributes::BUILTIN_ANNOTATIONS
+        .iter()
+        .filter(|spec| {
+            spec.availability == arandu_semantics::attributes::AnnotationAvailability::Implemented
+                && target.is_none_or(|target| spec.targets.contains(&target))
+                && (prefix.is_empty()
+                    || spec
+                        .canonical_name
+                        .to_ascii_lowercase()
+                        .starts_with(&prefix.to_ascii_lowercase()))
+        })
+        .map(|spec| {
+            let (insert_text, insert_text_format) = match spec.arguments {
+                arandu_semantics::attributes::AnnotationArguments::None => {
+                    (Some(spec.canonical_name.to_string()), None)
+                }
+                arandu_semantics::attributes::AnnotationArguments::OneString => (
+                    Some(format!("{}(\"${{1:library}}\")", spec.canonical_name)),
+                    Some(InsertTextFormat::SNIPPET),
+                ),
+            };
+            CompletionItem {
+                label: spec.canonical_name.to_string(),
+                kind: Some(CompletionItemKind::PROPERTY),
+                detail: Some(format!("@{} — {}", spec.canonical_name, spec.summary)),
+                documentation: Some(markdown_documentation(spec.summary.to_string())),
+                insert_text,
+                insert_text_format,
+                ..CompletionItem::default()
+            }
+        })
+        .collect::<Vec<_>>();
+    items.sort_by(|left, right| left.label.cmp(&right.label));
+    items
+}
+
+fn annotation_hover(text: &str, offset: u32, index: &LineIndex) -> Option<Hover> {
+    let offset = usize::try_from(offset).ok()?.min(text.len());
+    let bytes = text.as_bytes();
+    let mut start = offset;
+    while start > 0 && (bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_') {
+        start -= 1;
+    }
+    let mut end = offset;
+    while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+        end += 1;
+    }
+    if start == 0 || bytes.get(start - 1) != Some(&b'@') || start == end {
+        return None;
+    }
+    let (spec, legacy) = arandu_semantics::attributes::annotation_spec(&text[start..end])?;
+    let targets = spec
+        .targets
+        .iter()
+        .map(|target| target.description())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut value = format!(
+        "```arandu\n@{}\n```\n\n{}\n\n**Targets:** {}\n\n**Arguments:** {}",
+        spec.canonical_name,
+        spec.summary,
+        targets,
+        spec.arguments.synopsis()
+    );
+    if legacy {
+        value.push_str(&format!(
+            "\n\nThis spelling is deprecated; use `@{}`.",
+            spec.canonical_name
+        ));
+    }
+    let span = arandu_base::Span::new(0, u32::try_from(start).ok()?, u32::try_from(end).ok()?);
+    Some(Hover {
+        contents: HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value,
+        }),
+        range: Some(span_to_range(index, span)),
+    })
 }
 
 /// Known top-level stdlib path roots for import completion (T3 tokens).
@@ -1079,6 +1198,7 @@ pub fn semantic_tokens_legend() -> SemanticTokensLegend {
             SemanticTokenType::OPERATOR,    // 12
             SemanticTokenType::PROPERTY,    // 13
             SemanticTokenType::ENUM_MEMBER, // 14 Constant
+            SemanticTokenType::DECORATOR,   // 15
         ],
         token_modifiers: vec![
             SemanticTokenModifier::DECLARATION,  // bit 0 MOD_DECLARATION
@@ -1257,6 +1377,50 @@ fn split_highlight_lines(
 mod tests {
     use super::*;
     use arandu_query::AnalysisHost;
+
+    #[test]
+    fn annotation_completion_uses_canonical_names_and_snippets() {
+        let text = "@Li\nextern \"C\" {}\n";
+        let mut host = AnalysisHost::new();
+        let file = host.new_file("annotation.aru".into(), text.into());
+        let snap = host.snapshot();
+        let items = completions(&snap, file, text, Position::new(0, 3));
+        let link = items
+            .iter()
+            .find(|item| item.label == "Link")
+            .expect("Link completion");
+        assert_eq!(link.insert_text.as_deref(), Some("Link(\"${1:library}\")"));
+        assert_eq!(link.insert_text_format, Some(InsertTextFormat::SNIPPET));
+        assert!(items.iter().all(|item| item.label != "link"));
+    }
+
+    #[test]
+    fn annotation_completion_filters_by_target() {
+        let text = "@\nfunc critical() {}\n";
+        let mut host = AnalysisHost::new();
+        let file = host.new_file("annotation-target.aru".into(), text.into());
+        let snap = host.snapshot();
+        let items = completions(&snap, file, text, Position::new(0, 1));
+        assert!(items.iter().any(|item| item.label == "NoFallback"));
+        assert!(items.iter().all(|item| item.label != "Link"));
+        assert!(items.iter().all(|item| item.label != "Specialize"));
+    }
+
+    #[test]
+    fn annotation_hover_exposes_only_the_canonical_contract() {
+        let text = "@no_fallback\nfunc critical() {}\n";
+        let mut host = AnalysisHost::new();
+        let file = host.new_file("annotation-hover.aru".into(), text.into());
+        let snap = host.snapshot();
+        let hover = hover(&snap, file, text, Position::new(0, 4)).expect("annotation hover");
+        let HoverContents::Markup(content) = hover.contents else {
+            panic!("expected markdown hover");
+        };
+        assert!(content.value.contains("@NoFallback"));
+        assert!(content.value.contains("deprecated"));
+        assert!(!content.value.contains("AnnotationId"));
+        assert!(!content.value.contains("no_fallback`"));
+    }
 
     #[test]
     fn prefix_at_identifier() {

@@ -104,6 +104,9 @@ impl TopLevelDecl {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Attribute {
     pub span: Span,
+    /// Exact span of the annotation identifier, excluding the leading `@`
+    /// and any argument list. Used by structured migration replacements.
+    pub name_span: Span,
     pub name: SmolStr,
     pub args: Vec<Expr>,
 }

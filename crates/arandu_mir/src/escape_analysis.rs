@@ -10,7 +10,7 @@
 //!     → generational / escape path:
 //!         • always emit O004 (inspectable — never silent magic)
 //!         • return of &local → also O010 (hard error; cannot gen-fix a stack frame)
-//!         • with @no_fallback / --no-generational-fallback → O004 is Error (G2)
+//!         • with @NoFallback / --no-generational-fallback → O004 is Error (G2)
 //! ```
 //!
 //! G2 is **not** a silent global “strict mode”: it only promotes O004 notes to
@@ -54,7 +54,7 @@ pub struct EscapeEvent {
 /// Options for one function's escape check.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EscapeCheckOptions {
-    /// From `@no_fallback` on the function (G2 opt-in).
+    /// From `@NoFallback` on the function (G2 opt-in).
     pub no_fallback: bool,
 }
 
@@ -140,7 +140,7 @@ fn o004_diag(name: &str, span: Span, reason: &str, as_error: bool) -> Diagnostic
     let msg = format!("generational fallback: '{name}' escapes stack-limited borrow window");
     let d = if as_error {
         Diagnostic::error(DiagCode::O004GenerationalFallback, msg, span).with_note(
-            "this scope forbids generational fallback (`@no_fallback` or `--no-generational-fallback`)",
+            "this scope forbids generational fallback (`@NoFallback` or `--no-generational-fallback`)",
         )
     } else {
         Diagnostic::note(DiagCode::O004GenerationalFallback, msg, span).with_note(

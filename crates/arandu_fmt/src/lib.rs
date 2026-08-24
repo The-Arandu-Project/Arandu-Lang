@@ -408,6 +408,14 @@ mod tests {
         assert!(format_edits(&applied).is_empty());
     }
 
+    #[test]
+    fn formatting_preserves_annotation_spelling() {
+        let canonical = "@NoFallback\nfunc main() {}\n";
+        let legacy = "@no_fallback\nfunc main() {}\n";
+        assert!(format_source(canonical).contains("@NoFallback"));
+        assert!(format_source(legacy).contains("@no_fallback"));
+    }
+
     fn apply_edits(source: &str, edits: &[TextEdit]) -> String {
         let mut out = source.to_string();
         for edit in edits.iter().rev() {

@@ -39,7 +39,42 @@ fn hash_diag(hasher: &mut Hasher, d: &Diagnostic) {
     hasher.update(&u32_le(d.span.file_id));
     hasher.update(&u32_le(d.span.start));
     hasher.update(&u32_le(d.span.end));
-    hasher.update(d.message.as_bytes());
+    hash_str(hasher, &d.message);
+    hasher.update(&u64_le(d.labels.len() as u64));
+    for label in &d.labels {
+        hasher.update(&u32_le(label.span.file_id));
+        hasher.update(&u32_le(label.span.start));
+        hasher.update(&u32_le(label.span.end));
+        hash_str(hasher, &label.message);
+    }
+    hasher.update(&u64_le(d.notes.len() as u64));
+    for note in &d.notes {
+        hash_str(hasher, note);
+    }
+    hasher.update(&u64_le(d.hints.len() as u64));
+    for hint in &d.hints {
+        hash_str(hasher, &hint.message);
+        if let Some(replacement) = &hint.replacement {
+            hasher.update(&[1]);
+            hasher.update(&u32_le(replacement.span.file_id));
+            hasher.update(&u32_le(replacement.span.start));
+            hasher.update(&u32_le(replacement.span.end));
+            hash_str(hasher, &replacement.new_text);
+        } else {
+            hasher.update(&[0]);
+        }
+    }
+}
+
+impl StableHash for Vec<Diagnostic> {
+    fn stable_hash(&self) -> blake3::Hash {
+        let mut h = Hasher::new();
+        h.update(&u64_le(self.len() as u64));
+        for diagnostic in self {
+            hash_diag(&mut h, diagnostic);
+        }
+        finish(h)
+    }
 }
 
 fn hash_symbol_id(hasher: &mut Hasher, id: SymbolId) {

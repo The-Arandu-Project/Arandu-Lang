@@ -69,7 +69,7 @@ Fields:
 Example:
 
 ```arandu
-@link("m")
+@Link("m")
 extern "C" {
     func cos(value f64) f64
 }

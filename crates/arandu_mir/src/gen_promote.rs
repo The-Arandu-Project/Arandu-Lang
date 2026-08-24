@@ -1,6 +1,6 @@
 //! F2.3.runtime — promote escaping int-local borrows to GenInsert/GenGet.
 //!
-//! For [`EscapeKind::HeapStore`] (and not `@no_fallback`):
+//! For [`EscapeKind::HeapStore`] (and not `@NoFallback`):
 //! - `t = Borrow(p)` / `BorrowMut(p)` → `t_payload = Load(p); t = GenInsert(t_payload)`
 //! - `t2 = *t` when `t` is a gen-ref temp → `t2 = GenGet(t)`
 //!

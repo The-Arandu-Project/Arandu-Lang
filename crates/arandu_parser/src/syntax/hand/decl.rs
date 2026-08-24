@@ -129,6 +129,7 @@ pub(super) fn parse_attributes(
         }
         attrs.push(Attribute {
             span: ctx.span(start, end),
+            name_span: ctx.span(name_tok.start, name_tok.start + name_tok.len),
             name,
             args,
         });

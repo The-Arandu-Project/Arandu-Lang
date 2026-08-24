@@ -1,0 +1,510 @@
+//! Built-in annotation registry and semantic validation.
+//!
+//! The parser preserves annotation spelling. This module is the single owner
+//! of canonical names, migration aliases, valid targets and argument shapes.
+
+use arandu_diagnostics::{CodeReplacement, DiagCode, Diagnostic, Hint};
+use arandu_parser::ast_pool::AstPool;
+use arandu_parser::{Attribute, ExprKind, FuncName, TopLevelDecl};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AnnotationId {
+    Link,
+    Test,
+    Suppress,
+    Deny,
+    Forbid,
+    NoFallback,
+    NoSuspend,
+    Specialize,
+    Repr,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AnnotationTarget {
+    Const,
+    TypeAlias,
+    Function,
+    Method,
+    Parameter,
+    Struct,
+    Field,
+    Enum,
+    EnumVariant,
+    Interface,
+    InterfaceMethod,
+    ExternBlock,
+    ExternFunction,
+}
+
+impl AnnotationTarget {
+    #[must_use]
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::Const => "constant",
+            Self::TypeAlias => "type alias",
+            Self::Function => "function",
+            Self::Method => "method",
+            Self::Parameter => "parameter",
+            Self::Struct => "struct",
+            Self::Field => "field",
+            Self::Enum => "enum",
+            Self::EnumVariant => "enum variant",
+            Self::Interface => "interface",
+            Self::InterfaceMethod => "interface method",
+            Self::ExternBlock => "extern block",
+            Self::ExternFunction => "extern function",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnotationArguments {
+    None,
+    OneString,
+}
+
+impl AnnotationArguments {
+    #[must_use]
+    pub const fn synopsis(self) -> &'static str {
+        match self {
+            Self::None => "no arguments",
+            Self::OneString => "one string argument",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnotationAvailability {
+    Implemented,
+    Planned,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnnotationSpec {
+    pub id: AnnotationId,
+    pub canonical_name: &'static str,
+    pub legacy_aliases: &'static [&'static str],
+    pub targets: &'static [AnnotationTarget],
+    pub arguments: AnnotationArguments,
+    pub repeatable: bool,
+    pub availability: AnnotationAvailability,
+    pub summary: &'static str,
+}
+
+const FUNCTION: &[AnnotationTarget] = &[AnnotationTarget::Function, AnnotationTarget::Method];
+const EXTERN_BLOCK: &[AnnotationTarget] = &[AnnotationTarget::ExternBlock];
+const DECLARATIONS: &[AnnotationTarget] = &[
+    AnnotationTarget::Const,
+    AnnotationTarget::TypeAlias,
+    AnnotationTarget::Function,
+    AnnotationTarget::Method,
+    AnnotationTarget::Struct,
+    AnnotationTarget::Field,
+    AnnotationTarget::Enum,
+    AnnotationTarget::EnumVariant,
+    AnnotationTarget::Interface,
+    AnnotationTarget::InterfaceMethod,
+    AnnotationTarget::ExternBlock,
+    AnnotationTarget::ExternFunction,
+];
+const STRUCT_OR_ENUM: &[AnnotationTarget] = &[AnnotationTarget::Struct, AnnotationTarget::Enum];
+
+pub static BUILTIN_ANNOTATIONS: &[AnnotationSpec] = &[
+    AnnotationSpec {
+        id: AnnotationId::Link,
+        canonical_name: "Link",
+        legacy_aliases: &["link"],
+        targets: EXTERN_BLOCK,
+        arguments: AnnotationArguments::OneString,
+        repeatable: false,
+        availability: AnnotationAvailability::Implemented,
+        summary: "Links an extern block to a native library.",
+    },
+    AnnotationSpec {
+        id: AnnotationId::Test,
+        canonical_name: "Test",
+        legacy_aliases: &[],
+        targets: FUNCTION,
+        arguments: AnnotationArguments::None,
+        repeatable: false,
+        availability: AnnotationAvailability::Planned,
+        summary: "Marks a function as a test.",
+    },
+    AnnotationSpec {
+        id: AnnotationId::Suppress,
+        canonical_name: "Suppress",
+        legacy_aliases: &[],
+        targets: DECLARATIONS,
+        arguments: AnnotationArguments::OneString,
+        repeatable: true,
+        availability: AnnotationAvailability::Planned,
+        summary: "Suppresses a named lint in a declaration scope.",
+    },
+    AnnotationSpec {
+        id: AnnotationId::Deny,
+        canonical_name: "Deny",
+        legacy_aliases: &[],
+        targets: DECLARATIONS,
+        arguments: AnnotationArguments::OneString,
+        repeatable: true,
+        availability: AnnotationAvailability::Planned,
+        summary: "Promotes a named lint to an error.",
+    },
+    AnnotationSpec {
+        id: AnnotationId::Forbid,
+        canonical_name: "Forbid",
+        legacy_aliases: &[],
+        targets: DECLARATIONS,
+        arguments: AnnotationArguments::OneString,
+        repeatable: true,
+        availability: AnnotationAvailability::Planned,
+        summary: "Forbids nested scopes from suppressing a named lint.",
+    },
+    AnnotationSpec {
+        id: AnnotationId::NoFallback,
+        canonical_name: "NoFallback",
+        legacy_aliases: &["no_fallback", "no_generational_fallback"],
+        targets: FUNCTION,
+        arguments: AnnotationArguments::None,
+        repeatable: false,
+        availability: AnnotationAvailability::Implemented,
+        summary: "Forbids generational heap fallback in a function.",
+    },
+    AnnotationSpec {
+        id: AnnotationId::NoSuspend,
+        canonical_name: "NoSuspend",
+        legacy_aliases: &["nosuspend"],
+        targets: FUNCTION,
+        arguments: AnnotationArguments::None,
+        repeatable: false,
+        availability: AnnotationAvailability::Planned,
+        summary: "Declares that a function cannot suspend.",
+    },
+    AnnotationSpec {
+        id: AnnotationId::Specialize,
+        canonical_name: "Specialize",
+        legacy_aliases: &["specialize"],
+        targets: FUNCTION,
+        arguments: AnnotationArguments::None,
+        repeatable: false,
+        availability: AnnotationAvailability::Planned,
+        summary: "Requests specialization of a function.",
+    },
+    AnnotationSpec {
+        id: AnnotationId::Repr,
+        canonical_name: "Repr",
+        legacy_aliases: &["repr"],
+        targets: STRUCT_OR_ENUM,
+        arguments: AnnotationArguments::OneString,
+        repeatable: false,
+        availability: AnnotationAvailability::Planned,
+        summary: "Selects a representation contract for a data type.",
+    },
+];
+
+#[derive(Debug, Default)]
+pub struct ValidatedAnnotations {
+    ids: Vec<AnnotationId>,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+impl ValidatedAnnotations {
+    #[must_use]
+    pub fn contains(&self, id: AnnotationId) -> bool {
+        self.ids.contains(&id)
+    }
+}
+
+enum NameResolution {
+    Canonical(&'static AnnotationSpec),
+    Legacy(&'static AnnotationSpec),
+    Unknown,
+}
+
+/// Look up a canonical name or an explicit migration alias.
+#[must_use]
+pub fn annotation_spec(name: &str) -> Option<(&'static AnnotationSpec, bool)> {
+    match resolve_name(name) {
+        NameResolution::Canonical(spec) => Some((spec, false)),
+        NameResolution::Legacy(spec) => Some((spec, true)),
+        NameResolution::Unknown => None,
+    }
+}
+
+fn resolve_name(name: &str) -> NameResolution {
+    for spec in BUILTIN_ANNOTATIONS {
+        if name == spec.canonical_name {
+            return NameResolution::Canonical(spec);
+        }
+        if spec.legacy_aliases.contains(&name) {
+            return NameResolution::Legacy(spec);
+        }
+    }
+    NameResolution::Unknown
+}
+
+fn arguments_match(spec: &AnnotationSpec, attr: &Attribute, pool: &AstPool) -> bool {
+    match spec.arguments {
+        AnnotationArguments::None => attr.args.is_empty(),
+        AnnotationArguments::OneString => {
+            attr.args.len() == 1
+                && attr.args.first().is_some_and(|arg| {
+                    matches!(pool.expr(*arg), ExprKind::InterpolatedString { .. })
+                })
+        }
+    }
+}
+
+#[must_use]
+pub fn validate_attributes(
+    attrs: &[Attribute],
+    target: AnnotationTarget,
+    pool: &AstPool,
+) -> ValidatedAnnotations {
+    let mut out = ValidatedAnnotations::default();
+    for attr in attrs {
+        let (spec, legacy) = match resolve_name(&attr.name) {
+            NameResolution::Canonical(spec) => (spec, false),
+            NameResolution::Legacy(spec) => (spec, true),
+            NameResolution::Unknown => {
+                out.diagnostics.push(Diagnostic::error(
+                    DiagCode::N012UnknownAnnotation,
+                    format!("unknown annotation '@{}'", attr.name),
+                    attr.name_span,
+                ));
+                continue;
+            }
+        };
+
+        if spec.availability == AnnotationAvailability::Planned {
+            out.diagnostics.push(
+                Diagnostic::error(
+                    DiagCode::N012UnknownAnnotation,
+                    format!(
+                        "annotation '@{}' is planned but not available",
+                        spec.canonical_name
+                    ),
+                    attr.name_span,
+                )
+                .with_note(
+                    "the annotation name is reserved, but its semantics are not implemented",
+                ),
+            );
+            continue;
+        }
+        if !spec.targets.contains(&target) {
+            out.diagnostics.push(Diagnostic::error(
+                DiagCode::N013InvalidAnnotationTarget,
+                format!(
+                    "annotation '@{}' cannot be applied to a {}",
+                    spec.canonical_name,
+                    target.description()
+                ),
+                attr.name_span,
+            ));
+            continue;
+        }
+        if !arguments_match(spec, attr, pool) {
+            out.diagnostics.push(Diagnostic::error(
+                DiagCode::N014InvalidAnnotationArguments,
+                format!(
+                    "annotation '@{}' expects {}",
+                    spec.canonical_name,
+                    spec.arguments.synopsis()
+                ),
+                attr.span,
+            ));
+            continue;
+        }
+        if !spec.repeatable && out.ids.contains(&spec.id) {
+            out.diagnostics.push(Diagnostic::error(
+                DiagCode::N015DuplicateAnnotation,
+                format!("annotation '@{}' cannot be repeated", spec.canonical_name),
+                attr.name_span,
+            ));
+            continue;
+        }
+
+        if legacy {
+            out.diagnostics.push(
+                Diagnostic::warning(
+                    DiagCode::W008LegacyAnnotationName,
+                    format!(
+                        "legacy annotation name '@{}'; use '@{}'",
+                        attr.name, spec.canonical_name
+                    ),
+                    attr.name_span,
+                )
+                .with_hint_replacement(Hint {
+                    message: format!("replace with '{}'", spec.canonical_name),
+                    replacement: Some(CodeReplacement {
+                        span: attr.name_span,
+                        new_text: spec.canonical_name.to_string(),
+                    }),
+                }),
+            );
+        }
+        out.ids.push(spec.id);
+    }
+    out
+}
+
+/// Validate one top-level declaration and its directly nested annotated parts.
+#[must_use]
+pub fn validate_decl_attributes(decl: &TopLevelDecl, pool: &AstPool) -> ValidatedAnnotations {
+    let mut combined = ValidatedAnnotations::default();
+    let mut append = |validated: ValidatedAnnotations| {
+        combined.ids.extend(validated.ids);
+        combined.diagnostics.extend(validated.diagnostics);
+    };
+    match decl {
+        TopLevelDecl::Const(d) => {
+            append(validate_attributes(&d.attrs, AnnotationTarget::Const, pool))
+        }
+        TopLevelDecl::TypeAlias(d) => {
+            append(validate_attributes(
+                &d.attrs,
+                AnnotationTarget::TypeAlias,
+                pool,
+            ));
+        }
+        TopLevelDecl::Func(d) => {
+            let target = if matches!(d.name, FuncName::Method { .. }) {
+                AnnotationTarget::Method
+            } else {
+                AnnotationTarget::Function
+            };
+            append(validate_attributes(&d.attrs, target, pool));
+            for param in &d.params {
+                append(validate_attributes(
+                    &param.attrs,
+                    AnnotationTarget::Parameter,
+                    pool,
+                ));
+            }
+        }
+        TopLevelDecl::Struct(d) => {
+            append(validate_attributes(
+                &d.attrs,
+                AnnotationTarget::Struct,
+                pool,
+            ));
+            for field in &d.fields {
+                append(validate_attributes(
+                    &field.attrs,
+                    AnnotationTarget::Field,
+                    pool,
+                ));
+            }
+        }
+        TopLevelDecl::Enum(d) => {
+            append(validate_attributes(&d.attrs, AnnotationTarget::Enum, pool));
+            for variant in &d.variants {
+                append(validate_attributes(
+                    &variant.attrs,
+                    AnnotationTarget::EnumVariant,
+                    pool,
+                ));
+            }
+        }
+        TopLevelDecl::Interface(d) => {
+            append(validate_attributes(
+                &d.attrs,
+                AnnotationTarget::Interface,
+                pool,
+            ));
+            for member in &d.members {
+                append(validate_attributes(
+                    &member.attrs,
+                    AnnotationTarget::InterfaceMethod,
+                    pool,
+                ));
+                for param in &member.params {
+                    append(validate_attributes(
+                        &param.attrs,
+                        AnnotationTarget::Parameter,
+                        pool,
+                    ));
+                }
+            }
+        }
+        TopLevelDecl::Extern(d) => {
+            append(validate_attributes(
+                &d.attrs,
+                AnnotationTarget::ExternBlock,
+                pool,
+            ));
+            for member in &d.members {
+                append(validate_attributes(
+                    &member.attrs,
+                    AnnotationTarget::ExternFunction,
+                    pool,
+                ));
+                for param in &member.params {
+                    append(validate_attributes(
+                        &param.attrs,
+                        AnnotationTarget::Parameter,
+                        pool,
+                    ));
+                }
+            }
+        }
+        TopLevelDecl::Error(_) => {}
+    }
+    combined
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arandu_parser::parse;
+
+    fn validate(source: &str) -> ValidatedAnnotations {
+        let program = parse(source).expect("fixture parses");
+        let decl = program.pool.decl(program.decls[0]);
+        validate_decl_attributes(decl, &program.pool)
+    }
+
+    #[test]
+    fn canonical_no_fallback_is_recognized() {
+        let result = validate("@NoFallback\nfunc main() {}\n");
+        assert!(result.contains(AnnotationId::NoFallback));
+        assert!(result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn legacy_name_keeps_semantics_and_has_exact_replacement() {
+        let result = validate("@no_fallback\nfunc main() {}\n");
+        assert!(result.contains(AnnotationId::NoFallback));
+        assert_eq!(result.diagnostics.len(), 1);
+        let diagnostic = &result.diagnostics[0];
+        assert_eq!(diagnostic.code, DiagCode::W008LegacyAnnotationName);
+        let replacement = diagnostic.hints[0]
+            .replacement
+            .as_ref()
+            .expect("replacement");
+        assert_eq!(replacement.span.start, 1);
+        assert_eq!(replacement.span.end, 12);
+        assert_eq!(replacement.new_text, "NoFallback");
+    }
+
+    #[test]
+    fn invalid_target_does_not_enable_annotation() {
+        let result = validate("@NoFallback\nstruct Main {}\n");
+        assert!(!result.contains(AnnotationId::NoFallback));
+        assert_eq!(
+            result.diagnostics[0].code,
+            DiagCode::N013InvalidAnnotationTarget
+        );
+    }
+
+    #[test]
+    fn duplicate_non_repeatable_annotation_is_rejected() {
+        let result = validate("@NoFallback\n@NoFallback\nfunc main() {}\n");
+        assert_eq!(
+            result.diagnostics[0].code,
+            DiagCode::N015DuplicateAnnotation
+        );
+    }
+}
