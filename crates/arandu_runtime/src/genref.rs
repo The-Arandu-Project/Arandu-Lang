@@ -86,6 +86,8 @@ pub enum GenError {
     Stale,
     CapacityOverflow,
     AllocationFailed,
+    InvalidLayout,
+    InvalidPayloadPointer,
 }
 
 #[derive(Debug)]

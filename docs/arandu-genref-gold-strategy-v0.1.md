@@ -269,6 +269,23 @@ triviais.
 - [ ] adapters `ar_gen_*_i64`, backend C e stdlib ainda usam o contrato MVP e
   só migrarão depois de G2/G3 congelarem payload e AMIR. Não contam como Gold.
 
+#### Registro do payload Gold, pré-requisito do G2 AMIR
+
+- [x] `PayloadLayout` do runtime valida tamanho, alinhamento e limite `isize`;
+- [x] `PayloadDescriptor` associa layout e drop glue sem conhecer tipos do
+  compilador;
+- [x] `OwnedPayload` suporta ZST, alinhamento alto, enum, string e transferência
+  por movimento a partir da ABI;
+- [x] storage type-erased executa drop exatamente uma vez em `remove` e destroy;
+- [x] ponte em `arandu_middle::GenPayloadLayout` deriva tamanho/alinhamento do
+  `DataLayout` do alvo, incluindo diferença x86_64/i686 para `str`;
+- [x] todo bloco `unsafe` possui invariante local e regressões para movimento,
+  alinhamento e double-drop;
+- [ ] Miri não está disponível no toolchain Windows 1.97.1 instalado; executar
+  no gate Linux/nightly quando o componente estiver disponível;
+- [ ] geração e passagem do drop glue pelos backends dependem do contrato AMIR
+  tipado da próxima etapa.
+
 ### G2 — Contrato AMIR e validação
 
 - explicitar `T` e o domínio nas operações Gen;
