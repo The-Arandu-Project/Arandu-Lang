@@ -116,6 +116,41 @@ func main() {
 }
 
 #[test]
+fn destructor_drop_is_elaborated_once_at_normal_return() {
+    let src = r#"
+struct Resource { handle: ptr[u8] }
+
+@Destructor
+func Resource.close(own self): void {}
+
+func main() {
+    let resource = Resource { handle: nil }
+}
+"#;
+    let program = arandu_parser::parse(src).expect("parse");
+    let resolution = resolve_for_test(0, &program);
+    let mut tc = type_check(resolution, &program);
+    assert!(tc.diagnostics.is_empty(), "{:?}", tc.diagnostics);
+    let hir = lower_to_hir(&mut tc, &program).expect("HIR");
+    let amir = lower_to_amir(&tc, &hir).expect("AMIR");
+
+    let destructor = tc.type_info.destructors.values().copied().next().unwrap();
+    for func in &amir.funcs {
+        let destroys = func
+            .blocks
+            .iter()
+            .flat_map(|block| func.block_stmts(block.id))
+            .filter(|stmt| matches!(stmt, AmirStmt::Destroy(_)))
+            .count();
+        if func.symbol == destructor {
+            assert_eq!(destroys, 0, "destructor must not recursively drop own self");
+        } else if tc.symbols.get(func.symbol).name == "main" {
+            assert_eq!(destroys, 1, "live resource must be destroyed exactly once");
+        }
+    }
+}
+
+#[test]
 fn non_copy_local_use_after_move_fails_during_amir_analysis() {
     let src = r#"
 struct Boxed {

@@ -17,6 +17,7 @@
 #![allow(clippy::collapsible_if)]
 
 pub mod gen_runtime;
+pub mod gen_runtime_gold;
 pub mod genref;
 pub mod genref_payload;
 pub mod os_runtime;

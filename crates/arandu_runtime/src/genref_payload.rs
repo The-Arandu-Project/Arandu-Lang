@@ -11,6 +11,10 @@ use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 use std::ptr::{self, NonNull};
 
+/// C-compatible destructor for one initialized payload in caller-provided
+/// storage. It must not deallocate the storage or unwind across the ABI.
+pub type PayloadDropGlue = unsafe extern "C" fn(*mut u8);
+
 /// Checked size/alignment contract for one promoted payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PayloadLayout {
@@ -46,7 +50,7 @@ impl PayloadLayout {
 #[derive(Clone, Copy)]
 pub struct PayloadDescriptor {
     layout: PayloadLayout,
-    drop_glue: unsafe fn(*mut u8),
+    drop_glue: PayloadDropGlue,
     type_id: Option<TypeId>,
 }
 
@@ -79,7 +83,7 @@ impl PayloadDescriptor {
     /// `drop_glue` must accept a live value with exactly `layout`, must drop it
     /// once without deallocating its storage, and must not unwind across an FFI
     /// boundary when called by an ABI adapter.
-    pub unsafe fn from_raw_parts(layout: PayloadLayout, drop_glue: unsafe fn(*mut u8)) -> Self {
+    pub unsafe fn from_raw_parts(layout: PayloadLayout, drop_glue: PayloadDropGlue) -> Self {
         Self {
             layout,
             drop_glue,
@@ -192,6 +196,42 @@ impl OwnedPayload {
         deallocate(this.ptr, this.descriptor.layout);
         Ok(value)
     }
+
+    /// Move the erased payload into caller-owned storage without running drop
+    /// glue. The destination becomes the unique owner on success.
+    ///
+    /// # Safety
+    ///
+    /// `destination` must be non-null, aligned for this payload, writable for
+    /// `layout.size()` bytes, and contain no initialized value that requires
+    /// dropping. The caller must later run the descriptor's drop glue exactly
+    /// once for the moved value.
+    pub unsafe fn try_move_into(
+        self,
+        destination: *mut u8,
+        expected_layout: PayloadLayout,
+    ) -> Result<(), Self> {
+        if self.descriptor.layout != expected_layout
+            || destination.is_null()
+            || (destination.addr() & (expected_layout.align - 1)) != 0
+        {
+            return Err(self);
+        }
+        let this = ManuallyDrop::new(self);
+        if expected_layout.size > 0 {
+            // SAFETY: guaranteed by the caller and checked above; source and
+            // destination are distinct allocations of the exact same layout.
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    this.ptr.as_ptr().cast_const(),
+                    destination,
+                    expected_layout.size,
+                )
+            };
+        }
+        deallocate(this.ptr, expected_layout);
+        Ok(())
+    }
 }
 
 impl Drop for OwnedPayload {
@@ -227,7 +267,7 @@ fn deallocate(ptr: NonNull<u8>, layout: PayloadLayout) {
     unsafe { dealloc(ptr.as_ptr(), allocation_layout) };
 }
 
-unsafe fn drop_value<T>(value: *mut u8) {
+unsafe extern "C" fn drop_value<T>(value: *mut u8) {
     // SAFETY: PayloadDescriptor::for_type<T> pairs this glue with T's exact
     // layout, and OwnedPayload calls it once while the value is initialized.
     unsafe { ptr::drop_in_place(value.cast::<T>()) };
@@ -339,6 +379,35 @@ mod tests {
         .unwrap();
         assert_eq!(drops.get(), 0);
         drop(payload);
+        assert_eq!(drops.get(), 1);
+    }
+
+    #[test]
+    fn erased_move_out_transfers_drop_obligation_to_destination() {
+        #[derive(Debug)]
+        struct Probe(Rc<Cell<usize>>, u32);
+        impl Drop for Probe {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+
+        let drops = Rc::new(Cell::new(0));
+        let payload = OwnedPayload::try_new(Probe(Rc::clone(&drops), 17)).unwrap();
+        let layout = payload.descriptor().layout();
+        let mut destination = std::mem::MaybeUninit::<Probe>::uninit();
+        // SAFETY: destination is aligned, writable, and uninitialized for the
+        // payload's exact Probe layout. It becomes the unique owner.
+        unsafe {
+            payload
+                .try_move_into(destination.as_mut_ptr().cast::<u8>(), layout)
+                .unwrap();
+        }
+        assert_eq!(drops.get(), 0);
+        // SAFETY: try_move_into initialized destination with one Probe.
+        let moved = unsafe { destination.assume_init() };
+        assert_eq!(moved.1, 17);
+        drop(moved);
         assert_eq!(drops.get(), 1);
     }
 

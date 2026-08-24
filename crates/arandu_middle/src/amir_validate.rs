@@ -230,6 +230,7 @@ pub fn validate_amir_func(
 }
 
 fn validate_gen_operations(func: &AmirFunc, interner: &TypeInterner, diags: &mut Vec<Diagnostic>) {
+    let mut borrowed_results = Vec::new();
     for stmt_id in func.stmts.iter_ids() {
         let Some(stmt) = func.stmts.get(stmt_id) else {
             continue;
@@ -264,8 +265,24 @@ fn validate_gen_operations(func: &AmirFunc, interner: &TypeInterner, diags: &mut
                 payload_ty,
                 origin,
                 ..
+            } => {
+                if !func.temps[lhs.as_usize()].is_copy {
+                    borrowed_results.push((*lhs, *origin));
+                }
+                require_gen_ref_operand(func, interner, gen_ref, *origin, diags);
+                if result_ty != *payload_ty {
+                    diags.push(Diagnostic::ice(
+                        DiagCode::ICEGEN002,
+                        format!(
+                            "Gen operation result type {} differs from declared payload type {} (GEN-TYPE)",
+                            type_name(interner, result_ty),
+                            type_name(interner, *payload_ty)
+                        ),
+                        *origin,
+                    ));
+                }
             }
-            | AmirRvalue::GenRemove {
+            AmirRvalue::GenRemove {
                 gen_ref,
                 payload_ty,
                 origin,
@@ -284,9 +301,152 @@ fn validate_gen_operations(func: &AmirFunc, interner: &TypeInterner, diags: &mut
                     ));
                 }
             }
+            AmirRvalue::GenSet {
+                gen_ref,
+                value,
+                payload_ty,
+                origin,
+                ..
+            } => {
+                require_gen_ref_type(interner, result_ty, *origin, "GenSet result", diags);
+                require_gen_ref_operand(func, interner, gen_ref, *origin, diags);
+                require_payload_operand(
+                    func,
+                    interner,
+                    value,
+                    *payload_ty,
+                    *origin,
+                    "GenSet payload",
+                    diags,
+                );
+            }
+            AmirRvalue::GenUpsert {
+                gen_ref,
+                value,
+                payload_ty,
+                origin,
+                ..
+            } => {
+                require_gen_ref_type(interner, result_ty, *origin, "GenUpsert result", diags);
+                if !matches!(
+                    gen_ref,
+                    AmirOperand::Constant(crate::amir::AmirConstant::Nil)
+                ) {
+                    require_gen_ref_operand(func, interner, gen_ref, *origin, diags);
+                }
+                require_payload_operand(
+                    func,
+                    interner,
+                    value,
+                    *payload_ty,
+                    *origin,
+                    "GenUpsert payload",
+                    diags,
+                );
+            }
             _ => {}
         }
     }
+
+    for (borrowed, origin) in borrowed_results {
+        validate_borrowed_gen_result(func, borrowed, origin, diags);
+    }
+}
+
+fn validate_borrowed_gen_result(
+    func: &AmirFunc,
+    borrowed: crate::amir::TempId,
+    origin: arandu_lexer::Span,
+    diags: &mut Vec<Diagnostic>,
+) {
+    let references = |operand: &AmirOperand| matches!(operand, AmirOperand::Copy(temp) | AmirOperand::Move(temp) if *temp == borrowed);
+    for stmt in func.stmts.payloads.iter() {
+        let AmirStmt::Assign { lhs, rhs } = stmt else {
+            let used = match stmt {
+                AmirStmt::Store { rhs, .. } | AmirStmt::Free(rhs) => references(rhs),
+                AmirStmt::Call { callee, args, .. } => {
+                    references(callee) || args.iter().any(references)
+                }
+                AmirStmt::Destroy(_)
+                | AmirStmt::StorageLive(_)
+                | AmirStmt::StorageDead(_)
+                | AmirStmt::Nop => false,
+                AmirStmt::Assign { .. } => false,
+            };
+            if used {
+                borrowed_gen_escape(origin, borrowed, diags);
+            }
+            continue;
+        };
+        if *lhs == borrowed && matches!(rhs, AmirRvalue::GenGet { .. }) {
+            continue;
+        }
+        let mut used = false;
+        crate::amir::for_each_rvalue_operand(rhs, |operand| used |= references(operand));
+        if !used {
+            continue;
+        }
+        let safe_projection = match rhs {
+            AmirRvalue::FieldAccess { base, .. }
+            | AmirRvalue::Len(base)
+            | AmirRvalue::Discriminant { value: base }
+            | AmirRvalue::EnumPayload { value: base, .. } => references(base),
+            AmirRvalue::IndexAccess { base, index } => references(base) && !references(index),
+            _ => false,
+        };
+        if !safe_projection {
+            borrowed_gen_escape(origin, borrowed, diags);
+        }
+    }
+
+    for block in &func.blocks {
+        let used = match &block.terminator {
+            AmirTerminator::Return | AmirTerminator::Unreachable => false,
+            AmirTerminator::Goto { args, .. } => args.iter().any(references),
+            AmirTerminator::Branch {
+                condition,
+                true_args,
+                false_args,
+                ..
+            } => {
+                references(condition)
+                    || true_args.iter().any(references)
+                    || false_args.iter().any(references)
+            }
+            AmirTerminator::SwitchInt {
+                discriminant,
+                targets,
+                otherwise,
+            } => {
+                references(discriminant)
+                    || targets
+                        .iter()
+                        .any(|(_, _, args)| args.iter().any(references))
+                    || otherwise.1.iter().any(references)
+            }
+            AmirTerminator::Suspend { future, args, .. } => {
+                references(future) || args.iter().any(references)
+            }
+        };
+        if used {
+            borrowed_gen_escape(origin, borrowed, diags);
+        }
+    }
+}
+
+fn borrowed_gen_escape(
+    origin: arandu_lexer::Span,
+    borrowed: crate::amir::TempId,
+    diags: &mut Vec<Diagnostic>,
+) {
+    diags.push(Diagnostic::ice(
+        DiagCode::ICEGEN002,
+        format!(
+            "borrowed non-Copy GenGet result _{} escapes a projection-only use (GEN-BORROW)",
+            borrowed.as_usize()
+        ),
+        origin,
+    ));
 }
 
 fn require_payload_operand(

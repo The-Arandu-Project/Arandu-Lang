@@ -111,6 +111,30 @@ pub enum AmirRvalue {
         arena: GenArenaDomain,
         origin: Span,
     },
+    /// Replace the payload behind a live gen ref and return the same handle.
+    ///
+    /// Returning the handle keeps the operation in SSA form while preserving
+    /// the arena identity shared by every alias. It is effectful even when the
+    /// result is unused because the previous payload may be dropped.
+    GenSet {
+        gen_ref: AmirOperand,
+        value: AmirOperand,
+        payload_ty: TypeId,
+        arena: GenArenaDomain,
+        origin: Span,
+    },
+    /// Insert when `gen_ref` is the reserved zero handle, otherwise replace
+    /// the live payload, returning the canonical handle in either case.
+    ///
+    /// This models path-sensitive initialization without speculating that one
+    /// textual store dominates every CFG path.
+    GenUpsert {
+        gen_ref: AmirOperand,
+        value: AmirOperand,
+        payload_ty: TypeId,
+        arena: GenArenaDomain,
+        origin: Span,
+    },
     /// Move a payload out and recycle/retire its slot, invalidating the ref.
     GenRemove {
         gen_ref: AmirOperand,

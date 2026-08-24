@@ -502,6 +502,11 @@ impl LowerCtx<'_> {
             AmirRvalue::GenGet { gen_ref, .. } | AmirRvalue::GenRemove { gen_ref, .. } => {
                 *gen_ref = Self::resolve_operand(redirected_temps, *gen_ref);
             }
+            AmirRvalue::GenSet { gen_ref, value, .. }
+            | AmirRvalue::GenUpsert { gen_ref, value, .. } => {
+                *gen_ref = Self::resolve_operand(redirected_temps, *gen_ref);
+                *value = Self::resolve_operand(redirected_temps, *value);
+            }
             AmirRvalue::StringInterp { parts } => {
                 for op in parts {
                     *op = Self::resolve_operand(redirected_temps, *op);

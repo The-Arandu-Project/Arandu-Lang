@@ -2,6 +2,7 @@ pub mod borrow_check;
 pub mod borrow_facts;
 pub(crate) mod dce;
 pub mod definite_init;
+pub mod drop_elaborate;
 pub mod escape_analysis;
 pub mod gen_promote;
 pub mod liveness;

@@ -18,6 +18,7 @@ minúsculas:
 @NoSuspend
 @Specialize
 @Repr(C)
+@Destructor
 ```
 
 Uma anotação é metadado declarativo reconhecido pelo compilador, não uma
@@ -58,6 +59,7 @@ da categoria correspondente.
 | `@NoSuspend` | planejada | `@nosuspend` |
 | `@Specialize` | planejada | `@specialize` |
 | `@Repr` | planejada | `@repr` |
+| `@Destructor` | implementada para métodos consumidores | — |
 
 Esta tabela registra nomes, não promove itens planejados a funcionalidades
 implementadas. A disponibilidade de cada anotação continua pertencendo ao

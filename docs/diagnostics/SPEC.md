@@ -268,6 +268,10 @@ Abaixo estão listados todos os diagnósticos mapeados para o compilador Arandu.
 | **T029** | `recursive type '{name}' has infinite size` | Error | `0.1.0` | Definição de struct recursiva sem indicação de ponteiro (indireção). |
 | **T030** | `field '{name}' is already declared in struct '{struct_name}'` | Error | `0.1.0` | Declaração de múltiplos campos com o mesmo nome na definição de um struct. |
 | **T031** | *[Reservado / Obsoleto]* | - | `0.1.0` | *Código reservado para mutação futura de valores sob referências somente-leitura.* |
+| **T032** | `await requires a coroutine value` | Error | `0.1.0` | O operando de `await` não é uma coroutine válida. |
+| **T033** | `indirect call is not supported` | Error | `0.1.0` | A chamada não possui um alvo direto suportado pelo contrato atual. |
+| **T034** | `cannot format value as str` | Error | `0.1.0` | O tipo não participa do contrato atual de apresentação textual. |
+| **T035** | `invalid @Destructor contract` | Error | `0.1.0` | O método anotado não é um destrutor consumidor válido ou o tipo já possui outro destrutor. |
 
 ---
 

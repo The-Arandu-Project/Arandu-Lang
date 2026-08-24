@@ -122,9 +122,23 @@ pub fn check_escapes_by_block(
             }
             EscapeKind::HeapStore => {
                 // Controlled fallback path: O004 is Note by default; G2 promotes to Error.
+                // Projected refs cannot be represented by the current scalar
+                // handle without either snapshot semantics or losing the base
+                // owner/path relation. Reject instead of compiling stale data.
+                let projected = has_projected_borrow(func, ev.place_local);
                 diags.push((
                     ev.block,
-                    o004_diag(&name, ev.span, ev.reason, /*as_error*/ no_fb),
+                    o004_diag(
+                        &name,
+                        ev.span,
+                        ev.reason,
+                        /*as_error*/ no_fb || projected,
+                    )
+                    .with_note(if projected {
+                        "projected escaping borrows require a first-class owner/path handle; snapshot promotion is intentionally forbidden"
+                    } else {
+                        "compiler-managed owner promotion is available for this root place"
+                    }),
                 ));
                 if no_fb {
                     // Extra hint only when hard-failing.
@@ -134,6 +148,21 @@ pub fn check_escapes_by_block(
     }
 
     diags
+}
+
+fn has_projected_borrow(func: &AmirFunc, local: LocalId) -> bool {
+    func.blocks
+        .iter()
+        .flat_map(|block| func.block_stmts(block.id))
+        .any(|stmt| {
+            matches!(
+                stmt,
+                AmirStmt::Assign {
+                    rhs: AmirRvalue::Borrow(place) | AmirRvalue::BorrowMut(place),
+                    ..
+                } if place.local == local && !place.projections.is_empty()
+            )
+        })
 }
 
 fn o004_diag(name: &str, span: Span, reason: &str, as_error: bool) -> Diagnostic {

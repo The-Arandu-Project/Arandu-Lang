@@ -219,6 +219,7 @@ public func Vec.clear<T>(mut self): void {
 }
 
 /// Method form of [`destroy`].
-public func Vec.destroy<T>(mut self): void {
+@Destructor
+public func Vec.destroy<T>(own self): void {
     destroy(self)
 }

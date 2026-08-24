@@ -93,6 +93,11 @@ pub fn for_each_rvalue_operand(rvalue: &AmirRvalue, mut f: impl FnMut(&AmirOpera
         | AmirRvalue::GenInsert { value: op, .. }
         | AmirRvalue::GenGet { gen_ref: op, .. }
         | AmirRvalue::GenRemove { gen_ref: op, .. } => f(op),
+        AmirRvalue::GenSet { gen_ref, value, .. }
+        | AmirRvalue::GenUpsert { gen_ref, value, .. } => {
+            f(gen_ref);
+            f(value);
+        }
 
         AmirRvalue::Binary { left, right, .. }
         | AmirRvalue::IndexAccess {

@@ -358,6 +358,32 @@ impl AmirRvalue {
                     gen_ref.to_pretty_string(symbols, pool)
                 ));
             }
+            AmirRvalue::GenSet {
+                gen_ref,
+                value,
+                payload_ty,
+                ..
+            } => {
+                out.push_str(&format!(
+                    "gen_set.compiler_managed(ty#{}, {}, {})",
+                    payload_ty.as_usize(),
+                    gen_ref.to_pretty_string(symbols, pool),
+                    value.to_pretty_string(symbols, pool)
+                ));
+            }
+            AmirRvalue::GenUpsert {
+                gen_ref,
+                value,
+                payload_ty,
+                ..
+            } => {
+                out.push_str(&format!(
+                    "gen_upsert.compiler_managed(ty#{}, {}, {})",
+                    payload_ty.as_usize(),
+                    gen_ref.to_pretty_string(symbols, pool),
+                    value.to_pretty_string(symbols, pool)
+                ));
+            }
             AmirRvalue::GenRemove {
                 gen_ref,
                 payload_ty,

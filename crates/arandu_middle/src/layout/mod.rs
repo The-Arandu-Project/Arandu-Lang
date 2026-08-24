@@ -150,6 +150,19 @@ pub trait StructLayoutProvider {
     fn get_struct_field_indices(&self, struct_id: SymbolId) -> Option<&FxHashMap<String, usize>>;
     fn get_generic_params(&self, struct_id: SymbolId) -> Option<&[SymbolId]>;
     fn get_enum_variants(&self, enum_id: SymbolId) -> Option<Vec<EnumPayloadShape>>;
+
+    /// Structural Copy proof supplied by typeck when available. Layout-only
+    /// test providers may return `None`; backends must then stay conservative.
+    fn is_copy_type(&self, _ty: TypeId) -> Option<bool> {
+        None
+    }
+
+    /// Explicit cleanup method associated with a nominal type by the
+    /// language-level `@Destructor` contract. Backends must never infer this
+    /// association from a function name or from the presence of pointers.
+    fn destructor_for_type(&self, _ty: TypeId) -> Option<SymbolId> {
+        None
+    }
 }
 
 /// The physical memory layout engine.

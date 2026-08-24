@@ -329,25 +329,39 @@ impl StableHash for arandu_middle::amir::AmirFunc {
             let Some(arandu_middle::amir::AmirStmt::Assign { rhs, .. }) = self.stmts.get(id) else {
                 continue;
             };
-            let (tag, operand, payload_ty, origin) = match rhs {
+            let (tag, operand, second_operand, payload_ty, origin) = match rhs {
                 arandu_middle::amir::AmirRvalue::GenInsert {
                     value,
                     payload_ty,
                     origin,
                     ..
-                } => (0u8, value, payload_ty, origin),
+                } => (0u8, value, None, payload_ty, origin),
                 arandu_middle::amir::AmirRvalue::GenGet {
                     gen_ref,
                     payload_ty,
                     origin,
                     ..
-                } => (1, gen_ref, payload_ty, origin),
+                } => (1, gen_ref, None, payload_ty, origin),
+                arandu_middle::amir::AmirRvalue::GenSet {
+                    gen_ref,
+                    value,
+                    payload_ty,
+                    origin,
+                    ..
+                } => (2, gen_ref, Some(value), payload_ty, origin),
+                arandu_middle::amir::AmirRvalue::GenUpsert {
+                    gen_ref,
+                    value,
+                    payload_ty,
+                    origin,
+                    ..
+                } => (3, gen_ref, Some(value), payload_ty, origin),
                 arandu_middle::amir::AmirRvalue::GenRemove {
                     gen_ref,
                     payload_ty,
                     origin,
                     ..
-                } => (2, gen_ref, payload_ty, origin),
+                } => (4, gen_ref, None, payload_ty, origin),
                 _ => continue,
             };
             h.update(b"GenOp/v1");
@@ -357,6 +371,9 @@ impl StableHash for arandu_middle::amir::AmirFunc {
             h.update(&u32_le(origin.start));
             h.update(&u32_le(origin.end));
             hash_amir_operand(&mut h, operand);
+            if let Some(second) = second_operand {
+                hash_amir_operand(&mut h, second);
+            }
         }
         finish(h)
     }

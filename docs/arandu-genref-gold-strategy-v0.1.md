@@ -96,6 +96,42 @@ ECS ou biblioteca torne-se uma promessa de segurança mais forte no Arandu.
 | CHERI/revogação | bounds/capabilities sozinhos não garantem temporal safety; revogação é mecanismo adicional de software/hardware | geração não será vendida como spatial safety, alias safety ou data-race safety; OSSA, bounds e política de threads continuam obrigatórios | testes independentes para stale, bounds, alias mutável e thread crossing |
 | Fil-C | segurança completa exige checks amplos e controle da fronteira; sua solução usa GC concorrente e FFI restrita | GenRef não justifica alegar segurança completa da linguagem; Arandu mantém GC rejeitado e documenta a fronteira unsafe/FFI | corpus FFI prova que handles não são dereferenciáveis sem validação |
 
+### Decisões externas revisadas antes da promoção CFG-completa
+
+Esta etapa não usa implementações externas como autoridade automática; usa os
+erros e custos documentados por elas como testes contra o desenho do Arandu:
+
+- o compilador Go modela escape como grafo de locations/assignments e exige que
+  ponteiros para stack não alcancem heap nem sobrevivam ao objeto. Um rewrite
+  sintático local perderia aliases, chamadas e joins; por isso a promoção usa o
+  grafo de loans já calculado até fixpoint. O próprio Go documenta que regras
+  conservadoras demais geram heap allocation e custo de GC, então “promover por
+  dúvida” não será tratado como sucesso
+  ([fonte do compilador](https://github.com/golang/go/blob/master/src/cmd/compile/internal/escape/escape.go),
+  [guia de GC](https://go.dev/doc/gc-guide#Eliminating_heap_allocations));
+- o MIR do Rust não insere destruição incondicional em cada saída: classifica
+  drops como static, dead, conditional ou open usando initializedness e drop
+  flags. Portanto `GenRemove` não será colocado por proximidade lexical nem
+  simplesmente no fim da função
+  ([Rust drop elaboration](https://rustc-dev-guide.rust-lang.org/mir/drop-elaboration.html));
+- o Ownership SSA do Swift exige que um valor owned seja consumido exatamente
+  uma vez em todos os caminhos; copiar ownership num phi mascara leak ou
+  double-consume. GenRef copiável e obrigação de cleanup serão conceitos
+  distintos antes de introduzir remoção automática
+  ([Swift SIL Ownership](https://github.com/swiftlang/swift/blob/main/docs/SIL/Ownership.md));
+- Swift também registra que inner pointers podem ser invalidados quando o
+  objeto se move. Assim, projeção promovida carrega tipo semântico e owner; não
+  congela offset de campo como identidade
+  ([Swift C++ interop manifesto](https://github.com/swiftlang/swift/blob/main/docs/CppInteroperability/CppInteroperabilityManifesto.md));
+- LLVM MemorySSA usa SSA podada e `MemoryPhi` apenas onde o fluxo de memória
+  converge. O Arandu reutiliza block params e worklist existentes em vez de
+  criar uma segunda CFG ou uma floresta paralela de phis
+  ([LLVM MemorySSA](https://llvm.org/docs/MemorySSA.html)).
+
+Essas decisões viram regressões obrigatórias: diamond/joins, backedges, aliases,
+projeções, múltiplos usos, no-fallback atômico e consumo único do futuro owner
+token.
+
 ### Consequências adicionais
 
 1. **Nada probabilístico é garantia.** Geração aleatória ou contador grande
@@ -298,7 +334,8 @@ triviais.
 
 #### Registro de execução do contrato AMIR
 
-- [x] `GenInsert`, `GenGet` e `GenRemove` carregam `payload_ty`, domínio lógico
+- [x] `GenInsert`, `GenGet`, `GenSet`, `GenUpsert` e `GenRemove` carregam
+  `payload_ty`, domínio lógico
   da arena e span de origem; backends não precisam recuperar `T` da ABI;
 - [x] o domínio compiler-managed é distinto da `GenArena<T>` explícita;
 - [x] visitors, pretty-printer e resolução SSA preservam os novos campos e
@@ -309,10 +346,19 @@ triviais.
   drop glues ou locais de trap diferentes;
 - [x] DCE preserva todas as operações Gen porque alocação, trap, invalidação e
   drop são efeitos observáveis;
-- [ ] unicidade de `GenRemove` e drop glue no CFG depende da promoção completa
-  da próxima etapa;
-- [ ] os adapters C/Cranelift ainda consomem apenas o subconjunto `i64` MVP; a
-  migração ABI permanece atômica para G4.
+- [x] `GenSet` atualiza o payload preservando a identidade do handle; validator,
+  visitors, pretty, SSA rewrite, stable hash, DCE e ambos os backends tratam
+  seus dois operandos explicitamente;
+- [x] `GenUpsert` representa initializedness path-sensitive: zero insere e um
+  handle vivo atualiza, sem presumir que o primeiro `Store` textual domina a
+  CFG;
+- [x] cleanup do domínio compiler-managed é ligado ao lifetime do programa:
+  ambos os backends chamam `ar_gen_shutdown_raw` antes de retornar de `main`;
+  inserir `GenRemove` no fim lexical do owner invalidaria aliases que justamente
+  escaparam daquele escopo;
+- [x] os adapters C/Cranelift do domínio compiler-managed usam a ABI raw; o
+  subconjunto atualmente produzido pela promoção continua escalar/`Copy`, e
+  tipos não triviais são rejeitados antes de uma cópia de ownership ambígua.
 
 ### G3 — Promoção completa no pipeline
 
@@ -326,6 +372,36 @@ triviais.
 **Saída:** código de superfície produz AMIR Gold sem query monolítica ou clone
 profundo.
 
+#### Registro parcial da promoção CFG-completa
+
+- [x] aliases e block params são derivados do grafo de loans até fixpoint, não
+  da ordem textual dos blocos;
+- [x] branches, diamond join e múltiplos usos preservam um único tipo GenRef em
+  todas as arestas SSA;
+- [x] o tipo do payload vem de `&T`/`&mut T`, permitindo que projeções não sejam
+  confundidas com o tipo do aggregate owner;
+- [x] `@NoFallback` continua retornando antes de qualquer mutação da AMIR;
+- [x] backedge converge na mesma worklist e mantém os tipos dos argumentos e
+  block params alinhados;
+- [x] projeções preservam o `AmirPlace` do owner até o `Load`; fixture de
+  array tipado prova que o índice não vira offset cru e que o payload vem de
+  `&T`, não do aggregate;
+- [x] `GenRemove` não é sintetizado por proximidade lexical: o fallback
+  compiler-managed conserva aliases até o shutdown do arena do programa;
+  `GenRemove` permanece a operação explícita para um futuro owner/arena cujo
+  fim de lifetime seja provado;
+- [x] owners escalares com place raiz são heap-liftados: o `LocalId` guarda um
+  handle canônico, todos os borrow sites o reutilizam e stores usam
+  `GenUpsert`, preservando aliases antes/depois de mutações;
+- [x] a antiga ponte de snapshot para owner projetado foi removida. Escape de
+  `&owner.field`/`&owner[index]` é O004 hard error até existir representação
+  first-class `(owner, projection path)`; nunca produz uma referência stale que
+  apenas contém uma cópia do campo;
+- [x] aggregates POD emprestados pela raiz usam a prova estrutural
+  `TypeInfo::is_copy` e são heap-liftados como bytes do aggregate inteiro;
+  Cranelift distingue endereço lógico do payload do ponteiro incidental usado
+  para representar valores address-only.
+
 ### G4 — Runtime compartilhado e paridade
 
 - remover a tabela C fixa;
@@ -335,6 +411,64 @@ profundo.
 - testar fora do checkout com artefatos reais de 32 e 64 bits.
 
 **Saída:** nenhuma regra existe só no host JIT ou no emissor C.
+
+#### Registro parcial da paridade de identidade
+
+- [x] zero é permanentemente inválido também na ABI compacta; o primeiro slot
+  usa índice codificado `1` e geração `1`;
+- [x] Rust host e runtime C abortam de forma determinística em `get` e `remove`
+  inválidos, em vez de o C devolver sentinela `0` ambígua;
+- [x] geração nunca usa wrapping: slots em `u32::MAX` aposentam e não retornam
+  à free-list;
+- [x] o emissor C removeu arrays fixos de 256 entradas; o storage type-erased
+  usa tokens `u64` monotônicos, alocação alinhada e lista ativa em ordem de
+  inserção;
+- [x] atualização in-place tem paridade C/Cranelift: `GenSet` retorna o mesmo
+  handle e ambos observam o novo payload sem criar snapshot ou nova geração;
+- [x] a ABI compacta foi retirada do lowering compiler-managed; C e Cranelift
+  passam endereço, tamanho e alinhamento derivados do alvo para a ABI raw;
+- [x] o runtime Gold type-erased substituiu o domínio compiler-managed compacto
+  nos backends para payloads `Copy` atualmente promovidos;
+- [x] drop glue de payload não trivial deriva do contrato único `@Destructor`,
+  especializado por tipo concreto; GenRef não inventa uma segunda semântica de
+  destruição;
+- [x] payload não trivial sem `@Destructor` concreto é rejeitado antes do
+  backend mover ownership;
+
+#### Registro da ABI type-erased do host
+
+- [x] ABI raw recebe ponteiro, `size`, `align` e drop glue C-compatible, sem
+  recuperar layout a partir da representação incidental do valor;
+- [x] handles compiler-managed são tokens monotônicos não-zero e nunca são
+  reciclados; overflow falha antes de mutar o registro, impedindo ABA;
+- [x] insert/upsert movem ownership para o runtime, get apenas copia uma view
+  emprestada e remove move para storage do chamador sem executar drop glue;
+- [x] set constrói o novo payload antes de substituir e executa o drop antigo
+  exatamente uma vez depois de liberar o borrow do registro;
+- [x] drop glue reentrante pode chamar shutdown sem `RefCell` panic: payloads a
+  destruir são retirados do registro antes da callback;
+- [x] layout errado, ponteiro nulo/desalinhado e handle stale falham sem remover
+  ou corromper o payload vivo;
+- [x] a ordem de shutdown do host é determinística: o registro mantém apenas
+  entradas ativas em ordem de inserção, sem depender da iteração de `HashMap`;
+- [x] insert reserva token/capacidade antes de mover a origem; uma falha
+  reportada como zero nunca deixa o chamador acreditando que ainda possui um
+  valor já consumido;
+- [x] Cranelift e C chamam a ABI raw e o C espelha storage, alinhamento,
+  monotonicidade, stale rejection, set/upsert/remove e shutdown destacado;
+- [x] aggregates não triviais promovidos carregam layout e drop glue próprios;
+  `get` produz uma visão emprestada restrita a projeções, enquanto `remove`
+  transfere ownership;
+- [x] cleanup normal vira `Destroy` exatamente uma vez para locais inicializados
+  e não movidos. Como O007 rejeita moves divergentes, não há drop flags dinâmicas.
+
+#### Fechamento de G4
+
+G4 está concluído para o contrato que o compilador consegue provar hoje:
+raízes e projeções tipadas, payloads `Copy` ou com `@Destructor` explícito, ABI
+raw compartilhada, layout do alvo, paridade de traps, handles monotônicos e
+cleanup exatamente uma vez. O limite deliberado é o empréstimo retornado por
+`get`: ele não pode escapar nem ser consumido; ownership só sai por `remove`.
 
 ### G5 — Diagnóstico, LSP e observabilidade
 

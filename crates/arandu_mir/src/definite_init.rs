@@ -47,6 +47,29 @@ pub fn init_in_counts(func: &AmirFunc) -> Vec<u32> {
     block_in.iter().map(|s| s.len() as u32).collect()
 }
 
+/// Definitely initialized locals after each block. Drop elaboration consumes
+/// these exact facts instead of maintaining a second initialization model.
+#[must_use]
+pub fn initialized_at_block_exit(func: &AmirFunc) -> Vec<BitSet<LocalId>> {
+    let Some(block_in) = compute_init_in(func) else {
+        return vec![BitSet::with_capacity(func.locals.len()); func.blocks.len()];
+    };
+    block_in
+        .into_iter()
+        .enumerate()
+        .map(|(index, mut initialized)| {
+            for stmt in func.block_stmts(BlockId::from_usize(index)) {
+                if let AmirStmt::Store { lhs, .. } = stmt
+                    && lhs.projections.is_empty()
+                {
+                    initialized.insert(lhs.local);
+                }
+            }
+            initialized
+        })
+        .collect()
+}
+
 /// Run definite-initialization analysis over a single AMIR function.
 ///
 /// Returns a list of `O008` diagnostics for any load from a possibly

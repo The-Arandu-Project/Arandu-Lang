@@ -191,6 +191,8 @@ fn has_side_effect(stmt: &AmirStmt) -> bool {
             AmirRvalue::Alloc(_)
                 | AmirRvalue::GenInsert { .. }
                 | AmirRvalue::GenGet { .. }
+                | AmirRvalue::GenSet { .. }
+                | AmirRvalue::GenUpsert { .. }
                 | AmirRvalue::GenRemove { .. }
         ),
         AmirStmt::Nop => false,

@@ -206,8 +206,9 @@ pub(crate) fn lower_func(
         &tc.type_info.type_interner,
         escape_opts,
     ));
-    // F2.3.runtime: materialize GenInsert/GenGet for escaping int locals (MVP).
-    crate::gen_promote::apply_gen_promotion(&mut amir_f, &tc.type_info.type_interner, escape_opts);
+    // G4: structural Copy proof comes from typeck; MIR does not duplicate it.
+    crate::gen_promote::apply_gen_promotion_with_type_info(&mut amir_f, &tc.type_info, escape_opts);
+    crate::drop_elaborate::elaborate_drops(&mut amir_f, &tc.type_info);
 
     Ok(amir_f)
 }

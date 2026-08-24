@@ -44,11 +44,15 @@ fn aggregate_store_escape_characterizes_the_missing_surface_to_amir_path() {
 struct Holder {
     value: &int
 }
+struct Pair {
+    left: int
+    right: int
+}
 
 func main(): int {
-    let number = 42
-    let mut holder = Holder { value: &number }
-    set holder.value = &number
+    let pair = Pair { left: 42, right: 7 }
+    let mut holder = Holder { value: &pair.left }
+    set holder.value = &pair.left
     return *holder.value
 }
 "#;
@@ -71,5 +75,12 @@ func main(): int {
             .iter()
             .any(|diagnostic| diagnostic.0.code == DiagCode::O004GenerationalFallback),
         "expected the aggregate escape to remain inspectable as O004"
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.0.code == DiagCode::O004GenerationalFallback
+                && diagnostic.0.severity == arandu_middle::Severity::Error
+        }),
+        "projected escape must hard-fail instead of creating a stale snapshot"
     );
 }
