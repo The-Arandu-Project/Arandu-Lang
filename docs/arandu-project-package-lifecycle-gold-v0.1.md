@@ -27,6 +27,7 @@ identity, lockfile integrity and cache isolation are proven.
 | Incrementality | raw manifest BLAKE3 and fields are Salsa inputs | package graph, target declarations and resolved dependencies are absent |
 | Build | package `check/run/build` works; Cranelift build reports success | no stable on-disk artifact contract or project-local output directory |
 | Dependencies | package-local modules and stdlib roots work | no dependency declaration, resolver, lockfile, workspace or global source cache |
+| Imports | dotted imports lower deterministically to `.aru` keys; public symbols are cutoff-friendly | package name, logical module and physical file are conflated; bare/quoted paths can bypass future package boundaries |
 | Portability | installed SDK smoke is native on three OS families | generated projects are not yet exercised as a complete lifecycle outside checkout |
 
 The existing narrow query boundaries are retained. Parsing a manifest is pure;
@@ -34,6 +35,34 @@ reading it, walking directories, resolving VCS and writing files stay in CLI or
 dedicated effectful infrastructure before values enter Salsa.
 
 ## Decisions informed by existing ecosystems
+
+### Why TOML remains the right manifest format
+
+The comparison was reopened rather than inherited from Cargo:
+
+| Format | Strength | Reason not selected |
+| --- | --- | --- |
+| JSON | ubiquitous, strict data model and strong schema tooling | no native comments; noisy for hand-maintained dependency tables |
+| YAML | concise and expressive | specification and implicit typing are too broad for a compiler control file; parser behavior is harder to constrain |
+| custom `mod`-style DSL | could optimize package syntax | creates a second language, parser, formatter and editor ecosystem with no semantic benefit yet |
+| executable manifest | arbitrary build logic | reading dependencies becomes host-code execution and harms reproducibility/security |
+| TOML 1.0 | typed, UTF-8, comments, unambiguous tables, mature Rust parsers | table/dotted-key rules require good diagnostics and tool edits must preserve user formatting |
+
+**Decision:** both `arandu.toml` and generated `arandu.lock` use TOML 1.0.
+The manifest accepts the complete TOML syntax but a strict Arandu schema. The
+lockfile uses a canonical machine-written TOML subset so byte determinism is
+under our control. We do not maintain a partial TOML parser.
+
+`arandu check/build/run` never rewrite the user manifest. Future `add/remove`
+commands must use a lossless TOML document editor or narrowly edit the owned
+dependency table; deserializing and serializing the entire file is forbidden
+because it would erase comments and create noisy diffs.
+
+This choice follows the same human-editable/static-metadata rationale recorded
+by Python packaging, while avoiding Python's later ambiguity between static and
+dynamic metadata: Arandu metadata is static unless a future field explicitly
+defines a reproducible source. No build backend may silently replace a value
+written by the user.
 
 ### Declarative, versioned manifest
 
@@ -61,12 +90,14 @@ schema = 1
 [package]
 name = "hello"
 version = "0.1.0"
-kind = "bin"
 edition = "2026"
-entry = "src/main.aru"
 
 [toolchain]
 arandu = ">=0.1.0-rc.4, <0.2.0"
+
+[targets.bin]
+name = "hello"
+root = "src/main.aru"
 
 [dependencies]
 # util = { path = "../util" }
@@ -138,6 +169,182 @@ identities, missing manifests, root escapes and source collisions are hard
 errors. Dependency manifests cannot select root profiles or mutate the root
 workspace.
 
+### Package, target and module are different identities
+
+Arandu adopts four explicit layers instead of treating a source path as all of
+them at once:
+
+| Layer | Meaning | Example |
+| --- | --- | --- |
+| package | versioned/distributed unit from one manifest | `acme_math@1.2.0` |
+| target | independently compiled product inside a package | library `math`, binary `calc`, tests |
+| module | namespace/analysis unit inside one target | `self.geometry.vector` |
+| file | current physical source of a module | `src/geometry/vector.aru` |
+
+`PackageId`, `TargetId` and `ModuleId` must be typed identities. None is a raw
+path or a `SymbolId`. A file rename may change the module mapping, but package
+resolution never manufactures a `FileId`; CLI/LSP register sources and provide
+the resulting immutable package/module map as Salsa inputs.
+
+The manifest target shape replaces the MVP `kind`/`entry` pair before it becomes
+a compatibility burden:
+
+```toml
+schema = 1
+
+[package]
+name = "calculator"
+version = "0.1.0"
+edition = "2026"
+
+[targets.lib]
+name = "calculator"
+root = "src/lib.aru"
+
+[targets.bin]
+name = "calc"
+root = "src/main.aru"
+
+[dependencies]
+math = { path = "../math" }
+```
+
+The dependency table key (`math`) is the **source-level binding**, while the
+resolved package keeps its own declared name and canonical source identity.
+Consumers therefore survive an upstream repository rename and two packages
+with similar display names can be bound under distinct aliases. Two aliases
+that resolve to the same package identity are rejected initially rather than
+compiling the same package twice under ambiguous namespaces.
+
+### Canonical import roots
+
+Package mode has three unambiguous roots:
+
+```text
+std.path                    standard library
+self.geometry.vector        another module in the current target
+math.geometry.vector        exported module from direct dependency alias `math`
+```
+
+Existing source forms remain useful:
+
+```aru
+import self.geometry.vector as vector
+import math.geometry as geometry
+from math.geometry import { Point, distance }
+```
+
+Rules:
+
+1. only a manifest-declared **direct** dependency alias may occupy the first
+   external segment; transitive dependencies never leak into source lookup;
+2. `self` never means a filesystem current directory and cannot escape its
+   target;
+3. `std` is a reserved toolchain root and cannot be shadowed by a package;
+4. source imports never contain versions, URLs, Git revisions or cache paths;
+5. dotted paths are case-sensitive logical identifiers but creation rejects
+   case-fold collisions that would break Windows/macOS checkouts;
+6. extensionless dotted syntax has exactly one resolution; no probing
+   `foo.aru` versus `foo/index.aru` or several source roots;
+7. import aliases are file-scoped, matching the current resolver and avoiding
+   one file silently changing another file's namespace;
+8. package dependency cycles are rejected. Existing deterministic module-cycle
+   recovery remains a compiler diagnostic, not permission for cyclic packages.
+
+The current bare form (`import util`) is ambiguous between a local module and a
+future dependency named `util`. In package mode it migrates deterministically:
+
+- if `util` is a declared direct dependency alias, it means that dependency's
+  root export;
+- otherwise the legacy local interpretation is accepted with a structured fix
+  to `import self.util` during the migration edition;
+- a later edition removes implicit local roots.
+
+Quoted imports such as `import "vendor/file.aru" as vendor` are not a package
+dependency mechanism. In package mode, arbitrary quoted filesystem sources are
+rejected unless a future explicit foreign-source manifest contract authorizes
+them. Single-file CLI mode may retain them for compatibility without allowing
+them to enter a resolved package graph.
+
+### Public module surface, no deep imports
+
+An external package cannot import every `.aru` file merely because it exists.
+The library target declares an export map; everything else is package-internal:
+
+```toml
+[targets.lib]
+name = "math"
+root = "src/lib.aru"
+
+[targets.lib.exports]
+"." = "src/lib.aru"
+"geometry" = "src/geometry.aru"
+"geometry.vector" = "src/geometry/vector.aru"
+```
+
+Thus `import math.geometry` is stable API while
+`import math.internal.fast_inverse_sqrt` fails even if that file is present.
+The public path is decoupled from layout, preventing consumers from freezing a
+dependency's private directory structure. Export targets must be unique,
+inside the package, part of the declared library target and case-fold unique.
+
+Inside an exported module, only existing `public` declarations cross the
+module boundary. Both gates are required:
+
+```text
+package export map permits module
+            AND
+exported_symbols permits declaration
+```
+
+This preserves the current `exported_symbols` early cutoff: editing a private
+body does not invalidate dependants, changing the export map invalidates only
+the affected package surface, and changing a public signature invalidates its
+importers. A future source-level re-export can add convenience, but it must feed
+the same explicit export surface rather than creating a second resolver.
+
+### Package graph and module graph stay separate
+
+Resolution occurs in two pure deterministic stages after effectful discovery:
+
+1. **Package graph:** manifest requirements → exact `PackageId`s, targets and
+   direct dependency aliases; serialized in `arandu.lock`.
+2. **Module graph:** source import paths → `ModuleId`s using the already resolved
+   target/module maps; tracked by Salsa and never performs network or filesystem
+   discovery.
+
+The lockfile records package edges, not every source import. Module dependencies
+remain compiler analysis data and may change on each edit without rewriting the
+lockfile. Conversely, changing a dependency alias or resolved package version
+replaces the relevant module root as one narrow Salsa input.
+
+`ModuleRoots` therefore evolves from one package plus stdlib into an immutable
+`PackageModuleMap` containing:
+
+- current package and target;
+- `self` module mapping;
+- direct dependency alias → exported module mapping;
+- stdlib mapping;
+- one deterministic reverse map for diagnostics/LSP.
+
+`canonicalize_import_path` may continue to normalize syntax, but it must return
+a logical import (`Std`, `SelfModule`, `DependencyModule`, `LegacyExternal`),
+not a guessed filesystem string. Filesystem paths are resolved before query
+execution and installed through inputs.
+
+Module/package regressions required before Gold:
+
+- dependency alias root and exported subpath resolve in CLI and LSP;
+- undeclared transitive dependency and non-exported deep module fail;
+- `self`, dependency and `std` cannot shadow one another;
+- two files/exports differing only by case fail portably;
+- module/package cycles and duplicate source identities are deterministic;
+- path dependency rename/removal refreshes completion, goto and diagnostics;
+- dependency body-only edit preserves importer cutoff when exports are stable;
+- public signature or export-map edit invalidates exactly the affected importers;
+- a malicious module path cannot escape source/cache/workspace roots;
+- Windows separators, symlinks/junctions and Unicode normalize to one identity.
+
 ### No dependency code execution during resolution
 
 Arandu v0.1 has no install hooks, lifecycle scripts or executable build
@@ -177,6 +384,12 @@ The lockfile is not ignored for applications/workspaces.
 | path dependencies escape a sandbox or package boundary | normalized paths, explicit workspace membership and containment checks |
 | failed build leaves a plausible partial artifact | staging and atomic publication of final outputs |
 | arbitrary unknown manifest keys appear accepted | strict owned schema with a namespaced metadata escape hatch |
+| consumers deep-import private source files | explicit target export map; file existence does not imply public API |
+| transitive dependency accidentally becomes importable | only direct dependency aliases enter the module map |
+| package rename rewrites every consumer import | manifest dependency key is the stable source-level alias |
+| module resolution probes several filesystem layouts | one canonical logical mapping; no extension/index probing |
+| source imports smuggle URLs, versions or host paths | dependency source belongs only to manifest/lockfile |
+| package and module graphs invalidate each other wholesale | separate immutable inputs and tracked module edges |
 
 ## Campaign
 
@@ -211,10 +424,15 @@ The lockfile is not ignored for applications/workspaces.
 
 ### P4 — Local packages and workspaces
 
+- [ ] Introduce typed `PackageId`, `TargetId`, `ModuleId` and logical import roots.
 - [ ] Support `bin` and `lib` targets plus relative path dependencies.
+- [ ] Bind source imports through direct dependency aliases, `self` and `std`.
+- [ ] Add explicit library export maps and reject dependency deep imports.
+- [ ] Migrate bare local and quoted filesystem imports without ambiguous lookup.
 - [ ] Add a single-root workspace with members and shared output/lockfile.
 - [ ] Resolve a deterministic package DAG with cycle/collision diagnostics.
-- [ ] Feed resolved module roots through Salsa inputs without filesystem reads in queries.
+- [ ] Feed `PackageModuleMap` through Salsa inputs without filesystem reads in queries.
+- [ ] Prove body-edit/export-surface/package-version invalidation boundaries.
 
 ### P5 — Verified global cache
 
@@ -274,4 +492,14 @@ already exist.
   and [registry integrity model](https://github.com/swiftlang/swift-package-manager/blob/main/Documentation/PackageRegistry/PackageRegistryUsage.md)
 - [Cargo build scripts](https://doc.rust-lang.org/cargo/reference/build-scripts.html),
   used here as a warning against ambient dependency code execution
-
+- [TOML 1.0 specification](https://toml.io/en/v1.0.0) and
+  [PEP 518 format comparison](https://peps.python.org/pep-0518/#other-file-formats)
+- [Python static project metadata contract](https://packaging.python.org/specifications/declaring-project-metadata/)
+- [Go module/package identity](https://go.dev/ref/mod) and
+  [file-scoped import bindings](https://go.dev/ref/spec)
+- [Swift package products, targets and modules](https://docs.swift.org/swiftpm/documentation/packagemanagerdocs/introducingpackages/)
+  plus [package/module visibility](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/accesscontrol/)
+- [Rust visibility and public re-exports](https://doc.rust-lang.org/reference/visibility-and-privacy.html)
+- [Dart libraries and package imports](https://dart.dev/language/libraries)
+- [Node package exports](https://nodejs.org/api/packages.html#package-entry-points),
+  used for the explicit public-subpath boundary rather than its runtime loader
