@@ -219,6 +219,26 @@ Cada etapa deve terminar em PR revisável e deixar a `main` utilizável.
 
 **Saída:** suíte que demonstra os limites atuais sem mudar a semântica.
 
+#### Registro de execução G0
+
+- [x] modelo executável independente com identidade de arena, zero inválido,
+  stale, arena destruída, retirement e drop único;
+- [x] contador reduzido reproduz wrap/ABA do algoritmo MVP e prova que o modelo
+  Gold aposenta slots e identidades de arena;
+- [x] cross-arena e sentinela `0` foram reproduzidos como ambiguidades do MVP;
+- [x] projeções validam o owner antes de aritmética checked de offset/bounds;
+- [x] pipeline real prova custo estrutural zero para borrow local: nenhum
+  `GenInsert`, `GenGet` ou `GenRemove` aparece no AMIR;
+- [x] backend C tem teste de caracterização para o limite atual de 256 slots;
+- [x] matriz inicial permanece i686, x86_64 e aarch64, com handle lógico de
+  quatro domínios `u32`; o layout físico só congela após os protótipos G1/G5;
+- [ ] baseline de poucos/muitos escapes: bloqueado pelo comportamento atual em
+  que um aggregate store em código de superfície emite O004, mas o lowering
+  devolve AMIR vazio. O teste G0 congela essa lacuna e será invertido em G4.
+
+O G0 não usa AMIR construído à mão para esconder essa limitação. Até G4, apenas
+o baseline sem escape é representativo do pipeline completo.
+
 ### G1 — Chave segura e arena explícita Gold
 
 - introduzir `GenRef<T>` lógico e identidade de arena;

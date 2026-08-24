@@ -53,6 +53,16 @@ fn emit_c(amir: &AmirProgram, tc: &TypeCheckResult) -> String {
     .unwrap()
 }
 
+#[test]
+fn c_backend_characterizes_the_fixed_256_slot_genref_mvp() {
+    let (amir, tc) = compile_src("func main(): int { return 0 }");
+    let emitted = emit_c(&amir, &tc);
+
+    assert!(emitted.contains("ar_gen_slots[256]"));
+    assert!(emitted.contains("ar_gen_free[256]"));
+    assert!(emitted.contains("ar_gen_nslots >= 256"));
+}
+
 fn assert_backend_rejection_parity(
     amir: &AmirProgram,
     tc: &TypeCheckResult,
