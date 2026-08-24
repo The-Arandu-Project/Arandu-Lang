@@ -7,12 +7,9 @@ permanece como stub na raiz.
 ## Fontes vivas
 
 - [Roadmap mestre do compilador](arandu-compiler-roadmap-v0.1.md)
-- [Roadmap de estabilidade Gold](arandu-stability-gold-roadmap-v0.1.md)
-- [Roadmap Gold de decomposição de monólitos e arquitetura](arandu-architecture-decomposition-gold-roadmap-v0.1.md)
-- [Roadmap Gold do LSP/editor](arandu-lsp-editor-gold-roadmap-v0.1.md)
-- [Estratégia GenRef Gold](arandu-genref-gold-strategy-v0.1.md)
 - [Arquitetura Salsa/LSP](arandu-salsa-lsp-architecture-v0.1.md)
-- [Plano estratégico](arandu-strategic-plan-v0.1.md)
+- [Capacidades públicas do LSP/editor](arandu-lsp-capabilities-v0.1.md)
+- [RFC GenRef Gold](arandu-genref-gold-rfc-v0.1.md)
 - [Contrato de distribuição](arandu-distribution-contract-v0.1.md)
 - [Verificação de releases](release-verification.md)
 - [Especificação de diagnósticos](diagnostics/SPEC.md)
@@ -22,7 +19,7 @@ permanece como stub na raiz.
 
 Os documentos `arandu-*-v0.1.md` que descrevem lexer, parser, AST, IR, ABI,
 backends, stdlib, CLI/LSP e instrumentação são contratos da implementação.
-Planos concluídos são consolidados nas fontes vivas acima e removidos da raiz.
+Planos concluídos são consolidados no roadmap mestre e removidos da raiz.
 
 ## Diagnósticos e releases
 

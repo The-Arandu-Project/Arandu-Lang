@@ -7,11 +7,11 @@ Arandu is an experimental Brazilian systems programming language focused on memo
 
 ## Current Status
 
-**Solidification gate (S5) closed** — foundation (DoD AMIR `TypeId`, spans, `DataLayout`, host C↔Cranelift parity, unified imports) is stable enough to resume language-level Fase 3 work. Details: [docs/arandu-solidification-matrix-v0.1.md](docs/arandu-solidification-matrix-v0.1.md).
+**Compiler foundation gold** — AMIR `TypeId`, spans, target-aware `DataLayout`, host C↔Cranelift parity, unified imports, recovery and endurance are protected by CI.
 
-**Product freeze:** [Arandu Minimal 0.1](docs/arandu-minimal-0.1-freeze.md) — language surface green; **project CLI gold** (`new` / `check` / `run` / `build` / `doctor`, stdlib via `current_exe`) in [docs/arandu-project-cli-gold-v0.1.md](docs/arandu-project-cli-gold-v0.1.md). Install tarballs ship from **GitHub Releases** on `v*` tags (see below).
+**Product surface:** Arandu Minimal 0.1 and the project CLI (`new` / `check` / `run` / `build` / `doctor`) are gold in their published scope. Install archives ship from **GitHub Releases** on `v*` tags.
 
-**Current execution roadmaps:** [compiler stabilization gold](docs/arandu-stability-gold-roadmap-v0.1.md) and [LSP/editor gold](docs/arandu-lsp-editor-gold-roadmap-v0.1.md). Implemented milestones are not called `gold` unless their published scope and gates are complete.
+**Single execution roadmap:** [compiler architecture master roadmap](docs/arandu-compiler-roadmap-v0.1.md). Completed stabilization, distribution, LSP/editor, annotation and GenRef campaigns are consolidated there.
 
 Documentation map: [docs/README.md](docs/README.md).
 
@@ -240,7 +240,7 @@ tests/ui/         UI diagnostic fixtures (.aru → .diag)
 
 ## Next Steps
 
-Close the [compiler stabilization gold roadmap](docs/arandu-stability-gold-roadmap-v0.1.md) and the [LSP/editor gold roadmap](docs/arandu-lsp-editor-gold-roadmap-v0.1.md) before selecting the next major feature phase from the [master roadmap](docs/arandu-compiler-roadmap-v0.1.md).
+Select the next major phase and its prerequisites from the [master roadmap](docs/arandu-compiler-roadmap-v0.1.md). New campaign documents are temporary and must be consolidated back into that roadmap when completed.
 
 ## License
 

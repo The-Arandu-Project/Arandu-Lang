@@ -2,7 +2,7 @@
 
 **Status:** Accepted / implemented
 
-**Supersedes:** `arandu-genref-abi-rfc-v0.1.md`
+**Supersedes:** the F2.3 i64 MVP contract preserved in Git history
 
 ## Contract
 

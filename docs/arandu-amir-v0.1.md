@@ -1,6 +1,6 @@
 # Arandu Mid-level Intermediate Representation (AMIR) v0.1
 
-> **Plano estratégico e roadmap:** [arandu-strategic-plan-v0.1.md](./arandu-strategic-plan-v0.1.md) · [arandu-compiler-roadmap-v0.1.md](./arandu-compiler-roadmap-v0.1.md)
+> **Roadmap executivo:** [arandu-compiler-roadmap-v0.1.md](./arandu-compiler-roadmap-v0.1.md)
 
 AMIR v0.1 is a Control Flow Graph (CFG) representation of the program. It flattens the high-level syntax structures (like nesting and structured control flow) into linear lists of instructions grouped in Basic Blocks and linked by jumps.
 
@@ -231,4 +231,3 @@ After all validations succeed with no errors:
 1. **Operand Rewriting**: `rewrite_all_operands()` recursively replaces all virtual temporaries in statements and block parameters with their final, resolved SSA values from the redirection map.
 2. **Poda (Pruning)**: `prune_dummy_loads_stores()` sweeps the entire function CFG and deletes all virtual `Store` and `Load` statements of simple local variables (those with empty projections).
 3. The remaining AMIR contains pure, optimal SSA code with zero redundant copies, ready to be translated by the Cranelift backend.
-
