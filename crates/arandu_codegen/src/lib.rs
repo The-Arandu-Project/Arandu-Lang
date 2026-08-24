@@ -1,6 +1,15 @@
-use crate::amir::AmirProgram;
-use crate::diagnostics::Diagnostic;
-use crate::symbol_table::SymbolTable;
+//! Backend-agnostic codegen contracts (the `rustc_codegen_ssa` role in this
+//! workspace).
+//!
+//! Owns the trait interface every Arandu codegen backend implements —
+//! [`CodegenBackend`] turns a validated AMIR program into a backend-specific
+//! artifact, and [`CompiledCode`] is how callers obtain entry points from that
+//! artifact. Concrete backends live in `arandu_backend_cranelift` (host JIT)
+//! and `arandu_backend_c` (portable C emission); neither owns this contract.
+
+use arandu_middle::amir::AmirProgram;
+use arandu_middle::diagnostics::Diagnostic;
+use arandu_middle::symbol_table::SymbolTable;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JitError {

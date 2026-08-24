@@ -7,6 +7,8 @@ authors.workspace = true
 
 [dependencies]
 arandu_base = { path = "../arandu_base" }
+arandu_codegen = { path = "../arandu_codegen" }
+arandu_runtime = { path = "../arandu_runtime" }
 arandu_semantics = { path = "../arandu_semantics" }
 cranelift-codegen = "0.134.3"
 cranelift-frontend = "0.134.3"
@@ -16,17 +18,6 @@ cranelift-native = "0.134.3"
 target-lexicon = "0.13.5"
 rustc-hash = { workspace = true }
 tracing.workspace = true
-# SL_R.2 reactor (epoll + timerfd on Linux); portable fallback elsewhere
-libc = "0.2.189"
-
-# SL_R.3 io_uring is Linux-only (MAP_POPULATE / SYS_io_uring_*). Do not pull
-# this crate on macOS/Windows or install-smoke matrix builds fail to compile.
-# Code paths are already #[cfg(target_os = "linux")]; keep the dep gated too.
-[target.'cfg(target_os = "linux")'.dependencies]
-io-uring = "0.7.14"
-
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.60.2", features = ["Win32_Networking_WinSock"] }
 
 [dev-dependencies]
 arandu_parser = { path = "../arandu_parser" }

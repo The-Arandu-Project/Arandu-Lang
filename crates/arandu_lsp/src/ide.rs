@@ -1151,7 +1151,7 @@ pub fn code_actions(_uri: &Uri, context: &lsp_types::CodeActionContext) -> CodeA
     out
 }
 
-/// Build LSP semantic tokens from type-aware [`arandu_query::file_highlights`].
+/// Build LSP semantic tokens from type-aware [`arandu_query::file_highlights()`].
 #[must_use]
 pub fn semantic_tokens(snap: &AnalysisSnapshot, source: SourceFile) -> SemanticTokens {
     encode_highlights(

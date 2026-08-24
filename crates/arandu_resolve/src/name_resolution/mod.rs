@@ -12,7 +12,7 @@ mod symbols;
 mod types;
 mod util;
 
-/// Builtin prelude modules injected by [`define_prelude`] / this helper.
+/// Builtin prelude modules injected by `define_prelude` / this helper.
 /// Kept in one place so Salsa import resolution can short-circuit without
 /// requiring on-disk `io.aru` / `err.aru` files.
 pub const PRELUDE_MODULES: &[&str] = &["io", "err"];

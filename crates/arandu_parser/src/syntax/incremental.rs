@@ -167,7 +167,7 @@ pub fn splice_tokens_for_item_edit(
 /// Algorithm:
 /// 1. Apply the text edit.
 /// 2. If the edit range is contained in a single [`SyntaxKind::ITEM`], re-lex **only that
-///    ITEM's new text**, rebuild its green node, and [`GreenNodeData::replace_child`] on the
+///    ITEM's new text**, rebuild its green node, and `GreenNodeData::replace_child` on the
 ///    root so **sibling ITEM green nodes are reused** (cheap `Arc` clone).
 /// 3. **Splice** the token stream (no full-file re-lex) for lower.
 /// 4. Otherwise fall back to full [`parse_syntax`].

@@ -15,6 +15,8 @@ members = [
     "crates/arandu_test_support",
     "crates/arandu_fuzz_support",
     "crates/arandu_backend_c",
+    "crates/arandu_runtime",
+    "crates/arandu_codegen",
     "crates/arandu_query",
     "crates/arandu_lsp",
     "crates/arandu_fmt",

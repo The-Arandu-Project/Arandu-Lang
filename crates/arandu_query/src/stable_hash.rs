@@ -10,7 +10,7 @@ use arandu_semantics::TypeCheckResult;
 use blake3::Hasher;
 use std::sync::Arc;
 
-/// Types that can be content-addressed for [`super::HashEq`].
+/// Types that can be content-addressed for [`crate::db::HashEq`].
 pub trait StableHash {
     fn stable_hash(&self) -> blake3::Hash;
 }

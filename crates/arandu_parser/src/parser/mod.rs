@@ -230,7 +230,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parses a full program, collecting recoverable errors in [`Self::diagnostics`].
+    /// Parses a full program, collecting recoverable errors in `self.diagnostics`.
     ///
     /// When event recording is enabled ([`Self::with_events`]), emits
     /// `SOURCE_FILE` / item / `BLOCK` / `STMT` structure for green trees.

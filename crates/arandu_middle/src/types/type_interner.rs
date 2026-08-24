@@ -111,7 +111,7 @@ impl TypeInterner {
 
     /// Resolve a `TypeId` back to its `ArType` (clones the interned value).
     ///
-    /// Prefer [`with_type`] / [`is_copy`] when you only need a temporary view —
+    /// Prefer [`Self::with_type`] / [`Self::is_copy_v01`] when you only need a temporary view —
     /// those avoid an `ArType` heap clone.
     ///
     /// # Panics
@@ -140,7 +140,7 @@ impl TypeInterner {
         self.with_type(id, ArType::is_error)
     }
 
-    /// Canonical id for [`ArType::Error`] in this interner (pre-interned in [`new`]).
+    /// Canonical id for [`ArType::Error`] in this interner (pre-interned in [`Self::new`]).
     #[must_use]
     pub fn error_type_id(&self) -> TypeId {
         self.intern(ArType::Error)

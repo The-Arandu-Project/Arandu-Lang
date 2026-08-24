@@ -3,7 +3,7 @@
 //! This crate is the central dependency hub. It owns:
 //! - **AMIR** (`amir`): the Arandu Mid-level IR (SSA-like, typed basic blocks).
 //! - **HIR** (`hir`): the High-level IR produced by the lowering pass.
-//! - **Type system** (`types`): [`ArType`], [`TypeInterner`], and primitives.
+//! - **Type system** (`types`): [`types::ArType`], [`types::TypeInterner`], and primitives.
 //! - **Layout engine** (`layout`): struct/enum memory layout computation.
 //! - **Symbol table** (`symbol_table`): scoped identifier registry.
 //! - **Diagnostics** (`diagnostics`): re-exported from `arandu_diagnostics`.
@@ -16,7 +16,6 @@
 pub mod amir;
 pub mod amir_validate;
 pub mod cfg;
-pub mod codegen;
 pub mod db;
 pub mod diagnostics;
 pub mod hir;
@@ -43,7 +42,6 @@ pub use layout::{
 };
 
 pub use amir_validate::validate_amir_program;
-pub use codegen::{CodegenBackend, CompiledCode, JitError};
 pub use diagnostics::{CodeReplacement, DiagCode, Diagnostic, Hint, Label, Severity};
 pub use resolved::{DocCommentMap, NodeKey, ResolvedNames};
 pub use symbol_table::{ScopeId, Symbol, SymbolId, SymbolKind, SymbolTable};

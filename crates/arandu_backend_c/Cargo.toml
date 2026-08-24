@@ -7,6 +7,7 @@ authors.workspace = true
 
 [dependencies]
 arandu_base = { path = "../arandu_base" }
+arandu_codegen = { path = "../arandu_codegen" }
 arandu_middle = { path = "../arandu_middle" }
 arandu_semantics = { path = "../arandu_semantics" }
 rustc-hash = { workspace = true }

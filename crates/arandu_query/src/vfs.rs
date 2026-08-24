@@ -7,7 +7,7 @@
 //! `resolve_module_path` without restarting the process.
 //!
 //! Stdlib stays install-fixed (Camada D); package root is the second root
-//! registered on the same [`crate::db::DatabaseImpl::resolve_module_path`].
+//! registered on the same `DatabaseImpl::resolve_module_path`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

@@ -454,7 +454,7 @@ impl SymbolTable {
     }
 
     /// Defines a new symbol in the specified scope.
-    /// Define a private (non-exported) symbol. Prefer [`define_vis`] for API items.
+    /// Define a private (non-exported) symbol. Prefer [`Self::define_vis`] for API items.
     ///
     /// # Errors
     ///

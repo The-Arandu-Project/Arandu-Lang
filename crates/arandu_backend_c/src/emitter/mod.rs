@@ -636,7 +636,7 @@ static inline void* ar_co_await_ptr(uint8_t* aw) {{
             "    return ar_str_pack(buf, ({len_c_ty})n);"
         );
         let _ = writeln!(&mut self.output, "}}");
-        // Keep in sync with arandu_backend_cranelift::to_str_runtime::format_f64_v01
+        // Keep in sync with arandu_runtime::to_str_runtime::format_f64_v01
         // (specials + integer-looking values + %.15g for the rest).
         let _ = writeln!(&mut self.output, "static ArStr ar_f64_to_str(double v) {{");
         let _ = writeln!(&mut self.output, "    char tmp[64];");

@@ -6,7 +6,7 @@
 //! - Explicit handles, no global language-level executor in user code beyond
 //!   these host symbols (stdlib wraps them as `SyncExecutor`).
 //! - `spawn` parks a coroutine state blob; `join` drives it with
-//!   [`ar_co_block_on_i64`](crate::poll_runtime::ar_co_block_on_i64).
+//!   [`crate::poll_runtime::ar_co_block_on_i64`].
 //! - Cooperative only: Pending spins (no OS reactor yet — SL_R.2).
 
 use crate::poll_runtime::{ar_co_block_on_i64, ar_co_free};

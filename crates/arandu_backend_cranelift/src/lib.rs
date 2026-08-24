@@ -4,32 +4,34 @@
 //! The backend compiles an [`AmirProgram`] to native machine code in memory
 //! via Cranelift and returns a [`CompiledModule`] whose functions can be
 //! called directly through raw function pointers.
+//!
+//! Host runtime routines (SL_R) live in `arandu_runtime`; this crate registers
+//! them as JIT imports through the re-exports below, so existing
+//! `arandu_backend_cranelift::<module>_runtime` paths keep working.
 
 #![allow(clippy::collapsible_if)]
 pub mod abi;
-pub mod gen_runtime;
 pub mod jit;
-pub mod os_runtime;
-pub mod poll_runtime;
-pub mod reactor_runtime;
-pub mod rt_runtime;
-pub mod socket_runtime;
-pub mod supervisor_runtime;
-pub mod to_str_runtime;
 pub mod translator;
 pub mod types;
-pub mod vec_runtime;
-pub mod waker_runtime;
+
+// Host runtime routines moved to `arandu_runtime`; re-exported so the JIT
+// symbol table (`crate::<module>_runtime::*`) and external paths keep working.
+pub use arandu_runtime::{
+    gen_runtime, os_runtime, poll_runtime, reactor_runtime, rt_runtime, socket_runtime,
+    supervisor_runtime, to_str_runtime, vec_runtime, waker_runtime,
+};
 
 pub use crate::jit::CompiledModule;
 
 use crate::jit::AranduJit;
+use arandu_codegen::{CodegenBackend, CompiledCode};
 use arandu_semantics::amir::AmirProgram;
-use arandu_semantics::{CodegenBackend, CompiledCode, Diagnostic, SymbolTable};
+use arandu_semantics::{Diagnostic, SymbolTable, TypeInfo};
 
 /// Entry point for the Cranelift JIT backend.
 ///
-/// Implements [`CodegenBackend`]; use [`CraneliftBackend::new`] and then
+/// Implements [`CodegenBackend`]; use [`CraneliftBackend::try_new`] and then
 /// [`CraneliftBackend::compile`] to JIT-compile an [`AmirProgram`].
 pub struct CraneliftBackend {
     jit: AranduJit,
@@ -50,14 +52,14 @@ impl CraneliftBackend {
         self,
         program: &AmirProgram,
         symbols: &SymbolTable,
-        type_info: &arandu_semantics::TypeInfo,
+        type_info: &TypeInfo,
     ) -> Result<CompiledModule, Diagnostic> {
         CodegenBackend::compile(self, program, symbols, type_info)
     }
 }
 
 impl CodegenBackend for CraneliftBackend {
-    type TargetConfig = arandu_semantics::TypeInfo;
+    type TargetConfig = TypeInfo;
     type CompilationOutput = CompiledModule;
 
     fn compile(

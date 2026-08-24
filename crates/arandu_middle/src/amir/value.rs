@@ -73,7 +73,7 @@ pub enum AmirRvalue {
     BorrowMut(AmirPlace),
     /// A3.4: pin-free borrow — value is `LocalId` as an index into coroutine /
     /// frame state, **not** a raw address. Survives stack↔heap moves of the
-    /// state blob. Loads through it are rewritten to [`Load`] of the local.
+    /// state blob. Loads through it are rewritten to `Load` of the local.
     RelativeBorrow {
         local: LocalId,
         /// When true, surface type is `&mut T`; otherwise `&T`.
@@ -91,7 +91,7 @@ pub enum AmirRvalue {
         /// rewritten to heap or rejected by analysis.
         stack: bool,
     },
-    /// F2.3.runtime: insert `value` into the process gen-arena; result is [`ArType::GenRef`].
+    /// F2.3.runtime: insert `value` into the process gen-arena; result is [`crate::types::ArType::GenRef`].
     GenInsert {
         value: AmirOperand,
     },

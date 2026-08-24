@@ -432,13 +432,13 @@ Estado: `done`.
 
 ### Fase 3 — Extração do crate `arandu_runtime` e `arandu_codegen`
 
-Estado: `planned`.
+Estado: `done`.
 
-- [ ] 3.1 Criar `crates/arandu_runtime` e migrar rotinas de
+- [x] 3.1 Criar `crates/arandu_runtime` e migrar rotinas de
       socket/reactor/supervisor/vec.
-- [ ] 3.2 Criar `crates/arandu_codegen` com trait `CodegenBackend`.
-- [ ] 3.3 Conectar Cranelift e C Backend ao `arandu_runtime` unificado.
-- [ ] 3.4 Validar testes de integração JIT e paridade C.
+- [x] 3.2 Criar `crates/arandu_codegen` com trait `CodegenBackend`.
+- [x] 3.3 Conectar Cranelift e C Backend ao `arandu_runtime` unificado.
+- [x] 3.4 Validar testes de integração JIT e paridade C.
 
 ### Fase 4 — Refatoração do Typechecker: Flat Constraint Worklist Solver
 
