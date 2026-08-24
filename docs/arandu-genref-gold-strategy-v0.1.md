@@ -250,6 +250,25 @@ o baseline sem escape é representativo do pipeline completo.
 **Saída:** stdlib estável para arenas cruzadas, stale handles e payloads não
 triviais.
 
+#### Registro de execução G1
+
+- [x] núcleo seguro de produção em `arandu_runtime::genref`, separado dos
+  adapters ABI legados;
+- [x] `ArenaId` e `GenRef<T>` opacos, tipados e sem construtor por bits;
+- [x] zero completo reservado como inválido;
+- [x] identidade geracional de arena validada antes do lookup do slot;
+- [x] `Vacant`, `Occupied` e `Retired`, sem `wrapping_add`;
+- [x] erros tipados para invalid, wrong-arena, arena-gone, stale, overflow e
+  falha de alocação;
+- [x] crescimento usa `try_reserve`, aritmética checked e reserva antes de
+  qualquer transição destrutiva;
+- [x] `get` empresta, `remove` move e `destroy_arena` destrói payloads vivos
+  exatamente uma vez;
+- [x] registry é `!Send + !Sync` deliberadamente; concorrência não é herdada
+  da trava global do MVP;
+- [ ] adapters `ar_gen_*_i64`, backend C e stdlib ainda usam o contrato MVP e
+  só migrarão depois de G2/G3 congelarem payload e AMIR. Não contam como Gold.
+
 ### G2 — Contrato AMIR e validação
 
 - explicitar `T` e o domínio nas operações Gen;
