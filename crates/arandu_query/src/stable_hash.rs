@@ -555,8 +555,9 @@ impl StableHash for crate::passes::ItemSourceInput {
     fn stable_hash(&self) -> blake3::Hash {
         // Content-address only this item's source fingerprint — not the whole Program.
         let mut h = Hasher::new();
-        h.update(b"ItemSourceInput/v2");
+        h.update(b"ItemSourceInput/v3");
         hash_symbol_id(&mut h, self.item_sym);
+        h.update(&u32_le(self.item_start));
         h.update(self.body_fp.as_bytes());
         finish(h)
     }

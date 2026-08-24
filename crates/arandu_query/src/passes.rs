@@ -275,6 +275,9 @@ pub fn module_signatures(db: &dyn ArandCompilerDb, file: SourceFile) -> ModuleSi
 pub struct ItemSourceInput {
     pub program: Arc<Program>,
     pub item_sym: arandu_middle::SymbolId,
+    /// Start of the complete top-level item, including its attributes. Used by
+    /// structured fixes without re-parsing diagnostic presentation text.
+    pub item_start: u32,
     /// blake3 of the item's source slice for StableHash / early cutoff.
     pub(crate) body_fp: blake3::Hash,
 }
@@ -304,6 +307,7 @@ pub fn item_source_input(
         return HashEq::new(ItemSourceInput {
             program: Arc::new(empty_program()),
             item_sym,
+            item_start: 0,
             body_fp: blake3::hash(b"parse-error"),
         });
     };
@@ -313,6 +317,7 @@ pub fn item_source_input(
     let ranges = tree.item_ranges();
 
     let mut body_fp = blake3::hash(b"item-missing");
+    let mut item_start = 0;
     for decl_id in &program.decls {
         let decl = program.pool.decl(*decl_id);
         let matches = match arandu_semantics::primary_def_key(decl) {
@@ -330,6 +335,7 @@ pub fn item_source_input(
             continue;
         }
         let span = arandu_semantics::item_source_span(decl);
+        item_start = span.start;
         // Floor/ceil to char boundaries — spans can land mid-UTF-8 sequence
         // (e.g. multi-byte comment characters adjacent to an item).
         let floor = |i: usize| {
@@ -371,6 +377,7 @@ pub fn item_source_input(
     HashEq::new(ItemSourceInput {
         program: Arc::clone(program),
         item_sym,
+        item_start,
         body_fp,
     })
 }

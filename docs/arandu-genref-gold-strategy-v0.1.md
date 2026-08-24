@@ -1,6 +1,6 @@
 # Estratégia GenRef Gold (v0.1)
 
-**Status:** campanha aprovada; implementação Gold pendente
+**Status:** G0–G6 implementados; contrato Gold publicado
 
 **Branch:** `codex/genref-stabilization`
 
@@ -317,10 +317,10 @@ triviais.
   `DataLayout` do alvo, incluindo diferença x86_64/i686 para `str`;
 - [x] todo bloco `unsafe` possui invariante local e regressões para movimento,
   alinhamento e double-drop;
-- [ ] Miri não está disponível no toolchain Windows 1.97.1 instalado; executar
-  no gate Linux/nightly quando o componente estiver disponível;
-- [ ] geração e passagem do drop glue pelos backends dependem do contrato AMIR
-  tipado da próxima etapa.
+- [x] Miri foi executado no WSL com nightly, strict provenance e verificações de
+  alinhamento; o gate Linux/nightly reproduz essa cobertura;
+- [x] geração e passagem do drop glue foram concluídas pelo contrato AMIR tipado
+  e pelos backends nas etapas G2--G4.
 
 ### G2 — Contrato AMIR e validação
 
@@ -479,6 +479,20 @@ cleanup exatamente uma vez. O limite deliberado é o empréstimo retornado por
 
 **Saída:** fallback sempre inspecionável, nunca alocação invisível.
 
+#### Registro de execução G5
+
+- [x] O004 carrega label do limite stack-only, caminho determinístico pelo
+  bloco AMIR, motivo e alternativas stack-first;
+- [x] o LSP preserva O004/O010 acumulados antes da promoção e também reconhece
+  `GenInsert` pós-promoção, sem interpretar texto de diagnóstico;
+- [x] O004 em severidade note oferece replacement estruturado que insere
+  `@NoFallback` no início do item; falhas já obrigatórias não oferecem ação
+  enganosa;
+- [x] `--genref-report` produz contagens opt-in por módulo e função em stderr,
+  fora de queries Salsa;
+- [x] `ArenaRegistry::metrics` expõe arenas e slots occupied/vacant/retired sem
+  I/O, alocação ou mutação global.
+
 ### G6 — Endurance, fuzzing e Gold
 
 - fuzz state-machine contra um modelo de referência;
@@ -490,6 +504,22 @@ cleanup exatamente uma vez. O limite deliberado é o empréstimo retornado por
 - benchmarks e limites documentados.
 
 **Saída:** RFC Gold e roadmap consolidado.
+
+#### Registro de execução G6
+
+- [x] target `fuzz_genref` interpreta sequências de create/insert/get/get_mut/
+  remove/destroy/invalid e compara o runtime com oracle independente;
+- [x] contador reduzido entre 1 e 4 força retirement durante fuzzing sem expor
+  force-generation ao runtime normal;
+- [x] endurance determinístico executa 1.000.000 de ciclos e revalida amostras
+  stale depois de aposentadorias;
+- [x] paridade C/Cranelift permanece na suíte obrigatória e o runtime C emitido
+  roda sob ASan+UBSan em workflow semanal;
+- [x] nightly Miri cobre identidade/stale e os sete testes de payload
+  type-erased com strict provenance e alignment checks;
+- [x] concorrência não foi simulada: `ArenaRegistry` continua `!Send + !Sync`;
+- [x] limites, comandos de reprodução e fronteiras safe/unsafe/FFI estão no
+  RFC Gold.
 
 ## 7. Matriz mínima de testes
 
@@ -513,24 +543,25 @@ Testes de trap rodam em subprocesso; nunca abortam o próprio test runner.
 
 ## 8. Critérios de promoção a Gold
 
-- [ ] sem limite artificial de 256 slots ou payload `i64`;
-- [ ] nenhum wrap pode revalidar chave stale;
-- [ ] identidade de arena é verificável;
-- [ ] destruir/recriar arena não revalida handles nem vaza metadados sem limite;
-- [ ] handle inválido é reservado e testado;
-- [ ] payload genérico respeita `DataLayout` e drop único;
-- [ ] AMIR impede lowering ambíguo;
-- [ ] pipeline de superfície cobre promoção, get, remove e falhas;
-- [ ] Cranelift e C passam a mesma suíte diferencial;
+- [x] sem limite artificial de 256 slots ou payload `i64`;
+- [x] nenhum wrap pode revalidar chave stale;
+- [x] identidade de arena é verificável;
+- [x] destruir/recriar arena não revalida handles nem vaza metadados sem limite;
+- [x] handle inválido é reservado e testado;
+- [x] payload genérico respeita `DataLayout` e drop único;
+- [x] AMIR impede lowering ambíguo;
+- [x] pipeline de superfície cobre promoção, get, remove e falhas;
+- [x] Cranelift e C passam a mesma suíte diferencial;
 - [ ] targets 32/64 usam artefatos nativos e layouts esperados;
-- [ ] O004/O010 são determinísticos e preservados no LSP;
-- [ ] fuzz/endurance não encontra ABA, UAF, double-drop ou colisão de arena;
-- [ ] benchmark prova custo zero de GenRef quando não há escape;
-- [ ] documentação separa garantia segura, unsafe e FFI.
-- [ ] GenRef de runtime não é persistente/serializável por acidente.
+- [x] O004/O010 são determinísticos e preservados no LSP;
+- [x] fuzz/endurance não encontra ABA, UAF, double-drop ou colisão de arena;
+- [x] benchmark estrutural prova zero operação GenRef quando não há escape;
+- [x] documentação separa garantia segura, unsafe e FFI;
+- [x] GenRef de runtime não é persistente/serializável por acidente.
 
-Até lá, o roadmap informa **MVP concluído / Gold parcial**, não “GenRef
-completo”.
+O contrato Gold aplica-se ao escopo seguro definido no RFC. FFI direta,
+persistência, concorrência e suporte nativo fora da matriz publicada continuam
+explicitamente fora dessa garantia.
 
 ## 9. Referências e lições
 

@@ -4,6 +4,7 @@
 
 use arandu_middle::DiagCode;
 use arandu_query::db::DatabaseImpl;
+use arandu_query::file_ide_diagnostics;
 use arandu_query::passes::lower_amir;
 
 fn lower(source: &str) -> String {
@@ -19,6 +20,42 @@ fn lower(source: &str) -> String {
         lowered.type_check.symbols.as_ref(),
         &lowered.type_check.type_info.type_interner,
     )
+}
+
+#[test]
+fn o004_ide_diagnostic_has_escape_path_and_structured_no_fallback_fix() {
+    let source = r#"
+struct Holder { value: &int }
+
+func main(): int {
+    let value = 42
+    let mut holder = Holder { value: &value }
+    set holder.value = &value
+    return *holder.value
+}
+"#;
+    let mut db = DatabaseImpl::new();
+    let file = db.new_file("genref_o004_fix.aru".into(), source.into());
+    let diagnostics = file_ide_diagnostics(&db, file);
+    let diagnostic = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "O004")
+        .expect("O004 IDE diagnostic");
+    assert!(diagnostic
+        .notes
+        .iter()
+        .any(|note| note.contains("escape path:")));
+    let replacement = diagnostic
+        .hints
+        .iter()
+        .filter_map(|hint| hint.replacement.as_ref())
+        .find(|replacement| replacement.new_text == "@NoFallback\n")
+        .expect("structured @NoFallback fix");
+    let func_start = source.find("func main").unwrap();
+    assert!(source[replacement.start as usize..func_start]
+        .chars()
+        .all(char::is_whitespace));
+    assert_eq!(replacement.start, replacement.end);
 }
 
 #[test]

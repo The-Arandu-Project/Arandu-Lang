@@ -117,7 +117,7 @@ pub fn check_escapes_by_block(
                 ));
                 diags.push((
                     ev.block,
-                    o004_diag(&name, ev.span, ev.reason, /*as_error*/ no_fb),
+                    o004_diag(&name, ev.span, ev.block, ev.reason, /*as_error*/ no_fb),
                 ));
             }
             EscapeKind::HeapStore => {
@@ -131,6 +131,7 @@ pub fn check_escapes_by_block(
                     o004_diag(
                         &name,
                         ev.span,
+                        ev.block,
                         ev.reason,
                         /*as_error*/ no_fb || projected,
                     )
@@ -165,7 +166,7 @@ fn has_projected_borrow(func: &AmirFunc, local: LocalId) -> bool {
         })
 }
 
-fn o004_diag(name: &str, span: Span, reason: &str, as_error: bool) -> Diagnostic {
+fn o004_diag(name: &str, span: Span, block: BlockId, reason: &str, as_error: bool) -> Diagnostic {
     let msg = format!("generational fallback: '{name}' escapes stack-limited borrow window");
     let d = if as_error {
         Diagnostic::error(DiagCode::O004GenerationalFallback, msg, span).with_note(
@@ -176,9 +177,15 @@ fn o004_diag(name: &str, span: Span, reason: &str, as_error: bool) -> Diagnostic
             "not a silent heap promotion: this note records why the static borrow window was insufficient",
         )
     };
-    d.with_note(reason.to_string()).with_hint(
-        "refactor to keep the reference inside the owner's live range, or use an explicit heap type",
-    )
+    d.with_label(span, "escape crosses the stack-only borrow boundary")
+        .with_note(format!(
+            "escape path: local `{name}` -> AMIR block {} -> storage that may outlive the borrow",
+            block.as_usize()
+        ))
+        .with_note(reason.to_string())
+        .with_hint(
+            "stack-first alternatives: shorten the borrow, pass the owner, return owned data, or use an explicit heap type",
+        )
 }
 
 /// Pure escape finder (no diagnostics).

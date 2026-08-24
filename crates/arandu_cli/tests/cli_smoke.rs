@@ -82,6 +82,23 @@ func main() {
     assert!(String::from_utf8_lossy(&check.stdout).contains("ok"));
 }
 
+#[test]
+fn genref_report_is_opt_in_and_stays_off_stdout() {
+    let file = std::env::temp_dir().join("arandu_cli_genref_report.aru");
+    fs::write(&file, "func main(): int { return 0 }\n").expect("fixture");
+    let path = file.to_string_lossy();
+
+    let output = run_cli(&["check", &path, "--genref-report"]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        format!("ok {path}")
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("[arandu][genref]"));
+    assert!(stderr.contains("promotions=0 checks=0"));
+}
+
 /// Builtin prelude must resolve on the CLI/Salsa path without on-disk modules.
 #[test]
 fn check_import_io_prelude_succeeds() {

@@ -12,6 +12,19 @@ use std::env;
 use std::fs;
 use std::process::Command;
 
+fn c_compiler(cc: &str) -> Command {
+    let mut command = Command::new(cc);
+    if env::var_os("ARANDU_C_SANITIZERS").is_some() {
+        command.args([
+            "-O1",
+            "-g",
+            "-fno-omit-frame-pointer",
+            "-fsanitize=address,undefined",
+        ]);
+    }
+    command
+}
+
 fn compile_src(src: &str) -> (AmirProgram, TypeCheckResult) {
     let program = arandu_parser::parse(src).expect("parse failed");
     let resolution = resolve_for_test(0, &program);
@@ -140,7 +153,7 @@ int main(void) {
     let exe_file = out_dir.join("genref_dynamic_capacity.exe");
     fs::write(&c_file, source).unwrap();
     let cc = env::var("CC").unwrap_or_else(|_| "gcc".to_string());
-    let compiled = Command::new(&cc)
+    let compiled = c_compiler(&cc)
         .arg(&c_file)
         .arg("-o")
         .arg(&exe_file)
@@ -213,7 +226,7 @@ int main() {
     let cc = env::var("CC").unwrap_or_else(|_| "gcc".to_string());
 
     // `-lm` for ToStr float helpers (`isnan`/`isinf` via math.h).
-    let compile_status = Command::new(&cc)
+    let compile_status = c_compiler(&cc)
         .arg(&c_file)
         .arg("-o")
         .arg(&exe_file)

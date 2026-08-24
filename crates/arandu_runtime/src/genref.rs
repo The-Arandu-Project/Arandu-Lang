@@ -90,6 +90,16 @@ pub enum GenError {
     InvalidPayloadPointer,
 }
 
+/// Allocation-free snapshot for opt-in runtime observability.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RegistryMetrics {
+    pub live_arenas: usize,
+    pub occupied_slots: usize,
+    pub vacant_slots: usize,
+    pub retired_slots: usize,
+    pub retired_arenas: usize,
+}
+
 #[derive(Debug)]
 enum ValueState<T> {
     Vacant,
@@ -240,8 +250,11 @@ impl<T> ArenaRegistry<T> {
         }
     }
 
-    #[cfg(test)]
-    fn with_generation_limit(generation_limit: u32) -> Result<Self, GenError> {
+    /// Construct a registry with a reduced counter width for fuzzing and
+    /// retirement/endurance campaigns, never for normal runtime consumers.
+    #[cfg(any(test, feature = "fuzzing"))]
+    #[doc(hidden)]
+    pub fn with_generation_limit(generation_limit: u32) -> Result<Self, GenError> {
         if generation_limit == 0 {
             return Err(GenError::CapacityOverflow);
         }
@@ -318,6 +331,29 @@ impl<T> ArenaRegistry<T> {
             ArenaState::Vacant
         };
         Ok(())
+    }
+
+    /// Inspect current slot state without mutation, allocation or I/O.
+    #[must_use]
+    pub fn metrics(&self) -> RegistryMetrics {
+        let mut metrics = RegistryMetrics::default();
+        for arena in &self.arenas {
+            match &arena.state {
+                ArenaState::Live(live) => {
+                    metrics.live_arenas += 1;
+                    for slot in &live.slots {
+                        match slot.state {
+                            ValueState::Vacant => metrics.vacant_slots += 1,
+                            ValueState::Occupied(_) => metrics.occupied_slots += 1,
+                            ValueState::Retired => metrics.retired_slots += 1,
+                        }
+                    }
+                }
+                ArenaState::Retired => metrics.retired_arenas += 1,
+                ArenaState::Vacant => {}
+            }
+        }
+        metrics
     }
 
     fn validate_identity(&self, arena_id: ArenaId, handle: GenRef<T>) -> Result<(), GenError> {
@@ -468,5 +504,27 @@ mod tests {
         assert_eq!(registry.get(arena, live).unwrap().1, 9);
         registry.destroy_arena(arena).unwrap();
         assert_eq!(drops.get(), 2);
+    }
+
+    #[test]
+    fn million_cycle_endurance_retires_without_aba() {
+        const CYCLES: u64 = 1_000_000;
+        let mut registry = ArenaRegistry::<u64>::with_generation_limit(3).unwrap();
+        let arena = registry.create_arena().unwrap();
+        let mut stale_samples = Vec::new();
+        for value in 0..CYCLES {
+            let handle = registry.insert(arena, value).unwrap();
+            if value % 100_000 == 0 {
+                stale_samples.push(handle);
+            }
+            assert_eq!(registry.remove(arena, handle), Ok(value));
+        }
+        for stale in stale_samples {
+            assert_eq!(registry.get(arena, stale), Err(GenError::Stale));
+        }
+        let metrics = registry.metrics();
+        assert_eq!(metrics.occupied_slots, 0);
+        assert_eq!(metrics.retired_slots, (CYCLES / 3) as usize);
+        assert_eq!(metrics.vacant_slots, usize::from(!CYCLES.is_multiple_of(3)));
     }
 }

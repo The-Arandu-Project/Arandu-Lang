@@ -5,6 +5,9 @@ edition = "2024"
 license.workspace = true
 authors.workspace = true
 
+[features]
+fuzzing = []
+
 [dependencies]
 # SL_R.2 reactor (epoll + timerfd on Linux); portable fallback elsewhere
 libc = "0.2.189"

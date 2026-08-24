@@ -40,3 +40,9 @@ path = "fuzz_targets/fuzz_lex_simd.rs"
 [[bin]]
 name = "fuzz_parse_structured"
 path = "fuzz_targets/fuzz_parse_structured.rs"
+
+[[bin]]
+name = "fuzz_genref"
+path = "fuzz_targets/fuzz_genref.rs"
+test = false
+doc = false

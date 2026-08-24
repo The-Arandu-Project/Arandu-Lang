@@ -132,6 +132,7 @@ dependencies = [
  "arandu_lexer",
  "arandu_parser",
  "arandu_query",
+ "arandu_runtime",
 ]
 
 [[package]]

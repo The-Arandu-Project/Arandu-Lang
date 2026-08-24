@@ -6,7 +6,7 @@
 
 use crate::db::HashEq;
 use crate::{ArandCompilerDb, SourceFile};
-use arandu_middle::amir::{AmirFunc, BlockId};
+use arandu_middle::amir::{AmirFunc, AmirRvalue, AmirStmt, BlockId};
 use arandu_middle::{Diagnostic, SymbolId, SymbolKind};
 
 /// Compact, hash-stable summary of block-local dataflow.
@@ -425,6 +425,48 @@ pub fn item_ide_diagnostics(
     let amir = func_amir(db, file, item_sym);
     if !amir.blocks.is_empty() {
         let sigs = crate::passes::module_signatures(db, file);
+        let item = crate::passes::item_source_input(db, file, item_sym);
+        // `func_amir` is post-promotion, so the original borrow no longer
+        // escapes when the ordinary escape checker runs. Preserve G5
+        // observability from the explicit GenInsert semantic marker instead
+        // of parsing presentation text or depending on a monolithic query.
+        for block in &amir.blocks {
+            for stmt in amir.block_stmts(block.id) {
+                let AmirStmt::Assign {
+                    rhs: AmirRvalue::GenInsert { origin, .. },
+                    ..
+                } = stmt
+                else {
+                    continue;
+                };
+                let diagnostic = Diagnostic::note(
+                    arandu_middle::DiagCode::O004GenerationalFallback,
+                    "generational fallback: compiler-managed owner promotion",
+                    *origin,
+                )
+                .with_label(*origin, "escape crosses the stack-only borrow boundary")
+                .with_note(format!(
+                    "escape path: source borrow -> AMIR block {} -> GenRef storage",
+                    block.id.as_usize()
+                ))
+                .with_note("the promoted owner remains checked by generation at every access")
+                .with_hint(
+                    "stack-first alternatives: shorten the borrow, pass the owner, return owned data, or use an explicit heap type",
+                );
+                let mut diagnostic =
+                    IdeDiagnostic::from_diag(&diagnostic, Some(item_sym), Some(block.id));
+                diagnostic.hints.push(IdeHint {
+                    message: "forbid this implicit fallback in the containing function".into(),
+                    replacement: Some(IdeReplacement {
+                        file_id: *file.file_id(db),
+                        start: item.item_start,
+                        end: item.item_start,
+                        new_text: "@NoFallback\n".into(),
+                    }),
+                });
+                out.push(diagnostic);
+            }
+        }
         for (bid, d) in
             arandu_mir::definite_init::check_definite_init_by_block(amir, sigs.symbols.as_ref())
         {
@@ -449,7 +491,22 @@ pub fn item_ide_diagnostics(
             &body_tc.type_info.type_interner,
             arandu_mir::escape_analysis::EscapeCheckOptions { no_fallback },
         ) {
-            out.push(IdeDiagnostic::from_diag(&d, Some(item_sym), Some(bid)));
+            let mut diagnostic = IdeDiagnostic::from_diag(&d, Some(item_sym), Some(bid));
+            if diagnostic.code == "O004"
+                && d.severity == arandu_middle::Severity::Note
+                && !no_fallback
+            {
+                diagnostic.hints.push(IdeHint {
+                    message: "forbid this implicit fallback in the containing function".into(),
+                    replacement: Some(IdeReplacement {
+                        file_id: *file.file_id(db),
+                        start: item.item_start,
+                        end: item.item_start,
+                        new_text: "@NoFallback\n".into(),
+                    }),
+                });
+            }
+            out.push(diagnostic);
         }
 
         // Populate block facts only (do NOT call block_diagnostics — cycle risk).
@@ -600,6 +657,54 @@ pub fn file_ide_diagnostics(
         let key = (d.start, d.end, d.code.clone(), d.message.clone());
         if covered.insert(key) {
             out.push(d.clone());
+        }
+    }
+
+    // Lowering accumulators include pre-promotion O004/O010 evidence that is
+    // intentionally absent from the post-promotion AMIR. Preserve it at the
+    // file composition boundary; do not force sibling item queries to depend
+    // on one another.
+    let _ = crate::passes::lower_amir(db, file);
+    let lower_diags = crate::passes::lower_amir::accumulated::<
+        arandu_middle::db::DiagnosticsAccumulator,
+    >(db, file);
+    let item_ranges = crate::passes::syntax_tree(db, file).item_ranges();
+    for accumulated in lower_diags {
+        if !matches!(
+            accumulated.0.code,
+            arandu_middle::DiagCode::O004GenerationalFallback
+                | arandu_middle::DiagCode::O010EscapeOfBorrowedValue
+        ) {
+            continue;
+        }
+        let mut diagnostic = IdeDiagnostic::from_diag(&accumulated.0, None, None);
+        if accumulated.0.code == arandu_middle::DiagCode::O004GenerationalFallback
+            && accumulated.0.severity == arandu_middle::Severity::Note
+        {
+            if let Some((start, _)) = item_ranges
+                .iter()
+                .copied()
+                .find(|(start, end)| *start <= diagnostic.start && diagnostic.end <= *end)
+            {
+                diagnostic.hints.push(IdeHint {
+                    message: "forbid this implicit fallback in the containing function".into(),
+                    replacement: Some(IdeReplacement {
+                        file_id: *file.file_id(db),
+                        start,
+                        end: start,
+                        new_text: "@NoFallback\n".into(),
+                    }),
+                });
+            }
+        }
+        let key = (
+            diagnostic.start,
+            diagnostic.end,
+            diagnostic.code.clone(),
+            diagnostic.message.clone(),
+        );
+        if covered.insert(key) {
+            out.push(diagnostic);
         }
     }
 

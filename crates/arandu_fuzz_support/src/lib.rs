@@ -15,16 +15,18 @@ pub enum Target {
     Cycles,
     LexSimd,
     Structured,
+    GenRef,
 }
 
 impl Target {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Lex,
         Self::Syntax,
         Self::Pipeline,
         Self::Cycles,
         Self::LexSimd,
         Self::Structured,
+        Self::GenRef,
     ];
 
     pub const fn name(self) -> &'static str {
@@ -35,6 +37,7 @@ impl Target {
             Self::Cycles => "cycles",
             Self::LexSimd => "lex-simd",
             Self::Structured => "structured",
+            Self::GenRef => "genref",
         }
     }
 
@@ -54,6 +57,7 @@ pub fn run(target: Target, data: &[u8]) {
         Target::Cycles => run_cycles(data),
         Target::LexSimd => run_lex_simd(data),
         Target::Structured => run_structured(data),
+        Target::GenRef => run_genref(data),
     }
 }
 
@@ -155,4 +159,144 @@ fn run_structured(data: &[u8]) {
     }
     source.push_str("}\n");
     let _ = arandu_parser::parse_recovering(&source);
+}
+
+/// Differential state-machine for the safe, thread-confined GenRef core. The
+/// oracle models the public contract, not slots, generations or free lists.
+fn run_genref(data: &[u8]) {
+    use arandu_runtime::genref::{ArenaId, ArenaRegistry, GenError, GenRef};
+
+    #[derive(Clone, Copy)]
+    struct Handle {
+        arena: usize,
+        key: GenRef<u64>,
+        value: u64,
+        live: bool,
+    }
+
+    let limit = 1 + u32::from(data.first().copied().unwrap_or(3) % 4);
+    let mut registry = ArenaRegistry::with_generation_limit(limit).expect("non-zero limit");
+    let mut arenas: Vec<(ArenaId, bool)> = Vec::new();
+    let mut handles: Vec<Handle> = Vec::new();
+
+    for (step, op) in data
+        .get(1..)
+        .unwrap_or_default()
+        .chunks(4)
+        .take(4096)
+        .enumerate()
+    {
+        let code = op.first().copied().unwrap_or(0) % 7;
+        let arena_index = usize::from(op.get(1).copied().unwrap_or(0));
+        let handle_index = usize::from(op.get(2).copied().unwrap_or(0));
+        let value = ((step as u64) << 8) | u64::from(op.get(3).copied().unwrap_or(0));
+        match code {
+            0 => {
+                if let Ok(id) = registry.create_arena() {
+                    arenas.push((id, true));
+                }
+            }
+            1 if !arenas.is_empty() => {
+                let index = arena_index % arenas.len();
+                let (id, live) = arenas[index];
+                let result = registry.insert(id, value);
+                if live {
+                    if let Ok(key) = result {
+                        handles.push(Handle {
+                            arena: index,
+                            key,
+                            value,
+                            live: true,
+                        });
+                    }
+                } else {
+                    assert_eq!(result, Err(GenError::ArenaGone));
+                }
+            }
+            2 | 3 if !arenas.is_empty() && !handles.is_empty() => {
+                let ai = arena_index % arenas.len();
+                let hi = handle_index % handles.len();
+                let (id, arena_live) = arenas[ai];
+                let handle = handles[hi];
+                let expected = if ai != handle.arena {
+                    Err(GenError::WrongArena)
+                } else if !arena_live {
+                    Err(GenError::ArenaGone)
+                } else if !handle.live {
+                    Err(GenError::Stale)
+                } else {
+                    Ok(handle.value)
+                };
+                if code == 2 {
+                    assert_eq!(registry.get(id, handle.key).copied(), expected);
+                } else {
+                    assert_eq!(registry.remove(id, handle.key), expected);
+                    if expected.is_ok() {
+                        handles[hi].live = false;
+                    }
+                }
+            }
+            4 if !arenas.is_empty() => {
+                let ai = arena_index % arenas.len();
+                let (id, live) = arenas[ai];
+                assert_eq!(
+                    registry.destroy_arena(id),
+                    if live {
+                        Ok(())
+                    } else {
+                        Err(GenError::ArenaGone)
+                    }
+                );
+                if live {
+                    arenas[ai].1 = false;
+                    for handle in &mut handles {
+                        if handle.arena == ai {
+                            handle.live = false;
+                        }
+                    }
+                }
+            }
+            5 if !arenas.is_empty() => {
+                let id = arenas[arena_index % arenas.len()].0;
+                assert_eq!(
+                    registry.get(id, GenRef::INVALID),
+                    Err(GenError::InvalidHandle)
+                );
+            }
+            6 if !arenas.is_empty() && !handles.is_empty() => {
+                let hi = handle_index % handles.len();
+                let ai = handles[hi].arena;
+                let (id, arena_live) = arenas[ai];
+                let handle = handles[hi];
+                let expected = if !arena_live {
+                    Err(GenError::ArenaGone)
+                } else if !handle.live {
+                    Err(GenError::Stale)
+                } else {
+                    Ok(())
+                };
+                assert_eq!(
+                    registry.get_mut(id, handle.key).map(|slot| *slot = value),
+                    expected
+                );
+                if expected.is_ok() {
+                    handles[hi].value = value;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod genref_tests {
+    #[test]
+    fn state_machine_covers_cross_arena_stale_and_retirement() {
+        let mut input = vec![3];
+        input.extend_from_slice(&[
+            0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 7, 2, 1, 0, 0, 3, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 8, 3,
+            0, 1, 0, 1, 0, 0, 9, 3, 0, 2, 0, 1, 0, 0, 10, 4, 0, 0, 0, 2, 0, 3, 0,
+        ]);
+        super::run_genref(&input);
+    }
 }
