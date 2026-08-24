@@ -82,9 +82,75 @@ pub(crate) fn lower_decl(
             } else {
                 crate::attributes::AnnotationTarget::Function
             };
-            let no_fallback =
-                crate::attributes::validate_attributes(&d.attrs, annotation_target, pool)
-                    .contains(crate::attributes::AnnotationId::NoFallback);
+            let annotations =
+                crate::attributes::validate_attributes(&d.attrs, annotation_target, pool);
+            let no_fallback = annotations.contains(crate::attributes::AnnotationId::NoFallback);
+            if annotations.contains(crate::attributes::AnnotationId::Destructor) {
+                let valid_shape = matches!(d.name, FuncName::Method { .. })
+                    && d.params.len() == 1
+                    && d.params[0].is_receiver
+                    && d.params[0].ownership == Some(arandu_parser::Ownership::Own)
+                    && matches!(
+                        type_check.type_info.type_interner.resolve(return_type),
+                        ArType::Void
+                    )
+                    && !d.is_async;
+                if !valid_shape {
+                    return Err(Diagnostic::error(
+                        crate::DiagCode::T035InvalidDestructor,
+                        "@Destructor requires a synchronous method `func Type.name(own self): void` with no additional parameters",
+                        d.span,
+                    ));
+                }
+                let receiver_ty = d.params.first().and_then(|_| {
+                    match type_check.type_info.type_interner.resolve(decl_ty_id) {
+                        ArType::Func(params, _) => params.first().copied(),
+                        _ => None,
+                    }
+                });
+                let Some(receiver_ty) = receiver_ty else {
+                    return Err(Diagnostic::error(
+                        crate::DiagCode::T035InvalidDestructor,
+                        "@Destructor receiver must be a nominal struct or enum type",
+                        d.params[0].span,
+                    ));
+                };
+                let Some(receiver_symbol) =
+                    (match type_check.type_info.type_interner.resolve(receiver_ty) {
+                        ArType::Named(symbol, _) => Some(symbol),
+                        _ => None,
+                    })
+                else {
+                    return Err(Diagnostic::error(
+                        crate::DiagCode::T035InvalidDestructor,
+                        "@Destructor receiver must be a nominal struct or enum type",
+                        d.params[0].span,
+                    ));
+                };
+                if let Some(previous) = type_check
+                    .type_info
+                    .destructors
+                    .get(&receiver_symbol)
+                    .copied()
+                    && previous != symbol
+                {
+                    return Err(Diagnostic::error(
+                        crate::DiagCode::T035InvalidDestructor,
+                        "a type may declare only one @Destructor method",
+                        d.span,
+                    ));
+                }
+                type_check
+                    .type_info_mut()
+                    .destructors
+                    .insert(receiver_symbol, symbol);
+                if !type_check.type_info.generic_params.contains_key(&symbol) {
+                    type_check
+                        .type_info_mut()
+                        .destructor_instances
+                        .insert(receiver_ty, symbol);
+                }
+            }
             Ok(Some(HirDecl::Func(HirFunc {
                 symbol,
                 params,

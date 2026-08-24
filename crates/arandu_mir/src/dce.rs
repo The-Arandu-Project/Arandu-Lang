@@ -186,7 +186,15 @@ fn has_side_effect(stmt: &AmirStmt) -> bool {
         | AmirStmt::Destroy(_)
         | AmirStmt::StorageLive(_)
         | AmirStmt::StorageDead(_) => true,
-        AmirStmt::Assign { rhs, .. } => matches!(rhs, AmirRvalue::Alloc(_)),
+        AmirStmt::Assign { rhs, .. } => matches!(
+            rhs,
+            AmirRvalue::Alloc(_)
+                | AmirRvalue::GenInsert { .. }
+                | AmirRvalue::GenGet { .. }
+                | AmirRvalue::GenSet { .. }
+                | AmirRvalue::GenUpsert { .. }
+                | AmirRvalue::GenRemove { .. }
+        ),
         AmirStmt::Nop => false,
     }
 }
@@ -264,7 +272,8 @@ mod tests {
     use super::*;
     use crate::amir::program::extend_block_range;
     use crate::amir::{
-        AmirBasicBlock, AmirConstant, AmirPlace, AmirStmtTable, AmirTemp, BlockId, LocalId, TempId,
+        AmirBasicBlock, AmirConstant, AmirPlace, AmirStmtTable, AmirTemp, BlockId, GenArenaDomain,
+        LocalId, TempId,
     };
     use crate::layout::DenseRange;
     use crate::ops::BinaryOp;
@@ -342,6 +351,26 @@ mod tests {
         );
         assert!(mark_sweep_dce(&mut f).unwrap());
         assert_eq!(f.blocks[0].statements.len, 0);
+    }
+
+    #[test]
+    fn keeps_gen_operation_when_result_is_unused() {
+        let payload_ty = intern_ty(ArType::Primitive(Primitive::Int));
+        let mut f = func(
+            vec![AmirStmt::Assign {
+                lhs: TempId::from_usize(1),
+                rhs: AmirRvalue::GenInsert {
+                    value: AmirOperand::Copy(TempId::from_usize(0)),
+                    payload_ty,
+                    arena: GenArenaDomain::CompilerManaged,
+                    origin: arandu_lexer::Span::new(0, 4, 8),
+                },
+            }],
+            vec![int_temp(0), int_temp(1)],
+        );
+
+        assert!(!mark_sweep_dce(&mut f).unwrap());
+        assert_eq!(f.blocks[0].statements.len, 1);
     }
 
     #[test]

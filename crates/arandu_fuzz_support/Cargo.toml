@@ -11,4 +11,4 @@ description = "Shared deterministic fuzz targets for Arandu"
 arandu_lexer = { path = "../arandu_lexer" }
 arandu_parser = { path = "../arandu_parser" }
 arandu_query = { path = "../arandu_query" }
-
+arandu_runtime = { path = "../arandu_runtime", features = ["fuzzing"] }

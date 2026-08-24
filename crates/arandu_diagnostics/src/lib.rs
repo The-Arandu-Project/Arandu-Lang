@@ -183,6 +183,8 @@ pub enum DiagCode {
     T033IndirectCallNotSupported,
     /// Cannot auto-format a value as `str` (ToStr v0.1: only primitives).
     T034CannotFormat,
+    /// Invalid signature or duplicate association for `@Destructor`.
+    T035InvalidDestructor,
 
     // ── Lowering (L) ──
     L001LoweringUnresolvedSymbol,
@@ -301,6 +303,7 @@ impl DiagCode {
             T032AwaitInvalid,
             T033IndirectCallNotSupported,
             T034CannotFormat,
+            T035InvalidDestructor,
             L001LoweringUnresolvedSymbol,
             G001GenericInstantiationCycle,
             G002GenericInstantiationLimit,
@@ -420,6 +423,7 @@ impl DiagCode {
             DiagCode::T032AwaitInvalid => "T032",
             DiagCode::T033IndirectCallNotSupported => "T033",
             DiagCode::T034CannotFormat => "T034",
+            DiagCode::T035InvalidDestructor => "T035",
             DiagCode::L001LoweringUnresolvedSymbol => "L001",
             DiagCode::G001GenericInstantiationCycle => "G001",
             DiagCode::G002GenericInstantiationLimit => "G002",

@@ -90,6 +90,16 @@ pub struct TypeLayout {
     pub field_offsets: Vec<u64>, // Field offsets (populated for structs, tuples, etc.)
 }
 
+/// Target-derived runtime contract for a promoted GenRef payload.
+///
+/// Drop glue is attached during backend lowering; size and alignment always
+/// originate in [`LayoutEngine`] rather than the compiler host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct GenPayloadLayout {
+    pub size: u64,
+    pub align: u64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutOperation {
     ArrayRepeat,
@@ -99,6 +109,7 @@ pub enum LayoutOperation {
     ResultPayload,
     OptionPayload,
     RangePair,
+    GenPayload,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -139,6 +150,19 @@ pub trait StructLayoutProvider {
     fn get_struct_field_indices(&self, struct_id: SymbolId) -> Option<&FxHashMap<String, usize>>;
     fn get_generic_params(&self, struct_id: SymbolId) -> Option<&[SymbolId]>;
     fn get_enum_variants(&self, enum_id: SymbolId) -> Option<Vec<EnumPayloadShape>>;
+
+    /// Structural Copy proof supplied by typeck when available. Layout-only
+    /// test providers may return `None`; backends must then stay conservative.
+    fn is_copy_type(&self, _ty: TypeId) -> Option<bool> {
+        None
+    }
+
+    /// Explicit cleanup method associated with a nominal type by the
+    /// language-level `@Destructor` contract. Backends must never infer this
+    /// association from a function name or from the presence of pointers.
+    fn destructor_for_type(&self, _ty: TypeId) -> Option<SymbolId> {
+        None
+    }
 }
 
 /// The physical memory layout engine.
@@ -212,6 +236,32 @@ impl LayoutEngine {
         provider: &dyn StructLayoutProvider,
     ) -> Result<TypeLayout, LayoutError> {
         self.layout_of_type(&interner.resolve(type_id), interner, provider)
+    }
+
+    /// Derive the checked physical contract consumed by GenRef runtime slots.
+    pub fn gen_payload_layout(
+        &self,
+        type_id: TypeId,
+        interner: &TypeInterner,
+        provider: &dyn StructLayoutProvider,
+    ) -> Result<GenPayloadLayout, LayoutError> {
+        let layout = self.layout_of(type_id, interner, provider)?;
+        let limit = self.data_layout.object_size_bound();
+        if layout.size >= limit {
+            return Err(LayoutError::SizeOverflow {
+                operation: LayoutOperation::GenPayload,
+                limit,
+            });
+        }
+        if layout.align == 0 || !layout.align.is_power_of_two() {
+            return Err(LayoutError::InvalidAlignment {
+                align: layout.align,
+            });
+        }
+        Ok(GenPayloadLayout {
+            size: layout.size,
+            align: layout.align,
+        })
     }
 
     /// Compute the memory layout of a structural `ArType`.

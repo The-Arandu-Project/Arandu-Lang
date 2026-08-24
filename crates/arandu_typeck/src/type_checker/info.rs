@@ -30,6 +30,13 @@ pub struct TypeInfo {
     pub enum_variants: FxHashMap<SymbolId, (SymbolId, EnumPayloadShape)>,
     /// Pre-computed discriminant tag for each enum variant symbol.
     pub enum_variant_tags: FxHashMap<SymbolId, usize>,
+    /// Receiver type symbol → the unique method carrying `@Destructor`.
+    ///
+    /// The association is semantic metadata, not a naming convention: a
+    /// method named `destroy` has no special meaning without the annotation.
+    pub destructors: FxHashMap<SymbolId, SymbolId>,
+    /// Concrete receiver `TypeId` → monomorphic destructor function.
+    pub destructor_instances: FxHashMap<TypeId, SymbolId>,
     /// Ordered type-parameter symbols for generic decls (func, struct, …).
     pub generic_params: FxHashMap<SymbolId, Arc<Vec<SymbolId>>>,
     /// T2.1: type-parameter symbol → default type (`A = GlobalAllocator`).
@@ -59,6 +66,8 @@ impl TypeInfo {
             struct_field_indices: FxHashMap::default(),
             enum_variants: FxHashMap::default(),
             enum_variant_tags: FxHashMap::default(),
+            destructors: FxHashMap::default(),
+            destructor_instances: FxHashMap::default(),
             generic_params: FxHashMap::default(),
             generic_defaults: FxHashMap::default(),
             param_constraints: FxHashMap::default(),
@@ -310,6 +319,8 @@ impl TypeInfo {
             && other.struct_field_indices.is_empty()
             && other.enum_variants.is_empty()
             && other.enum_variant_tags.is_empty()
+            && other.destructors.is_empty()
+            && other.destructor_instances.is_empty()
             && other.generic_params.is_empty()
             && other.generic_defaults.is_empty()
             && other.param_constraints.is_empty()
@@ -363,6 +374,15 @@ impl TypeInfo {
         }
         for (&symbol, &tag) in &other.enum_variant_tags {
             self.enum_variant_tags.insert(symbol, tag);
+        }
+        for (&type_symbol, &destructor) in &other.destructors {
+            self.destructors.insert(type_symbol, destructor);
+        }
+        for (&other_type, &destructor) in &other.destructor_instances {
+            let ty = other.type_interner.resolve(other_type);
+            let translated = translate_type(&ty, &other.type_interner, &mut self.type_interner);
+            let concrete = self.type_interner.intern(translated);
+            self.destructor_instances.insert(concrete, destructor);
         }
         for (symbol, params) in &other.generic_params {
             self.generic_params.insert(*symbol, Arc::clone(params));
@@ -517,5 +537,13 @@ impl arandu_middle::layout::StructLayoutProvider for TypeInfo {
         }
 
         Some(mapped_variants)
+    }
+
+    fn is_copy_type(&self, ty: TypeId) -> Option<bool> {
+        Some(self.is_copy(ty))
+    }
+
+    fn destructor_for_type(&self, ty: TypeId) -> Option<SymbolId> {
+        self.destructor_instances.get(&ty).copied()
     }
 }

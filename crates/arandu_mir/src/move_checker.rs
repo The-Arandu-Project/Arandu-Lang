@@ -26,6 +26,42 @@ enum LocalMoveState {
     MaybeMoved,
 }
 
+/// Ownership state used by drop elaboration at a block boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DropState {
+    Available,
+    Moved,
+    MaybeMoved,
+}
+
+/// Whole-local ownership state after each block, computed by the same
+/// transfer function as move diagnostics so cleanup cannot diverge from the
+/// move checker.
+#[must_use]
+pub fn move_states_at_block_exit(func: &AmirFunc) -> Vec<Vec<DropState>> {
+    let bump = bumpalo::Bump::new();
+    let Some(block_in) = compute_move_in(func, &bump) else {
+        return vec![vec![DropState::Available; func.locals.len()]; func.blocks.len()];
+    };
+    let origins = temp_origins(func, &bump);
+    block_in
+        .iter()
+        .enumerate()
+        .map(|(index, incoming)| {
+            let mut state = incoming.clone();
+            apply_block(BlockId::from_usize(index), func, &origins, &mut state, None);
+            func.locals
+                .iter()
+                .map(|local| match state.get(local.id) {
+                    LocalMoveState::Available => DropState::Available,
+                    LocalMoveState::Moved => DropState::Moved,
+                    LocalMoveState::MaybeMoved => DropState::MaybeMoved,
+                })
+                .collect()
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct MoveState {
     moved: BitSet<LocalId>,

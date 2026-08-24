@@ -12,6 +12,19 @@ use std::env;
 use std::fs;
 use std::process::Command;
 
+fn c_compiler(cc: &str) -> Command {
+    let mut command = Command::new(cc);
+    if env::var_os("ARANDU_C_SANITIZERS").is_some() {
+        command.args([
+            "-O1",
+            "-g",
+            "-fno-omit-frame-pointer",
+            "-fsanitize=address,undefined",
+        ]);
+    }
+    command
+}
+
 fn compile_src(src: &str) -> (AmirProgram, TypeCheckResult) {
     let program = arandu_parser::parse(src).expect("parse failed");
     let resolution = resolve_for_test(0, &program);
@@ -51,6 +64,109 @@ fn emit_c(amir: &AmirProgram, tc: &TypeCheckResult) -> String {
         arandu_middle::layout::DataLayout::host(),
     )
     .unwrap()
+}
+
+#[test]
+fn c_backend_genref_runtime_has_monotonic_type_erased_storage() {
+    let (amir, tc) = compile_src("func main(): int { return 0 }");
+    let emitted = emit_c(&amir, &tc);
+
+    assert!(emitted.contains("typedef struct ar_gen_entry"));
+    assert!(emitted.contains("ar_gen_alloc_aligned"));
+    assert!(emitted.contains("ar_gen_next_token == UINT64_MAX"));
+    assert!(emitted.contains("ar_gen_shutdown_raw"));
+    assert!(!emitted.contains("ar_gen_slots[256]"));
+}
+
+#[test]
+fn explicit_destructor_runs_through_both_backend_pipelines() {
+    test_execution_parity(
+        "destructor_epilogue",
+        r#"
+struct Resource { handle: ptr[u8] }
+
+@Destructor
+func Resource.close(own self): void {}
+
+func main(): int {
+    let resource = Resource { handle: nil }
+    return 0
+}
+"#,
+    );
+}
+
+#[test]
+fn c_backend_genref_runtime_executes_beyond_legacy_capacity() {
+    let (amir, tc) = compile_src("func main(): int { return 0 }");
+    let emitted = emit_c(&amir, &tc);
+    let source = format!(
+        "#define main arandu_unused_main\n{emitted}\n#undef main\n{}",
+        r#"
+typedef struct __attribute__((aligned(64))) { uint64_t words[8]; } AlignedProbe;
+static int probe_drops = 0;
+static void drop_probe(void *payload) {
+    AlignedProbe *probe = (AlignedProbe *)payload;
+    if (((uintptr_t)probe & 63U) != 0) abort();
+    ++probe_drops;
+    if (probe_drops == 1) ar_gen_shutdown_raw();
+}
+
+int main(void) {
+    uint64_t handles[1024];
+    for (int64_t i = 0; i < 1024; ++i) {
+        int64_t value = i + 7;
+        handles[i] = ar_gen_upsert_raw(0, &value, sizeof(value), _Alignof(int64_t), NULL);
+    }
+    for (int64_t i = 0; i < 1024; ++i) {
+        int64_t value = 0;
+        if (!ar_gen_get_raw(handles[i], &value, sizeof(value), _Alignof(int64_t)) || value != i + 7) return 1;
+        value = i + 9;
+        if (!ar_gen_set_raw(handles[i], &value, sizeof(value), _Alignof(int64_t), NULL)) return 2;
+        value = 0;
+        if (!ar_gen_get_raw(handles[i], &value, sizeof(value), _Alignof(int64_t)) || value != i + 9) return 3;
+    }
+    for (int64_t i = 0; i < 1024; ++i) {
+        int64_t value = 0;
+        if (!ar_gen_remove_raw(handles[i], &value, sizeof(value), _Alignof(int64_t)) || value != i + 9) return 4;
+        if (ar_gen_get_raw(handles[i], &value, sizeof(value), _Alignof(int64_t))) return 5;
+    }
+    for (int64_t i = 0; i < 1024; ++i) {
+        int64_t value = i + 11;
+        uint64_t next = ar_gen_insert_raw(&value, sizeof(value), _Alignof(int64_t), NULL);
+        if (next == 0 || next <= handles[1023]) return 6;
+    }
+    ar_gen_shutdown_raw();
+    AlignedProbe first = {{1}};
+    AlignedProbe second = {{2}};
+    if (!ar_gen_insert_raw(&first, sizeof(first), _Alignof(AlignedProbe), drop_probe)) return 7;
+    if (!ar_gen_insert_raw(&second, sizeof(second), _Alignof(AlignedProbe), drop_probe)) return 8;
+    ar_gen_shutdown_raw();
+    if (probe_drops != 2) return 9;
+    return 0;
+}
+"#
+    );
+    let out_dir = env::temp_dir().join("arandu_c_tests");
+    fs::create_dir_all(&out_dir).unwrap();
+    let c_file = out_dir.join("genref_dynamic_capacity.c");
+    let exe_file = out_dir.join("genref_dynamic_capacity.exe");
+    fs::write(&c_file, source).unwrap();
+    let cc = env::var("CC").unwrap_or_else(|_| "gcc".to_string());
+    let compiled = c_compiler(&cc)
+        .arg(&c_file)
+        .arg("-o")
+        .arg(&exe_file)
+        .status()
+        .unwrap_or_else(|_| panic!("failed to invoke C compiler '{cc}'"));
+    assert!(
+        compiled.success(),
+        "C GenRef stress fixture did not compile"
+    );
+    let status = Command::new(&exe_file)
+        .status()
+        .expect("failed to run C GenRef stress fixture");
+    assert!(status.success(), "C GenRef stress fixture failed: {status}");
 }
 
 fn assert_backend_rejection_parity(
@@ -110,7 +226,7 @@ int main() {
     let cc = env::var("CC").unwrap_or_else(|_| "gcc".to_string());
 
     // `-lm` for ToStr float helpers (`isnan`/`isinf` via math.h).
-    let compile_status = Command::new(&cc)
+    let compile_status = c_compiler(&cc)
         .arg(&c_file)
         .arg("-o")
         .arg(&exe_file)

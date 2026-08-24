@@ -1,6 +1,7 @@
 use arandu_semantics::amir::AmirStmt;
 use arandu_semantics::passes::type_checker::types::{ArType, Primitive};
 use cranelift_codegen::ir::InstBuilder;
+use cranelift_module::Module;
 
 use super::FunctionTranslator;
 use crate::types::{ClifType, clif_type};
@@ -87,10 +88,21 @@ impl FunctionTranslator<'_, '_> {
             AmirStmt::Destroy(place) => {
                 if place.projections.is_empty() {
                     let ty = self.local_ar_ty(place.local);
-                    if !ty.is_copy_v01() {
-                        if let Some(&var) = self.local_map.get(&place.local) {
+                    let ty_id = self.current_func.locals[place.local.as_usize()].ty;
+                    if let ArType::Named(_, _) = ty
+                        && let Some(destructor) = self.type_info.destructor_instances.get(&ty_id)
+                        && let Some(&var) = self.local_map.get(&place.local)
+                    {
+                        let name = self.symbol_table.get(*destructor).name.as_str();
+                        if let Some(&id) = self.func_ids.get(name) {
                             let ptr_val = self.builder.use_var(var);
-                            self.emit_free_ptr(ptr_val);
+                            let function = self.module.declare_func_in_func(id, self.builder.func);
+                            self.builder.ins().call(function, &[ptr_val]);
+                        } else {
+                            self.record_ice(
+                                format!("missing @Destructor function '{name}'"),
+                                self.local_span(place.local),
+                            );
                         }
                     }
                 }

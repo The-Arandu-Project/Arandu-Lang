@@ -38,6 +38,47 @@ fn canonical_and_legacy_no_fallback_lower_to_the_same_hir_flag() {
 }
 
 #[test]
+fn destructor_annotation_records_an_explicit_type_contract() {
+    let program = arandu_parser::parse(
+        r#"
+struct Resource { handle: ptr[u8] }
+
+@Destructor
+func Resource.close(own self): void {}
+"#,
+    )
+    .expect("parse");
+    let resolution = resolve_for_test(0, &program);
+    let mut tc = type_check(resolution, &program);
+    assert!(tc.diagnostics.is_empty(), "{:?}", tc.diagnostics);
+    lower_to_hir(&mut tc, &program).expect("HIR lowering");
+    assert_eq!(tc.type_info.destructors.len(), 1);
+    let (&type_symbol, &destructor) = tc.type_info.destructors.iter().next().unwrap();
+    assert_eq!(tc.symbols.get(type_symbol).name, "Resource");
+    assert!(tc.symbols.get(destructor).name.contains("close"));
+}
+
+#[test]
+fn destructor_requires_a_consuming_receiver() {
+    let program = arandu_parser::parse(
+        r#"
+struct Resource { handle: ptr[u8] }
+
+@Destructor
+func Resource.close(mut self): void {}
+"#,
+    )
+    .expect("parse");
+    let resolution = resolve_for_test(0, &program);
+    let mut tc = type_check(resolution, &program);
+    let errors = lower_to_hir(&mut tc, &program).expect_err("invalid destructor");
+    assert_eq!(
+        errors[0].code,
+        arandu_semantics::DiagCode::T035InvalidDestructor
+    );
+}
+
+#[test]
 fn lowers_io_println_call() {
     lower(
         r#"

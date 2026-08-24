@@ -34,6 +34,15 @@ impl LayoutEngine {
         self.0.layout_of(type_id, interner, provider)
     }
 
+    fn gen_payload_layout(
+        &self,
+        type_id: TypeId,
+        interner: &TypeInterner,
+        provider: &dyn StructLayoutProvider,
+    ) -> Result<GenPayloadLayout, LayoutError> {
+        self.0.gen_payload_layout(type_id, interner, provider)
+    }
+
     fn fat_ptr_len_offset(&self) -> u64 {
         self.0.fat_ptr_len_offset()
     }
@@ -123,6 +132,35 @@ fn test_primitive_layouts_32bit() {
     let layout_int_lit = engine.layout_of(int_lit_id, &interner, &provider);
     assert_eq!(layout_int_lit.size, 4);
     assert_eq!(layout_int_lit.align, 4);
+}
+
+#[test]
+fn gen_payload_layout_uses_target_not_host_width() {
+    let interner = TypeInterner::new();
+    let provider = MockProvider;
+    let string = interner.intern(ArType::Primitive(Primitive::Str));
+
+    let layout_64 = LayoutEngine::new(8)
+        .gen_payload_layout(string, &interner, &provider)
+        .unwrap();
+    let layout_32 = LayoutEngine::from_data_layout(DataLayout::i686_sysv())
+        .gen_payload_layout(string, &interner, &provider)
+        .unwrap();
+
+    assert_eq!(layout_64, GenPayloadLayout { size: 16, align: 8 });
+    assert_eq!(layout_32, GenPayloadLayout { size: 8, align: 4 });
+}
+
+#[test]
+fn gen_payload_layout_preserves_zero_sized_void_contract() {
+    let interner = TypeInterner::new();
+    let provider = MockProvider;
+    let void = interner.intern(ArType::Void);
+    let layout = LayoutEngine::new(8)
+        .gen_payload_layout(void, &interner, &provider)
+        .unwrap();
+
+    assert_eq!(layout, GenPayloadLayout { size: 0, align: 1 });
 }
 
 struct StructMockProvider {

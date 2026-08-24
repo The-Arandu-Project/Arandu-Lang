@@ -10,6 +10,7 @@ permanece como stub na raiz.
 - [Roadmap de estabilidade Gold](arandu-stability-gold-roadmap-v0.1.md)
 - [Roadmap Gold de decomposição de monólitos e arquitetura](arandu-architecture-decomposition-gold-roadmap-v0.1.md)
 - [Roadmap Gold do LSP/editor](arandu-lsp-editor-gold-roadmap-v0.1.md)
+- [Estratégia GenRef Gold](arandu-genref-gold-strategy-v0.1.md)
 - [Arquitetura Salsa/LSP](arandu-salsa-lsp-architecture-v0.1.md)
 - [Plano estratégico](arandu-strategic-plan-v0.1.md)
 - [Contrato de distribuição](arandu-distribution-contract-v0.1.md)

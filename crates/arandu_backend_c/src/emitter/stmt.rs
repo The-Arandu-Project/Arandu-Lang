@@ -86,6 +86,75 @@ impl<'a> CEmitter<'a> {
             AmirStmt::Assign { lhs, rhs } => {
                 let lhs_ty = self.temp_ty(func, *lhs);
                 let lhs_c_ty = self.format_type(&lhs_ty);
+                match rhs {
+                    arandu_middle::amir::AmirRvalue::GenInsert {
+                        value, payload_ty, ..
+                    } => {
+                        self.emit_gen_write_assign(*lhs, None, value, *payload_ty, func, false);
+                        return;
+                    }
+                    arandu_middle::amir::AmirRvalue::GenSet {
+                        gen_ref,
+                        value,
+                        payload_ty,
+                        ..
+                    } => {
+                        self.emit_gen_write_assign(
+                            *lhs,
+                            Some(gen_ref),
+                            value,
+                            *payload_ty,
+                            func,
+                            false,
+                        );
+                        return;
+                    }
+                    arandu_middle::amir::AmirRvalue::GenUpsert {
+                        gen_ref,
+                        value,
+                        payload_ty,
+                        ..
+                    } => {
+                        self.emit_gen_write_assign(
+                            *lhs,
+                            Some(gen_ref),
+                            value,
+                            *payload_ty,
+                            func,
+                            true,
+                        );
+                        return;
+                    }
+                    arandu_middle::amir::AmirRvalue::GenGet {
+                        gen_ref,
+                        payload_ty,
+                        ..
+                    } => {
+                        self.emit_gen_read_assign(
+                            *lhs,
+                            "ar_gen_get_raw",
+                            gen_ref,
+                            *payload_ty,
+                            func,
+                        );
+                        return;
+                    }
+                    arandu_middle::amir::AmirRvalue::GenRemove {
+                        gen_ref,
+                        payload_ty,
+                        ..
+                    } => {
+                        self.emit_gen_read_assign(
+                            *lhs,
+                            "ar_gen_remove_raw",
+                            gen_ref,
+                            *payload_ty,
+                            func,
+                        );
+                        return;
+                    }
+                    _ => {}
+                }
                 // A3.3 multi-stmt stack: declare payload local, store value, take address.
                 // (Statement-expression `&local` would dangle after the expression ends.)
                 if let arandu_middle::amir::AmirRvalue::CoroutineReady {
@@ -151,8 +220,128 @@ impl<'a> CEmitter<'a> {
                 let _ = writeln!(&mut self.output, "    free({});", op_str);
             }
             AmirStmt::StorageLive(_) | AmirStmt::StorageDead(_) => {}
-            AmirStmt::Destroy(_) | AmirStmt::Nop => {}
+            AmirStmt::Destroy(place) => {
+                if place.projections.is_empty() {
+                    let ty = self.local_ty(func, place.local);
+                    let ty_id = func.locals[place.local.as_usize()].ty;
+                    if let Some((_, destructor)) = self.gen_drop_glue(ty_id, &ty) {
+                        let destructor =
+                            super::sanitize_c_ident(&self.symbols.get(destructor).name);
+                        let value = self.format_place(place, func);
+                        let _ = writeln!(&mut self.output, "    {destructor}({value});");
+                    }
+                }
+            }
+            AmirStmt::Nop => {}
         }
+    }
+
+    fn emit_gen_write_assign(
+        &mut self,
+        lhs: TempId,
+        handle: Option<&AmirOperand>,
+        value: &AmirOperand,
+        payload_ty: arandu_middle::types::TypeId,
+        func: &AmirFunc,
+        upsert: bool,
+    ) {
+        let payload_ar = self.interner.resolve(payload_ty);
+        let drop_glue = self
+            .gen_drop_glue(payload_ty, &payload_ar)
+            .map(|(name, _)| name);
+        if !self
+            .provider
+            .is_copy_type(payload_ty)
+            .unwrap_or_else(|| payload_ar.is_copy_v01())
+            && drop_glue.is_none()
+        {
+            self.record_codegen_ice(
+                func,
+                "non-Copy GenRef payload has no explicit @Destructor contract",
+            );
+            let _ = writeln!(&mut self.output, "    t{} = 0;", lhs.as_usize());
+            return;
+        }
+        let payload_c = self.format_type(&payload_ar);
+        let layout = self.checked_layout(&payload_ar);
+        let value = self.format_operand(value, func);
+        let glue = drop_glue.as_deref().unwrap_or("NULL");
+        let slot = self.next_co_stack_slot();
+        let _ = writeln!(
+            &mut self.output,
+            "    {payload_c} __ar_gen_payload_{slot} = ({payload_c})({value});"
+        );
+        match handle {
+            None => {
+                let _ = writeln!(
+                    &mut self.output,
+                    "    t{} = (int64_t)ar_gen_insert_raw(&__ar_gen_payload_{slot}, {}, {}, {glue});",
+                    lhs.as_usize(),
+                    layout.size,
+                    layout.align
+                );
+            }
+            Some(handle) if upsert => {
+                let handle = self.format_operand(handle, func);
+                let _ = writeln!(
+                    &mut self.output,
+                    "    t{} = (int64_t)ar_gen_upsert_raw((uint64_t)({handle}), &__ar_gen_payload_{slot}, {}, {}, {glue});",
+                    lhs.as_usize(),
+                    layout.size,
+                    layout.align
+                );
+            }
+            Some(handle) => {
+                let handle = self.format_operand(handle, func);
+                let _ = writeln!(
+                    &mut self.output,
+                    "    if (!ar_gen_set_raw((uint64_t)({handle}), &__ar_gen_payload_{slot}, {}, {}, {glue})) abort();",
+                    layout.size, layout.align
+                );
+                let _ = writeln!(
+                    &mut self.output,
+                    "    t{} = (int64_t)({handle});",
+                    lhs.as_usize()
+                );
+            }
+        }
+        let _ = writeln!(
+            &mut self.output,
+            "    if (t{} == 0) abort();",
+            lhs.as_usize()
+        );
+    }
+
+    fn emit_gen_read_assign(
+        &mut self,
+        lhs: TempId,
+        name: &str,
+        handle: &AmirOperand,
+        payload_ty: arandu_middle::types::TypeId,
+        func: &AmirFunc,
+    ) {
+        let payload_ar = self.interner.resolve(payload_ty);
+        if !self
+            .provider
+            .is_copy_type(payload_ty)
+            .unwrap_or_else(|| payload_ar.is_copy_v01())
+            && self.gen_drop_glue(payload_ty, &payload_ar).is_none()
+        {
+            self.record_codegen_ice(
+                func,
+                "non-Copy GenRef payload has no explicit @Destructor contract",
+            );
+            return;
+        }
+        let layout = self.checked_layout(&payload_ar);
+        let handle = self.format_operand(handle, func);
+        let _ = writeln!(
+            &mut self.output,
+            "    if (!{name}((uint64_t)({handle}), &t{}, {}, {})) abort();",
+            lhs.as_usize(),
+            layout.size,
+            layout.align
+        );
     }
 
     pub(super) fn emit_terminator(&mut self, term: &AmirTerminator, func: &AmirFunc) {
@@ -161,6 +350,7 @@ impl<'a> CEmitter<'a> {
                 let name = super::sanitize_c_ident(&self.symbols.get(func.symbol).name);
                 let ret = self.interner.resolve(func.return_type);
                 if name == "main" {
+                    let _ = writeln!(&mut self.output, "    ar_gen_shutdown_raw();");
                     // ISO C requires `int main`; void Arandu main becomes `return 0`.
                     if matches!(ret, ArType::Void) {
                         let _ = writeln!(&mut self.output, "    return 0;");

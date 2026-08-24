@@ -150,6 +150,48 @@ fn pipeline_lower(
     std::sync::Arc::clone(&artifacts.value)
 }
 
+/// Opt-in GenRef observability, intentionally outside Salsa queries. This
+/// derives metrics from the immutable AMIR artifact and has no query-visible
+/// side effects.
+fn print_genref_report(filepath: &str, artifacts: &arandu_query::LowerAmirArtifacts) {
+    use arandu_middle::amir::{AmirRvalue, AmirStmt};
+
+    let mut total_promotions = 0usize;
+    let mut total_checks = 0usize;
+    let mut rows = Vec::new();
+    for func in &artifacts.amir.funcs {
+        let mut promotions = 0usize;
+        let mut checks = 0usize;
+        for stmt in func.stmts.payloads.iter() {
+            let AmirStmt::Assign { rhs, .. } = stmt else {
+                continue;
+            };
+            match rhs {
+                AmirRvalue::GenInsert { .. } => promotions += 1,
+                AmirRvalue::GenGet { .. }
+                | AmirRvalue::GenSet { .. }
+                | AmirRvalue::GenUpsert { .. }
+                | AmirRvalue::GenRemove { .. } => checks += 1,
+                _ => {}
+            }
+        }
+        if promotions != 0 || checks != 0 {
+            let name = artifacts.type_check.symbols.get(func.symbol).name.clone();
+            rows.push((name, promotions, checks));
+            total_promotions += promotions;
+            total_checks += checks;
+        }
+    }
+    rows.sort_by(|a, b| a.0.cmp(&b.0));
+    eprintln!(
+        "[arandu][genref] module={filepath} promotions={total_promotions} checks={total_checks} functions={}",
+        rows.len()
+    );
+    for (name, promotions, checks) in rows {
+        eprintln!("[arandu][genref] function={name} promotions={promotions} checks={checks}");
+    }
+}
+
 /// Parse + type-check for paths that still need a local TypeCheckResult (e.g. `hir`).
 fn parse_and_check(
     db: &dyn arandu_query::db::ArandCompilerDb,
@@ -194,6 +236,7 @@ fn usage_and_exit() -> ! {
         "  emit-c options: --layout=host|ptr4|ptr8|i686  (default: host)\n",
         "                  layout model only; cross compiler/sysroot are external\n",
         "  G2/F2.3: --no-generational-fallback  (promote O004 notes to errors)\n",
+        "  G5: --genref-report  (per-module/function promotion and check counts on stderr)\n",
         "  -Z flags: -Ztime-passes  -Zprofile-queries  -Zprint-alloc-stats  -Zdump-mir\n",
         "           : -Zdebug-parser -Zdebug-typeck -Zdebug-ossa -Zdebug-layout -Zdebug-backend -Zdebug-all\n",
         "           : -Zself-profile=<path>  -Zexplain-rebuild  -Zno-generational-fallback\n\n",
@@ -257,6 +300,7 @@ fn main() {
     let mut debug = false;
     let mut opt = false;
     let mut parallel = false;
+    let mut genref_report = false;
     let mut args = Vec::new();
     let mut z_flags: Vec<String> = Vec::new();
     let mut layout_flags: Vec<String> = Vec::new();
@@ -267,6 +311,7 @@ fn main() {
             "--debug" => debug = true,
             "--opt" => opt = true,
             "--parallel" => parallel = true,
+            "--genref-report" => genref_report = true,
             // G2: long form of -Zno-generational-fallback (same atomic).
             "--no-generational-fallback" => {
                 z_flags.push("-Zno-generational-fallback".into());
@@ -502,7 +547,10 @@ fn main() {
 
             "check" => {
                 // One pipeline: parse → typeck → lower_amir (Salsa memos; diags once each).
-                let _ = pipeline_lower(&db, source_file, &filepath);
+                let artifacts = pipeline_lower(&db, source_file, &filepath);
+                if genref_report {
+                    print_genref_report(&filepath, &artifacts);
+                }
                 tracing::info!(
                     "Compilation verified successfully — no errors found for {}",
                     filepath
@@ -538,6 +586,9 @@ fn main() {
 
             "amir" => {
                 let artifacts = pipeline_lower(&db, source_file, &filepath);
+                if genref_report {
+                    print_genref_report(&filepath, &artifacts);
+                }
                 let symbols = artifacts.type_check.symbols.as_ref();
                 let interner = &artifacts.type_check.type_info.type_interner;
                 let mut amir_owned = if opt {
@@ -564,6 +615,9 @@ fn main() {
 
             "run" => {
                 let artifacts = pipeline_lower(&db, source_file, &filepath);
+                if genref_report {
+                    print_genref_report(&filepath, &artifacts);
+                }
                 tracing::info!("AMIR lowering completed (Salsa: single pipeline)");
 
                 // DX.5 one-liner: did Salsa re-execute work or hit memos?
@@ -655,6 +709,9 @@ fn main() {
             }
             "emit-c" => {
                 let artifacts = pipeline_lower(&db, source_file, &filepath);
+                if genref_report {
+                    print_genref_report(&filepath, &artifacts);
+                }
                 let type_check = &artifacts.type_check;
                 let mut amir_owned = if opt {
                     Some(artifacts.amir.clone())

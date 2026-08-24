@@ -11,7 +11,7 @@ use arandu_middle::amir::{
 use arandu_middle::layout::{LayoutEngine, StructLayoutProvider};
 use arandu_middle::literal_pool::AmirLiteralEntry;
 use arandu_middle::types::{ArType, TypeInterner};
-use arandu_middle::{DiagCode, Diagnostic, Span};
+use arandu_middle::{DiagCode, Diagnostic, Span, SymbolId};
 use arandu_semantics::SymbolTable;
 use std::fmt::Write;
 
@@ -157,12 +157,57 @@ impl<'a> CEmitter<'a> {
             }
             let _ = writeln!(&mut self.output, ");");
         }
+        self.emit_gen_drop_glues();
         for func in &self.program.funcs {
             self.emit_func(func);
         }
         match self.error {
             Some(error) => Err(error),
             None => Ok(self.output),
+        }
+    }
+
+    pub(super) fn gen_drop_glue(
+        &self,
+        ty_id: arandu_middle::types::TypeId,
+        ty: &ArType,
+    ) -> Option<(String, SymbolId)> {
+        let ArType::Named(_, _) = ty else {
+            return None;
+        };
+        let destructor = self.provider.destructor_for_type(ty_id)?;
+        Some((
+            format!("__ar_drop_{}_{}", destructor.file_id, destructor.local_id.0),
+            destructor,
+        ))
+    }
+
+    fn emit_gen_drop_glues(&mut self) {
+        let mut payloads = std::collections::BTreeMap::<String, (ArType, SymbolId)>::new();
+        for func in &self.program.funcs {
+            for stmt in func.stmts.payloads.iter() {
+                let AmirStmt::Assign { rhs, .. } = stmt else {
+                    continue;
+                };
+                let payload_ty = match rhs {
+                    AmirRvalue::GenInsert { payload_ty, .. }
+                    | AmirRvalue::GenSet { payload_ty, .. }
+                    | AmirRvalue::GenUpsert { payload_ty, .. } => *payload_ty,
+                    _ => continue,
+                };
+                let ty = self.interner.resolve(payload_ty);
+                if let Some((name, destructor)) = self.gen_drop_glue(payload_ty, &ty) {
+                    payloads.entry(name).or_insert((ty, destructor));
+                }
+            }
+        }
+        for (glue, (ty, destructor)) in payloads {
+            let payload_c = self.format_type(&ty);
+            let destructor_c = sanitize_c_ident(&self.symbols.get(destructor).name);
+            let _ = writeln!(
+                &mut self.output,
+                "static void {glue}(void *raw) {{ {destructor_c}(*({payload_c} *)raw); }}"
+            );
         }
     }
 
@@ -268,45 +313,99 @@ impl<'a> CEmitter<'a> {
     fn emit_gen_arena_runtime(&mut self) {
         let _ = writeln!(
             &mut self.output,
-            r#"/* GenRef = (index<<32)|generation; gen mismatch aborts (F2.3.runtime). */
-static struct {{ int64_t value; int used; uint32_t generation; }} ar_gen_slots[256];
-static uint32_t ar_gen_free[256];
-static int ar_gen_nslots = 0;
-static int ar_gen_nfree = 0;
-static int64_t ar_gen_insert_i64(int64_t v) {{
-    uint32_t idx; uint32_t g;
-    if (ar_gen_nfree > 0) {{
-        idx = ar_gen_free[--ar_gen_nfree];
-        g = ar_gen_slots[idx].generation + 1;
-        ar_gen_slots[idx].generation = g;
-        ar_gen_slots[idx].value = v;
-        ar_gen_slots[idx].used = 1;
-    }} else {{
-        if (ar_gen_nslots >= 256) abort();
-        idx = (uint32_t)ar_gen_nslots++;
-        g = 0;
-        ar_gen_slots[idx].generation = 0;
-        ar_gen_slots[idx].value = v;
-        ar_gen_slots[idx].used = 1;
+            r#"/* G4 type-erased GenRef ABI: monotonic tokens, target layout, ordered drops. */
+typedef void (*ar_gen_drop_fn)(void *);
+typedef struct ar_gen_entry {{
+    uint64_t token;
+    void *data;
+    void *allocation;
+    size_t size;
+    size_t align;
+    ar_gen_drop_fn drop;
+    struct ar_gen_entry *next;
+}} ar_gen_entry;
+static ar_gen_entry *ar_gen_head = NULL;
+static ar_gen_entry *ar_gen_tail = NULL;
+static uint64_t ar_gen_next_token = 0;
+static int ar_gen_valid_layout(size_t size, size_t align) {{
+    return align != 0 && (align & (align - 1)) == 0 && size <= SIZE_MAX - (align - 1);
+}}
+static void *ar_gen_alloc_aligned(size_t size, size_t align, void **allocation) {{
+    if (!ar_gen_valid_layout(size, align)) return NULL;
+    size_t bytes = size == 0 ? 1 : size;
+    if (bytes > SIZE_MAX - (align - 1)) return NULL;
+    void *raw = malloc(bytes + align - 1);
+    if (!raw) return NULL;
+    uintptr_t base = (uintptr_t)raw;
+    uintptr_t aligned = (base + (align - 1)) & ~(uintptr_t)(align - 1);
+    *allocation = raw;
+    return (void *)aligned;
+}}
+static ar_gen_entry *ar_gen_find(uint64_t token) {{
+    for (ar_gen_entry *entry = ar_gen_head; entry; entry = entry->next)
+        if (entry->token == token) return entry;
+    return NULL;
+}}
+static uint64_t ar_gen_insert_raw(void *source, size_t size, size_t align, ar_gen_drop_fn drop) {{
+    if (!source || ar_gen_next_token == UINT64_MAX) return 0;
+    ar_gen_entry *entry = (ar_gen_entry *)malloc(sizeof(ar_gen_entry));
+    if (!entry) return 0;
+    entry->data = ar_gen_alloc_aligned(size, align, &entry->allocation);
+    if (!entry->data) {{ free(entry); return 0; }}
+    if (size != 0) memcpy(entry->data, source, size);
+    entry->token = ++ar_gen_next_token;
+    entry->size = size; entry->align = align; entry->drop = drop; entry->next = NULL;
+    if (ar_gen_tail) ar_gen_tail->next = entry; else ar_gen_head = entry;
+    ar_gen_tail = entry;
+    return entry->token;
+}}
+static int ar_gen_get_raw(uint64_t token, void *destination, size_t size, size_t align) {{
+    ar_gen_entry *entry = ar_gen_find(token);
+    if (!entry || !destination || entry->size != size || entry->align != align) return 0;
+    if (size != 0) memcpy(destination, entry->data, size);
+    return 1;
+}}
+static int ar_gen_set_raw(uint64_t token, void *source, size_t size, size_t align, ar_gen_drop_fn drop) {{
+    ar_gen_entry *entry = ar_gen_find(token);
+    if (!entry || !source || entry->size != size || entry->align != align) return 0;
+    void *new_allocation = NULL;
+    void *new_data = ar_gen_alloc_aligned(size, align, &new_allocation);
+    if (!new_data) return 0;
+    if (size != 0) memcpy(new_data, source, size);
+    void *old_data = entry->data; void *old_allocation = entry->allocation;
+    ar_gen_drop_fn old_drop = entry->drop;
+    entry->data = new_data; entry->allocation = new_allocation; entry->drop = drop;
+    if (old_drop) old_drop(old_data);
+    free(old_allocation);
+    return 1;
+}}
+static uint64_t ar_gen_upsert_raw(uint64_t token, void *source, size_t size, size_t align, ar_gen_drop_fn drop) {{
+    if (token == 0) return ar_gen_insert_raw(source, size, align, drop);
+    return ar_gen_set_raw(token, source, size, align, drop) ? token : 0;
+}}
+static int ar_gen_remove_raw(uint64_t token, void *destination, size_t size, size_t align) {{
+    ar_gen_entry **link = &ar_gen_head;
+    while (*link && (*link)->token != token) link = &(*link)->next;
+    ar_gen_entry *entry = *link;
+    if (!entry || !destination || entry->size != size || entry->align != align) return 0;
+    *link = entry->next;
+    if (ar_gen_tail == entry) {{
+        ar_gen_tail = NULL;
+        for (ar_gen_entry *cursor = ar_gen_head; cursor; cursor = cursor->next) ar_gen_tail = cursor;
     }}
-    return ((int64_t)idx << 32) | (int64_t)g;
+    if (size != 0) memcpy(destination, entry->data, size);
+    free(entry->allocation); free(entry);
+    return 1;
 }}
-static int64_t ar_gen_get_i64(int64_t r) {{
-    uint32_t idx = (uint32_t)((uint64_t)r >> 32);
-    uint32_t g = (uint32_t)r;
-    if (idx >= (uint32_t)ar_gen_nslots || !ar_gen_slots[idx].used || ar_gen_slots[idx].generation != g)
-        abort();
-    return ar_gen_slots[idx].value;
-}}
-static int64_t ar_gen_remove_i64(int64_t r) {{
-    uint32_t idx = (uint32_t)((uint64_t)r >> 32);
-    uint32_t g = (uint32_t)r;
-    if (idx >= (uint32_t)ar_gen_nslots || !ar_gen_slots[idx].used || ar_gen_slots[idx].generation != g)
-        return 0;
-    int64_t v = ar_gen_slots[idx].value;
-    ar_gen_slots[idx].used = 0;
-    if (ar_gen_nfree < 256) ar_gen_free[ar_gen_nfree++] = idx;
-    return v;
+static void ar_gen_shutdown_raw(void) {{
+    ar_gen_entry *entries = ar_gen_head;
+    ar_gen_head = NULL; ar_gen_tail = NULL;
+    while (entries) {{
+        ar_gen_entry *next = entries->next;
+        if (entries->drop) entries->drop(entries->data);
+        free(entries->allocation); free(entries);
+        entries = next;
+    }}
 }}"#
         );
     }
@@ -937,11 +1036,19 @@ static inline void* ar_co_await_ptr(uint8_t* aw) {{
                         AmirRvalue::RelativeBorrow { local, .. } => {
                             used_locals.insert(local.as_usize());
                         }
-                        AmirRvalue::GenInsert { value }
-                        | AmirRvalue::GenGet { gen_ref: value }
-                        | AmirRvalue::GenRemove { gen_ref: value } => {
+                        AmirRvalue::GenInsert { value, .. }
+                        | AmirRvalue::GenGet { gen_ref: value, .. }
+                        | AmirRvalue::GenRemove { gen_ref: value, .. } => {
                             if let AmirOperand::Copy(t) | AmirOperand::Move(t) = value {
                                 used_temps.insert(t.as_usize());
+                            }
+                        }
+                        AmirRvalue::GenSet { gen_ref, value, .. }
+                        | AmirRvalue::GenUpsert { gen_ref, value, .. } => {
+                            for operand in [gen_ref, value] {
+                                if let AmirOperand::Copy(t) | AmirOperand::Move(t) = operand {
+                                    used_temps.insert(t.as_usize());
+                                }
                             }
                         }
                         AmirRvalue::StringInterp { parts } => {

@@ -15,6 +15,7 @@ pub enum AnnotationId {
     Deny,
     Forbid,
     NoFallback,
+    Destructor,
     NoSuspend,
     Specialize,
     Repr,
@@ -170,6 +171,16 @@ pub static BUILTIN_ANNOTATIONS: &[AnnotationSpec] = &[
         repeatable: false,
         availability: AnnotationAvailability::Implemented,
         summary: "Forbids generational heap fallback in a function.",
+    },
+    AnnotationSpec {
+        id: AnnotationId::Destructor,
+        canonical_name: "Destructor",
+        legacy_aliases: &[],
+        targets: &[AnnotationTarget::Method],
+        arguments: AnnotationArguments::None,
+        repeatable: false,
+        availability: AnnotationAvailability::Implemented,
+        summary: "Associates one consuming cleanup method with its receiver type.",
     },
     AnnotationSpec {
         id: AnnotationId::NoSuspend,
@@ -505,6 +516,20 @@ mod tests {
         assert_eq!(
             result.diagnostics[0].code,
             DiagCode::N015DuplicateAnnotation
+        );
+    }
+
+    #[test]
+    fn destructor_is_canonical_and_method_only() {
+        let result = validate("@Destructor\nfunc Resource.close(own self): void {}\n");
+        assert!(result.contains(AnnotationId::Destructor));
+        assert!(result.diagnostics.is_empty());
+
+        let result = validate("@Destructor\nfunc close(): void {}\n");
+        assert!(!result.contains(AnnotationId::Destructor));
+        assert_eq!(
+            result.diagnostics[0].code,
+            DiagCode::N013InvalidAnnotationTarget
         );
     }
 }

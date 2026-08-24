@@ -1354,13 +1354,13 @@ fn jit_enum_match_main() {
     assert_eq!(result, 2);
 }
 
-/// F2.3.runtime: hand-built AMIR with GenInsert/GenGet roundtrip via host arena.
+/// G4: type-erased ABI copies the aggregate bytes, not its incidental JIT pointer.
 #[test]
-fn jit_gen_insert_get_i64() {
+fn jit_gen_insert_get_copy_tuple() {
     use arandu_base::span::Span;
     use arandu_semantics::amir::{
         AmirBasicBlock, AmirConstant, AmirFunc, AmirOperand, AmirProgram, AmirRvalue, AmirStmt,
-        AmirStmtTable, AmirTemp, AmirTerminator, BlockId, TempId,
+        AmirStmtTable, AmirTemp, AmirTerminator, BlockId, GenArenaDomain, TempId,
     };
     use arandu_semantics::cfg::compute_cfg_edges;
     use arandu_semantics::layout::DenseRange;
@@ -1370,30 +1370,52 @@ fn jit_gen_insert_get_i64() {
 
     let interner = TypeInterner::new();
     let int_ty = interner.intern(ArType::Primitive(Primitive::Int));
+    let tuple_ty = interner.intern(ArType::Tuple(vec![int_ty, int_ty]));
     let gen_ty = interner.intern(ArType::GenRef);
 
     let mut stmts = AmirStmtTable::new();
-    // t1 = gen_insert(42)
+    // t1 = (42, 43)
     stmts.push(AmirStmt::Assign {
         lhs: TempId::from_usize(1),
-        rhs: AmirRvalue::GenInsert {
-            value: AmirOperand::Constant(AmirConstant::Pool(
-                // use Nil then we need a constant - better use iconst path via Constant
-                // Pool needs literal - use Constant from int via... AmirConstant only has Pool for ints
-                arandu_semantics::literal_pool::LiteralId(0),
-            )),
+        rhs: AmirRvalue::Tuple {
+            items: vec![
+                AmirOperand::Constant(AmirConstant::Pool(
+                    arandu_semantics::literal_pool::LiteralId(0),
+                )),
+                AmirOperand::Constant(AmirConstant::Pool(
+                    arandu_semantics::literal_pool::LiteralId(1),
+                )),
+            ],
         },
     });
-    // t0 = gen_get(t1)  // return temp
+    stmts.push(AmirStmt::Assign {
+        lhs: TempId::from_usize(2),
+        rhs: AmirRvalue::GenInsert {
+            value: AmirOperand::Copy(TempId::from_usize(1)),
+            payload_ty: tuple_ty,
+            arena: GenArenaDomain::CompilerManaged,
+            origin: Span::new(0, 0, 0),
+        },
+    });
+    stmts.push(AmirStmt::Assign {
+        lhs: TempId::from_usize(3),
+        rhs: AmirRvalue::GenGet {
+            gen_ref: AmirOperand::Copy(TempId::from_usize(2)),
+            payload_ty: tuple_ty,
+            arena: GenArenaDomain::CompilerManaged,
+            origin: Span::new(0, 0, 0),
+        },
+    });
     stmts.push(AmirStmt::Assign {
         lhs: TempId::from_usize(0),
-        rhs: AmirRvalue::GenGet {
-            gen_ref: AmirOperand::Copy(TempId::from_usize(1)),
+        rhs: AmirRvalue::FieldAccess {
+            base: AmirOperand::Copy(TempId::from_usize(3)),
+            field: 1,
         },
     });
     let block = AmirBasicBlock {
         id: BlockId::from_usize(0),
-        statements: DenseRange::new(0, 2),
+        statements: DenseRange::new(0, 4),
         params: vec![],
         terminator: AmirTerminator::Return,
     };
@@ -1402,6 +1424,8 @@ fn jit_gen_insert_get_i64() {
     let mut pool = AmirLiteralPool::default();
     let lit = pool.intern_int("42");
     assert_eq!(lit.0, 0);
+    let updated = pool.intern_int("43");
+    assert_eq!(updated.0, 1);
 
     let mut symbols = SymbolTable::new(0);
     let scope = symbols.global_scope();
@@ -1425,7 +1449,21 @@ fn jit_gen_insert_get_i64() {
             },
             AmirTemp {
                 id: TempId::from_usize(1),
+                ty: tuple_ty,
+                is_copy: true,
+                is_nullable: false,
+                span: Span::new(0, 0, 0),
+            },
+            AmirTemp {
+                id: TempId::from_usize(2),
                 ty: gen_ty,
+                is_copy: true,
+                is_nullable: false,
+                span: Span::new(0, 0, 0),
+            },
+            AmirTemp {
+                id: TempId::from_usize(3),
+                ty: tuple_ty,
                 is_copy: true,
                 is_nullable: false,
                 span: Span::new(0, 0, 0),
@@ -1453,5 +1491,5 @@ fn jit_gen_insert_get_i64() {
         let f: unsafe fn() -> i64 = module.get_fn("main").unwrap();
         f()
     };
-    assert_eq!(result, 42);
+    assert_eq!(result, 43);
 }

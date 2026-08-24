@@ -293,3 +293,47 @@ func main(): int {
         "missing str mono: {mangled:?}"
     );
 }
+
+#[test]
+fn generic_destructor_is_registered_per_concrete_receiver() {
+    let src = r#"
+struct Resource<T> { value: T }
+
+@Destructor
+func Resource.dispose(own self): void {}
+
+func consume_int(own value: Resource<int>): void {}
+func consume_str(own value: Resource<str>): void {}
+
+func main(): void {
+    consume_int(Resource<int> { value: 1 })
+    consume_str(Resource<str> { value: "ok" })
+}
+"#;
+    let program = arandu_parser::parse(src).expect("parse");
+    let resolution = resolve_for_test(0, &program);
+    let mut tc = type_check(resolution, &program);
+    assert!(tc.diagnostics.is_empty(), "typeck: {:?}", tc.diagnostics);
+    let mut hir = lower_to_hir(&mut tc, &program).expect("hir");
+    monomorphize_program(&mut tc, &mut hir).expect("mono");
+
+    let instances: Vec<_> = tc
+        .type_info
+        .destructor_instances
+        .iter()
+        .map(|(ty, symbol)| {
+            (
+                format!("{:?}", tc.type_info.resolve_type_id(*ty)),
+                tc.symbols.get(*symbol).name.clone(),
+            )
+        })
+        .collect();
+    assert!(
+        instances.iter().any(|(_, name)| name.contains("$I_int_")),
+        "missing concrete int destructor: {instances:?}"
+    );
+    assert!(
+        instances.iter().any(|(_, name)| name.contains("$I_str_")),
+        "missing concrete str destructor: {instances:?}"
+    );
+}

@@ -117,14 +117,29 @@ pub fn check_escapes_by_block(
                 ));
                 diags.push((
                     ev.block,
-                    o004_diag(&name, ev.span, ev.reason, /*as_error*/ no_fb),
+                    o004_diag(&name, ev.span, ev.block, ev.reason, /*as_error*/ no_fb),
                 ));
             }
             EscapeKind::HeapStore => {
                 // Controlled fallback path: O004 is Note by default; G2 promotes to Error.
+                // Projected refs cannot be represented by the current scalar
+                // handle without either snapshot semantics or losing the base
+                // owner/path relation. Reject instead of compiling stale data.
+                let projected = has_projected_borrow(func, ev.place_local);
                 diags.push((
                     ev.block,
-                    o004_diag(&name, ev.span, ev.reason, /*as_error*/ no_fb),
+                    o004_diag(
+                        &name,
+                        ev.span,
+                        ev.block,
+                        ev.reason,
+                        /*as_error*/ no_fb || projected,
+                    )
+                    .with_note(if projected {
+                        "projected escaping borrows require a first-class owner/path handle; snapshot promotion is intentionally forbidden"
+                    } else {
+                        "compiler-managed owner promotion is available for this root place"
+                    }),
                 ));
                 if no_fb {
                     // Extra hint only when hard-failing.
@@ -136,7 +151,22 @@ pub fn check_escapes_by_block(
     diags
 }
 
-fn o004_diag(name: &str, span: Span, reason: &str, as_error: bool) -> Diagnostic {
+fn has_projected_borrow(func: &AmirFunc, local: LocalId) -> bool {
+    func.blocks
+        .iter()
+        .flat_map(|block| func.block_stmts(block.id))
+        .any(|stmt| {
+            matches!(
+                stmt,
+                AmirStmt::Assign {
+                    rhs: AmirRvalue::Borrow(place) | AmirRvalue::BorrowMut(place),
+                    ..
+                } if place.local == local && !place.projections.is_empty()
+            )
+        })
+}
+
+fn o004_diag(name: &str, span: Span, block: BlockId, reason: &str, as_error: bool) -> Diagnostic {
     let msg = format!("generational fallback: '{name}' escapes stack-limited borrow window");
     let d = if as_error {
         Diagnostic::error(DiagCode::O004GenerationalFallback, msg, span).with_note(
@@ -147,9 +177,15 @@ fn o004_diag(name: &str, span: Span, reason: &str, as_error: bool) -> Diagnostic
             "not a silent heap promotion: this note records why the static borrow window was insufficient",
         )
     };
-    d.with_note(reason.to_string()).with_hint(
-        "refactor to keep the reference inside the owner's live range, or use an explicit heap type",
-    )
+    d.with_label(span, "escape crosses the stack-only borrow boundary")
+        .with_note(format!(
+            "escape path: local `{name}` -> AMIR block {} -> storage that may outlive the borrow",
+            block.as_usize()
+        ))
+        .with_note(reason.to_string())
+        .with_hint(
+            "stack-first alternatives: shorten the borrow, pass the owner, return owned data, or use an explicit heap type",
+        )
 }
 
 /// Pure escape finder (no diagnostics).

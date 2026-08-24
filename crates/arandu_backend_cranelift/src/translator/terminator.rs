@@ -2,6 +2,7 @@ use arandu_semantics::amir::AmirTerminator;
 use arandu_semantics::passes::type_checker::types::{ArType, Primitive};
 use cranelift_codegen::ir::{BlockArg, InstBuilder, TrapCode};
 use cranelift_frontend::Switch;
+use cranelift_module::Module;
 
 use super::FunctionTranslator;
 use crate::types::{ClifType, clif_type};
@@ -10,6 +11,14 @@ impl FunctionTranslator<'_, '_> {
     pub(super) fn translate_terminator(&mut self, terminator: &AmirTerminator) {
         match terminator {
             AmirTerminator::Return => {
+                if self.symbol_table.get(self.current_func.symbol).name == "main"
+                    && let Some(&shutdown_id) = self.func_ids.get("ar_gen_shutdown_raw")
+                {
+                    let shutdown = self
+                        .module
+                        .declare_func_in_func(shutdown_id, self.builder.func);
+                    self.builder.ins().call(shutdown, &[]);
+                }
                 if matches!(
                     self.resolve_ty(self.current_func.return_type),
                     ArType::Primitive(Primitive::Str)

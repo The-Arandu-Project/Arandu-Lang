@@ -105,18 +105,30 @@ impl AranduJit {
             "ar_jit_err_to_str",
             crate::to_str_runtime::ar_jit_err_to_str as *const u8,
         );
-        // F2.3.runtime generational arena (i64 payload MVP).
+        // G4 type-erased compiler-managed GenRef ABI.
         builder.symbol(
-            "ar_gen_insert_i64",
-            crate::gen_runtime::ar_gen_insert_i64 as *const u8,
+            "ar_gen_insert_raw",
+            arandu_runtime::gen_runtime_gold::ar_gen_insert_raw as *const u8,
         );
         builder.symbol(
-            "ar_gen_get_i64",
-            crate::gen_runtime::ar_gen_get_i64 as *const u8,
+            "ar_gen_get_raw",
+            arandu_runtime::gen_runtime_gold::ar_gen_get_raw as *const u8,
         );
         builder.symbol(
-            "ar_gen_remove_i64",
-            crate::gen_runtime::ar_gen_remove_i64 as *const u8,
+            "ar_gen_set_raw",
+            arandu_runtime::gen_runtime_gold::ar_gen_set_raw as *const u8,
+        );
+        builder.symbol(
+            "ar_gen_upsert_raw",
+            arandu_runtime::gen_runtime_gold::ar_gen_upsert_raw as *const u8,
+        );
+        builder.symbol(
+            "ar_gen_remove_raw",
+            arandu_runtime::gen_runtime_gold::ar_gen_remove_raw as *const u8,
+        );
+        builder.symbol(
+            "ar_gen_shutdown_raw",
+            arandu_runtime::gen_runtime_gold::ar_gen_shutdown_raw as *const u8,
         );
         // A3.6: coroutine poll / block_on (i64 payload MVP).
         builder.symbol(
@@ -407,21 +419,76 @@ impl AranduJit {
             .map_err(|err| codegen_ice(format!("failed to declare free: {err:?}")))?;
         func_ids.insert("free".to_string(), free_id);
 
-        // F2.3.runtime: gen arena helpers (i64 → i64).
-        let mut gen_sig = cranelift_codegen::ir::Signature::new(default_call_conv);
-        gen_sig.params.push(cranelift_codegen::ir::AbiParam::new(
+        // G4 raw ABI: pointers and layout widths follow the JIT target.
+        let usize_ty = ptr_type;
+        let mut insert_sig = cranelift_codegen::ir::Signature::new(default_call_conv);
+        for ty in [ptr_type, usize_ty, usize_ty, ptr_type] {
+            insert_sig
+                .params
+                .push(cranelift_codegen::ir::AbiParam::new(ty));
+        }
+        insert_sig
+            .returns
+            .push(cranelift_codegen::ir::AbiParam::new(
+                cranelift_codegen::ir::types::I64,
+            ));
+        let mut get_sig = cranelift_codegen::ir::Signature::new(default_call_conv);
+        for ty in [
             cranelift_codegen::ir::types::I64,
+            ptr_type,
+            usize_ty,
+            usize_ty,
+        ] {
+            get_sig
+                .params
+                .push(cranelift_codegen::ir::AbiParam::new(ty));
+        }
+        get_sig.returns.push(cranelift_codegen::ir::AbiParam::new(
+            cranelift_codegen::ir::types::I8,
         ));
-        gen_sig.returns.push(cranelift_codegen::ir::AbiParam::new(
+        let mut set_sig = cranelift_codegen::ir::Signature::new(default_call_conv);
+        for ty in [
             cranelift_codegen::ir::types::I64,
+            ptr_type,
+            usize_ty,
+            usize_ty,
+            ptr_type,
+        ] {
+            set_sig
+                .params
+                .push(cranelift_codegen::ir::AbiParam::new(ty));
+        }
+        set_sig.returns.push(cranelift_codegen::ir::AbiParam::new(
+            cranelift_codegen::ir::types::I8,
         ));
-        for name in ["ar_gen_insert_i64", "ar_gen_get_i64", "ar_gen_remove_i64"] {
+        let mut upsert_sig = set_sig.clone();
+        upsert_sig.returns.clear();
+        upsert_sig
+            .returns
+            .push(cranelift_codegen::ir::AbiParam::new(
+                cranelift_codegen::ir::types::I64,
+            ));
+        for (name, signature) in [
+            ("ar_gen_insert_raw", &insert_sig),
+            ("ar_gen_get_raw", &get_sig),
+            ("ar_gen_set_raw", &set_sig),
+            ("ar_gen_upsert_raw", &upsert_sig),
+            ("ar_gen_remove_raw", &get_sig),
+        ] {
             let id = self
                 .module
-                .declare_function(name, Linkage::Import, &gen_sig)
+                .declare_function(name, Linkage::Import, signature)
                 .map_err(|err| codegen_ice(format!("failed to declare {name}: {err:?}")))?;
             func_ids.insert(name.to_string(), id);
         }
+        let shutdown_sig = cranelift_codegen::ir::Signature::new(default_call_conv);
+        let shutdown_id = self
+            .module
+            .declare_function("ar_gen_shutdown_raw", Linkage::Import, &shutdown_sig)
+            .map_err(|err| {
+                codegen_ice(format!("failed to declare ar_gen_shutdown_raw: {err:?}"))
+            })?;
+        func_ids.insert("ar_gen_shutdown_raw".to_string(), shutdown_id);
 
         // A3.6: block_on(state) -> i64
         let mut block_on_sig = cranelift_codegen::ir::Signature::new(default_call_conv);
@@ -1206,6 +1273,53 @@ impl AranduJit {
             }
         }
 
+        // Declare one target-native drop shim per explicitly destructible
+        // GenRef payload. The shim ABI is always `(ptr) -> void`; it forwards
+        // the address-owned representation to the Arandu destructor without
+        // deallocating the runtime-owned payload storage.
+        let mut drop_shims = std::collections::BTreeMap::new();
+        for func in &program.funcs {
+            for stmt in func.stmts.payloads.iter() {
+                let arandu_semantics::amir::AmirStmt::Assign { rhs, .. } = stmt else {
+                    continue;
+                };
+                let payload_ty = match rhs {
+                    arandu_semantics::amir::AmirRvalue::GenInsert { payload_ty, .. }
+                    | arandu_semantics::amir::AmirRvalue::GenSet { payload_ty, .. }
+                    | arandu_semantics::amir::AmirRvalue::GenUpsert { payload_ty, .. } => {
+                        *payload_ty
+                    }
+                    _ => continue,
+                };
+                let ArType::Named(_, _) = type_info.resolve_type_id(payload_ty) else {
+                    continue;
+                };
+                let Some(&destructor_symbol) = type_info.destructor_instances.get(&payload_ty)
+                else {
+                    continue;
+                };
+                let name = format!(
+                    "__ar_drop_{}_{}",
+                    destructor_symbol.file_id, destructor_symbol.local_id.0
+                );
+                if drop_shims.contains_key(&name) {
+                    continue;
+                }
+                let mut signature = cranelift_codegen::ir::Signature::new(default_call_conv);
+                signature
+                    .params
+                    .push(cranelift_codegen::ir::AbiParam::new(ptr_type));
+                let shim_id = self
+                    .module
+                    .declare_function(&name, Linkage::Local, &signature)
+                    .map_err(|err| {
+                        codegen_ice(format!("failed to declare drop shim '{name}': {err:?}"))
+                    })?;
+                func_ids.insert(name.clone(), shim_id);
+                drop_shims.insert(name, (shim_id, destructor_symbol, signature));
+            }
+        }
+
         // Declare all extern functions as imports
         for (&symbol_id, (param_types, return_type)) in &program.extern_funcs {
             let sym = symbols.get(symbol_id);
@@ -1300,6 +1414,38 @@ impl AranduJit {
                 .define_function(func_id, &mut context)
                 .map_err(|err| {
                     codegen_ice(format!("failed to define function '{}': {err:?}", sym.name))
+                })?;
+            self.module.clear_context(&mut context);
+        }
+
+        for (name, (shim_id, destructor_symbol, signature)) in drop_shims {
+            let destructor_name = symbols.get(destructor_symbol).name.as_str();
+            let Some(&destructor_id) = func_ids.get(destructor_name) else {
+                return Err(codegen_ice(format!(
+                    "drop shim '{name}' references unavailable destructor '{destructor_name}'"
+                )));
+            };
+            context.func.signature = signature;
+            let mut builder_context = FunctionBuilderContext::new();
+            {
+                use cranelift_codegen::ir::InstBuilder;
+                let mut builder = FunctionBuilder::new(&mut context.func, &mut builder_context);
+                let entry = builder.create_block();
+                builder.append_block_params_for_function_params(entry);
+                builder.switch_to_block(entry);
+                builder.seal_block(entry);
+                let raw = builder.block_params(entry)[0];
+                let destructor = self
+                    .module
+                    .declare_func_in_func(destructor_id, builder.func);
+                builder.ins().call(destructor, &[raw]);
+                builder.ins().return_(&[]);
+                builder.seal_all_blocks();
+            }
+            self.module
+                .define_function(shim_id, &mut context)
+                .map_err(|err| {
+                    codegen_ice(format!("failed to define drop shim '{name}': {err:?}"))
                 })?;
             self.module.clear_context(&mut context);
         }

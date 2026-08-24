@@ -70,6 +70,39 @@ pub fn expand_specializations<'bump>(
         })
         .collect();
 
+    // Destruction is compiler-inserted, so it has no source call for the
+    // ordinary call collector to discover. Seed generic destructors from every
+    // concrete nominal type observed by type checking. Sorting by interned ID
+    // keeps specialization order independent from hash-map iteration.
+    let mut observed_types: Vec<TypeId> = tc
+        .type_info
+        .expr_types
+        .iter()
+        .flatten()
+        .copied()
+        .chain(tc.type_info.decl_types.values().copied())
+        .collect();
+    observed_types.sort_by_key(|ty| ty.0);
+    observed_types.dedup();
+    for ty in observed_types {
+        let ArType::Named(nominal, args) = tc.type_info.resolve_type_id(ty) else {
+            continue;
+        };
+        let Some(&destructor) = tc.type_info.destructors.get(&nominal) else {
+            continue;
+        };
+        if args.is_empty() || !template_funcs.contains_key(&destructor) {
+            continue;
+        }
+        let key = InstantiationKey {
+            symbol: destructor,
+            type_args: bump.alloc_slice_copy(&args),
+        };
+        if !worklist.iter().any(|existing| existing == &key) {
+            worklist.push_back(key);
+        }
+    }
+
     if worklist.is_empty() {
         return Ok(0);
     }
@@ -554,6 +587,16 @@ fn specialize_free_func(
     let func_ty_id = tc.type_info.type_interner.intern(func_ty);
     tc.type_info_mut()
         .record_decl_type(new_func_sym, func_ty_id);
+    let specializes_destructor = tc
+        .type_info
+        .destructors
+        .values()
+        .any(|symbol| *symbol == template.symbol);
+    if specializes_destructor && let Some(receiver) = new_params.first() {
+        tc.type_info_mut()
+            .destructor_instances
+            .insert(receiver.ty, new_func_sym);
+    }
 
     let new_params_range = hir.pool.alloc_param_list(&new_params);
     let new_body = clone_block(hir, body_id, &subst, &mut symbol_map, tc, &mangled)?;

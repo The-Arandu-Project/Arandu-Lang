@@ -338,21 +338,60 @@ impl AmirRvalue {
                     value.to_pretty_string(symbols, pool)
                 ));
             }
-            AmirRvalue::GenInsert { value } => {
+            AmirRvalue::GenInsert {
+                value, payload_ty, ..
+            } => {
                 out.push_str(&format!(
-                    "gen_insert({})",
+                    "gen_insert.compiler_managed(ty#{}, {})",
+                    payload_ty.as_usize(),
                     value.to_pretty_string(symbols, pool)
                 ));
             }
-            AmirRvalue::GenGet { gen_ref } => {
+            AmirRvalue::GenGet {
+                gen_ref,
+                payload_ty,
+                ..
+            } => {
                 out.push_str(&format!(
-                    "gen_get({})",
+                    "gen_get.compiler_managed(ty#{}, {})",
+                    payload_ty.as_usize(),
                     gen_ref.to_pretty_string(symbols, pool)
                 ));
             }
-            AmirRvalue::GenRemove { gen_ref } => {
+            AmirRvalue::GenSet {
+                gen_ref,
+                value,
+                payload_ty,
+                ..
+            } => {
                 out.push_str(&format!(
-                    "gen_remove({})",
+                    "gen_set.compiler_managed(ty#{}, {}, {})",
+                    payload_ty.as_usize(),
+                    gen_ref.to_pretty_string(symbols, pool),
+                    value.to_pretty_string(symbols, pool)
+                ));
+            }
+            AmirRvalue::GenUpsert {
+                gen_ref,
+                value,
+                payload_ty,
+                ..
+            } => {
+                out.push_str(&format!(
+                    "gen_upsert.compiler_managed(ty#{}, {}, {})",
+                    payload_ty.as_usize(),
+                    gen_ref.to_pretty_string(symbols, pool),
+                    value.to_pretty_string(symbols, pool)
+                ));
+            }
+            AmirRvalue::GenRemove {
+                gen_ref,
+                payload_ty,
+                ..
+            } => {
+                out.push_str(&format!(
+                    "gen_remove.compiler_managed(ty#{}, {})",
+                    payload_ty.as_usize(),
                     gen_ref.to_pretty_string(symbols, pool)
                 ));
             }

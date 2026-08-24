@@ -152,8 +152,9 @@ Fase 3 — OSSA Avançado, Semântica e OS Runtime (v0.3) · [PARCIAL; vários m
    │    ├─ [x] F2.3.1 Escape detection (return → O010; heap-store → O004 path)
    │    ├─ [x] F2.3.2 O004 nota informativa (Magia Inspecionável — nunca silencioso)
    │    └─ [x] F2.3.3 G2: `@NoFallback` / `--no-generational-fallback` promove O004→erro
-   └─ [x] F2.3.runtime  GenRef MVP (i64 payload; promoção HeapStore para int)
+   └─ [~] F2.3.runtime  GenRef MVP concluído; estabilização Gold em campanha
         ├─ [x] Spec: `docs/arandu-genref-abi-rfc-v0.1.md`
+        ├─ [~] Gold: `docs/arandu-genref-gold-strategy-v0.1.md`
         ├─ [x] `stdlib/core/intrinsics.aru` — `abort_generational_mismatch`
         ├─ [x] `stdlib/alloc/gen_arena.aru` — API GenRef/GenArena (surface tipada)
         ├─ [x] AMIR `GenInsert`/`GenGet`/`GenRemove` + `ArType::GenRef`
