@@ -9,6 +9,9 @@ blake3 = { workspace = true }
 tracing = { workspace = true }
 slotmap = { workspace = true }
 rustc-hash = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+semver = { workspace = true }
 
 arandu_base = { path = "../arandu_base" }
 arandu_lexer = { path = "../arandu_lexer" }

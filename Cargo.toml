@@ -45,6 +45,8 @@ lsp-types = "0.97.0"
 crossbeam-channel = "0.5.15"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+toml = "0.8.23"
+semver = "1.0.28"
 rowan = "0.17.0"
 bumpalo = "3.20.3"
 

@@ -216,6 +216,14 @@ with similar display names can be bound under distinct aliases. Two aliases
 that resolve to the same package identity are rejected initially rather than
 compiling the same package twice under ambiguous namespaces.
 
+This deliberately combines the strongest parts of Go and Deno without making
+source imports a transport protocol. Like Go, a package path is resolved from
+an already selected module graph. Like Deno import maps, a short source-level
+name is bound centrally. Unlike Go's missing-package lookup and Deno's direct
+URL specifiers, an Arandu `import` never searches a registry, contacts a proxy,
+or embeds a version/URL. Only an explicit manifest dependency can introduce an
+external package; `check`, `build` and `run` do not mutate that graph.
+
 ### Canonical import roots
 
 Package mode has three unambiguous roots:
@@ -524,6 +532,8 @@ The lockfile is not ignored for applications/workspaces.
 - [ ] Add schema, package kind, edition and toolchain compatibility.
 - [ ] Reject duplicates, unknown owned fields, invalid SemVer and unsafe paths.
 - [ ] Keep manifest and directory data as narrow Salsa inputs.
+- [ ] Reserve versioned capability-policy and compiler-produced effect-summary
+  metadata without claiming A2 inference before it exists.
 
 ### P1 — Project creation and VCS
 

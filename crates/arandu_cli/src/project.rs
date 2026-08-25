@@ -112,10 +112,22 @@ pub fn cmd_new(name: &str) -> CliResult {
     })?;
 
     let toml = format!(
-        r#"# Arandu package manifest (Minimal 0.1)
+        r#"# Arandu package manifest
+schema = 1
+
+[package]
 name = "{name}"
 version = "0.0.1"
-entry = "{DEFAULT_ENTRY}"
+edition = "2026"
+
+[toolchain]
+arandu = ">=0.1.0-rc.4, <0.2.0"
+
+[targets.bin]
+name = "{name}"
+root = "{DEFAULT_ENTRY}"
+
+[dependencies]
 "#
     );
     let main_src = TEMPLATE_MAIN_ARU.replace("module my_app", &format!("module {name}"));

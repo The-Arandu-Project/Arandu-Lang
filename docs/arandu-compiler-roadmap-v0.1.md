@@ -374,13 +374,51 @@ Inspirado por Salsa e o request-evaluator do Swift, o compilador é estruturado 
 
 #### A2 — Effect System (v0.3)
 
-Um sistema de efeitos estrito e rastreável pelo compilador que decora as assinaturas de funções e garante propriedades semânticas:
+Um sistema de efeitos estrito e rastreável pelo compilador. Effects são
+**inferidos transitivamente** a partir do código resolvido e tipado; anotações
+como `@Effects(Net)` declaram um contrato verificável, nunca uma afirmação em
+que o compilador confia cegamente. Omitir a anotação não oculta comportamento,
+e uma declaração menor que o conjunto inferido é erro.
+
+O modelo separa três dimensões para que alertas permaneçam úteis:
+
+* **autoridade/segurança**: `Net`, `FileRead`, `FileWrite`, `Environment`,
+  `Process`, `Foreign` e `UnknownCapability`;
+* **recursos**: `Heap`, `Blocking`, `Suspend` e `Thread`;
+* **semântica**: estado, não determinismo e falhas tipadas.
+
+`Unsafe` não concede autoridade. Operações de rede dentro de código unsafe
+continuam exigindo `Net`; FFI não classificada introduz conservadoramente
+`Foreign + Unsafe + UnknownCapability`. Uso interno auditável de memória unsafe
+é registrado como risco de implementação, mas não contamina automaticamente
+toda API pública. `UnknownCapability` sempre se propaga e políticas rigorosas o
+bloqueiam.
+
+O resumo inferido da API pública e os riscos de implementação formarão metadata
+assinada pelo compilador. O gerenciador de pacotes compara versões e exige
+aprovação para ampliações como `{} -> {Net}` ou alerta para mudanças de recurso
+como `{} -> {Heap}`. Manifesto define o teto autorizado, lockfile registra o
+perfil observado, e sandbox/runtime aplica a autoridade; checksum sozinho só
+prova identidade dos bytes.
+
+Propriedades semânticas iniciais:
 
 * `pure`: Garante ausência de efeitos colaterais e mutações globais. Permite otimização agressiva de GVN (Global Value Numbering) e eliminação total de sub-chamadas redundantes.
 * `readonly`: Permite ler dados arbitrários mas proíbe qualquer mutação. O compilador usa isso para promover borrows mutáveis em compartilhados de forma segura.
 * `noalloc`: Proíbe alocações na heap. Ideal para kernels, drivers e hot-paths de alta performance.
 * `nothrow`: Garante que a função nunca pânico/abort, eliminando caminhos de erro nas análises de controle de fluxo do AMIR.
 * `nosuspend`: Garante que a função é síncrona e nunca suspende controle, permitindo chamadas diretas sem overhead de corrotinas.
+
+**Marcos de implementação:**
+
+1. IDs estáveis de effects/capabilities e representação canônica de conjuntos;
+2. effects intrínsecos da stdlib e fronteiras conservadoras de FFI/unsafe;
+3. inferência local e propagação interprocedural com ciclos até ponto fixo;
+4. contratos explícitos e diagnósticos com cadeia causal;
+5. resumo público separado do risco interno, preservando early-cutoff;
+6. metadata de pacote, diff de atualização e políticas no manifesto/lockfile;
+7. enforcement por sandbox para autoridade — análise estática não substitui
+   isolamento de código nativo.
 
 #### A3 — Modelo Async Semântico e Colorless (v0.3)
 

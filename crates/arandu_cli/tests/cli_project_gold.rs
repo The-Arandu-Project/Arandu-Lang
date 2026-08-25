@@ -78,7 +78,7 @@ fn new_scaffolds_package_and_check_run() {
         "new failed: {}",
         String::from_utf8_lossy(&new_out.stderr)
     );
-    assert!(project.join("Arandu.toml").is_file());
+    assert!(project.join("arandu.toml").is_file());
     assert!(project.join("src/main.aru").is_file());
 
     let check = run_cli_in(&project, &["check"]);

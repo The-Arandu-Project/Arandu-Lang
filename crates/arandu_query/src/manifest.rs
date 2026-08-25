@@ -1,4 +1,4 @@
-//! Project manifest (`Arandu.toml`) — Salsa input from day 1.
+//! Project manifest (`arandu.toml`) — Salsa input from day 1.
 //!
 //! Gold bar (P2): the manifest is a `#[salsa::input]` whose **content hash**
 //! participates in the invalidation key. Changing `entry` / `name` / `version`
@@ -12,8 +12,13 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use serde::Deserialize;
+
 /// Canonical on-disk filename for a project package.
-pub const MANIFEST_FILENAME: &str = "Arandu.toml";
+pub const MANIFEST_FILENAME: &str = "arandu.toml";
+
+/// Previous case-sensitive spelling, readable only during migration.
+pub const LEGACY_MANIFEST_FILENAME: &str = "Arandu.toml";
 
 /// Parsed package fields (MVP: name / version / entry).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +26,64 @@ pub struct ManifestData {
     pub name: String,
     pub version: String,
     pub entry: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManifestSchema {
+    schema: u32,
+    package: PackageSection,
+    #[serde(default)]
+    toolchain: Option<ToolchainSection>,
+    targets: TargetsSection,
+    #[serde(default)]
+    dependencies: std::collections::BTreeMap<String, PathDependency>,
+    #[serde(default)]
+    metadata: toml::Table,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PackageSection {
+    name: String,
+    version: String,
+    edition: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ToolchainSection {
+    arandu: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TargetsSection {
+    #[serde(default)]
+    bin: Option<TargetSection>,
+    #[serde(default)]
+    lib: Option<TargetSection>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TargetSection {
+    name: String,
+    root: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PathDependency {
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyManifest {
+    name: String,
+    version: String,
+    entry: String,
 }
 
 /// Why reading or parsing `Arandu.toml` failed.
@@ -98,70 +161,46 @@ pub fn hash_manifest_bytes(bytes: &[u8]) -> String {
 
 /// Parse `Arandu.toml` text. Does **not** read the filesystem.
 ///
-/// Minimal TOML subset: top-level `key = "value"` string assignments only.
-/// Unknown keys are ignored (forward-compatible). Missing required fields fail.
+/// Complete TOML syntax with a strict Arandu-owned schema. The legacy three-key
+/// shape remains readable during the migration window.
 pub fn parse_manifest_str(path: &Path, text: &str) -> Result<ManifestData, ManifestError> {
-    let mut name: Option<String> = None;
-    let mut version: Option<String> = None;
-    let mut entry: Option<String> = None;
-
-    for (line_no, raw_line) in text.lines().enumerate() {
-        let line = strip_toml_comment(raw_line).trim();
-        if line.is_empty() {
-            continue;
-        }
-        // Sections / tables not supported in MVP — reject so we never silently
-        // ignore structured config the user thought was active.
-        if line.starts_with('[') {
-            return Err(ManifestError::Parse {
+    let value: toml::Value = toml::from_str(text).map_err(|error| ManifestError::Parse {
+        path: path.to_path_buf(),
+        message: error.to_string(),
+    })?;
+    let (name, version, entry) = if value.get("schema").is_some()
+        || value.get("package").is_some()
+        || value.get("targets").is_some()
+    {
+        let manifest: ManifestSchema = value.try_into().map_err(|error| ManifestError::Parse {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        })?;
+        validate_schema(path, &manifest)?;
+        let target = manifest
+            .targets
+            .bin
+            .or(manifest.targets.lib)
+            .ok_or_else(|| ManifestError::MissingField {
                 path: path.to_path_buf(),
-                message: format!(
-                    "line {}: tables/sections are not supported yet (got `{line}`)",
-                    line_no + 1
-                ),
-            });
-        }
-        let Some((key, rest)) = line.split_once('=') else {
-            return Err(ManifestError::Parse {
-                path: path.to_path_buf(),
-                message: format!(
-                    "line {}: expected `key = \"value\"`, got `{line}`",
-                    line_no + 1
-                ),
-            });
-        };
-        let key = key.trim();
-        let value = match parse_toml_string(rest.trim()) {
-            Ok(v) => v,
-            Err(msg) => {
-                return Err(ManifestError::Parse {
+                field: "targets.bin or targets.lib",
+            })?;
+        (manifest.package.name, manifest.package.version, target.root)
+    } else {
+        for field in ["name", "version", "entry"] {
+            if value.get(field).is_none() {
+                return Err(ManifestError::MissingField {
                     path: path.to_path_buf(),
-                    message: format!("line {}: {msg}", line_no + 1),
+                    field,
                 });
             }
-        };
-        match key {
-            "name" => name = Some(value),
-            "version" => version = Some(value),
-            "entry" => entry = Some(value),
-            // Forward-compatible: ignore unknown keys for now.
-            _ => {}
         }
-    }
-
-    let path_buf = path.to_path_buf();
-    let name = name.ok_or(ManifestError::MissingField {
-        path: path_buf.clone(),
-        field: "name",
-    })?;
-    let version = version.ok_or(ManifestError::MissingField {
-        path: path_buf.clone(),
-        field: "version",
-    })?;
-    let entry = entry.ok_or(ManifestError::MissingField {
-        path: path_buf,
-        field: "entry",
-    })?;
+        let legacy: LegacyManifest = value.try_into().map_err(|error| ManifestError::Parse {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        })?;
+        (legacy.name, legacy.version, legacy.entry)
+    };
 
     if name.is_empty() {
         return Err(ManifestError::Parse {
@@ -175,6 +214,11 @@ pub fn parse_manifest_str(path: &Path, text: &str) -> Result<ManifestData, Manif
             message: "`entry` must be non-empty".into(),
         });
     }
+    semver::Version::parse(&version).map_err(|error| ManifestError::Parse {
+        path: path.to_path_buf(),
+        message: format!("`package.version` is not valid SemVer: {error}"),
+    })?;
+    validate_relative_path(path, &entry, "target root", false)?;
     // PROMOTE-L2: package name must not collide with stdlib roots.
     if let Err(e) = crate::vfs::validate_package_name(&name) {
         return Err(ManifestError::ReservedName {
@@ -188,6 +232,83 @@ pub fn parse_manifest_str(path: &Path, text: &str) -> Result<ManifestData, Manif
         version,
         entry,
     })
+}
+
+fn validate_schema(path: &Path, manifest: &ManifestSchema) -> Result<(), ManifestError> {
+    if manifest.schema != 1 {
+        return Err(ManifestError::Parse {
+            path: path.to_path_buf(),
+            message: format!("unsupported schema {}; expected 1", manifest.schema),
+        });
+    }
+    if manifest.package.edition != "2026" {
+        return Err(ManifestError::Parse {
+            path: path.to_path_buf(),
+            message: format!(
+                "unsupported package edition `{}`; expected `2026`",
+                manifest.package.edition
+            ),
+        });
+    }
+    if let Some(toolchain) = &manifest.toolchain {
+        semver::VersionReq::parse(&toolchain.arandu).map_err(|error| ManifestError::Parse {
+            path: path.to_path_buf(),
+            message: format!("invalid `toolchain.arandu` requirement: {error}"),
+        })?;
+    }
+    if manifest.targets.bin.is_some() && manifest.targets.lib.is_some() {
+        return Err(ManifestError::Parse {
+            path: path.to_path_buf(),
+            message: "schema 1 accepts one target: choose `targets.bin` or `targets.lib`".into(),
+        });
+    }
+    let target = manifest
+        .targets
+        .bin
+        .as_ref()
+        .or(manifest.targets.lib.as_ref());
+    if let Some(target) = target {
+        if target.name.is_empty() {
+            return Err(ManifestError::Parse {
+                path: path.to_path_buf(),
+                message: "target `name` must be non-empty".into(),
+            });
+        }
+    }
+    for (alias, dependency) in &manifest.dependencies {
+        crate::vfs::validate_package_name(alias).map_err(|error| ManifestError::ReservedName {
+            path: path.to_path_buf(),
+            message: format!("invalid dependency alias `{alias}`: {error}"),
+        })?;
+        validate_relative_path(path, &dependency.path, "dependency path", true)?;
+    }
+    let _ = &manifest.metadata;
+    Ok(())
+}
+
+fn validate_relative_path(
+    manifest_path: &Path,
+    value: &str,
+    field: &str,
+    allow_parent: bool,
+) -> Result<(), ManifestError> {
+    let candidate = Path::new(value);
+    let has_parent = candidate
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir));
+    if value.is_empty()
+        || candidate.is_absolute()
+        || (!allow_parent && has_parent)
+        || value.contains('\\')
+    {
+        return Err(ManifestError::Parse {
+            path: manifest_path.to_path_buf(),
+            message: format!(
+                "unsafe `{field}` `{value}`; use a non-empty relative path with `/` separators"
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// Read and parse `Arandu.toml` at `path`. Propagates I/O and parse errors.
@@ -222,7 +343,7 @@ pub fn register_manifest(
     )
 }
 
-/// Walk parents of `start` looking for `Arandu.toml` (project discovery).
+/// Walk parents of `start` looking for `arandu.toml` (project discovery).
 ///
 /// This is **not** stdlib resolution — package roots may use cwd/path walk
 /// (Cargo convention). Stdlib uses [`crate::stdlib::resolve_stdlib_root`].
@@ -241,64 +362,15 @@ pub fn find_manifest(start: &Path) -> Option<PathBuf> {
         if candidate.is_file() {
             return Some(candidate);
         }
+        let legacy = current.join(LEGACY_MANIFEST_FILENAME);
+        if legacy.is_file() {
+            return Some(legacy);
+        }
         if !current.pop() {
             break;
         }
     }
     None
-}
-
-fn strip_toml_comment(line: &str) -> &str {
-    // Naive: `#` starts a comment unless inside quotes. Good enough for MVP
-    // keys which are simple strings without embedded `#`.
-    let mut in_string = false;
-    let bytes = line.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'"' if in_string => {
-                // Handle escaped quote.
-                if i > 0 && bytes[i - 1] == b'\\' {
-                    i += 1;
-                    continue;
-                }
-                in_string = false;
-            }
-            b'"' => in_string = true,
-            b'#' if !in_string => return &line[..i],
-            _ => {}
-        }
-        i += 1;
-    }
-    line
-}
-
-fn parse_toml_string(s: &str) -> Result<String, String> {
-    let s = s.trim();
-    if s.len() < 2 || !s.starts_with('"') || !s.ends_with('"') {
-        return Err(format!("expected double-quoted string, got `{s}`"));
-    }
-    let inner = &s[1..s.len() - 1];
-    // Minimal escapes: \\ \" \n \t
-    let mut out = String::with_capacity(inner.len());
-    let mut chars = inner.chars();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.next() {
-                Some('\\') => out.push('\\'),
-                Some('"') => out.push('"'),
-                Some('n') => out.push('\n'),
-                Some('t') => out.push('\t'),
-                Some(other) => {
-                    return Err(format!("unknown escape `\\{other}` in string"));
-                }
-                None => return Err("trailing backslash in string".into()),
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    Ok(out)
 }
 
 /// Tracked helper so dependents can pin work to the manifest fingerprint.
@@ -333,6 +405,80 @@ entry = "src/main.aru"
         assert_eq!(data.name, "hello");
         assert_eq!(data.version, "0.0.1");
         assert_eq!(data.entry, "src/main.aru");
+    }
+
+    #[test]
+    fn parse_schema_one_with_path_dependency() {
+        let text = r#"
+schema = 1
+
+[package]
+name = "hello"
+version = "1.2.3"
+edition = "2026"
+
+[toolchain]
+arandu = ">=0.1.0-rc.4, <0.2.0"
+
+[targets.bin]
+name = "hello"
+root = "src/main.aru"
+
+[dependencies]
+math = { path = "../math" }
+
+[metadata.example]
+note = "preserved for third-party tools"
+"#;
+        let data = parse_manifest_str(Path::new("arandu.toml"), text).unwrap();
+        assert_eq!(data.name, "hello");
+        assert_eq!(data.version, "1.2.3");
+        assert_eq!(data.entry, "src/main.aru");
+    }
+
+    #[test]
+    fn parse_rejects_unknown_owned_field() {
+        let text = r#"
+schema = 1
+[package]
+name = "hello"
+version = "1.2.3"
+edition = "2026"
+surprise = true
+[targets.bin]
+name = "hello"
+root = "src/main.aru"
+"#;
+        let err = parse_manifest_str(Path::new("arandu.toml"), text).unwrap_err();
+        assert!(err.to_string().contains("unknown field `surprise`"));
+    }
+
+    #[test]
+    fn parse_rejects_invalid_semver_and_unsafe_target_path() {
+        let invalid_version = r#"
+schema = 1
+[package]
+name = "hello"
+version = "latest"
+edition = "2026"
+[targets.bin]
+name = "hello"
+root = "src/main.aru"
+"#;
+        assert!(
+            parse_manifest_str(Path::new("arandu.toml"), invalid_version)
+                .unwrap_err()
+                .to_string()
+                .contains("not valid SemVer")
+        );
+
+        let escaping_root = invalid_version
+            .replace("latest", "1.0.0")
+            .replace("src/main.aru", "../main.aru");
+        assert!(parse_manifest_str(Path::new("arandu.toml"), &escaping_root)
+            .unwrap_err()
+            .to_string()
+            .contains("unsafe `target root`"));
     }
 
     #[test]
