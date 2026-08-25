@@ -1,11 +1,10 @@
 use arandu_semantics::amir::{AmirOperand, TempId};
 use arandu_semantics::passes::type_checker::types::{ArType, Primitive};
 use cranelift_codegen::ir::{InstBuilder, Type};
-use cranelift_module::Module;
 
 use super::FunctionTranslator;
 
-impl FunctionTranslator<'_, '_> {
+impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
     pub(super) fn translate_call(
         &mut self,
         lhs: &Option<TempId>,

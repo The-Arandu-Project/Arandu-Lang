@@ -105,6 +105,7 @@ def validate(archive_path: Path, root: str, target: str, version: str) -> None:
         f"{root}/bin/arandu_cli",
         f"{root}/bin/arandu",
         f"{root}/bin/arandu-lsp",
+        f"{root}/lib/{target}/libarandu_runtime.a",
         f"{root}/BLAKE3SUMS",
         f"{root}/LICENSE-MIT",
         f"{root}/LICENSE-APACHE",
@@ -121,7 +122,7 @@ def validate(archive_path: Path, root: str, target: str, version: str) -> None:
             seen.add(name)
             if name != root and not name.startswith(f"{root}/"):
                 raise SystemExit(f"entry outside package root: {name}")
-            allowed = name in required or name == root or name.startswith(f"{root}/share/arandu/stdlib/") or name in {f"{root}/bin", f"{root}/share", f"{root}/share/arandu", f"{root}/share/arandu/stdlib"}
+            allowed = name in required or name == root or name.startswith(f"{root}/share/arandu/stdlib/") or name in {f"{root}/bin", f"{root}/lib", f"{root}/lib/{target}", f"{root}/share", f"{root}/share/arandu", f"{root}/share/arandu/stdlib"}
             if not allowed:
                 raise SystemExit(f"unexpected archive content: {name}")
             if member.issym():
@@ -143,7 +144,7 @@ def validate(archive_path: Path, root: str, target: str, version: str) -> None:
         release = json.loads((manifest_bytes or b"").decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise SystemExit(f"invalid release manifest: {error}") from error
-    expected = {"schema": 1, "version": version, "target": target, "components": ["arandu", "arandu-lsp", "stdlib"], "archive": "tar.gz"}
+    expected = {"schema": 1, "version": version, "target": target, "components": ["arandu", "arandu-lsp", "runtime", "stdlib"], "archive": "tar.gz"}
     if release != expected:
         raise SystemExit(f"release manifest mismatch: {release!r}")
 

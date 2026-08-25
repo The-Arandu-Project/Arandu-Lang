@@ -22,10 +22,10 @@ identity, lockfile integrity and cache isolation are proven.
 
 | Area | Current state | Gold gap |
 | --- | --- | --- |
-| Project creation | `arandu new` writes `Arandu.toml` and `src/main.aru` | no `init`, package kind, README, `.gitignore`, tests or VCS policy |
-| Manifest | hand-written string-only parser for `name`, `version`, `entry` | not full TOML; duplicate keys overwrite; unknown keys are silently ignored; no schema/toolchain version |
+| Project creation | transactional `new`/`init`, bin/lib targets, README, ignore file and VCS policy | lifecycle E2E remains in P7 |
+| Manifest | strict deterministic TOML with schema, edition, targets and compatibility validation | dependency graph and lockfile begin in P3/P4 |
 | Incrementality | raw manifest BLAKE3 and fields are Salsa inputs | package graph, target declarations and resolved dependencies are absent |
-| Build | package `check/run/build` works; Cranelift build reports success | no stable on-disk artifact contract or project-local output directory |
+| Build | Cranelift emits a baseline host object, links the packaged runtime and atomically publishes a content-addressed executable | cross-target builds and LLVM release mode remain out of scope |
 | Dependencies | package-local modules and stdlib roots work | no dependency declaration, resolver, lockfile, workspace or global source cache |
 | Imports | dotted imports lower deterministically to `.aru` keys; public symbols are cutoff-friendly | package name, logical module and physical file are conflated; bare/quoted paths can bypass future package boundaries |
 | Portability | installed SDK smoke is native on three OS families | generated projects are not yet exercised as a complete lifecycle outside checkout |
@@ -167,6 +167,14 @@ target/<profile>/<target-triple>/build-state.json
 Final artifacts are published through staging plus atomic rename. A failed
 build cannot replace the last valid binary. `clean` resolves and validates the
 exact project root and refuses symlink/junction escapes or broad targets.
+
+`build` records schema-2 provenance. The relocatable `.o`/`.obj` is immutable
+under `deps/`; the linked executable is immutable under `bin/`; and
+`build-state.json` selects the current successful pair. Unix replaces this
+state with atomic `rename`; Windows uses `ReplaceFileW` with write-through.
+Link or compilation failure occurs before that commit, so the previous state
+and executable remain runnable. The SDK ships its target-matched
+`arandu_runtime` static library; its C ABI is compiler-internal, not public FFI.
 
 ### Package identity and resolution
 
@@ -564,8 +572,8 @@ The lockfile is not ignored for applications/workspaces.
 ### P2 — Artifact lifecycle
 
 - [x] Define profiles, target triples and `target/` layout.
-- [ ] Make `build` produce a real stable artifact outside the monorepo.
-- [ ] Publish through staging/atomic rename and retain the last valid artifact.
+- [x] Make `build` produce a real stable artifact outside the monorepo.
+- [x] Publish through staging/atomic rename and retain the last valid artifact.
 - [x] Implement safe `arandu clean` and artifact provenance metadata.
 
 ### P3 — Lockfile core

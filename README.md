@@ -36,7 +36,8 @@ Implemented:
 - Intraprocedural move checker with O001/O005/O007 diagnostics.
 - Opt-in AMIR optimizer (`amir --opt`) with constant folding and DCE.
 - Type interning, `DataLayout` (host / 32-bit / i686), and monomorphization graph infrastructure.
-- Cranelift JIT backend (experimental, **host** dev/debug) with `run` CLI support.
+- Cranelift host backend: JIT for `run`, plus baseline object emission and
+  native linking for content-addressed `build` executables.
 - GNU C emit path (`emit-c --layout=host|ptr4|ptr8|i686`) — layout-aware source;
   cross compilation still requires a matching external target toolchain and sysroot.
 - **ToStr v0.1** — auto-format `bool`, integers (incl. fixed-width), floats, `char`, and `str` in:

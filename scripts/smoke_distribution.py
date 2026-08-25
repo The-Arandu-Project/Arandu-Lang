@@ -45,20 +45,24 @@ def lsp_smoke(server: Path, cwd: Path) -> None:
 
     def receive(expected_id: int) -> None:
         assert process.stdout is not None
-        length = None
         while True:
-            line = process.stdout.readline()
-            if not line:
-                raise SystemExit(f"LSP closed before response {expected_id}")
-            if line == b"\r\n":
-                break
-            if line.lower().startswith(b"content-length:"):
-                length = int(line.split(b":", 1)[1].strip())
-        if length is None:
-            raise SystemExit("LSP response missing Content-Length")
-        response = json.loads(process.stdout.read(length))
-        if response.get("id") != expected_id or "error" in response:
-            raise SystemExit(f"unexpected LSP response: {response!r}")
+            length = None
+            while True:
+                line = process.stdout.readline()
+                if not line:
+                    raise SystemExit(f"LSP closed before response {expected_id}")
+                if line == b"\r\n":
+                    break
+                if line.lower().startswith(b"content-length:"):
+                    length = int(line.split(b":", 1)[1].strip())
+            if length is None:
+                raise SystemExit("LSP response missing Content-Length")
+            response = json.loads(process.stdout.read(length))
+            if "method" in response and "id" not in response:
+                continue
+            if response.get("id") != expected_id or "error" in response:
+                raise SystemExit(f"unexpected LSP response: {response!r}")
+            return
 
     try:
         send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}})
@@ -97,12 +101,21 @@ def main() -> None:
                 f"found {version.stdout.strip()!r}"
             )
         run([str(arandu), "doctor"], work)
-        created = run([str(arandu), "new", "installed_app"], work)
+        created = run([str(arandu), "new", "installed_app", "--vcs=none"], work)
         if "arandu check" not in created.stdout or "arandu_cli" in created.stdout:
             raise SystemExit("new scaffold exposes an internal command name")
         project = work / "installed_app"
         run([str(arandu), "check"], project)
         run([str(arandu), "run"], project)
+        run([str(arandu), "build"], project)
+        build_states = list((project / "target").rglob("build-state.json"))
+        if len(build_states) != 1:
+            raise SystemExit(f"expected one native build state, found {build_states!r}")
+        build_state = json.loads(build_states[0].read_text(encoding="utf-8"))
+        artifact = build_states[0].parent / build_state["artifact"]
+        if not artifact.is_file() or build_state.get("backend") != "cranelift-aot":
+            raise SystemExit(f"installed SDK did not publish a native artifact: {build_state!r}")
+        run([str(artifact)], project)
         run([str(arandu), "fmt", "src/main.aru"], project)
         lsp_smoke(lsp, project)
 

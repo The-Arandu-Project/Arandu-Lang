@@ -15,6 +15,7 @@ cranelift-frontend = "0.134.3"
 cranelift-jit = "0.134.3"
 cranelift-module = "0.134.3"
 cranelift-native = "0.134.3"
+cranelift-object = "0.134.3"
 target-lexicon = "0.13.5"
 rustc-hash = { workspace = true }
 tracing.workspace = true

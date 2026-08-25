@@ -39,6 +39,7 @@ unsafe fn pack_string(s: &str, out_len: *mut i64) -> *mut u8 {
 /// # Safety
 /// `out_len` must be null or a valid writable `*mut i64`. Caller owns the
 /// returned buffer (allocated with `malloc`).
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_jit_i64_to_str(v: i64, out_len: *mut i64) -> *mut u8 {
     let s = v.to_string();
     unsafe { pack_string(&s, out_len) }
@@ -49,6 +50,7 @@ pub unsafe extern "C" fn ar_jit_i64_to_str(v: i64, out_len: *mut i64) -> *mut u8
 /// # Safety
 /// `out_len` must be null or a valid writable `*mut i64`. Caller owns the
 /// returned buffer (allocated with `malloc`).
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_jit_u64_to_str(v: u64, out_len: *mut i64) -> *mut u8 {
     let s = v.to_string();
     unsafe { pack_string(&s, out_len) }
@@ -61,6 +63,7 @@ pub unsafe extern "C" fn ar_jit_u64_to_str(v: u64, out_len: *mut i64) -> *mut u8
 /// # Safety
 /// `out_len` must be null or a valid writable `*mut i64`. Caller owns the
 /// returned buffer (allocated with `malloc`).
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_jit_f64_to_str(v: f64, out_len: *mut i64) -> *mut u8 {
     let s = format_f64_v01(v);
     unsafe { pack_string(&s, out_len) }
@@ -93,6 +96,7 @@ pub fn format_f64_v01(v: f64) -> String {
 /// # Safety
 /// `out_len` must be null or a valid writable `*mut i64`. Caller owns the
 /// returned buffer (allocated with `malloc`).
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_jit_bool_to_str(v: i8, out_len: *mut i64) -> *mut u8 {
     let s = if v != 0 { "true" } else { "false" };
     unsafe { pack_string(s, out_len) }
@@ -103,6 +107,7 @@ pub unsafe extern "C" fn ar_jit_bool_to_str(v: i8, out_len: *mut i64) -> *mut u8
 /// # Safety
 /// `out_len` must be null or a valid writable `*mut i64`. Caller owns the
 /// returned buffer (allocated with `malloc`).
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_jit_char_to_str(v: u32, out_len: *mut i64) -> *mut u8 {
     let s = char::from_u32(v)
         .map(|c| c.to_string())
@@ -116,6 +121,7 @@ pub unsafe extern "C" fn ar_jit_char_to_str(v: u32, out_len: *mut i64) -> *mut u
 ///
 /// # Safety
 /// `ptr` must be valid for `len` bytes if `len > 0`. `len` must be non-negative.
+#[unsafe(export_name = "io.println")]
 pub unsafe extern "C" fn ar_jit_println(ptr: *const u8, len: i64) {
     use std::io::{self, Write};
     let stdout = io::stdout();
@@ -138,6 +144,7 @@ pub unsafe extern "C" fn ar_jit_println(ptr: *const u8, len: i64) {
 ///
 /// # Safety
 /// `ptr` must be valid for `len` bytes if `len > 0`. `len` must be non-negative.
+#[unsafe(export_name = "err.new")]
 pub unsafe extern "C" fn ar_jit_err_new(ptr: *const u8, len: i64) -> *mut u8 {
     let slice = if len > 0 && !ptr.is_null() {
         unsafe { std::slice::from_raw_parts(ptr, len as usize) }
@@ -156,6 +163,7 @@ pub unsafe extern "C" fn ar_jit_err_new(ptr: *const u8, len: i64) -> *mut u8 {
 /// # Safety
 /// `err` must be null or a valid NUL-terminated buffer from `err.new`.
 /// `out_len` must be null or a valid writable `*mut i64`.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_jit_err_to_str(err: *const u8, out_len: *mut i64) -> *mut u8 {
     if err.is_null() {
         if !out_len.is_null() {

@@ -116,10 +116,37 @@ fn new_scaffolds_package_and_check_run() {
     let build_states = files_named(&project.join("target"), "build-state.json");
     assert_eq!(build_states.len(), 1);
     let state = fs::read_to_string(&build_states[0]).unwrap();
-    assert!(state.contains("\"schema\": 1"));
-    assert!(state.contains("\"backend\": \"c-aot-source\""));
+    assert!(state.contains("\"schema\": 2"));
+    assert!(state.contains("\"backend\": \"cranelift-aot\""));
     assert!(state.contains("\"compiler_version\""));
-    assert_eq!(files_with_extension(&project.join("target"), "c").len(), 1);
+    assert!(state.contains("\"linker\""));
+    let first_state: serde_json::Value = serde_json::from_str(&state).unwrap();
+    let first_artifact = build_states[0]
+        .parent()
+        .unwrap()
+        .join(first_state["artifact"].as_str().unwrap());
+    assert!(first_artifact.is_file());
+    assert_eq!(
+        Command::new(&first_artifact)
+            .output()
+            .unwrap()
+            .status
+            .code(),
+        Some(0)
+    );
+    let object_extension = if cfg!(windows) { "obj" } else { "o" };
+    assert_eq!(
+        files_with_extension(&project.join("target"), object_extension).len(),
+        1
+    );
+    let repeated = run_cli_in(&project, &["build"]);
+    assert!(repeated.status.success());
+    let repeated_state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&build_states[0]).unwrap()).unwrap();
+    assert_eq!(
+        repeated_state["artifact"], first_state["artifact"],
+        "identical native inputs must select a byte-identical executable"
+    );
 
     fs::write(
         project.join("src/main.aru"),
@@ -129,9 +156,50 @@ fn new_scaffolds_package_and_check_run() {
     let rebuild = run_cli_in(&project, &["build"]);
     assert!(rebuild.status.success());
     assert_eq!(
-        files_with_extension(&project.join("target"), "c").len(),
+        files_with_extension(&project.join("target"), object_extension).len(),
         2,
         "a successful rebuild retains the previous immutable artifact"
+    );
+    let second_state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&build_states[0]).unwrap()).unwrap();
+    let second_artifact = build_states[0]
+        .parent()
+        .unwrap()
+        .join(second_state["artifact"].as_str().unwrap());
+    assert_ne!(first_artifact, second_artifact);
+    assert!(
+        first_artifact.is_file(),
+        "last valid artifact was discarded"
+    );
+    assert_eq!(
+        Command::new(&second_artifact)
+            .output()
+            .unwrap()
+            .status
+            .code(),
+        Some(1)
+    );
+
+    fs::write(
+        project.join("src/main.aru"),
+        "module hello_gold\nfunc main(): int { return missing_name }\n",
+    )
+    .unwrap();
+    let failed = run_cli_in(&project, &["build"]);
+    assert_eq!(failed.status.code(), Some(1));
+    let state_after_failure = fs::read_to_string(&build_states[0]).unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&state_after_failure).unwrap()["artifact"],
+        second_state["artifact"],
+        "failed build must leave the last valid publication selected"
+    );
+    assert_eq!(
+        Command::new(&second_artifact)
+            .output()
+            .unwrap()
+            .status
+            .code(),
+        Some(1)
     );
 
     // --release is reserved for LLVM — must not silently change meaning.

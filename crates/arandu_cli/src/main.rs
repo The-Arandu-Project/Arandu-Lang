@@ -1,6 +1,7 @@
 #![allow(clippy::collapsible_if)]
 mod artifact;
 mod cli_error;
+mod linker;
 mod project;
 mod watch;
 
@@ -1053,7 +1054,7 @@ fn cmd_project_build(
     let artifacts = pipeline_lower(&db, file, &filepath);
     eprintln!("{}", rebuild_log.status_line());
 
-    // Dev "build" = typecheck + lower + Cranelift compile (verify codegen).
+    // Dev "build" = typecheck + lower + relocatable native object emission.
     let type_check = &artifacts.type_check;
     let mut amir_owned = if opt {
         Some(artifacts.amir.clone())
@@ -1068,28 +1069,23 @@ fn cmd_project_build(
         None => &artifacts.amir,
     };
 
-    use arandu_semantics::CodegenBackend;
-    let backend_impl = match arandu_backend_cranelift::CraneliftBackend::try_new() {
+    let backend_impl = match arandu_backend_cranelift::CraneliftObjectBackend::host_baseline() {
         Ok(b) => b,
         Err(diag) => print_diagnostics_and_exit(std::iter::once(diag), &filepath),
     };
-    match CodegenBackend::compile(
-        backend_impl,
+    match backend_impl.compile(
         amir,
         type_check.symbols.as_ref(),
         type_check.type_info.as_ref(),
     ) {
-        Ok(_) => {
-            let c_source = arandu_backend_c::emit_c(
-                amir,
-                type_check.symbols.as_ref(),
-                type_check.type_info.as_ref(),
-                &type_check.type_info.type_interner,
-                arandu_middle::layout::DataLayout::host(),
-            )
-            .unwrap_or_else(|diag| print_diagnostics_and_exit(std::iter::once(diag), &filepath));
-            let artifact =
-                artifact::publish_c_artifact(&ctx.root, &ctx.name, &ctx.version, &c_source)?;
+        Ok(object) => {
+            let artifact = artifact::publish_native_artifact(
+                &ctx.root,
+                &ctx.name,
+                &ctx.version,
+                object.bytes(),
+                |object, output| linker::link(object, output).map(|kind| kind.label()),
+            )?;
             println!(
                 "built {} v{} (backend={}, entry={}, artifact={})",
                 ctx.name,

@@ -63,10 +63,11 @@ class ArchiveValidationTests(unittest.TestCase):
             required = {
                 "bin/arandu.exe": b"a", "bin/arandu_cli.exe": b"a",
                 "bin/arandu-lsp.exe": b"l", "BLAKE3SUMS": b"",
+                "lib/x86_64-pc-windows-msvc/arandu_runtime.lib": b"r",
                 "LICENSE-MIT": b"m", "LICENSE-APACHE": b"a",
                 "share/arandu/stdlib/std/io.aru": b"public func print() {}",
             }
-            manifest = {"schema": 1, "version": "0.0.1", "target": "aarch64-pc-windows-msvc", "components": ["arandu", "arandu-lsp", "stdlib"], "archive": "zip"}
+            manifest = {"schema": 1, "version": "0.0.1", "target": "aarch64-pc-windows-msvc", "components": ["arandu", "arandu-lsp", "runtime", "stdlib"], "archive": "zip"}
             with zipfile.ZipFile(archive, "w") as output:
                 for name, contents in required.items():
                     output.writestr(f"{root}/{name}", contents)

@@ -12,17 +12,18 @@ if (-not $OutDir) { $OutDir = Join-Path $root 'dist' }
 if (-not $SourceDateEpoch) { $SourceDateEpoch = (git -C $root log -1 --format=%ct) }
 if ($Target -ne 'x86_64-pc-windows-msvc') { throw "Windows package requires x86_64-pc-windows-msvc, got $Target" }
 
-cargo build --locked -p arandu_cli -p arandu_lsp --release --manifest-path "$root/Cargo.toml"
+cargo build --locked -p arandu_cli -p arandu_lsp -p arandu_runtime --release --manifest-path "$root/Cargo.toml"
 $stage = Join-Path ([IO.Path]::GetTempPath()) ("arandu-package-" + [guid]::NewGuid())
 $tree = Join-Path $stage "arandu-$Version"
 try {
-    New-Item -ItemType Directory -Force "$tree/bin", "$tree/share/arandu" | Out-Null
+    New-Item -ItemType Directory -Force "$tree/bin", "$tree/lib/$Target", "$tree/share/arandu" | Out-Null
     Copy-Item "$root/target/release/arandu_cli.exe" "$tree/bin/arandu.exe"
     Copy-Item "$root/target/release/arandu_cli.exe" "$tree/bin/arandu_cli.exe"
     Copy-Item "$root/target/release/arandu-lsp.exe" "$tree/bin/arandu-lsp.exe"
+    Copy-Item "$root/target/release/arandu_runtime.lib" "$tree/lib/$Target/arandu_runtime.lib"
     Copy-Item -Recurse "$root/stdlib" "$tree/share/arandu/stdlib"
     Copy-Item "$root/LICENSE-MIT", "$root/LICENSE-APACHE" $tree
-    [ordered]@{schema=1; version=$Version; target=$Target; components=@('arandu','arandu-lsp','stdlib'); archive='zip'} |
+    [ordered]@{schema=1; version=$Version; target=$Target; components=@('arandu','arandu-lsp','runtime','stdlib'); archive='zip'} |
         ConvertTo-Json | Set-Content -Encoding utf8NoBOM "$tree/release-manifest.json"
     $hashLines = Get-ChildItem -File -Recurse $tree | Sort-Object { $_.FullName.Substring($tree.Length).Replace('\','/') } | ForEach-Object {
         $relative = $_.FullName.Substring($tree.Length + 1).Replace('\','/')

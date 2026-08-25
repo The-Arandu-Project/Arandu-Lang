@@ -64,6 +64,7 @@ fn descriptor(
 /// # Safety
 /// `source` and `drop_glue` must satisfy [`OwnedPayload::try_move_from`]. The
 /// source becomes logically uninitialized only when a non-zero handle returns.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_gen_insert_raw(
     source: *mut u8,
     size: usize,
@@ -90,6 +91,7 @@ pub unsafe extern "C" fn ar_gen_insert_raw(
 ///
 /// # Safety
 /// `destination` must be writable and aligned for the supplied layout.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_gen_get_raw(
     handle: u64,
     destination: *mut u8,
@@ -127,6 +129,7 @@ pub unsafe extern "C" fn ar_gen_get_raw(
 ///
 /// # Safety
 /// Same source/drop contract as [`ar_gen_insert_raw`].
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_gen_set_raw(
     handle: u64,
     source: *mut u8,
@@ -173,6 +176,7 @@ pub unsafe extern "C" fn ar_gen_set_raw(
 ///
 /// # Safety
 /// Same source/drop contract as [`ar_gen_insert_raw`].
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_gen_upsert_raw(
     handle: u64,
     source: *mut u8,
@@ -194,6 +198,7 @@ pub unsafe extern "C" fn ar_gen_upsert_raw(
 ///
 /// # Safety
 /// `destination` must satisfy [`OwnedPayload::try_move_into`].
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_gen_remove_raw(
     handle: u64,
     destination: *mut u8,
@@ -220,6 +225,7 @@ pub unsafe extern "C" fn ar_gen_remove_raw(
 
 /// Drop all payloads owned by this thread's compiler-managed registry.
 /// Destructors run after releasing the registry borrow.
+#[unsafe(no_mangle)]
 pub extern "C" fn ar_gen_shutdown_raw() {
     let payloads = REGISTRY.with_borrow_mut(|registry| std::mem::take(&mut registry.payloads));
     drop(payloads);

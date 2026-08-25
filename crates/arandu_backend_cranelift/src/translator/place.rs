@@ -4,7 +4,7 @@ use cranelift_codegen::ir::{InstBuilder, Value};
 
 use super::FunctionTranslator;
 
-impl FunctionTranslator<'_, '_> {
+impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
     /// Address of `place` as `(base_ptr, constant_offset)`.
     ///
     /// - **F2.0** stack homes: address of the stack slot.
@@ -216,7 +216,10 @@ impl FunctionTranslator<'_, '_> {
     }
 }
 
-fn unwrap_ptr_like(ty: &ArType, this: &FunctionTranslator<'_, '_>) -> ArType {
+fn unwrap_ptr_like<M: cranelift_module::Module>(
+    ty: &ArType,
+    this: &FunctionTranslator<'_, '_, M>,
+) -> ArType {
     match ty {
         ArType::Ptr(inner)
         | ArType::Ref(inner)

@@ -2,11 +2,10 @@ use arandu_semantics::amir::{AmirConstant, AmirOperand, AmirRvalue};
 use arandu_semantics::ops::UnaryOp;
 use arandu_semantics::passes::type_checker::types::{ArType, Primitive};
 use cranelift_codegen::ir::{InstBuilder, Type, Value};
-use cranelift_module::Module;
 
 use super::FunctionTranslator;
 
-impl FunctionTranslator<'_, '_> {
+impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
     /// Box a scalar into a heap cell for `T?` (null-or-pointer ABI).
     fn box_nullable_scalar(&mut self, val: Value, inner: &ArType) -> Value {
         let Some(malloc_id) = self.malloc_func_id() else {

@@ -122,6 +122,10 @@ if [[ ! -x "$TREE/bin/arandu-lsp" ]]; then
   echo "error: archive missing bin/arandu-lsp" >&2
   exit 1
 fi
+if [[ ! -f "$TREE/lib/$PACKAGE_TARGET/libarandu_runtime.a" ]]; then
+  echo "error: archive missing target runtime library" >&2
+  exit 1
+fi
 # The archive is already authenticated. Use its staged CLI to verify BLAKE3SUMS
 # before anything is moved into the installation prefix.
 ARANDU_HASH_TOOL="$TREE/bin/arandu"

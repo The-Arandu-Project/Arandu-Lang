@@ -36,14 +36,16 @@ trap 'rm -rf "$STAGE"' EXIT
 
 echo "==> package-release VERSION=$VERSION TARGET=$TARGET"
 
-cargo build --locked -p arandu_cli -p arandu_lsp --release --manifest-path "$ROOT/Cargo.toml"
+cargo build --locked -p arandu_cli -p arandu_lsp -p arandu_runtime --release --manifest-path "$ROOT/Cargo.toml"
 BIN="$ROOT/target/release/arandu_cli"
 LSP="$ROOT/target/release/arandu-lsp"
+RUNTIME="$ROOT/target/release/libarandu_runtime.a"
 
 TREE="$STAGE/$NAME"
-mkdir -p "$TREE/bin" "$TREE/share/arandu"
+mkdir -p "$TREE/bin" "$TREE/lib/$TARGET" "$TREE/share/arandu"
 install -m 755 "$BIN" "$TREE/bin/arandu_cli"
 install -m 755 "$LSP" "$TREE/bin/arandu-lsp"
+install -m 644 "$RUNTIME" "$TREE/lib/$TARGET/libarandu_runtime.a"
 ln -sfn arandu_cli "$TREE/bin/arandu"
 cp -a "$ROOT/stdlib" "$TREE/share/arandu/stdlib"
 install -m 644 "$ROOT/LICENSE-MIT" "$ROOT/LICENSE-APACHE" "$TREE/"
@@ -52,7 +54,7 @@ cat >"$TREE/release-manifest.json" <<EOF
   "schema": 1,
   "version": "$VERSION",
   "target": "$TARGET",
-  "components": ["arandu", "arandu-lsp", "stdlib"],
+  "components": ["arandu", "arandu-lsp", "runtime", "stdlib"],
   "archive": "tar.gz"
 }
 EOF
@@ -60,7 +62,7 @@ EOF
 {
   cd "$TREE"
   # shellcheck disable=SC2044
-  for f in LICENSE-APACHE LICENSE-MIT bin/arandu_cli bin/arandu-lsp release-manifest.json $(find share/arandu/stdlib -type f -name '*.aru' | sort); do
+  for f in LICENSE-APACHE LICENSE-MIT bin/arandu_cli bin/arandu-lsp "lib/$TARGET/libarandu_runtime.a" release-manifest.json $(find share/arandu/stdlib -type f -name '*.aru' | sort); do
     hash="$("$BIN" hash-file "$TREE/$f")"
     printf '%s  %s\n' "$hash" "$f"
   done

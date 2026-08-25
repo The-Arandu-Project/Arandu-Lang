@@ -705,7 +705,7 @@ O compilador do Arandu rejeita abordagens extremas e escolhe a estratégia ótim
 
 O compilador do Arandu abandona o acoplamento exclusivo a um único backend:
 
-* **arandu build --dev**: Utiliza o backend **Cranelift** gerando código de máquina diretamente em memória de forma quase instantânea para testes e iteração rápida.
+* **arandu run / build --dev**: `run` utiliza o JIT **Cranelift** em memória; `build` reutiliza o mesmo lowering para emitir objeto baseline do host, ligar o runtime estático distribuído e publicar um executável nativo transacional.
 * **arandu build --release**: Utiliza o backend **LLVM** aplicando vetorização avançada, PGO (Profile-Guided Optimization) e LTO (Link-Time Optimization) para desempenho máximo de produção.
 * **arandu build --portability**: Utiliza o backend **C** puro para transpilar o código linearizado 1:1, servindo estritamente como fallback para plataformas de nicho, embarcados de arquiteturas exóticas e bootstrapping.
 

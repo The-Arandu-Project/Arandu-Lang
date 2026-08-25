@@ -962,7 +962,7 @@ pub fn load_project(
 /// Backend selection convention (roadmap 4.1 dual backend).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendChoice {
-    /// Fast dev path (Cranelift JIT) — default `build` / `run`.
+    /// Fast host path — Cranelift JIT for `run`, AOT object/link for `build`.
     Cranelift,
     /// Future release path — `build --release` (not implemented yet).
     LlvmReserved,

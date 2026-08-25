@@ -37,7 +37,7 @@ try {
             if (-not $seen.Add($name)) { throw "duplicate zip entry: $name" }
             if ($name.EndsWith('/')) { continue }
             $relative = $name.Substring($treeName.Length + 1)
-            $fixed = @('bin/arandu.exe','bin/arandu_cli.exe','bin/arandu-lsp.exe','BLAKE3SUMS','LICENSE-MIT','LICENSE-APACHE','release-manifest.json')
+            $fixed = @('bin/arandu.exe','bin/arandu_cli.exe','bin/arandu-lsp.exe',"lib/$target/arandu_runtime.lib",'BLAKE3SUMS','LICENSE-MIT','LICENSE-APACHE','release-manifest.json')
             if ($relative -notin $fixed -and -not $relative.StartsWith('share/arandu/stdlib/', [StringComparison]::Ordinal)) {
                 throw "unexpected zip content: $name"
             }
@@ -47,7 +47,7 @@ try {
             [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $destination, $false)
         }
     } finally { $zip.Dispose() }
-    foreach ($required in 'bin/arandu.exe','bin/arandu-lsp.exe','share/arandu/stdlib','BLAKE3SUMS','release-manifest.json','LICENSE-MIT','LICENSE-APACHE') {
+    foreach ($required in 'bin/arandu.exe','bin/arandu-lsp.exe',"lib/$target/arandu_runtime.lib",'share/arandu/stdlib','BLAKE3SUMS','release-manifest.json','LICENSE-MIT','LICENSE-APACHE') {
         if (-not (Test-Path -LiteralPath (Join-Path $tree $required))) { throw "archive missing $required" }
     }
     $manifest = Get-Content -Raw -LiteralPath "$tree/release-manifest.json" | ConvertFrom-Json

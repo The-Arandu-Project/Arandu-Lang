@@ -32,6 +32,8 @@ struct BuildState<'a> {
     artifact_digest: &'a str,
     compiler_version: &'a str,
     artifact: &'a str,
+    object: &'a str,
+    linker: &'a str,
 }
 
 pub fn host_triple() -> String {
@@ -64,11 +66,12 @@ pub fn layout(project_root: &Path, profile: &str) -> ArtifactLayout {
     }
 }
 
-pub fn publish_c_artifact(
+pub fn publish_native_artifact(
     project_root: &Path,
     package: &str,
     version: &str,
-    source: &str,
+    object: &[u8],
+    link: impl FnOnce(&Path, &Path) -> Result<&'static str, CliFailure>,
 ) -> Result<PathBuf, CliFailure> {
     let layout = layout(project_root, "dev");
     for directory in [&layout.bin, &layout.deps, &layout.incremental] {
@@ -80,29 +83,67 @@ pub fn publish_c_artifact(
         b"arandu-target-v1\n",
     )?;
 
-    let digest = blake3::hash(source.as_bytes()).to_hex().to_string();
-    let artifact_name = format!("{package}-{}.c", &digest[..16]);
+    let digest = blake3::hash(object).to_hex().to_string();
+    let extension = if cfg!(windows) { "obj" } else { "o" };
+    let artifact_name = format!("{package}-{}.{extension}", &digest[..16]);
     let artifact_path = layout.deps.join(&artifact_name);
-    atomic_write(&artifact_path, source.as_bytes())?;
+    atomic_write(&artifact_path, object)?;
 
-    let relative = format!("deps/{artifact_name}");
+    let staging = unique_staging_path(
+        &layout.bin.join(if cfg!(windows) {
+            format!("{package}.exe")
+        } else {
+            package.to_string()
+        }),
+        "link",
+    );
+    let linker = match link(&artifact_path, &staging) {
+        Ok(linker) => linker,
+        Err(error) => {
+            let _ = fs::remove_file(&staging);
+            return Err(error);
+        }
+    };
+    let executable =
+        fs::read(&staging).map_err(|error| failure("read linked artifact", &staging, error))?;
+    if executable.is_empty() {
+        let _ = fs::remove_file(&staging);
+        return Err(CliFailure::operational(
+            "publish linked artifact",
+            Some(staging),
+            "linker produced an empty file",
+        ));
+    }
+    let executable_digest = blake3::hash(&executable).to_hex().to_string();
+    let executable_name = if cfg!(windows) {
+        format!("{package}-{}.exe", &executable_digest[..16])
+    } else {
+        format!("{package}-{}", &executable_digest[..16])
+    };
+    let executable_path = layout.bin.join(&executable_name);
+    publish_staging(&staging, &executable_path)?;
+
+    let relative = format!("bin/{executable_name}");
+    let object_relative = format!("deps/{artifact_name}");
     let state = BuildState {
-        schema: 1,
+        schema: 2,
         package,
         version,
         profile: "dev",
         target: &layout.triple,
-        backend: "c-aot-source",
-        artifact_digest: &digest,
+        backend: "cranelift-aot",
+        artifact_digest: &executable_digest,
         compiler_version: crate::project::ARANDU_VERSION,
         artifact: &relative,
+        object: &object_relative,
+        linker,
     };
     let mut encoded = serde_json::to_vec_pretty(&state).map_err(|error| {
         CliFailure::operational("serialize build provenance", None, error.to_string())
     })?;
     encoded.push(b'\n');
     atomic_replace(&layout.profile_root.join("build-state.json"), &encoded)?;
-    Ok(artifact_path)
+    Ok(executable_path)
 }
 
 pub fn clean(project_root: &Path) -> Result<bool, CliFailure> {
@@ -146,24 +187,61 @@ fn atomic_replace(path: &Path, bytes: &[u8]) -> Result<(), CliFailure> {
         return fs::rename(&staging, path)
             .map_err(|error| failure("publish build state", path, error));
     }
-    let backup = path.with_extension("json.previous");
-    let _ = fs::remove_file(&backup);
-    fs::rename(path, &backup)
-        .map_err(|error| failure("preserve previous build state", path, error))?;
-    if let Err(error) = fs::rename(&staging, path) {
-        let _ = fs::rename(&backup, path);
-        let _ = fs::remove_file(&staging);
+    atomic_platform_replace(path, &staging)
+}
+
+#[cfg(not(windows))]
+fn atomic_platform_replace(path: &Path, staging: &Path) -> Result<(), CliFailure> {
+    fs::rename(staging, path).map_err(|error| failure("publish build state", path, error))
+}
+
+#[cfg(windows)]
+fn atomic_platform_replace(path: &Path, staging: &Path) -> Result<(), CliFailure> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{REPLACEFILE_WRITE_THROUGH, ReplaceFileW};
+
+    let replaced = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let replacement = staging
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    // SAFETY: both paths are owned, NUL-terminated UTF-16 buffers that remain
+    // alive for the duration of the Win32 call; optional pointers are null.
+    let result = unsafe {
+        ReplaceFileW(
+            replaced.as_ptr(),
+            replacement.as_ptr(),
+            std::ptr::null(),
+            REPLACEFILE_WRITE_THROUGH,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+    if result == 0 {
+        let error = std::io::Error::last_os_error();
+        let _ = fs::remove_file(staging);
         return Err(failure("publish build state", path, error));
     }
-    let _ = fs::remove_file(backup);
     Ok(())
 }
 
+fn publish_staging(staging: &Path, destination: &Path) -> Result<(), CliFailure> {
+    if destination.is_file() {
+        fs::remove_file(staging)
+            .map_err(|error| failure("discard duplicate artifact", staging, error))?;
+        return Ok(());
+    }
+    fs::rename(staging, destination)
+        .map_err(|error| failure("publish linked artifact", destination, error))
+}
+
 fn write_staging(path: &Path, bytes: &[u8]) -> Result<PathBuf, CliFailure> {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos());
-    let staging = path.with_extension(format!("tmp-{}-{nonce}", std::process::id()));
+    let staging = unique_staging_path(path, "write");
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -176,6 +254,13 @@ fn write_staging(path: &Path, bytes: &[u8]) -> Result<PathBuf, CliFailure> {
             failure("flush artifact staging file", &staging, error)
         })?;
     Ok(staging)
+}
+
+fn unique_staging_path(path: &Path, operation: &str) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    path.with_extension(format!("{operation}-tmp-{}-{nonce}", std::process::id()))
 }
 
 fn failure(operation: &'static str, path: &Path, error: std::io::Error) -> CliFailure {
