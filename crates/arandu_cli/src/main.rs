@@ -1,4 +1,5 @@
 #![allow(clippy::collapsible_if)]
+mod artifact;
 mod cli_error;
 mod project;
 mod watch;
@@ -233,6 +234,7 @@ fn usage_and_exit() -> ! {
         "  arandu_cli doctor [--stdlib-path=<dir>] [-v]\n",
         "  arandu_cli hash-file <path>          # BLAKE3 hex (packaging checksums)\n",
         "  arandu_cli watch [package-path]      # re-check on FS changes (package mode)\n",
+        "  arandu_cli clean [package-path]      # remove owned project artifacts\n",
         "  arandu_cli check|run|build [--release] [--stdlib-path=<dir>] [package-path]\n\n",
         "  emit-c options: --layout=host|ptr4|ptr8|i686  (default: host)\n",
         "                  layout model only; cross compiler/sysroot are external\n",
@@ -399,6 +401,39 @@ fn main() {
                 env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
             };
             finish(watch::cmd_watch(&start, &project_flags));
+        }
+        "clean" => {
+            let start = if args.len() >= 3 {
+                PathBuf::from(&args[2])
+            } else {
+                env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+            };
+            let discovery = arandu_query::find_manifest(&start)
+                .unwrap_or_else(|error| {
+                    fail_operational("discover project", Some(start.clone()), error.to_string())
+                })
+                .unwrap_or_else(|| {
+                    fail_operational(
+                        "discover project",
+                        Some(start.clone()),
+                        "no arandu.toml found",
+                    )
+                });
+            arandu_query::load_manifest(&discovery.path).unwrap_or_else(|error| {
+                fail_operational(
+                    "load project manifest",
+                    Some(discovery.path.clone()),
+                    error.to_string(),
+                )
+            });
+            let root = discovery.path.parent().unwrap_or_else(|| Path::new("."));
+            let removed = artifact::clean(root).unwrap_or_else(|error| finish(Err(error)));
+            if removed {
+                println!("removed target");
+            } else {
+                println!("already clean");
+            }
+            finish(Ok(CliSuccess::Done));
         }
         "build" => {
             // Package mode: always project-oriented.
@@ -1045,12 +1080,23 @@ fn cmd_project_build(
         type_check.type_info.as_ref(),
     ) {
         Ok(_) => {
+            let c_source = arandu_backend_c::emit_c(
+                amir,
+                type_check.symbols.as_ref(),
+                type_check.type_info.as_ref(),
+                &type_check.type_info.type_interner,
+                arandu_middle::layout::DataLayout::host(),
+            )
+            .unwrap_or_else(|diag| print_diagnostics_and_exit(std::iter::once(diag), &filepath));
+            let artifact =
+                artifact::publish_c_artifact(&ctx.root, &ctx.name, &ctx.version, &c_source)?;
             println!(
-                "built {} v{} (backend={}, entry={})",
+                "built {} v{} (backend={}, entry={}, artifact={})",
                 ctx.name,
                 ctx.version,
                 backend.label(),
-                ctx.entry_rel
+                ctx.entry_rel,
+                artifact.display()
             );
             Ok(CliSuccess::Done)
         }

@@ -98,6 +98,8 @@ dependencies = [
  "notify-debouncer-full",
  "petgraph",
  "rayon",
+ "serde",
+ "serde_json",
  "thiserror",
  "tracing",
 ]

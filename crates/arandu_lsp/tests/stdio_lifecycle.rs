@@ -2188,7 +2188,12 @@ fn read_message(reader: &mut impl BufRead) -> std::io::Result<Option<Value>> {
 
 fn file_uri(path: &Path) -> String {
     let absolute = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let normalized = absolute.to_string_lossy().replace('\\', "/");
+    let path_text = absolute.to_string_lossy();
+    #[cfg(windows)]
+    let path_text = path_text
+        .strip_prefix(r"\\?\")
+        .unwrap_or(path_text.as_ref());
+    let normalized = path_text.replace('\\', "/");
     let encoded = encode_uri_path(&normalized);
     if normalized.starts_with('/') {
         format!("file://{encoded}")

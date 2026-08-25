@@ -563,10 +563,10 @@ The lockfile is not ignored for applications/workspaces.
 
 ### P2 — Artifact lifecycle
 
-- [ ] Define profiles, target triples and `target/` layout.
+- [x] Define profiles, target triples and `target/` layout.
 - [ ] Make `build` produce a real stable artifact outside the monorepo.
 - [ ] Publish through staging/atomic rename and retain the last valid artifact.
-- [ ] Implement safe `arandu clean` and artifact provenance metadata.
+- [x] Implement safe `arandu clean` and artifact provenance metadata.
 
 ### P3 — Lockfile core
 

@@ -113,6 +113,26 @@ fn new_scaffolds_package_and_check_run() {
         String::from_utf8_lossy(&build.stderr)
     );
     assert!(String::from_utf8_lossy(&build.stdout).contains("cranelift"));
+    let build_states = files_named(&project.join("target"), "build-state.json");
+    assert_eq!(build_states.len(), 1);
+    let state = fs::read_to_string(&build_states[0]).unwrap();
+    assert!(state.contains("\"schema\": 1"));
+    assert!(state.contains("\"backend\": \"c-aot-source\""));
+    assert!(state.contains("\"compiler_version\""));
+    assert_eq!(files_with_extension(&project.join("target"), "c").len(), 1);
+
+    fs::write(
+        project.join("src/main.aru"),
+        "module hello_gold\nfunc main(): int { return 1 }\n",
+    )
+    .unwrap();
+    let rebuild = run_cli_in(&project, &["build"]);
+    assert!(rebuild.status.success());
+    assert_eq!(
+        files_with_extension(&project.join("target"), "c").len(),
+        2,
+        "a successful rebuild retains the previous immutable artifact"
+    );
 
     // --release is reserved for LLVM — must not silently change meaning.
     let rel = run_cli_in(&project, &["build", "--release"]);
@@ -121,6 +141,13 @@ fn new_scaffolds_package_and_check_run() {
         String::from_utf8_lossy(&rel.stderr).contains("LLVM")
             || String::from_utf8_lossy(&rel.stderr).contains("llvm")
     );
+
+    let clean = run_cli_in(&project, &["clean"]);
+    assert!(clean.status.success());
+    assert!(!project.join("target").exists());
+    let clean_again = run_cli_in(&project, &["clean"]);
+    assert!(clean_again.status.success());
+    assert!(String::from_utf8_lossy(&clean_again.stdout).contains("already clean"));
 
     let _ = fs::remove_dir_all(&tmp);
 }
@@ -275,6 +302,28 @@ fn vcs_auto_reuses_parent_and_explicit_git_creates_repository() {
         String::from_utf8_lossy(&explicit.stderr)
     );
     assert!(tmp.join("standalone/.git").is_dir());
+    let _ = fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn clean_refuses_an_unowned_target_directory() {
+    let tmp = tempfile_dir("arandu_clean_unowned");
+    assert!(
+        run_cli_in(&tmp, &["new", "guarded", "--vcs=none"])
+            .status
+            .success()
+    );
+    let project = tmp.join("guarded");
+    fs::create_dir(project.join("target")).unwrap();
+    fs::write(project.join("target/keep.txt"), "user data\n").unwrap();
+
+    let clean = run_cli_in(&project, &["clean"]);
+    assert_eq!(clean.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&clean.stderr).contains("refusing"));
+    assert_eq!(
+        fs::read_to_string(project.join("target/keep.txt")).unwrap(),
+        "user data\n"
+    );
     let _ = fs::remove_dir_all(tmp);
 }
 
@@ -442,4 +491,34 @@ fn tempfile_dir(prefix: &str) -> std::path::PathBuf {
     ));
     fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+fn files_named(root: &std::path::Path, name: &str) -> Vec<std::path::PathBuf> {
+    collect_files(root, &|path| {
+        path.file_name().and_then(|value| value.to_str()) == Some(name)
+    })
+}
+
+fn files_with_extension(root: &std::path::Path, extension: &str) -> Vec<std::path::PathBuf> {
+    collect_files(root, &|path| {
+        path.extension().and_then(|value| value.to_str()) == Some(extension)
+    })
+}
+
+fn collect_files(
+    root: &std::path::Path,
+    predicate: &dyn Fn(&std::path::Path) -> bool,
+) -> Vec<std::path::PathBuf> {
+    let mut result = Vec::new();
+    if let Ok(entries) = fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                result.extend(collect_files(&path, predicate));
+            } else if predicate(&path) {
+                result.push(path);
+            }
+        }
+    }
+    result
 }
