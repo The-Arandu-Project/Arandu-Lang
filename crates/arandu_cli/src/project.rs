@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 use crate::cli_error::{CliFailure, CliResult, CliSuccess};
 use arandu_query::{
     DirectoryListing, MANIFEST_FILENAME, ManifestError, ManifestSpelling, ModuleRoots,
-    ProjectManifest, STDLIB_ENV, StdlibResolveOpts, StdlibRoot, find_manifest, load_manifest,
-    register_manifest, resolve_stdlib_root, scan_aru_entries,
+    ProjectManifest, STDLIB_ENV, StdlibResolveOpts, StdlibRoot, ensure_toolchain_compatible,
+    find_manifest, load_manifest, register_manifest, resolve_stdlib_root, scan_aru_entries,
 };
 
 /// Official default entry path for `arandu new`.
@@ -128,6 +128,20 @@ name = "{name}"
 root = "{DEFAULT_ENTRY}"
 
 [dependencies]
+
+# Reserved policy surface. A2 will infer effects; empty capabilities deny authority.
+[capabilities]
+network = []
+filesystem_read = []
+filesystem_write = []
+environment = []
+process = []
+foreign = false
+
+[policy.effects]
+deny_new_authority = true
+warn_new_resources = true
+deny = ["UnknownCapability"]
 "#
     );
     let main_src = TEMPLATE_MAIN_ARU.replace("module my_app", &format!("module {name}"));
@@ -264,7 +278,16 @@ pub fn cmd_doctor(flags: &ProjectFlags) -> i32 {
                             arandu_query::LEGACY_MANIFEST_FILENAME
                         )));
                     }
+                    let toolchain_error =
+                        ensure_toolchain_compatible(&path, &data, ARANDU_VERSION).err();
+                    if let Some(error) = &toolchain_error {
+                        details.push(DoctorDetail::Error(error.to_string()));
+                    }
                     if flags.verbose {
+                        details.push(DoctorDetail::Info(format!(
+                            "schema={} edition={:?} kind={:?}",
+                            data.schema, data.edition, data.kind
+                        )));
                         details.push(DoctorDetail::Info(format!(
                             "content hash {}…",
                             &hash[..12.min(hash.len())]
@@ -290,7 +313,10 @@ pub fn cmd_doctor(flags: &ProjectFlags) -> i32 {
                         .map(|p| p.join(&data.entry).is_file())
                         .unwrap_or(false);
                     DoctorCategory {
-                        status: if entry_ok && discovery.spelling == ManifestSpelling::Canonical {
+                        status: if entry_ok
+                            && discovery.spelling == ManifestSpelling::Canonical
+                            && toolchain_error.is_none()
+                        {
                             DoctorStatus::Ok
                         } else {
                             DoctorStatus::Partial
@@ -521,6 +547,8 @@ pub fn load_project(
 
     let (data, hash, _bytes) =
         load_manifest(&manifest_path).map_err(|e: ManifestError| e.to_string())?;
+    ensure_toolchain_compatible(&manifest_path, &data, ARANDU_VERSION)
+        .map_err(|error| error.to_string())?;
 
     let root = manifest_path
         .parent()

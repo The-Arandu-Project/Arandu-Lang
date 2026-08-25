@@ -101,7 +101,25 @@ root = "src/main.aru"
 
 [dependencies]
 # util = { path = "../util" }
+
+[capabilities]
+network = []
+filesystem_read = ["assets/**"]
+filesystem_write = []
+environment = []
+process = []
+foreign = false
+
+[policy.effects]
+deny_new_authority = true
+warn_new_resources = true
+deny = ["UnknownCapability"]
 ```
+
+These fields are a versioned policy reservation, not a claim that A2 inference
+already exists. Empty capability lists deny authority. A future compiler
+summary is generated from typed code and compared against this ceiling; authors
+cannot make unsafe behavior safe merely by editing the manifest.
 
 Paths are UTF-8 manifest data resolved relative to the manifest directory,
 lexically normalized and then containment-checked where containment is part of
@@ -530,10 +548,10 @@ The lockfile is not ignored for applications/workspaces.
 - [x] Make `arandu.toml` canonical and implement conflict-safe legacy discovery
   (`arandu.lock` becomes canonical when P3 introduces it).
 - [x] Replace the ad-hoc parser with a complete, deterministic TOML decoder.
-- [ ] Add schema, package kind, edition and toolchain compatibility.
-- [ ] Reject duplicates, unknown owned fields, invalid SemVer and unsafe paths.
-- [ ] Keep manifest and directory data as narrow Salsa inputs.
-- [ ] Reserve versioned capability-policy and compiler-produced effect-summary
+- [x] Add schema, derived package kind, edition and toolchain compatibility.
+- [x] Reject duplicates, unknown owned fields, invalid SemVer and unsafe paths.
+- [x] Keep manifest and directory data as narrow Salsa inputs.
+- [x] Reserve versioned capability-policy and compiler-produced effect-summary
   metadata without claiming A2 inference before it exists.
 
 ### P1 — Project creation and VCS

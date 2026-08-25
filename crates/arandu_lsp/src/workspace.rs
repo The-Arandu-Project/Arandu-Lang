@@ -8,8 +8,8 @@ use crate::pool::{Priority, WorkerPool};
 use crate::state::{discover_aru_files, ServerState};
 use crate::uri_util::uri_from_path;
 use arandu_query::{
-    find_manifest, load_manifest, resolve_stdlib_root, scan_aru_entries, ManifestData,
-    StdlibResolveOpts,
+    ensure_toolchain_compatible, find_manifest, load_manifest, resolve_stdlib_root,
+    scan_aru_entries, ManifestData, StdlibResolveOpts,
 };
 use crossbeam_channel::{bounded, Receiver};
 use std::path::PathBuf;
@@ -29,7 +29,7 @@ pub(crate) struct WorkspaceProject {
 }
 
 pub(crate) enum WorkspaceEvent {
-    Project(WorkspaceProject),
+    Project(Box<WorkspaceProject>),
     File(WorkspaceFile),
     Error(String),
     Done,
@@ -51,7 +51,7 @@ pub(crate) fn spawn_workspace_discovery(
         // separate protocol capability, not an order-dependent overwrite.
         match discover_workspace_project(&roots) {
             Ok(Some(project)) => {
-                if tx.send(WorkspaceEvent::Project(project)).is_err() {
+                if tx.send(WorkspaceEvent::Project(Box::new(project))).is_err() {
                     return;
                 }
             }
@@ -89,6 +89,8 @@ pub(crate) fn discover_workspace_project(
         let Ok((manifest_data, manifest_hash, _)) = load_manifest(&manifest_path) else {
             continue;
         };
+        ensure_toolchain_compatible(&manifest_path, &manifest_data, env!("CARGO_PKG_VERSION"))
+            .map_err(|error| error.to_string())?;
         let package_root = manifest_path
             .parent()
             .map(std::path::Path::to_path_buf)

@@ -136,6 +136,7 @@ pub(crate) fn event_loop(
             recv(workspace_rx) -> event => {
                 match event {
                     Ok(WorkspaceEvent::Project(project)) => {
+                        let project = *project;
                         state.configure_package(
                             project.manifest_path,
                             project.manifest_data,

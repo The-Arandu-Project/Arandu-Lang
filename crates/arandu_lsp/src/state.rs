@@ -695,11 +695,7 @@ mod tests {
         let mut state = ServerState::new();
         state.configure_package(
             root.join("Arandu.toml"),
-            ManifestData {
-                name: "editor_gold".into(),
-                version: "0.1.0".into(),
-                entry: "src/main.aru".into(),
-            },
+            ManifestData::legacy("editor_gold".into(), "0.1.0".into(), "src/main.aru".into()),
             "fixture".into(),
             discovered_src,
             vec!["main.aru".into()],
