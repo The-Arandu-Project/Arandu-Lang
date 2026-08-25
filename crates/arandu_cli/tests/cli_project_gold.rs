@@ -186,6 +186,99 @@ fn new_classifies_usage_and_operational_failures() {
 }
 
 #[test]
+fn new_rejects_nonportable_names_and_case_collisions() {
+    let tmp = tempfile_dir("arandu_new_portable_names");
+    fs::create_dir(tmp.join("Hello_App")).unwrap();
+
+    for name in ["std", "olá", "hello world"] {
+        let output = run_cli_in(&tmp, &["new", name, "--vcs=none"]);
+        assert_eq!(output.status.code(), Some(1), "name `{name}` should fail");
+        assert!(!tmp.join(name).exists());
+    }
+
+    let collision = run_cli_in(&tmp, &["new", "hello_app", "--vcs=none"]);
+    assert_eq!(collision.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&collision.stderr).contains("only by case"),
+        "{}",
+        String::from_utf8_lossy(&collision.stderr)
+    );
+    let _ = fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn init_is_transactional_when_a_generated_file_exists() {
+    let tmp = tempfile_dir("arandu_init_transaction");
+    fs::write(tmp.join("README.md"), "keep me\n").unwrap();
+
+    let output = run_cli_in(&tmp, &["init", "--vcs=none"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        fs::read_to_string(tmp.join("README.md")).unwrap(),
+        "keep me\n"
+    );
+    assert!(!tmp.join("arandu.toml").exists());
+    assert!(!tmp.join("src").exists());
+    assert!(!tmp.join("tests").exists());
+    let _ = fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn stale_interrupted_staging_does_not_block_new() {
+    let tmp = tempfile_dir("arandu_new_interrupted");
+    let stale = tmp.join(format!(".recoverable.arandu-new-{}", std::process::id()));
+    fs::create_dir(&stale).unwrap();
+    fs::write(stale.join("partial"), "incomplete\n").unwrap();
+
+    let output = run_cli_in(&tmp, &["new", "recoverable", "--vcs=none"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(tmp.join("recoverable/arandu.toml").is_file());
+    assert_eq!(
+        fs::read_to_string(stale.join("partial")).unwrap(),
+        "incomplete\n"
+    );
+    let _ = fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn vcs_auto_reuses_parent_and_explicit_git_creates_repository() {
+    if Command::new("git").arg("--version").output().is_err() {
+        return;
+    }
+    let tmp = tempfile_dir("arandu_new_vcs");
+    assert!(
+        Command::new("git")
+            .arg("init")
+            .arg("--quiet")
+            .arg(&tmp)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let nested = run_cli_in(&tmp, &["new", "nested", "--vcs=auto"]);
+    assert!(
+        nested.status.success(),
+        "{}",
+        String::from_utf8_lossy(&nested.stderr)
+    );
+    assert!(!tmp.join("nested/.git").exists());
+
+    let explicit = run_cli_in(&tmp, &["new", "standalone", "--vcs=git"]);
+    assert!(
+        explicit.status.success(),
+        "{}",
+        String::from_utf8_lossy(&explicit.stderr)
+    );
+    assert!(tmp.join("standalone/.git").is_dir());
+    let _ = fs::remove_dir_all(tmp);
+}
+
+#[test]
 fn package_local_multi_file_check_and_run() {
     let tmp = tempfile_dir("arandu_l2_pkg");
     let name = "pkg_l2";

@@ -7,8 +7,10 @@
 //! - `build` default = Cranelift; `--release` reserved for future LLVM
 
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::cli_error::{CliFailure, CliResult, CliSuccess};
 use arandu_query::{
@@ -148,6 +150,11 @@ pub fn cmd_new(name: &str, options: ScaffoldOptions) -> CliResult {
         )));
     }
     let root = PathBuf::from(name);
+    let parent = root
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    reject_case_collision(parent, name)?;
     if root.exists() {
         return Err(CliFailure::operational(
             "create project",
@@ -162,19 +169,11 @@ pub fn cmd_new(name: &str, options: ScaffoldOptions) -> CliResult {
             error.to_string(),
         )
     })?;
-    let parent = root.parent().unwrap_or_else(|| Path::new("."));
     let leaf = root
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or(name);
-    let staging = parent.join(format!(".{leaf}.arandu-new-{}", std::process::id()));
-    if staging.exists() {
-        return Err(CliFailure::operational(
-            "create project",
-            Some(staging),
-            "staging path already exists",
-        ));
-    }
+    let staging = staging_path(parent, leaf, "new");
     if let Err(error) = scaffold_into(&staging, name, options, parent) {
         let _ = fs::remove_dir_all(&staging);
         return Err(error);
@@ -196,7 +195,15 @@ pub fn cmd_init(root: &Path, name: &str, options: ScaffoldOptions) -> CliResult 
             "directory does not exist",
         ));
     }
-    for relative in [MANIFEST_FILENAME, "src/main.aru", "src/lib.aru"] {
+    let source_name = source_name(options.kind);
+    let generated = [
+        MANIFEST_FILENAME,
+        "README.md",
+        ".gitignore",
+        source_name,
+        "tests/smoke.aru",
+    ];
+    for relative in generated {
         if root.join(relative).exists() {
             return Err(CliFailure::operational(
                 "initialize project",
@@ -212,9 +219,144 @@ pub fn cmd_init(root: &Path, name: &str, options: ScaffoldOptions) -> CliResult 
             error.to_string(),
         )
     })?;
-    scaffold_into(root, name, options, root)?;
+
+    let parent = root.parent().unwrap_or_else(|| Path::new("."));
+    let leaf = root
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(name);
+    let staging = staging_path(parent, leaf, "init");
+    let staged_options = ScaffoldOptions {
+        kind: options.kind,
+        vcs: VcsChoice::None,
+    };
+    if let Err(error) = scaffold_into(&staging, name, staged_options, root) {
+        let _ = fs::remove_dir_all(&staging);
+        return Err(error);
+    }
+    if let Err(error) = publish_into_existing(root, &staging, source_name, options.vcs) {
+        let _ = fs::remove_dir_all(&staging);
+        return Err(error);
+    }
+    let _ = fs::remove_dir_all(&staging);
     print_created(name, options.kind);
     Ok(CliSuccess::Done)
+}
+
+fn source_name(kind: ScaffoldKind) -> &'static str {
+    match kind {
+        ScaffoldKind::Binary => "src/main.aru",
+        ScaffoldKind::Library => "src/lib.aru",
+    }
+}
+
+fn staging_path(parent: &Path, leaf: &str, operation: &str) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    parent.join(format!(
+        ".{leaf}.arandu-{operation}-{}-{nonce}",
+        std::process::id()
+    ))
+}
+
+fn reject_case_collision(parent: &Path, requested: &str) -> Result<(), CliFailure> {
+    let entries = match fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(CliFailure::operational(
+                "inspect project parent",
+                Some(parent.to_path_buf()),
+                error.to_string(),
+            ));
+        }
+    };
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            CliFailure::operational(
+                "inspect project parent",
+                Some(parent.to_path_buf()),
+                error.to_string(),
+            )
+        })?;
+        let existing = entry.file_name();
+        if let Some(existing) = existing.to_str()
+            && existing != requested
+            && existing.eq_ignore_ascii_case(requested)
+        {
+            return Err(CliFailure::operational(
+                "validate project path",
+                Some(parent.join(requested)),
+                format!("name differs only by case from existing `{existing}`"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn publish_into_existing(
+    root: &Path,
+    staging: &Path,
+    source_name: &str,
+    vcs: VcsChoice,
+) -> Result<(), CliFailure> {
+    let src_created = !root.join("src").exists();
+    let tests_created = !root.join("tests").exists();
+    let git_existed = root.join(".git").exists();
+    let mut published = Vec::new();
+
+    let result = (|| {
+        fs::create_dir_all(root.join("src")).map_err(|error| {
+            CliFailure::operational(
+                "create source directory",
+                Some(root.join("src")),
+                error.to_string(),
+            )
+        })?;
+        fs::create_dir_all(root.join("tests")).map_err(|error| {
+            CliFailure::operational(
+                "create test directory",
+                Some(root.join("tests")),
+                error.to_string(),
+            )
+        })?;
+        for relative in [
+            MANIFEST_FILENAME,
+            "README.md",
+            ".gitignore",
+            source_name,
+            "tests/smoke.aru",
+        ] {
+            let destination = root.join(relative);
+            fs::rename(staging.join(relative), &destination).map_err(|error| {
+                CliFailure::operational(
+                    "publish project file",
+                    Some(destination.clone()),
+                    error.to_string(),
+                )
+            })?;
+            published.push(destination);
+        }
+        initialize_git(root, root, vcs)
+    })();
+
+    if let Err(error) = result {
+        for path in published.iter().rev() {
+            let _ = fs::remove_file(path);
+        }
+        if tests_created {
+            let _ = fs::remove_dir(root.join("tests"));
+        }
+        if src_created {
+            let _ = fs::remove_dir(root.join("src"));
+        }
+        if !git_existed && root.join(".git").exists() {
+            let _ = fs::remove_dir_all(root.join(".git"));
+        }
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn scaffold_into(root: &Path, name: &str, options: ScaffoldOptions, vcs_probe: &Path) -> CliResult {
@@ -316,7 +458,12 @@ deny = ["UnknownCapability"]
             e.to_string(),
         )
     })?;
-    let initialize_git = match options.vcs {
+    initialize_git(root, vcs_probe, options.vcs)?;
+    Ok(CliSuccess::Done)
+}
+
+fn initialize_git(root: &Path, vcs_probe: &Path, vcs: VcsChoice) -> Result<(), CliFailure> {
+    let initialize_git = match vcs {
         VcsChoice::None => false,
         VcsChoice::Git => true,
         VcsChoice::Auto => !has_git_ancestor(vcs_probe),
@@ -342,7 +489,7 @@ deny = ["UnknownCapability"]
             ));
         }
     }
-    Ok(CliSuccess::Done)
+    Ok(())
 }
 
 fn has_git_ancestor(start: &Path) -> bool {

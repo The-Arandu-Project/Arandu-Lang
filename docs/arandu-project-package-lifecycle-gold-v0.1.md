@@ -556,10 +556,10 @@ The lockfile is not ignored for applications/workspaces.
 
 ### P1 — Project creation and VCS
 
-- [ ] Implement `arandu init` and `new --bin/--lib`.
-- [ ] Generate README, `.gitignore`, `src/` and `tests/` without partial trees.
-- [ ] Add `--vcs=auto|git|none`, detecting enclosing repositories.
-- [ ] Test reserved names, Unicode, spaces, case collisions and interrupted creation.
+- [x] Implement `arandu init` and `new --bin/--lib`.
+- [x] Generate README, `.gitignore`, `src/` and `tests/` without partial trees.
+- [x] Add `--vcs=auto|git|none`, detecting enclosing repositories.
+- [x] Test reserved names, Unicode, spaces, case collisions and interrupted creation.
 
 ### P2 — Artifact lifecycle
 
