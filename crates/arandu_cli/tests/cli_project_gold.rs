@@ -239,6 +239,25 @@ fn malformed_manifest_is_hard_error() {
 }
 
 #[test]
+fn legacy_manifest_loads_with_migration_warning() {
+    let tmp = tempfile_dir("arandu_legacy_manifest");
+    fs::create_dir_all(tmp.join("src")).unwrap();
+    fs::write(
+        tmp.join("Arandu.toml"),
+        "name = \"legacy_app\"\nversion = \"0.1.0\"\nentry = \"src/main.aru\"\n",
+    )
+    .unwrap();
+    fs::write(tmp.join("src/main.aru"), "func main(): int { return 0 }\n").unwrap();
+
+    let out = run_cli_in(&tmp, &["check"]);
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("deprecated"));
+    assert!(stderr.contains("arandu.toml"));
+    let _ = fs::remove_dir_all(tmp);
+}
+
+#[test]
 fn missing_entry_field_is_hard_error() {
     let tmp = tempfile_dir("arandu_missing_entry");
     fs::write(

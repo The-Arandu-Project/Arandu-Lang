@@ -148,6 +148,9 @@ pub(crate) fn event_loop(
                     Ok(WorkspaceEvent::File(file)) => {
                         crate::workspace::register_workspace_file(state, file);
                     }
+                    Ok(WorkspaceEvent::Error(error)) => {
+                        send_server_status(connection, "error", &error)?;
+                    }
                     Ok(WorkspaceEvent::Done) => {
                         spawn_open_diagnostics(state, pool, &job_tx);
                         workspace_done = true;

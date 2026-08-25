@@ -28,6 +28,19 @@ pub struct ManifestData {
     pub entry: String,
 }
 
+/// Result of filesystem discovery before the manifest enters Salsa.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestDiscovery {
+    pub path: PathBuf,
+    pub spelling: ManifestSpelling,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManifestSpelling {
+    Canonical,
+    Legacy,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ManifestSchema {
@@ -106,6 +119,10 @@ pub enum ManifestError {
         path: PathBuf,
         message: String,
     },
+    ConflictingFiles {
+        canonical: PathBuf,
+        legacy: PathBuf,
+    },
 }
 
 impl fmt::Display for ManifestError {
@@ -127,6 +144,12 @@ impl fmt::Display for ManifestError {
             ManifestError::ReservedName { path, message } => {
                 write!(f, "invalid {}: {message}", path.display())
             }
+            ManifestError::ConflictingFiles { canonical, legacy } => write!(
+                f,
+                "conflicting package manifests: both {} and {} exist; keep only `{MANIFEST_FILENAME}`",
+                canonical.display(),
+                legacy.display()
+            ),
         }
     }
 }
@@ -347,9 +370,12 @@ pub fn register_manifest(
 ///
 /// This is **not** stdlib resolution — package roots may use cwd/path walk
 /// (Cargo convention). Stdlib uses [`crate::stdlib::resolve_stdlib_root`].
-pub fn find_manifest(start: &Path) -> Option<PathBuf> {
+pub fn find_manifest(start: &Path) -> Result<Option<ManifestDiscovery>, ManifestError> {
     let mut current = if start.is_file() {
-        start.parent()?.to_path_buf()
+        let Some(parent) = start.parent() else {
+            return Ok(None);
+        };
+        parent.to_path_buf()
     } else {
         start.to_path_buf()
     };
@@ -358,19 +384,62 @@ pub fn find_manifest(start: &Path) -> Option<PathBuf> {
         current = abs;
     }
     loop {
-        let candidate = current.join(MANIFEST_FILENAME);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-        let legacy = current.join(LEGACY_MANIFEST_FILENAME);
-        if legacy.is_file() {
-            return Some(legacy);
+        if let Some(discovery) = discover_manifest_in(&current)? {
+            return Ok(Some(discovery));
         }
         if !current.pop() {
             break;
         }
     }
-    None
+    Ok(None)
+}
+
+fn discover_manifest_in(directory: &Path) -> Result<Option<ManifestDiscovery>, ManifestError> {
+    let entries = std::fs::read_dir(directory).map_err(|error| ManifestError::Io {
+        path: directory.to_path_buf(),
+        message: error.to_string(),
+    })?;
+    let mut canonical = None;
+    let mut legacy = None;
+    for entry in entries {
+        let entry = entry.map_err(|error| ManifestError::Io {
+            path: directory.to_path_buf(),
+            message: error.to_string(),
+        })?;
+        if entry.file_name() == MANIFEST_FILENAME && entry.path().is_file() {
+            canonical = Some(entry.path());
+        } else if entry.file_name() == LEGACY_MANIFEST_FILENAME && entry.path().is_file() {
+            legacy = Some(entry.path());
+        }
+    }
+    match (canonical, legacy) {
+        (Some(canonical), Some(legacy)) => {
+            let same_file = matches!(
+                (
+                    std::fs::canonicalize(&canonical),
+                    std::fs::canonicalize(&legacy)
+                ),
+                (Ok(canonical_real), Ok(legacy_real)) if canonical_real == legacy_real
+            );
+            if same_file {
+                Ok(Some(ManifestDiscovery {
+                    path: canonical,
+                    spelling: ManifestSpelling::Canonical,
+                }))
+            } else {
+                Err(ManifestError::ConflictingFiles { canonical, legacy })
+            }
+        }
+        (Some(path), None) => Ok(Some(ManifestDiscovery {
+            path,
+            spelling: ManifestSpelling::Canonical,
+        })),
+        (None, Some(path)) => Ok(Some(ManifestDiscovery {
+            path,
+            spelling: ManifestSpelling::Legacy,
+        })),
+        (None, None) => Ok(None),
+    }
 }
 
 /// Tracked helper so dependents can pin work to the manifest fingerprint.
@@ -520,5 +589,52 @@ entry = "src/main.aru"
         assert_eq!(a, b);
         assert_ne!(a, c);
         assert_eq!(a.len(), 64);
+    }
+
+    #[test]
+    fn discovery_prefers_canonical_and_classifies_legacy() {
+        let root = test_directory("manifest_discovery");
+        std::fs::write(root.join(LEGACY_MANIFEST_FILENAME), "legacy").unwrap();
+        let legacy = find_manifest(&root).unwrap().unwrap();
+        assert_eq!(legacy.spelling, ManifestSpelling::Legacy);
+
+        std::fs::write(root.join(MANIFEST_FILENAME), "canonical").unwrap();
+        let exact_names = std::fs::read_dir(&root)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .collect::<Vec<_>>();
+        let has_both = exact_names.iter().any(|name| name == MANIFEST_FILENAME)
+            && exact_names
+                .iter()
+                .any(|name| name == LEGACY_MANIFEST_FILENAME);
+        if has_both {
+            assert!(matches!(
+                find_manifest(&root),
+                Err(ManifestError::ConflictingFiles { .. })
+            ));
+        } else {
+            let discovery = find_manifest(&root).unwrap().unwrap();
+            let expected = if exact_names.iter().any(|name| name == MANIFEST_FILENAME) {
+                ManifestSpelling::Canonical
+            } else {
+                ManifestSpelling::Legacy
+            };
+            assert_eq!(discovery.spelling, expected);
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn test_directory(prefix: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "arandu-{prefix}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        root
     }
 }

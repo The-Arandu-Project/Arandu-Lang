@@ -11,9 +11,9 @@ use std::path::{Path, PathBuf};
 
 use crate::cli_error::{CliFailure, CliResult, CliSuccess};
 use arandu_query::{
-    DirectoryListing, MANIFEST_FILENAME, ManifestError, ModuleRoots, ProjectManifest, STDLIB_ENV,
-    StdlibResolveOpts, StdlibRoot, find_manifest, load_manifest, register_manifest,
-    resolve_stdlib_root, scan_aru_entries,
+    DirectoryListing, MANIFEST_FILENAME, ManifestError, ManifestSpelling, ModuleRoots,
+    ProjectManifest, STDLIB_ENV, StdlibResolveOpts, StdlibRoot, find_manifest, load_manifest,
+    register_manifest, resolve_stdlib_root, scan_aru_entries,
 };
 
 /// Official default entry path for `arandu new`.
@@ -247,75 +247,85 @@ pub fn cmd_doctor(flags: &ProjectFlags) -> i32 {
     // [Project] Arandu.toml (optional when not in a package)
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     categories.push(match find_manifest(&cwd) {
-        Some(path) => match load_manifest(&path) {
-            Ok((data, hash, _)) => {
-                let mut details = vec![
-                    DoctorDetail::Info(format!("manifest at {}", path.display())),
-                    DoctorDetail::Info(format!(
-                        "package {} {}  entry={}",
-                        data.name, data.version, data.entry
-                    )),
-                ];
-                if flags.verbose {
-                    details.push(DoctorDetail::Info(format!(
-                        "content hash {}…",
-                        &hash[..12.min(hash.len())]
-                    )));
-                    let entry = path
-                        .parent()
-                        .unwrap_or_else(|| Path::new("."))
-                        .join(&data.entry);
-                    if entry.is_file() {
-                        details.push(DoctorDetail::Info(format!(
-                            "entry file ok ({})",
-                            entry.display()
-                        )));
-                    } else {
+        Ok(Some(discovery)) => {
+            let path = discovery.path;
+            match load_manifest(&path) {
+                Ok((data, hash, _)) => {
+                    let mut details = vec![
+                        DoctorDetail::Info(format!("manifest at {}", path.display())),
+                        DoctorDetail::Info(format!(
+                            "package {} {}  entry={}",
+                            data.name, data.version, data.entry
+                        )),
+                    ];
+                    if discovery.spelling == ManifestSpelling::Legacy {
                         details.push(DoctorDetail::Error(format!(
-                            "entry file missing ({})",
-                            entry.display()
+                            "legacy manifest name `{}`; rename it to `{MANIFEST_FILENAME}`",
+                            arandu_query::LEGACY_MANIFEST_FILENAME
                         )));
                     }
-                }
-                let entry_ok = path
-                    .parent()
-                    .map(|p| p.join(&data.entry).is_file())
-                    .unwrap_or(false);
-                DoctorCategory {
-                    status: if entry_ok {
-                        DoctorStatus::Ok
-                    } else {
-                        DoctorStatus::Partial
-                    },
-                    title: format!("Project ({MANIFEST_FILENAME})"),
-                    details: {
-                        let mut d = details;
-                        if !entry_ok {
-                            d.push(DoctorDetail::Error(format!(
-                                "entry `{}` does not exist on disk",
-                                data.entry
+                    if flags.verbose {
+                        details.push(DoctorDetail::Info(format!(
+                            "content hash {}…",
+                            &hash[..12.min(hash.len())]
+                        )));
+                        let entry = path
+                            .parent()
+                            .unwrap_or_else(|| Path::new("."))
+                            .join(&data.entry);
+                        if entry.is_file() {
+                            details.push(DoctorDetail::Info(format!(
+                                "entry file ok ({})",
+                                entry.display()
                             )));
-                            d.push(DoctorDetail::Hint(
-                                "fix the entry path in Arandu.toml or create the file".into(),
-                            ));
+                        } else {
+                            details.push(DoctorDetail::Error(format!(
+                                "entry file missing ({})",
+                                entry.display()
+                            )));
                         }
-                        d
-                    },
+                    }
+                    let entry_ok = path
+                        .parent()
+                        .map(|p| p.join(&data.entry).is_file())
+                        .unwrap_or(false);
+                    DoctorCategory {
+                        status: if entry_ok && discovery.spelling == ManifestSpelling::Canonical {
+                            DoctorStatus::Ok
+                        } else {
+                            DoctorStatus::Partial
+                        },
+                        title: format!("Project ({MANIFEST_FILENAME})"),
+                        details: {
+                            let mut d = details;
+                            if !entry_ok {
+                                d.push(DoctorDetail::Error(format!(
+                                    "entry `{}` does not exist on disk",
+                                    data.entry
+                                )));
+                                d.push(DoctorDetail::Hint(
+                                    "fix the entry path in Arandu.toml or create the file".into(),
+                                ));
+                            }
+                            d
+                        },
+                    }
                 }
+                Err(e) => DoctorCategory {
+                    status: DoctorStatus::Fail,
+                    title: format!("Project ({MANIFEST_FILENAME})"),
+                    details: vec![
+                        // BUG-09: never swallow parse errors
+                        DoctorDetail::Error(e.to_string()),
+                        DoctorDetail::Hint(
+                            "fix the TOML (required: name, version, entry as quoted strings)"
+                                .into(),
+                        ),
+                    ],
+                },
             }
-            Err(e) => DoctorCategory {
-                status: DoctorStatus::Fail,
-                title: format!("Project ({MANIFEST_FILENAME})"),
-                details: vec![
-                    // BUG-09: never swallow parse errors
-                    DoctorDetail::Error(e.to_string()),
-                    DoctorDetail::Hint(
-                        "fix the TOML (required: name, version, entry as quoted strings)".into(),
-                    ),
-                ],
-            },
-        },
-        None => DoctorCategory {
+        }
+        Ok(None) => DoctorCategory {
             status: DoctorStatus::Skip,
             title: format!("Project ({MANIFEST_FILENAME})"),
             details: vec![
@@ -323,6 +333,11 @@ pub fn cmd_doctor(flags: &ProjectFlags) -> i32 {
                 DoctorDetail::Info("not an error outside a project directory".into()),
                 DoctorDetail::Hint("run `arandu_cli new <name>` to scaffold a package".into()),
             ],
+        },
+        Err(error) => DoctorCategory {
+            status: DoctorStatus::Fail,
+            title: format!("Project ({MANIFEST_FILENAME})"),
+            details: vec![DoctorDetail::Error(error.to_string())],
         },
     });
 
@@ -488,12 +503,21 @@ pub fn load_project(
     start: &Path,
     flags: &ProjectFlags,
 ) -> Result<ProjectContext, String> {
-    let manifest_path = find_manifest(start).ok_or_else(|| {
-        format!(
-            "no {MANIFEST_FILENAME} found from {} — run `arandu_cli new <name>` or pass a path to a package",
-            start.display()
-        )
-    })?;
+    let discovery = find_manifest(start)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| {
+            format!(
+                "no {MANIFEST_FILENAME} found from {} — run `arandu_cli new <name>` or pass a path to a package",
+                start.display()
+            )
+        })?;
+    if discovery.spelling == ManifestSpelling::Legacy {
+        eprintln!(
+            "warning: `{}` is deprecated; rename it to `{MANIFEST_FILENAME}`",
+            arandu_query::LEGACY_MANIFEST_FILENAME
+        );
+    }
+    let manifest_path = discovery.path;
 
     let (data, hash, _bytes) =
         load_manifest(&manifest_path).map_err(|e: ManifestError| e.to_string())?;

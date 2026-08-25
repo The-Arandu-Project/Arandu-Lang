@@ -31,8 +31,8 @@ pub use highlight::{
 };
 pub use manifest::{
     find_manifest, hash_manifest_bytes, load_manifest, manifest_fingerprint, parse_manifest_str,
-    register_manifest, ManifestData, ManifestError, ProjectManifest, LEGACY_MANIFEST_FILENAME,
-    MANIFEST_FILENAME,
+    register_manifest, ManifestData, ManifestDiscovery, ManifestError, ManifestSpelling,
+    ProjectManifest, LEGACY_MANIFEST_FILENAME, MANIFEST_FILENAME,
 };
 pub use rename::{prepare_rename, rename_occurrences, validate_rename, RenameError, RenameTarget};
 // re-export for tests/CLI convenience

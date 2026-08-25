@@ -527,8 +527,9 @@ The lockfile is not ignored for applications/workspaces.
 
 ### P0 — Contract and compatibility
 
-- [ ] Make `arandu.toml`/`arandu.lock` canonical and implement legacy discovery.
-- [ ] Replace the ad-hoc parser with a complete, deterministic TOML decoder.
+- [x] Make `arandu.toml` canonical and implement conflict-safe legacy discovery
+  (`arandu.lock` becomes canonical when P3 introduces it).
+- [x] Replace the ad-hoc parser with a complete, deterministic TOML decoder.
 - [ ] Add schema, package kind, edition and toolchain compatibility.
 - [ ] Reject duplicates, unknown owned fields, invalid SemVer and unsafe paths.
 - [ ] Keep manifest and directory data as narrow Salsa inputs.
