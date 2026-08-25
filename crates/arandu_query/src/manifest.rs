@@ -34,6 +34,13 @@ pub struct ManifestData {
     pub library_target: Option<ManifestTarget>,
     pub capabilities: CapabilityPolicy,
     pub effect_policy: EffectPolicy,
+    /// Dependency requirements, ordered by import alias. Resolution lands in P4.
+    pub dependencies: std::collections::BTreeMap<String, ManifestDependency>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestDependency {
+    pub path: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,6 +104,7 @@ impl ManifestData {
             library_target: None,
             capabilities: CapabilityPolicy::default(),
             effect_policy: EffectPolicy::default(),
+            dependencies: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -381,6 +389,18 @@ pub fn parse_manifest_str(path: &Path, text: &str) -> Result<ManifestData, Manif
                     deny: effects.deny,
                 })
                 .unwrap_or_default(),
+            dependencies: manifest
+                .dependencies
+                .into_iter()
+                .map(|(alias, dependency)| {
+                    (
+                        alias,
+                        ManifestDependency {
+                            path: dependency.path,
+                        },
+                    )
+                })
+                .collect(),
         }
     } else {
         for field in ["name", "version", "entry"] {

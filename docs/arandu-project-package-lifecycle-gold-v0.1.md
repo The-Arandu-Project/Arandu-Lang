@@ -141,6 +141,22 @@ iteration order.
 - writes use temporary sibling + flush + atomic replace;
 - parse or integrity failure never falls back to an unlocked build.
 
+P3 implements this as a strict typed model rather than a generic preserved
+metadata map. The manifest fingerprint hashes a length-delimited semantic
+projection, so comments and TOML layout do not create lock churn while every
+resolution input does. Version 1 currently admits only the single `root`
+source; P4 must introduce a typed source enum before registry, Git or path
+origins become readable. This fail-closed boundary prevents an old client from
+silently interpreting a future origin incorrectly.
+
+The implementation deliberately avoids two ecosystem traps. Cargo's own
+format notes discourage opaque metadata that old clients merely preserve, so
+unknown Arandu-owned fields and future versions are errors. npm documents that
+its hidden lock can trust directory modification times even though nested
+edits may not update them; Arandu validates canonical content and fingerprints
+instead of timestamps. Existing lock corruption is never overwritten as an
+ordinary update: the user must inspect or deliberately remove it.
+
 Path dependencies participate by canonical package identity and manifest
 fingerprint but are not copied into the global cache. The lockfile records a
 portable relative path only when the dependency is inside the workspace.
@@ -578,10 +594,10 @@ The lockfile is not ignored for applications/workspaces.
 
 ### P3 — Lockfile core
 
-- [ ] Define a versioned deterministic lock format and canonical serializer.
-- [ ] Implement atomic generation plus `--locked`, `--offline`, `--frozen`.
-- [ ] Reject corruption, stale manifest fingerprints and nonportable fields.
-- [ ] Prove byte-identical output across Windows, Linux and macOS.
+- [x] Define a versioned deterministic lock format and canonical serializer.
+- [x] Implement atomic generation plus `--locked`, `--offline`, `--frozen`.
+- [x] Reject corruption, stale manifest fingerprints and nonportable fields.
+- [x] Prove byte-identical output across Windows, Linux and macOS.
 
 ### P4 — Local packages and workspaces
 
@@ -661,7 +677,8 @@ already exist.
   including its private-module fallback/privacy constraints
 - [npm provenance](https://docs.npmjs.com/generating-provenance-statements/),
   [trusted publishing](https://docs.npmjs.com/trusted-publishers/) and
-  [script policy](https://docs.npmjs.com/cli/update.html#ignore-scripts)
+  [script policy](https://docs.npmjs.com/cli/update.html#ignore-scripts), plus
+  the [versioned package-lock format and hidden-lock timestamp caveat](https://docs.npmjs.com/cli/configuring-npm/package-lock-json/)
 - [Cargo source replacement](https://doc.rust-lang.org/cargo/reference/source-replacement.html)
 - [The Update Framework](https://theupdateframework.io/), used as the future
   registry baseline for rollback, freeze and mix-and-match resistance

@@ -181,7 +181,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), CliFailure> {
     })
 }
 
-fn atomic_replace(path: &Path, bytes: &[u8]) -> Result<(), CliFailure> {
+pub(crate) fn atomic_replace(path: &Path, bytes: &[u8]) -> Result<(), CliFailure> {
     let staging = write_staging(path, bytes)?;
     if !path.exists() {
         return fs::rename(&staging, path)

@@ -326,7 +326,10 @@ fn main() {
             s if s.starts_with("--stdlib-path")
                 || s == "--release"
                 || s == "-v"
-                || s == "--verbose" =>
+                || s == "--verbose"
+                || s == "--locked"
+                || s == "--offline"
+                || s == "--frozen" =>
             {
                 raw_project_flags.push(arg);
             }

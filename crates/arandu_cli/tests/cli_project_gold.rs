@@ -92,6 +92,9 @@ fn new_scaffolds_package_and_check_run() {
         String::from_utf8_lossy(&check.stderr)
     );
     assert!(String::from_utf8_lossy(&check.stdout).contains("ok"));
+    let lock_bytes = fs::read(project.join("arandu.lock")).unwrap();
+    assert!(!lock_bytes.contains(&b'\r'));
+    assert!(String::from_utf8_lossy(&lock_bytes).contains("version = 1"));
 
     let run = run_cli_in(&project, &["run"]);
     assert!(
@@ -218,6 +221,67 @@ fn new_scaffolds_package_and_check_run() {
     assert!(String::from_utf8_lossy(&clean_again.stdout).contains("already clean"));
 
     let _ = fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn locked_offline_and_frozen_have_independent_policy() {
+    let tmp = tempfile_dir("arandu_lock_policy");
+    let project = tmp.join("lock_policy");
+    assert!(
+        run_cli_in(&tmp, &["new", "lock_policy", "--vcs=none"])
+            .status
+            .success()
+    );
+
+    let missing_locked = run_cli_in(&project, &["check", "--locked"]);
+    assert!(!missing_locked.status.success());
+    assert!(String::from_utf8_lossy(&missing_locked.stderr).contains("--locked"));
+    assert!(!project.join("arandu.lock").exists());
+
+    let offline = run_cli_in(&project, &["check", "--offline"]);
+    assert!(
+        offline.status.success(),
+        "offline root resolution failed: {}",
+        String::from_utf8_lossy(&offline.stderr)
+    );
+    let original = fs::read(project.join("arandu.lock")).unwrap();
+
+    let frozen = run_cli_in(&project, &["check", "--frozen"]);
+    assert!(frozen.status.success());
+    assert_eq!(fs::read(project.join("arandu.lock")).unwrap(), original);
+}
+
+#[test]
+fn stale_or_corrupt_lock_never_builds_under_locked_policy() {
+    let tmp = tempfile_dir("arandu_stale_lock");
+    let project = tmp.join("stale_lock");
+    assert!(
+        run_cli_in(&tmp, &["new", "stale_lock", "--vcs=none"])
+            .status
+            .success()
+    );
+    assert!(run_cli_in(&project, &["check"]).status.success());
+    let lock_path = project.join("arandu.lock");
+    let original = fs::read(&lock_path).unwrap();
+
+    let manifest_path = project.join("arandu.toml");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    fs::write(&manifest_path, manifest.replace("0.1.0", "0.1.1")).unwrap();
+    let stale = run_cli_in(&project, &["check", "--locked"]);
+    assert!(!stale.status.success());
+    assert_eq!(fs::read(&lock_path).unwrap(), original);
+
+    fs::write(
+        &lock_path,
+        b"version = 1\nmanifest_fingerprint = 'broken'\n",
+    )
+    .unwrap();
+    let corrupt = run_cli_in(&project, &["check"]);
+    assert!(!corrupt.status.success());
+    assert_eq!(
+        fs::read(&lock_path).unwrap(),
+        b"version = 1\nmanifest_fingerprint = 'broken'\n"
+    );
 }
 
 #[test]

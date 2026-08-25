@@ -6,6 +6,7 @@ pub mod doc_store;
 pub mod edit_vfs;
 pub mod explain;
 pub mod highlight;
+pub mod lockfile;
 pub mod manifest;
 pub mod passes;
 pub mod rename;
@@ -29,11 +30,16 @@ pub use highlight::{
     compute_highlights, file_highlights, highlights_in_range, HlKind, HlToken, MOD_DECLARATION,
     MOD_DEFINITION, MOD_MUTABLE,
 };
+pub use lockfile::{
+    semantic_manifest_fingerprint, LockedPackage, Lockfile, LockfileError, LOCK_FILENAME,
+    LOCK_VERSION,
+};
 pub use manifest::{
     ensure_toolchain_compatible, find_manifest, hash_manifest_bytes, load_manifest,
     manifest_fingerprint, parse_manifest_str, register_manifest, CapabilityPolicy, EffectPolicy,
-    ManifestData, ManifestDiscovery, ManifestEdition, ManifestError, ManifestSpelling,
-    ManifestTarget, PackageKind, ProjectManifest, LEGACY_MANIFEST_FILENAME, MANIFEST_FILENAME,
+    ManifestData, ManifestDependency, ManifestDiscovery, ManifestEdition, ManifestError,
+    ManifestSpelling, ManifestTarget, PackageKind, ProjectManifest, LEGACY_MANIFEST_FILENAME,
+    MANIFEST_FILENAME,
 };
 pub use rename::{prepare_rename, rename_occurrences, validate_rename, RenameError, RenameTarget};
 // re-export for tests/CLI convenience

@@ -61,6 +61,8 @@ pub struct ProjectFlags {
     pub stdlib_path: Option<PathBuf>,
     pub release: bool,
     pub verbose: bool,
+    pub locked: bool,
+    pub offline: bool,
 }
 
 /// Parse `--stdlib-path=…` / `--stdlib-path …` / `--release` / `-v` from leftover args.
@@ -83,6 +85,13 @@ pub fn parse_project_flags(args: &[String]) -> Result<(ProjectFlags, Vec<String>
             flags.release = true;
         } else if a == "-v" || a == "--verbose" {
             flags.verbose = true;
+        } else if a == "--locked" {
+            flags.locked = true;
+        } else if a == "--offline" {
+            flags.offline = true;
+        } else if a == "--frozen" {
+            flags.locked = true;
+            flags.offline = true;
         } else {
             rest.push(a.clone());
         }
@@ -900,6 +909,8 @@ pub fn load_project(
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
 
+    synchronize_lockfile(&root, &data, flags)?;
+
     let entry_path = root.join(&data.entry);
     if !entry_path.is_file() {
         return Err(format!(
@@ -956,6 +967,56 @@ pub fn load_project(
         name,
         version,
         entry_rel,
+    })
+}
+
+fn synchronize_lockfile(
+    root: &Path,
+    manifest: &arandu_query::ManifestData,
+    flags: &ProjectFlags,
+) -> Result<(), String> {
+    let path = root.join(arandu_query::LOCK_FILENAME);
+    let expected = arandu_query::Lockfile::for_manifest(manifest);
+    let expected_bytes = expected.to_canonical_bytes();
+    match fs::read(&path) {
+        Ok(bytes) => {
+            let text = std::str::from_utf8(&bytes).map_err(|error| {
+                format!("invalid {}: file is not UTF-8: {error}", path.display())
+            })?;
+            let current =
+                arandu_query::Lockfile::parse(&path, text).map_err(|error| error.to_string())?;
+            if current == expected && bytes == expected_bytes {
+                return Ok(());
+            }
+            if flags.locked {
+                return Err(format!(
+                    "{} is stale or noncanonical and --locked forbids updating it",
+                    path.display()
+                ));
+            }
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            if flags.locked {
+                return Err(format!(
+                    "{} is missing and --locked forbids creating it",
+                    path.display()
+                ));
+            }
+        }
+        Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
+    }
+    crate::artifact::atomic_replace(&path, &expected_bytes).map_err(|error| match error {
+        CliFailure::Operational {
+            operation,
+            context,
+            source,
+        } => format!(
+            "{operation}{}: {source}",
+            context
+                .map(|path| format!(" {}", path.display()))
+                .unwrap_or_default()
+        ),
+        other => format!("unexpected lockfile publication failure: {other:?}"),
     })
 }
 

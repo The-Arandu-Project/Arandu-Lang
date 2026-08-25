@@ -40,6 +40,8 @@ jobs:
           key: s0-rust-1.97.1
       - name: Fetch locked dependency graph
         run: cargo fetch --locked
+      - name: P3 deterministic lockfile contract
+        run: cargo test --locked -p arandu_query lockfile
       - name: 1. Format
         run: cargo fmt --all -- --check
       - name: 2. Check
@@ -147,6 +149,8 @@ jobs:
           key: s1-recovery-${{ matrix.os }}-rust-1.97.1
       - name: Fetch locked dependency graph
         run: cargo fetch --locked
+      - name: P3 deterministic lockfile contract
+        run: cargo test --locked -p arandu_query lockfile
       - name: Import cycles and registration-order determinism
         run: cargo test --locked -p arandu_query --test salsa_imports
       - name: Query boundaries and incremental cutoffs
@@ -183,6 +187,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: install-${{ matrix.os }}-rust-1.97.1
+      - name: P3 deterministic lockfile contract
+        run: cargo test --locked -p arandu_query lockfile
       - name: Smoke versioned install + PATH symlink doctor
         run: |
           unset ARANDU_STDLIB
