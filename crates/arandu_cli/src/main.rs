@@ -228,7 +228,8 @@ fn usage_and_exit() -> ! {
     let message = concat!(
         "usage:\n",
         "  arandu_cli <lex|parse|check|hir|amir|run|emit-c|graph|fmt> <path> [flags]\n",
-        "  arandu_cli new <project-name>\n",
+        "  arandu_cli new <project-name> [--bin|--lib] [--vcs=auto|git|none]\n",
+        "  arandu_cli init [--bin|--lib] [--vcs=auto|git|none]\n",
         "  arandu_cli doctor [--stdlib-path=<dir>] [-v]\n",
         "  arandu_cli hash-file <path>          # BLAKE3 hex (packaging checksums)\n",
         "  arandu_cli watch [package-path]      # re-check on FS changes (package mode)\n",
@@ -356,10 +357,26 @@ fn main() {
     // ── Project / environment commands (no mandatory .aru path) ──────────
     match command {
         "new" => {
-            if args.len() != 3 {
-                fail_usage("usage: arandu_cli new <project-name>");
+            if args.len() < 3 {
+                fail_usage(
+                    "usage: arandu_cli new <project-name> [--bin|--lib] [--vcs=auto|git|none]",
+                );
             }
-            finish(project::cmd_new(&args[2]));
+            let options = project::parse_scaffold_options(&args[3..])
+                .unwrap_or_else(|error| fail_usage(format!("error: {error}")));
+            finish(project::cmd_new(&args[2], options));
+        }
+        "init" => {
+            let options = project::parse_scaffold_options(&args[2..])
+                .unwrap_or_else(|error| fail_usage(format!("error: {error}")));
+            let root = env::current_dir().unwrap_or_else(|error| {
+                fail_operational("resolve current directory", None, error.to_string())
+            });
+            let name = root
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or_else(|| fail_usage("current directory has no valid UTF-8 package name"));
+            finish(project::cmd_init(&root, name, options));
         }
         "doctor" => {
             if args.len() != 2 {

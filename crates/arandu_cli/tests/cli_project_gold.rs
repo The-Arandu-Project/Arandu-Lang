@@ -80,6 +80,9 @@ fn new_scaffolds_package_and_check_run() {
     );
     assert!(project.join("arandu.toml").is_file());
     assert!(project.join("src/main.aru").is_file());
+    assert!(project.join("README.md").is_file());
+    assert!(project.join(".gitignore").is_file());
+    assert!(project.join("tests/smoke.aru").is_file());
 
     let check = run_cli_in(&project, &["check"]);
     assert!(
@@ -120,6 +123,40 @@ fn new_scaffolds_package_and_check_run() {
     );
 
     let _ = fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn new_lib_and_init_create_the_requested_targets_without_git() {
+    let tmp = tempfile_dir("arandu_scaffold_kinds");
+    let new_lib = run_cli_in(&tmp, &["new", "math_lib", "--lib", "--vcs=none"]);
+    assert!(
+        new_lib.status.success(),
+        "{}",
+        String::from_utf8_lossy(&new_lib.stderr)
+    );
+    let library = tmp.join("math_lib");
+    assert!(library.join("src/lib.aru").is_file());
+    assert!(!library.join("src/main.aru").exists());
+    assert!(!library.join(".git").exists());
+    let manifest = fs::read_to_string(library.join("arandu.toml")).unwrap();
+    assert!(manifest.contains("[targets.lib]"));
+
+    let existing = tmp.join("existing_app");
+    fs::create_dir(&existing).unwrap();
+    fs::write(existing.join("keep.txt"), "untouched\n").unwrap();
+    let init = run_cli_in(&existing, &["init", "--bin", "--vcs=none"]);
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    assert!(existing.join("arandu.toml").is_file());
+    assert!(existing.join("src/main.aru").is_file());
+    assert_eq!(
+        fs::read_to_string(existing.join("keep.txt")).unwrap(),
+        "untouched\n"
+    );
+    let _ = fs::remove_dir_all(tmp);
 }
 
 #[test]
