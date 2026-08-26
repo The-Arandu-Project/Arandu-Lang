@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 salsa = { workspace = true }
 blake3 = { workspace = true }
+sha2 = { workspace = true }
 tracing = { workspace = true }
 slotmap = { workspace = true }
 rustc-hash = { workspace = true }

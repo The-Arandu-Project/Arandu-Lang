@@ -1,6 +1,6 @@
 #![allow(clippy::collapsible_if)]
 mod artifact;
-mod cache;
+pub mod cache;
 mod cli_error;
 mod linker;
 mod project;

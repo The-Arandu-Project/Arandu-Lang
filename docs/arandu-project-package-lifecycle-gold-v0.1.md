@@ -634,7 +634,7 @@ for legacy bare local imports. With these contracts covered, P4 is complete.
 ### P5 — Verified global cache
 
 - [x] Specify platform-native cache/config locations and override flags.
-- [ ] Store immutable content-addressed package sources with per-entry locking.
+- [x] Store immutable content-addressed package sources with per-entry locking.
 - [ ] Add `arandu cache inspect|verify|prune` with bounded, recoverable behavior.
 - [ ] Never trust an extracted directory without rechecking its recorded digest.
 - [ ] Bound archive bytes, expanded bytes, file count, graph depth and graph size.
@@ -647,6 +647,15 @@ relative XDG values are ignored as required by the XDG Base Directory
 specification. The versioned layout separates archives, extracted trees,
 metadata, staging, quarantine and per-digest locks. Cache identities are
 canonical SHA-256 digests and never embed mutable package names or origins.
+
+P5-B publishes archive objects only after hashing the complete byte stream. A
+native OS lock scoped to that digest covers revalidation and publication, so
+unrelated packages never contend on a global download lock and process death
+cannot leave an owned lock behind. Publication uses a uniquely named staging
+file, flushes it before an atomic same-volume rename and never rewrites a valid
+object. A same-address object with different bytes is quarantined and repaired;
+staging files are never cache hits. Extracted trees remain untrusted until the
+P5 verification step records and rechecks their deterministic tree digest.
 
 ### P6 — Remote Git, intentionally narrow
 
@@ -697,6 +706,10 @@ already exist.
   [Apple File System Programming Guide](https://developer.apple.com/library/archive/documentation/FileManagement/Conceptual/FileSystemProgrammingGuide/MacOSXDirectories/MacOSXDirectories.html)
   and [Windows Known Folders](https://learn.microsoft.com/windows/win32/shell/knownfolderid):
   native per-user cache locations and regenerable-cache semantics
+- [Rust `File` locking](https://doc.rust-lang.org/stable/std/fs/struct.File.html)
+  and [Cargo cache locking](https://doc.rust-lang.org/stable/nightly-rustc/cargo/util/cache_lock/index.html):
+  process-scoped native locks, concurrency modes and the global-lock contention
+  avoided by Arandu's immutable per-digest publication
 - [Dart package layout](https://dart.dev/tools/pub/package-layout),
   [lockfile behavior](https://dart.dev/tools/pub/versioning) and
   [`--enforce-lockfile`](https://dart.dev/tools/pub/cmd/pub-get)

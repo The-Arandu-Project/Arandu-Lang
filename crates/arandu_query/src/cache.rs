@@ -23,7 +23,15 @@ impl CacheDigest {
         self.0
     }
 
-    fn hex(self) -> String {
+    /// Compute the canonical cache identity for an immutable byte stream.
+    pub fn sha256(bytes: &[u8]) -> Self {
+        use sha2::{Digest as _, Sha256};
+
+        Self(Sha256::digest(bytes).into())
+    }
+
+    /// Lowercase hexadecimal form safe for portable cache path components.
+    pub fn hex(self) -> String {
         let mut output = String::with_capacity(64);
         for byte in self.0 {
             use fmt::Write as _;
