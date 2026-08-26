@@ -272,6 +272,40 @@ fn locked_offline_and_frozen_have_independent_policy() {
 }
 
 #[test]
+fn tree_is_canonical_and_verify_is_locked_offline() {
+    let tmp = tempfile_dir("arandu_graph_inspect");
+    let project = tmp.join("graph_inspect");
+    assert!(
+        run_cli_in(&tmp, &["new", "graph_inspect", "--vcs=none"])
+            .status
+            .success()
+    );
+
+    let tree = run_cli_in(&project, &["tree"]);
+    assert!(tree.status.success());
+    let first = String::from_utf8_lossy(&tree.stdout).into_owned();
+    assert!(first.starts_with("graph blake3:"));
+    assert!(first.contains(" root local"), "{first}");
+    assert!(project.join("arandu.lock").is_file());
+    let second = run_cli_in(&project, &["tree", "--locked"]);
+    assert!(second.status.success());
+    assert_eq!(first, String::from_utf8_lossy(&second.stdout));
+
+    let verified = run_cli_in(&project, &["verify"]);
+    assert!(verified.status.success());
+    assert!(String::from_utf8_lossy(&verified.stdout).contains("verified locked offline graph"));
+
+    let manifest = project.join("arandu.toml");
+    let changed = fs::read_to_string(&manifest)
+        .unwrap()
+        .replace("version = \"0.0.1\"", "version = \"0.0.2\"");
+    fs::write(&manifest, changed).unwrap();
+    assert!(!run_cli_in(&project, &["verify"]).status.success());
+
+    fs::remove_dir_all(tmp).unwrap();
+}
+
+#[test]
 fn stale_or_corrupt_lock_never_builds_under_locked_policy() {
     let tmp = tempfile_dir("arandu_stale_lock");
     let project = tmp.join("stale_lock");

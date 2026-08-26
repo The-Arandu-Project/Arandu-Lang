@@ -444,13 +444,17 @@ fn discover_package(
                 .cloned()
                 .unwrap_or_else(|| "remote".to_string())
         } else {
-            format!(
-                "{}+path:{relative}",
-                visiting
-                    .last()
-                    .cloned()
-                    .unwrap_or_else(|| "remote".to_string())
-            )
+            let remote_source = visiting
+                .iter()
+                .rev()
+                .find(|source| source.starts_with("git+"))
+                .and_then(|source| {
+                    source
+                        .split_once("/path+")
+                        .map_or(Some(source.as_str()), |(root, _)| Some(root))
+                })
+                .unwrap_or("remote");
+            format!("{remote_source}/path+{relative}")
         }
     } else if is_root || package_root == workspace_root {
         "root".to_string()
@@ -543,18 +547,26 @@ fn discover_package(
             source: source.clone(),
             data,
             dependencies: edges,
-            origin: remote_packages
-                .get(&source)
-                .map(|remote| remote.origin.clone()),
-            commit: remote_packages
-                .get(&source)
-                .map(|remote| remote.commit.clone()),
-            content_digest: remote_packages
-                .get(&source)
+            origin: remote_provenance(remote_packages, &source).map(|remote| remote.origin.clone()),
+            commit: remote_provenance(remote_packages, &source).map(|remote| remote.commit.clone()),
+            content_digest: remote_provenance(remote_packages, &source)
                 .map(|remote| remote.content_digest.clone()),
         },
     );
     Ok(source)
+}
+
+fn remote_provenance<'a>(
+    remote_packages: &'a BTreeMap<String, MaterializedGitPackage>,
+    source: &str,
+) -> Option<&'a MaterializedGitPackage> {
+    remote_packages.iter().find_map(|(identity, package)| {
+        (source == identity
+            || source
+                .strip_prefix(identity)
+                .is_some_and(|tail| tail.starts_with("/path+")))
+        .then_some(package)
+    })
 }
 
 #[cfg(test)]
@@ -638,12 +650,23 @@ mod tests {
         fs::create_dir_all(remote.join("src")).unwrap();
         fs::write(
             remote.join(MANIFEST_FILENAME),
-            "schema=1\n[package]\nname='math'\nversion='1.0.0'\nedition='2026'\n[targets.lib]\nname='math'\nroot='src/lib.aru'\n[targets.lib.exports]\n'.'='src/lib.aru'\n",
+            "schema=1\n[package]\nname='math'\nversion='1.0.0'\nedition='2026'\n[targets.lib]\nname='math'\nroot='src/lib.aru'\n[targets.lib.exports]\n'.'='src/lib.aru'\n[dependencies]\nhelper={path='packages/helper'}\n",
         )
         .unwrap();
         fs::write(
             remote.join("src/lib.aru"),
             "public func answer(): int { return 42 }\n",
+        )
+        .unwrap();
+        fs::create_dir_all(remote.join("packages/helper/src")).unwrap();
+        fs::write(
+            remote.join("packages/helper/arandu.toml"),
+            "schema=1\n[package]\nname='helper'\nversion='1.0.0'\nedition='2026'\n[targets.lib]\nname='helper'\nroot='src/lib.aru'\n[targets.lib.exports]\n'.'='src/lib.aru'\n",
+        )
+        .unwrap();
+        fs::write(
+            remote.join("packages/helper/src/lib.aru"),
+            "public func helper(): int { return 7 }\n",
         )
         .unwrap();
 
@@ -676,6 +699,18 @@ mod tests {
             remote_package.content_digest.as_deref(),
             Some("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         );
+        let subpackage = locked
+            .packages
+            .iter()
+            .find(|package| package.name == "helper")
+            .expect("remote path subpackage lock entry");
+        assert_eq!(subpackage.source, format!("{source}/path+packages/helper"));
+        assert_eq!(subpackage.origin, remote_package.origin);
+        Lockfile::parse(
+            Path::new("arandu.lock"),
+            std::str::from_utf8(&locked.to_canonical_bytes()).unwrap(),
+        )
+        .expect("remote subpackage lock must round-trip canonically");
 
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(remote);

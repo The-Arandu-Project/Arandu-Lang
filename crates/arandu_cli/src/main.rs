@@ -1,12 +1,11 @@
 #![allow(clippy::collapsible_if)]
 mod artifact;
-pub mod cache;
 mod cli_error;
 mod linker;
 mod project;
-mod remote_git;
 mod watch;
 
+use arandu_package::cache;
 use cli_error::{CliFailure, CliResult, CliSuccess};
 
 use std::{
@@ -239,6 +238,8 @@ fn usage_and_exit() -> ! {
         "  arandu_cli hash-file <path>          # BLAKE3 hex (packaging checksums)\n",
         "  arandu_cli watch [package-path]      # re-check on FS changes (package mode)\n",
         "  arandu_cli clean [package-path]      # remove owned project artifacts\n",
+        "  arandu_cli tree [package-path]       # canonical resolved dependency graph\n",
+        "  arandu_cli verify [package-path]     # locked, offline cache verification\n",
         "  arandu_cli check|run|build [--release] [--stdlib-path=<dir>] [package-path]\n\n",
         "  emit-c options: --layout=host|ptr4|ptr8|i686  (default: host)\n",
         "                  layout model only; cross compiler/sysroot are external\n",
@@ -525,6 +526,18 @@ fn main() {
                 println!("already clean");
             }
             finish(Ok(CliSuccess::Done));
+        }
+        "tree" | "verify" => {
+            let start = if args.len() >= 3 {
+                PathBuf::from(&args[2])
+            } else {
+                env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+            };
+            finish(cmd_project_inspect(
+                &start,
+                &project_flags,
+                command == "verify",
+            ));
         }
         "build" => {
             // Package mode: always project-oriented.
@@ -1017,6 +1030,42 @@ fn cmd_project_check(
     let _ = pipeline_lower(&db, file, &filepath);
     eprintln!("{}", rebuild_log.status_line());
     println!("ok {} ({}/{})", filepath, ctx.name, ctx.version);
+    Ok(CliSuccess::Done)
+}
+
+fn cmd_project_inspect(start: &Path, flags: &project::ProjectFlags, verify: bool) -> CliResult {
+    let mut policy = flags.clone();
+    if verify {
+        policy.locked = true;
+        policy.offline = true;
+    }
+    let mut db = arandu_query::DatabaseImpl::default();
+    let ctx = project::load_project(&mut db, start, &policy).map_err(|error| {
+        CliFailure::operational(
+            if verify {
+                "verify locked project graph"
+            } else {
+                "resolve project graph"
+            },
+            Some(start.to_path_buf()),
+            error,
+        )
+    })?;
+    let lock = ctx.lockfile;
+    println!("graph {}", lock.manifest_fingerprint);
+    for package in lock.packages {
+        let digest = package.content_digest.as_deref().unwrap_or("local");
+        println!(
+            "{} {} {} {}",
+            package.name, package.version, package.source, digest
+        );
+        for dependency in package.dependencies {
+            println!("  -> {dependency}");
+        }
+    }
+    if verify {
+        println!("verified locked offline graph");
+    }
     Ok(CliSuccess::Done)
 }
 

@@ -262,7 +262,8 @@ impl CacheStore {
     ///
     /// The staging directory must live below this cache's staging namespace so
     /// the final rename stays on one filesystem. Symlinks and special files are
-    /// rejected by [`hash_tree`] before anything becomes visible as a cache hit.
+    /// rejected by the canonical tree verifier before anything becomes visible
+    /// as a cache hit.
     pub fn publish_tree(
         &self,
         staging: &Path,

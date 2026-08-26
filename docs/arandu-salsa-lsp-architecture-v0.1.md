@@ -92,6 +92,9 @@ superfície pública na [matriz de capacidades](./arandu-lsp-capabilities-v0.1.m
     as identidades existentes de `ProjectManifest`, `ModuleRoots` e
     `PackageModuleMap` em uma única revisão. Manifesto inválido mantém o último
     grafo válido e não interrompe recursos interativos.
+    Dependências Git remotas são materializadas fora de Salsa pela biblioteca
+    compartilhada `arandu_package`; o LSP opera apenas com lock e cache
+    revalidado, sem rede durante descoberta ou reload.
 14. Rename usa análise pura em `arandu_query`: a gramática lexical rejeita
     nomes reservados/inválidos, scopes relacionados bloqueiam conflitos e os
     spans vêm dos tokens do CST cruzados com a identidade semântica. O LSP

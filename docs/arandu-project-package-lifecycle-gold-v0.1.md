@@ -714,14 +714,25 @@ bounded canonical tree and atomically publishes it under that SHA-256 identity.
 An existing cache hit is rehashed before every use; corruption fails closed in
 offline mode and an online refetch must still reproduce the digest in the lock.
 
-P6-D now connects verified Git roots to the same deterministic package graph,
+P6-D connects verified Git roots to the same deterministic package graph,
 module export map and generated lock used by local dependencies. Remote Git
 dependencies may themselves depend on other exact-commit Git packages, graph
 budgets and cycle detection still apply, `--locked` refuses an unrecorded
 remote identity, and `--offline` cannot invoke Git. CLI project commands use
-this path today. LSP cache-only materialization and path subpackages contained
-inside a remote repository remain explicit follow-ups before P6-D is marked
-complete; neither silently falls back to a different origin or unlocked graph.
+this path for fetch and reuse; the LSP uses the same `arandu_package` verifier
+in locked, cache-only mode and therefore never adds analyzer-startup network
+latency. Path subpackages contained inside a remote tree retain the enclosing
+origin, commit and content digest while receiving a distinct portable source
+identity. Neither frontend silently falls back to a different origin or an
+unlocked graph.
+
+P6-E starts with `arandu tree` and `arandu verify`. `tree` prints the canonical
+graph fingerprint, sorted source identities, content digests and resolved
+edges, giving code review a stable representation independent of cache paths.
+`verify` forces `--locked --offline`, checks canonical lock bytes and rehashes
+every referenced remote tree before reporting success. This is the shared
+verification substrate for a future policy/vulnerability `audit` command and
+an atomic verified `vendor`; those commands are not claimed complete yet.
 
 ### P7 — Gold promotion
 

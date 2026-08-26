@@ -79,6 +79,7 @@ fn item_ide_diags_beta_edit_skips_alpha() {
 
 #[test]
 fn file_ide_diagnostics_fingerprint_stable_on_noop() {
+    let _guard = COUNTER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut db = DatabaseImpl::new();
     let file = db.new_file("fp3.aru".into(), "func main(): int { return 1 }\n".into());
     let d1 = file_ide_diagnostics(&db, file);
@@ -90,6 +91,7 @@ fn file_ide_diagnostics_fingerprint_stable_on_noop() {
 
 #[test]
 fn file_ide_compose_matches_item_union() {
+    let _guard = COUNTER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut db = DatabaseImpl::new();
     let file = db.new_file("union.aru".into(), two_funcs(1));
     let file_diags = file_ide_diagnostics(&db, file);
@@ -125,6 +127,7 @@ fn file_ide_compose_matches_item_union() {
 
 #[test]
 fn ide_diagnostic_preserves_labels_hints_and_replacements() {
+    let _guard = COUNTER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut db = DatabaseImpl::new();
     let file = db.new_file(
         "rich.aru".into(),

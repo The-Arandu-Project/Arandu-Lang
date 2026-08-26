@@ -409,9 +409,20 @@ fn validate_package_provenance(
         ));
     };
     let expected_source = format!("git+{origin}#{commit}");
-    if source != expected_source {
+    let valid_subpackage = source.strip_prefix(&expected_source).is_some_and(|suffix| {
+        suffix.strip_prefix("/path+").is_some_and(|path| {
+            !path.is_empty()
+                && !path.contains('\\')
+                && !path.starts_with('/')
+                && !path
+                    .split('/')
+                    .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+        })
+    });
+    if source != expected_source && !valid_subpackage {
         return Err(LockfileError(
-            "Git package source must exactly match its origin and commit".into(),
+            "Git package source must match its origin/commit and optional portable path subpackage"
+                .into(),
         ));
     }
     crate::manifest::validate_git_dependency_identity(origin, commit).map_err(LockfileError)?;

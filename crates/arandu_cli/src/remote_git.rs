@@ -29,6 +29,12 @@ pub fn materialize(
     if let Some(digest) = expected_digest {
         match store.trusted_tree(digest, TreeLimits::default()) {
             Ok(root) => {
+                let root = fs::canonicalize(&root).map_err(|error| {
+                    format!(
+                        "cannot canonicalize cached Git dependency {}: {error}",
+                        root.display()
+                    )
+                })?;
                 return Ok(MaterializedGit {
                     origin: origin.clone(),
                     commit: commit.clone(),
@@ -72,6 +78,12 @@ pub fn materialize(
     });
     let materialized = match result {
         Ok((_publish, verification, root)) => {
+            let root = fs::canonicalize(&root).map_err(|error| {
+                format!(
+                    "cannot canonicalize cached Git dependency {}: {error}",
+                    root.display()
+                )
+            })?;
             if let Some(expected) = expected_digest {
                 if verification.digest != expected {
                     Err(format!(

@@ -112,6 +112,13 @@ pub(crate) fn spawn_package_reload(
 pub(crate) fn discover_workspace_project(
     roots: &[PathBuf],
 ) -> Result<Option<WorkspaceProject>, String> {
+    discover_workspace_project_with_cache(roots, None)
+}
+
+fn discover_workspace_project_with_cache(
+    roots: &[PathBuf],
+    cache_override: Option<&std::path::Path>,
+) -> Result<Option<WorkspaceProject>, String> {
     for root in roots {
         let Some(discovery) = find_manifest(root).map_err(|error| error.to_string())? else {
             continue;
@@ -132,7 +139,23 @@ pub(crate) fn discover_workspace_project(
             .map(std::path::Path::to_path_buf)
             .unwrap_or_else(|| package_root.clone());
         let entries = scan_aru_entries(&package_src);
-        let graph = LocalPackageGraph::discover(&package_root, &manifest_path, &manifest_data)?;
+        let cache = arandu_package::cache::resolve_cache_layout(cache_override)?;
+        let remote_packages = arandu_package::resolver::materialize_remote_graph(
+            &package_root,
+            &manifest_path,
+            &manifest_data,
+            &cache,
+            arandu_package::resolver::ResolutionPolicy {
+                locked: true,
+                offline: true,
+            },
+        )?;
+        let graph = LocalPackageGraph::discover_materialized(
+            &package_root,
+            &manifest_path,
+            &manifest_data,
+            &remote_packages,
+        )?;
         let module_plan = graph.module_plan(&entry_path)?;
         let mut module_files = Vec::new();
         if let Some(plan) = module_plan.as_ref() {
@@ -178,6 +201,8 @@ pub(crate) fn register_workspace_file(state: &mut ServerState, file: WorkspaceFi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arandu_package::cache::{CacheStore, TreeLimits};
+    use arandu_query::{CacheLayout, LockedPackage, Lockfile, LOCK_FILENAME};
 
     #[test]
     fn workspace_project_discovery_loads_manifest_and_listing() {
@@ -208,5 +233,73 @@ mod tests {
         assert_eq!(project.entries, vec!["main.aru"]);
 
         std::fs::remove_dir_all(root).expect("remove fixture");
+    }
+
+    #[test]
+    fn workspace_remote_dependency_uses_only_revalidated_locked_cache() {
+        let suffix = format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(format!("arandu-lsp-remote-{suffix}"));
+        let cache_root = std::env::temp_dir().join(format!("arandu-lsp-cache-{suffix}"));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Arandu.toml"),
+            "schema=1\n[package]\nname='editor_remote'\nversion='0.1.0'\nedition='2026'\n[targets.bin]\nname='editor_remote'\nroot='src/main.aru'\n[dependencies]\nmath={git='https://example.com/math.git',rev='0123456789abcdef0123456789abcdef01234567'}\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("src/main.aru"), "func main(): int { return 0 }\n").unwrap();
+
+        let layout = CacheLayout::new(cache_root.clone()).unwrap();
+        std::fs::create_dir_all(layout.staging()).unwrap();
+        let staging = layout.staging().join("math");
+        std::fs::create_dir_all(staging.join("src")).unwrap();
+        std::fs::write(
+            staging.join("Arandu.toml"),
+            "schema=1\n[package]\nname='math'\nversion='1.0.0'\nedition='2026'\n[targets.lib]\nname='math'\nroot='src/lib.aru'\n[targets.lib.exports]\n'.'='src/lib.aru'\n",
+        )
+        .unwrap();
+        std::fs::write(
+            staging.join("src/lib.aru"),
+            "public func answer(): int { return 42 }\n",
+        )
+        .unwrap();
+        let (_, verified, _) = CacheStore::new(layout)
+            .publish_tree(&staging, TreeLimits::default())
+            .unwrap();
+        let source = "git+https://example.com/math.git#0123456789abcdef0123456789abcdef01234567";
+        let lock = Lockfile {
+            manifest_fingerprint:
+                "blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            packages: vec![LockedPackage {
+                name: "math".into(),
+                version: "1.0.0".into(),
+                source: source.into(),
+                manifest_fingerprint: String::new(),
+                origin: Some("https://example.com/math.git".into()),
+                commit: Some("0123456789abcdef0123456789abcdef01234567".into()),
+                content_digest: Some(verified.digest.to_string()),
+                dependencies: Vec::new(),
+            }],
+        };
+        std::fs::write(root.join(LOCK_FILENAME), lock.to_canonical_bytes()).unwrap();
+
+        let project =
+            discover_workspace_project_with_cache(std::slice::from_ref(&root), Some(&cache_root))
+                .expect("offline cached remote discovery")
+                .expect("workspace project");
+        assert!(project.module_plan.is_some());
+        assert!(project
+            .module_files
+            .iter()
+            .any(|file| file.path.ends_with("src/lib.aru")));
+
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(cache_root).unwrap();
     }
 }

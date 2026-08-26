@@ -153,6 +153,7 @@ name = "arandu_lsp"
 version = "0.1.0-rc.4"
 dependencies = [
  "arandu_base",
+ "arandu_cli",
  "arandu_fmt",
  "arandu_middle",
  "arandu_parser",
