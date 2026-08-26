@@ -315,6 +315,9 @@ fn audit_and_vendor_are_locked_and_deterministic() {
             .success()
     );
     assert!(run_cli_in(&project, &["check"]).status.success());
+    let misplaced_accept = run_cli_in(&project, &["check", "--accept"]);
+    assert_eq!(misplaced_accept.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&misplaced_accept.stderr).contains("only"));
     let audit = run_cli_in(&project, &["audit"]);
     assert!(
         audit.status.success(),

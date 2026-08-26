@@ -241,6 +241,7 @@ fn usage_and_exit() -> ! {
         "  arandu_cli tree [package-path]       # canonical resolved dependency graph\n",
         "  arandu_cli audit [package-path]      # locked provenance and policy audit\n",
         "  arandu_cli vendor [package-path]     # verified offline source snapshot\n",
+        "  arandu_cli update [package-path] --accept # review and publish remote graph\n",
         "  arandu_cli verify [package-path]     # locked, offline cache verification\n",
         "  arandu_cli check|run|build [--release] [--stdlib-path=<dir>] [package-path]\n\n",
         "  emit-c options: --layout=host|ptr4|ptr8|i686  (default: host)\n",
@@ -337,7 +338,8 @@ fn main() {
                 || s == "--verbose"
                 || s == "--locked"
                 || s == "--offline"
-                || s == "--frozen" =>
+                || s == "--frozen"
+                || s == "--accept" =>
             {
                 raw_project_flags.push(arg);
             }
@@ -367,6 +369,9 @@ fn main() {
     }
 
     let command = args[1].as_str();
+    if project_flags.accept_lock && command != "update" {
+        fail_usage("--accept is valid only with 'arandu update'");
+    }
 
     // ── Project / environment commands (no mandatory .aru path) ──────────
     match command {
@@ -529,13 +534,21 @@ fn main() {
             }
             finish(Ok(CliSuccess::Done));
         }
-        "tree" | "verify" | "audit" | "vendor" => {
+        "tree" | "verify" | "audit" | "vendor" | "update" => {
             let start = if args.len() >= 3 {
                 PathBuf::from(&args[2])
             } else {
                 env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
             };
-            if command == "vendor" {
+            if command == "update" {
+                let mut db = arandu_query::DatabaseImpl::default();
+                let ctx =
+                    project::load_project(&mut db, &start, &project_flags).unwrap_or_else(|e| {
+                        fail_operational("review dependency graph", Some(start.clone()), e)
+                    });
+                println!("accepted graph {}", ctx.lockfile.manifest_fingerprint);
+                finish(Ok(CliSuccess::Done));
+            } else if command == "vendor" {
                 let mut db = arandu_query::DatabaseImpl::default();
                 let policy = project::ProjectFlags {
                     locked: true,

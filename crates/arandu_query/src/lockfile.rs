@@ -67,6 +67,41 @@ struct RawPackage {
 }
 
 impl Lockfile {
+    /// Stable, review-oriented changes between two resolved package graphs.
+    #[must_use]
+    pub fn graph_diff(&self, next: &Self) -> Vec<String> {
+        fn lines(lock: &Lockfile) -> BTreeSet<String> {
+            let mut lines = BTreeSet::new();
+            for package in &lock.packages {
+                lines.insert(format!(
+                    "package {} name={} version={} origin={} commit={} digest={}",
+                    package.source,
+                    package.name,
+                    package.version,
+                    package.origin.as_deref().unwrap_or("local"),
+                    package.commit.as_deref().unwrap_or("local"),
+                    package.content_digest.as_deref().unwrap_or("local")
+                ));
+                for dependency in &package.dependencies {
+                    lines.insert(format!("edge {} -> {dependency}", package.source));
+                }
+            }
+            lines
+        }
+        let current = lines(self);
+        let next = lines(next);
+        current
+            .difference(&next)
+            .map(|line| format!("- {line}"))
+            .chain(next.difference(&current).map(|line| format!("+ {line}")))
+            .collect()
+    }
+
+    #[must_use]
+    pub fn contains_remote_packages(&self) -> bool {
+        self.packages.iter().any(|package| package.origin.is_some())
+    }
+
     #[must_use]
     pub fn for_manifest(manifest: &ManifestData) -> Self {
         Self {

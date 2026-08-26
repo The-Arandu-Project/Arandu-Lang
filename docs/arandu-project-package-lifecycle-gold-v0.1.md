@@ -679,9 +679,9 @@ limits without weakening the local package contract.
 - [x] Accept secure Git/HTTPS sources pinned to an exact commit.
 - [x] Record canonical origin, commit and content digest in the lockfile.
 - [x] Disable network in `--offline`; never fall back from private to public origins.
-- [ ] Make first trust and every update an explicit reviewable graph diff.
+- [x] Make first trust and every update an explicit reviewable graph diff.
 - [x] Add `tree`, `verify`, `audit` and verified `vendor` foundations.
-- [ ] Defer floating branches, arbitrary URLs, registries and dependency scripts.
+- [x] Defer floating branches, arbitrary URLs, registries and dependency scripts.
 
 P6-A freezes the remote manifest identity before networking is introduced:
 `alias = { git = "https://host/owner/repository.git", rev = "<full-commit>" }`.
@@ -690,9 +690,9 @@ credentials, custom port, query, fragment or path traversal, and end in
 `.git`. `rev` accepts only a complete lowercase 40- or 64-hex commit object ID;
 branch names, tags, abbreviated hashes and symbolic refs are invalid. `path`
 and `git` are mutually exclusive because each dependency has exactly one
-authority. This contract is already parsed and fingerprinted deterministically;
-CLI/LSP materialization, verified lock fields and network policy are the next
-P6 slices, so the top-level acceptance item remains open until those are wired.
+authority. The parser and regression suite reject every deferred source form;
+supporting one later requires a new reviewed contract rather than accidentally
+expanding this grammar.
 
 P6-B upgrades the generated lock format to version 2 and separates Git
 provenance into `origin`, `commit` and `content_digest`. The canonical
@@ -731,8 +731,19 @@ graph fingerprint, sorted source identities, content digests and resolved
 edges, giving code review a stable representation independent of cache paths.
 `verify` forces `--locked --offline`, checks canonical lock bytes and rehashes
 every referenced remote tree before reporting success. This is the shared
-verification substrate for a future policy/vulnerability `audit` command and
-an atomic verified `vendor`; those commands are not claimed complete yet.
+verification substrate used by `audit` and the atomic verified `vendor`.
+`audit` reports locked origin, commit and content identity without claiming a
+vulnerability scan when no advisory database is configured. `vendor` copies
+only revalidated cache trees, verifies the copies and publishes a deterministic
+content-named snapshot transactionally.
+
+P6-F makes remote authority changes readonly by default. First trust, removal,
+origin/commit changes, content changes and transitive edge changes produce a
+stable line-oriented graph diff while preserving the previous lockfile.
+`arandu update --accept` is the only ordinary command authorized to publish
+that reviewed remote graph. Local workspace-only lock maintenance remains
+automatic because it introduces no external code authority. LSP discovery stays
+locked and offline and therefore cannot accept an update.
 
 ### P7 — Gold promotion
 
