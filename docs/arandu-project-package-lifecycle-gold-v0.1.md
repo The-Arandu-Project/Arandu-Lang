@@ -633,11 +633,20 @@ for legacy bare local imports. With these contracts covered, P4 is complete.
 
 ### P5 — Verified global cache
 
-- [ ] Specify platform-native cache/config locations and override flags.
+- [x] Specify platform-native cache/config locations and override flags.
 - [ ] Store immutable content-addressed package sources with per-entry locking.
 - [ ] Add `arandu cache inspect|verify|prune` with bounded, recoverable behavior.
 - [ ] Never trust an extracted directory without rechecking its recorded digest.
 - [ ] Bound archive bytes, expanded bytes, file count, graph depth and graph size.
+
+P5-A fixes the cache root precedence as `--cache-dir`, then
+`ARANDU_CACHE_DIR`, then the platform-native per-user cache: Local AppData on
+Windows, `~/Library/Caches/Arandu` on macOS, and `$XDG_CACHE_HOME/arandu` (or
+`~/.cache/arandu`) on other Unix systems. Explicit overrides must be absolute;
+relative XDG values are ignored as required by the XDG Base Directory
+specification. The versioned layout separates archives, extracted trees,
+metadata, staging, quarantine and per-digest locks. Cache identities are
+canonical SHA-256 digests and never embed mutable package names or origins.
 
 ### P6 — Remote Git, intentionally narrow
 
@@ -684,6 +693,10 @@ already exist.
   [locked/offline/frozen semantics](https://doc.rust-lang.org/cargo/commands/cargo-generate-lockfile.html)
 - [Go Modules reference](https://go.dev/ref/mod): module identity, workspaces,
   immutable cache, checksums, private-origin behavior and portable path rules
+- [XDG Base Directory specification](https://specifications.freedesktop.org/basedir-spec/latest/),
+  [Apple File System Programming Guide](https://developer.apple.com/library/archive/documentation/FileManagement/Conceptual/FileSystemProgrammingGuide/MacOSXDirectories/MacOSXDirectories.html)
+  and [Windows Known Folders](https://learn.microsoft.com/windows/win32/shell/knownfolderid):
+  native per-user cache locations and regenerable-cache semantics
 - [Dart package layout](https://dart.dev/tools/pub/package-layout),
   [lockfile behavior](https://dart.dev/tools/pub/versioning) and
   [`--enforce-lockfile`](https://dart.dev/tools/pub/cmd/pub-get)

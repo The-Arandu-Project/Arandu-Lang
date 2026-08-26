@@ -1,5 +1,6 @@
 #![allow(clippy::collapsible_if)]
 mod artifact;
+mod cache;
 mod cli_error;
 mod linker;
 mod project;
@@ -233,6 +234,7 @@ fn usage_and_exit() -> ! {
         "  arandu_cli new <project-name> [--bin|--lib] [--vcs=auto|git|none]\n",
         "  arandu_cli init [--bin|--lib] [--vcs=auto|git|none]\n",
         "  arandu_cli doctor [--stdlib-path=<dir>] [-v]\n",
+        "  arandu_cli cache dir [--cache-dir=<absolute-dir>]\n",
         "  arandu_cli hash-file <path>          # BLAKE3 hex (packaging checksums)\n",
         "  arandu_cli watch [package-path]      # re-check on FS changes (package mode)\n",
         "  arandu_cli clean [package-path]      # remove owned project artifacts\n",
@@ -245,7 +247,8 @@ fn usage_and_exit() -> ! {
         "           : -Zdebug-parser -Zdebug-typeck -Zdebug-ossa -Zdebug-layout -Zdebug-backend -Zdebug-all\n",
         "           : -Zself-profile=<path>  -Zexplain-rebuild  -Zno-generational-fallback\n\n",
         "  backend: build → Cranelift (dev); build --release → LLVM when available\n",
-        "  stdlib:  --stdlib-path > ARANDU_STDLIB > relative to binary (never cwd)"
+        "  stdlib:  --stdlib-path > ARANDU_STDLIB > relative to binary (never cwd)\n",
+        "  cache:   --cache-dir > ARANDU_CACHE_DIR > platform-native user cache"
     );
     finish(Err(CliFailure::usage(message)))
 }
@@ -324,6 +327,7 @@ fn main() {
             s if s.starts_with("--layout=") => layout_flags.push(arg),
             // Collect project flags even before we know the subcommand.
             s if s.starts_with("--stdlib-path")
+                || s.starts_with("--cache-dir")
                 || s == "--release"
                 || s == "-v"
                 || s == "--verbose"
@@ -391,6 +395,15 @@ fn main() {
             finish(Ok(CliSuccess::ProgramExit(project::cmd_doctor(
                 &project_flags,
             ))));
+        }
+        "cache" => {
+            if args.len() != 3 || args[2] != "dir" {
+                fail_usage("usage: arandu_cli cache dir [--cache-dir=<absolute-dir>]");
+            }
+            let layout = cache::resolve_cache_layout(project_flags.cache_dir.as_deref())
+                .unwrap_or_else(|error| fail_usage(format!("error: {error}")));
+            println!("{}", layout.root().display());
+            finish(Ok(CliSuccess::Done));
         }
         "hash-file" => {
             if args.len() != 3 {

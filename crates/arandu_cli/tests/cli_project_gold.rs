@@ -21,6 +21,26 @@ fn run_cli_in(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
 }
 
 #[test]
+fn cache_dir_reports_the_absolute_override_without_creating_it() {
+    let tmp = tempfile_dir("arandu_cache_dir");
+    let cache = tmp.join("global-cache");
+    let out = run_cli(&["cache", "dir", &format!("--cache-dir={}", cache.display())]);
+    assert!(
+        out.status.success(),
+        "cache dir failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        cache.to_string_lossy()
+    );
+    assert!(
+        !cache.exists(),
+        "cache discovery must not mutate the filesystem"
+    );
+}
+
+#[test]
 fn doctor_reports_binary_and_stdlib() {
     let out = run_cli(&["doctor"]);
     let stdout = String::from_utf8_lossy(&out.stdout);

@@ -1,4 +1,5 @@
 pub mod analysis;
+pub mod cache;
 pub mod dataflow;
 pub mod db;
 pub mod debounce;
@@ -19,6 +20,9 @@ pub mod watch_buf;
 pub use analysis::{
     AnalysisHost, AnalysisRevision, AnalysisSnapshot, LspSymbolId, PackageConfiguration,
     ResolvedPackageMap,
+};
+pub use cache::{
+    CacheDigest, CacheDigestError, CacheLayout, CacheLayoutError, CACHE_DIGEST_ALGORITHM,
 };
 pub use dataflow::{
     block_borrow_facts, block_dataflow_facts, block_diagnostics, file_func_symbols,

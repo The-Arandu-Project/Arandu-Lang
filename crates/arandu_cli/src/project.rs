@@ -52,6 +52,8 @@ pub struct ProjectContext {
     pub entry_path: PathBuf,
     /// Resolved stdlib root (cascade); available for doctor/logs.
     pub stdlib: StdlibRoot,
+    /// Platform-native, verified global package cache.
+    pub cache: arandu_query::CacheLayout,
     pub name: String,
     pub version: String,
     pub entry_rel: String,
@@ -61,6 +63,7 @@ pub struct ProjectContext {
 #[derive(Debug, Clone, Default)]
 pub struct ProjectFlags {
     pub stdlib_path: Option<PathBuf>,
+    pub cache_dir: Option<PathBuf>,
     pub release: bool,
     pub verbose: bool,
     pub locked: bool,
@@ -82,6 +85,18 @@ pub fn parse_project_flags(args: &[String]) -> Result<(ProjectFlags, Vec<String>
                 flags.stdlib_path = Some(PathBuf::from(&args[i]));
             } else {
                 return Err("--stdlib-path requires a directory argument".into());
+            }
+        } else if let Some(v) = a.strip_prefix("--cache-dir=") {
+            if v.is_empty() {
+                return Err("--cache-dir requires a directory argument".into());
+            }
+            flags.cache_dir = Some(PathBuf::from(v));
+        } else if a == "--cache-dir" {
+            i += 1;
+            if i < args.len() {
+                flags.cache_dir = Some(PathBuf::from(&args[i]));
+            } else {
+                return Err("--cache-dir requires a directory argument".into());
             }
         } else if a == "--release" {
             flags.release = true;
@@ -929,6 +944,7 @@ pub fn load_project(
         ..Default::default()
     })
     .map_err(|e| e.to_string())?;
+    let cache = crate::cache::resolve_cache_layout(flags.cache_dir.as_deref())?;
 
     db.set_stdlib_root(stdlib.path.clone());
 
@@ -968,6 +984,7 @@ pub fn load_project(
         manifest,
         entry_path,
         stdlib,
+        cache,
         name,
         version,
         entry_rel,
