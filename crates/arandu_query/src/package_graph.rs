@@ -9,7 +9,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::MANIFEST_FILENAME;
-use crate::{load_manifest, semantic_manifest_fingerprint, LockedPackage, Lockfile, ManifestData};
+use crate::{
+    load_manifest, semantic_manifest_fingerprint, LockedPackage, Lockfile, ManifestData,
+    ManifestDependency,
+};
 use arandu_middle::{ModuleId, PackageId, TargetId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -420,13 +423,14 @@ fn discover_package(
     let mut identities = BTreeSet::new();
     for (alias, dependency) in &data.dependencies {
         budget.add_edge(&source, alias)?;
-        let dependency_root =
-            fs::canonicalize(package_root.join(&dependency.path)).map_err(|error| {
-                format!(
-                    "cannot resolve dependency `{alias}` at `{}`: {error}",
-                    dependency.path
-                )
-            })?;
+        let ManifestDependency::Path { path } = dependency else {
+            return Err(format!(
+                "remote Git dependency `{alias}` has a valid pinned identity but is not materialized yet; complete P6 fetch before loading it"
+            ));
+        };
+        let dependency_root = fs::canonicalize(package_root.join(path)).map_err(|error| {
+            format!("cannot resolve dependency `{alias}` at `{}`: {error}", path)
+        })?;
         let dependency_manifest = dependency_root.join(MANIFEST_FILENAME);
         let (dependency_data, _, _) = load_manifest(&dependency_manifest)
             .map_err(|error| format!("dependency `{alias}`: {error}"))?;

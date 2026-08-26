@@ -275,11 +275,15 @@ pub fn semantic_manifest_fingerprint(manifest: &ManifestData) -> String {
         }
     }
     for (alias, dependency) in &manifest.dependencies {
-        push_component(
-            &mut canonical,
-            &format!("dependency.{alias}"),
-            &dependency.path,
-        );
+        match dependency {
+            crate::ManifestDependency::Path { path } => {
+                push_component(&mut canonical, &format!("dependency.{alias}.path"), path);
+            }
+            crate::ManifestDependency::Git { origin, commit } => {
+                push_component(&mut canonical, &format!("dependency.{alias}.git"), origin);
+                push_component(&mut canonical, &format!("dependency.{alias}.rev"), commit);
+            }
+        }
     }
     if let Some(workspace) = &manifest.workspace {
         for member in &workspace.members {

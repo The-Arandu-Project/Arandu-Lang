@@ -40,8 +40,9 @@ pub struct ManifestData {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ManifestDependency {
-    pub path: String,
+pub enum ManifestDependency {
+    Path { path: String },
+    Git { origin: String, commit: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,7 +145,7 @@ struct ManifestSchema {
     toolchain: Option<ToolchainSection>,
     targets: TargetsSection,
     #[serde(default)]
-    dependencies: std::collections::BTreeMap<String, PathDependency>,
+    dependencies: std::collections::BTreeMap<String, RawDependency>,
     #[serde(default)]
     capabilities: RawCapabilityPolicy,
     #[serde(default)]
@@ -191,6 +192,20 @@ struct TargetSection {
 #[serde(deny_unknown_fields)]
 struct PathDependency {
     path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RawDependency {
+    Path(PathDependency),
+    Git(GitDependency),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GitDependency {
+    git: String,
+    rev: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -416,12 +431,16 @@ pub fn parse_manifest_str(path: &Path, text: &str) -> Result<ManifestData, Manif
                 .dependencies
                 .into_iter()
                 .map(|(alias, dependency)| {
-                    (
-                        alias,
-                        ManifestDependency {
+                    let dependency = match dependency {
+                        RawDependency::Path(dependency) => ManifestDependency::Path {
                             path: dependency.path,
                         },
-                    )
+                        RawDependency::Git(dependency) => ManifestDependency::Git {
+                            origin: dependency.git,
+                            commit: dependency.rev,
+                        },
+                    };
+                    (alias, dependency)
                 })
                 .collect(),
             workspace: manifest.workspace.map(|workspace| ManifestWorkspace {
@@ -536,7 +555,15 @@ fn validate_schema(path: &Path, manifest: &ManifestSchema) -> Result<(), Manifes
             path: path.to_path_buf(),
             message: format!("invalid dependency alias `{alias}`: {error}"),
         })?;
-        validate_relative_path(path, &dependency.path, "dependency path", true)?;
+        match dependency {
+            RawDependency::Path(dependency) => {
+                validate_relative_path(path, &dependency.path, "dependency path", true)?;
+            }
+            RawDependency::Git(dependency) => {
+                validate_git_origin(path, &dependency.git)?;
+                validate_git_commit(path, &dependency.rev)?;
+            }
+        }
     }
     if let Some(workspace) = &manifest.workspace {
         let mut members = std::collections::BTreeSet::new();
@@ -588,6 +615,85 @@ fn validate_schema(path: &Path, manifest: &ManifestSchema) -> Result<(), Manifes
         }
     }
     let _ = &manifest.metadata;
+    Ok(())
+}
+
+fn validate_git_origin(path: &Path, origin: &str) -> Result<(), ManifestError> {
+    let invalid = |message: String| ManifestError::Parse {
+        path: path.to_path_buf(),
+        message,
+    };
+    if origin.len() > 2048
+        || !origin.is_ascii()
+        || origin.bytes().any(|byte| byte.is_ascii_control())
+    {
+        return Err(invalid(
+            "dependency `git` origin must be an ASCII HTTPS URL no longer than 2048 bytes".into(),
+        ));
+    }
+    let Some(remainder) = origin.strip_prefix("https://") else {
+        return Err(invalid(
+            "dependency `git` origin must use canonical `https://` transport".into(),
+        ));
+    };
+    if remainder.contains(['@', '?', '#', '\\']) {
+        return Err(invalid(
+            "dependency `git` origin must not contain credentials, query, fragment or backslash"
+                .into(),
+        ));
+    }
+    let Some((host, repository)) = remainder.split_once('/') else {
+        return Err(invalid(
+            "dependency `git` origin must include a host and repository path".into(),
+        ));
+    };
+    if host.is_empty()
+        || host.contains(':')
+        || host != host.to_ascii_lowercase()
+        || host.starts_with('.')
+        || host.ends_with('.')
+        || host.split('.').any(|label| {
+            label.is_empty()
+                || label.starts_with('-')
+                || label.ends_with('-')
+                || !label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+    {
+        return Err(invalid(
+            "dependency `git` origin must use a lowercase DNS host without a custom port".into(),
+        ));
+    }
+    if !repository.ends_with(".git")
+        || repository.split('/').any(|segment| {
+            segment.is_empty()
+                || segment == "."
+                || segment == ".."
+                || !segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        })
+    {
+        return Err(invalid(
+            "dependency `git` origin must use a portable repository path ending in `.git`".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_git_commit(path: &Path, commit: &str) -> Result<(), ManifestError> {
+    if !matches!(commit.len(), 40 | 64)
+        || !commit
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(ManifestError::Parse {
+            path: path.to_path_buf(),
+            message: "dependency `rev` must be a complete 40- or 64-character lowercase hexadecimal commit ID"
+                .into(),
+        });
+    }
     Ok(())
 }
 
@@ -881,6 +987,49 @@ note = "preserved for third-party tools"
             data.toolchain_requirement.as_deref(),
             Some(">=0.1.0-rc.4, <0.2.0")
         );
+        assert_eq!(
+            data.dependencies["math"],
+            ManifestDependency::Path {
+                path: "../math".into()
+            }
+        );
+    }
+
+    #[test]
+    fn git_dependency_requires_canonical_https_origin_and_full_commit() {
+        let manifest = |dependency: &str| {
+            format!(
+                "schema=1\n[package]\nname='app'\nversion='1.0.0'\nedition='2026'\n[targets.bin]\nname='app'\nroot='src/main.aru'\n[dependencies]\nmath={dependency}\n"
+            )
+        };
+        let commit = "0123456789abcdef0123456789abcdef01234567";
+        let valid = manifest(&format!(
+            "{{ git='https://github.com/example/math.git', rev='{commit}' }}"
+        ));
+        let data = parse_manifest_str(Path::new("arandu.toml"), &valid).unwrap();
+        assert_eq!(
+            data.dependencies["math"],
+            ManifestDependency::Git {
+                origin: "https://github.com/example/math.git".into(),
+                commit: commit.into(),
+            }
+        );
+
+        for dependency in [
+            "{ git='http://github.com/example/math.git', rev='0123456789abcdef0123456789abcdef01234567' }",
+            "{ git='https://token@github.com/example/math.git', rev='0123456789abcdef0123456789abcdef01234567' }",
+            "{ git='https://github.com/example/math', rev='0123456789abcdef0123456789abcdef01234567' }",
+            "{ git='https://github.com/example/math.git', rev='main' }",
+            "{ git='https://github.com/example/math.git', rev='0123456' }",
+            "{ git='https://github.com/example/math.git', rev='0123456789ABCDEF0123456789ABCDEF01234567' }",
+            "{ git='https://github.com/example/math.git', rev='0123456789abcdef0123456789abcdef01234567', branch='main' }",
+            "{ path='../math', git='https://github.com/example/math.git', rev='0123456789abcdef0123456789abcdef01234567' }",
+        ] {
+            assert!(
+                parse_manifest_str(Path::new("arandu.toml"), &manifest(dependency)).is_err(),
+                "unsafe or ambiguous dependency was accepted: {dependency}"
+            );
+        }
     }
 
     #[test]

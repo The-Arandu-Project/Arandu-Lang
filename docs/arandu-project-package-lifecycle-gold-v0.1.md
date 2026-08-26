@@ -683,6 +683,17 @@ limits without weakening the local package contract.
 - [ ] Add `tree`, `verify`, `audit` and verified `vendor` foundations.
 - [ ] Defer floating branches, arbitrary URLs, registries and dependency scripts.
 
+P6-A freezes the remote manifest identity before networking is introduced:
+`alias = { git = "https://host/owner/repository.git", rev = "<full-commit>" }`.
+The origin must be canonical ASCII HTTPS, use a lowercase DNS host, contain no
+credentials, custom port, query, fragment or path traversal, and end in
+`.git`. `rev` accepts only a complete lowercase 40- or 64-hex commit object ID;
+branch names, tags, abbreviated hashes and symbolic refs are invalid. `path`
+and `git` are mutually exclusive because each dependency has exactly one
+authority. This contract is already parsed and fingerprinted deterministically;
+CLI/LSP materialization, verified lock fields and network policy are the next
+P6 slices, so the top-level acceptance item remains open until those are wired.
+
 ### P7 — Gold promotion
 
 - [ ] Native lifecycle E2E on Windows, Linux and macOS outside the checkout.
