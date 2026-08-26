@@ -245,6 +245,8 @@ jobs:
         run: cargo run --locked -p xtask -- check-project-performance
       - name: Run isolated adversarial fuzz regressions
         run: cargo run --locked -p xtask -- check-fuzz-regressions
+      - name: P7-B / Stress cross-process cache and build publication
+        run: cargo test --locked -p arandu_cli --test cache_process_concurrency --test cli_project_concurrency -- --nocapture
       - name: Stress LSP snapshots, debounce and stale document generations
         run: cargo test --locked -p arandu_lsp state::tests::s2_endurance_batches_edits_and_discards_stale_snapshots -- --exact
       - name: Measure L2 LSP end-to-end latency budgets

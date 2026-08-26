@@ -7,7 +7,7 @@
 //! - `build` default = Cranelift; `--release` reserved for future LLVM
 
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -1013,6 +1013,23 @@ fn synchronize_lockfile(
     expected: arandu_query::Lockfile,
     flags: &ProjectFlags,
 ) -> Result<(), String> {
+    // Serialize the complete read/compare/publish transaction. A persistent
+    // lock inode is intentional: deleting it after unlock can let two
+    // processes lock different inodes. The OS releases this lock on crash.
+    let lock_dir = root.join(".arandu").join("locks");
+    fs::create_dir_all(&lock_dir)
+        .map_err(|error| format!("cannot create {}: {error}", lock_dir.display()))?;
+    let lock_path = lock_dir.join("lockfile");
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|error| format!("cannot open {}: {error}", lock_path.display()))?;
+    lock.lock()
+        .map_err(|error| format!("cannot lock {}: {error}", lock_path.display()))?;
+
     let path = root.join(arandu_query::LOCK_FILENAME);
     let expected_bytes = expected.to_canonical_bytes();
     let mut previous = None;

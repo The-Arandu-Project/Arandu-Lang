@@ -745,14 +745,24 @@ that reviewed remote graph. Local workspace-only lock maintenance remains
 automatic because it introduces no external code authority. LSP discovery stays
 locked and offline and therefore cannot accept an update.
 
+P7-B exercises independent OS processes on Windows and Unix rather than
+assuming thread tests model filesystem behavior. Immutable cache objects retain
+their per-digest lock, while project lockfile publication and each target
+profile use persistent native lock inodes with a single acquisition order.
+Staging is fully flushed before rename/replace; an interrupted staging file is
+never an authoritative cache object, lockfile or build state, and the OS releases
+the held native lock when the process exits. This is a process-crash contract,
+not a claim that arbitrary filesystems survive power loss without directory
+durability guarantees.
+
 ### P7 — Gold promotion
 
-- [ ] Native lifecycle E2E on Windows, Linux and macOS outside the checkout.
-- [ ] Concurrent build/cache tests and crash-interrupted atomic-write recovery.
+- [x] Native lifecycle E2E on Windows, Linux and macOS outside the checkout.
+- [x] Concurrent build/cache tests and crash-interrupted atomic-write recovery.
 - [ ] Determinism campaign for manifests, graphs, lockfiles and artifact metadata.
 - [ ] Adversarial path, symlink/junction, malformed archive and cache-tamper tests.
 - [ ] Dependency-confusion, origin-substitution, rollback and graph/archive-bomb tests.
-- [ ] Installed SDK smoke: `new → check → build → run → clean`.
+- [x] Installed SDK smoke: `new → check → build → run → clean`.
 - [ ] Documentation and migration guide complete; no known P0/P1 defect.
 
 ## Initial command surface
@@ -764,13 +774,19 @@ arandu check [--locked|--offline|--frozen]
 arandu build [--profile <name>] [--target <triple>] [--locked|--offline|--frozen]
 arandu run [--profile <name>] [--target <triple>] [--locked|--offline|--frozen]
 arandu clean
+arandu tree
+arandu verify
+arandu audit
+arandu vendor
+arandu update --accept
 arandu metadata
 arandu cache inspect|verify|prune
 ```
 
-`add/remove/update`, a registry, publishing and general build scripts are not in
-the first Gold slice. The schema reserves room for them without pretending they
-already exist.
+`add/remove`, a registry, publishing and general dependency build scripts are
+not in the first Gold slice. Exact-commit Git graph changes use the deliberately
+narrow `update --accept` review flow; the schema reserves room for the other
+features without pretending they already exist.
 
 ## References
 
@@ -789,6 +805,12 @@ already exist.
   and [Cargo cache locking](https://doc.rust-lang.org/stable/nightly-rustc/cargo/util/cache_lock/index.html):
   process-scoped native locks, concurrency modes and the global-lock contention
   avoided by Arandu's immutable per-digest publication
+- [Git lockfile API](https://git-scm.com/docs/api-lockfile.html): writer
+  exclusion plus staging-and-rename publication so readers see the old or new
+  complete value, never a partially written value
+- [SQLite atomic commit](https://www.sqlite.org/atomiccommit.html): explicit
+  crash and power-loss boundaries, including why flushing one file alone is
+  not a universal power-loss durability guarantee
 - [Dart package layout](https://dart.dev/tools/pub/package-layout),
   [lockfile behavior](https://dart.dev/tools/pub/versioning) and
   [`--enforce-lockfile`](https://dart.dev/tools/pub/cmd/pub-get)

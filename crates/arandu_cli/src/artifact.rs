@@ -78,6 +78,20 @@ pub fn publish_native_artifact(
         fs::create_dir_all(directory)
             .map_err(|error| failure("create artifact layout", directory, error))?;
     }
+    // Builds for one profile may run in independent processes. Keep the
+    // content-addressed publication and its mutable state pointer in one
+    // transaction. File locks are released by the OS if a process crashes.
+    let lock_path = layout.profile_root.join(".publish.lock");
+    let publish_lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|error| failure("open build publication lock", &lock_path, error))?;
+    publish_lock
+        .lock()
+        .map_err(|error| failure("lock build publication", &lock_path, error))?;
     atomic_write(
         &layout.target_root.join(TARGET_MARKER),
         b"arandu-target-v1\n",
