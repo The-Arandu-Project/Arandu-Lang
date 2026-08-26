@@ -258,6 +258,95 @@ impl CacheStore {
         Ok(actual)
     }
 
+    /// Hash a staging directory and publish it under its content identity.
+    ///
+    /// The staging directory must live below this cache's staging namespace so
+    /// the final rename stays on one filesystem. Symlinks and special files are
+    /// rejected by [`hash_tree`] before anything becomes visible as a cache hit.
+    pub fn publish_tree(
+        &self,
+        staging: &Path,
+        limits: TreeLimits,
+    ) -> Result<(CachePublish, TreeVerification, PathBuf), CacheStoreError> {
+        let staging_root = self.layout.staging();
+        let canonical_staging_root = fs::canonicalize(&staging_root).map_err(|error| {
+            CacheStoreError::io("canonicalize cache staging directory", &staging_root, error)
+        })?;
+        let canonical_staging = fs::canonicalize(staging)
+            .map_err(|error| CacheStoreError::io("canonicalize staged tree", staging, error))?;
+        if canonical_staging == canonical_staging_root
+            || !canonical_staging.starts_with(&canonical_staging_root)
+        {
+            return Err(CacheStoreError::MalformedCache(format!(
+                "staged tree {} is outside cache staging {}",
+                staging.display(),
+                staging_root.display()
+            )));
+        }
+
+        let verification = hash_tree(&canonical_staging, limits)?;
+        let destination = self.layout.tree(verification.digest);
+        let lock_path = self.layout.entry_lock(verification.digest);
+        create_parent(&lock_path)?;
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(|error| CacheStoreError::io("open cache entry lock", &lock_path, error))?;
+        lock.lock()
+            .map_err(|error| CacheStoreError::io("lock cache entry", &lock_path, error))?;
+
+        let repaired = if destination.exists() {
+            let existing = hash_tree(&destination, limits)?;
+            if existing.digest == verification.digest {
+                fs::remove_dir_all(&canonical_staging).map_err(|error| {
+                    CacheStoreError::io("remove redundant staged tree", &canonical_staging, error)
+                })?;
+                return Ok((CachePublish::AlreadyPresent, existing, destination));
+            }
+            self.quarantine_corrupt(&destination, verification.digest)?;
+            true
+        } else {
+            false
+        };
+
+        create_parent(&destination)?;
+        fs::rename(&canonical_staging, &destination)
+            .map_err(|error| CacheStoreError::io("publish cached tree", &destination, error))?;
+        Ok((
+            if repaired {
+                CachePublish::Repaired
+            } else {
+                CachePublish::Added
+            },
+            verification,
+            destination,
+        ))
+    }
+
+    /// Revalidate and return a content-addressed tree.
+    pub fn trusted_tree(
+        &self,
+        digest: CacheDigest,
+        limits: TreeLimits,
+    ) -> Result<PathBuf, CacheStoreError> {
+        let tree = self.layout.tree(digest);
+        let actual = hash_tree(&tree, limits)?;
+        if actual.digest != digest {
+            return Err(CacheStoreError::DigestMismatch {
+                expected: digest,
+                actual: actual.digest,
+            });
+        }
+        Ok(tree)
+    }
+
+    pub fn layout(&self) -> &CacheLayout {
+        &self.layout
+    }
+
     fn quarantine_corrupt(&self, path: &Path, digest: CacheDigest) -> Result<(), CacheStoreError> {
         let quarantine = self.layout.quarantine();
         fs::create_dir_all(&quarantine)
@@ -1043,6 +1132,43 @@ mod tests {
             CachePublish::Added
         );
         assert_eq!(fs::read(layout.archive(digest)).unwrap(), bytes);
+
+        fs::remove_dir_all(layout.root()).unwrap();
+    }
+
+    #[test]
+    fn tree_publish_is_content_addressed_revalidated_and_repaired() {
+        let layout = temp_layout("tree-publish");
+        fs::create_dir_all(layout.staging()).unwrap();
+        let store = CacheStore::new(layout.clone());
+        let source = "public func value(): int { return 1 }\n";
+
+        let first = layout.staging().join("first");
+        fs::create_dir_all(first.join("src")).unwrap();
+        fs::write(first.join("src/lib.aru"), source).unwrap();
+        let (published, verification, tree) =
+            store.publish_tree(&first, TreeLimits::default()).unwrap();
+        assert_eq!(published, CachePublish::Added);
+        assert_eq!(tree, layout.tree(verification.digest));
+        assert_eq!(
+            store
+                .trusted_tree(verification.digest, TreeLimits::default())
+                .unwrap(),
+            tree
+        );
+
+        fs::write(tree.join("src/lib.aru"), "tampered\n").unwrap();
+        let replacement = layout.staging().join("replacement");
+        fs::create_dir_all(replacement.join("src")).unwrap();
+        fs::write(replacement.join("src/lib.aru"), source).unwrap();
+        let (published, repaired, _) = store
+            .publish_tree(&replacement, TreeLimits::default())
+            .unwrap();
+        assert_eq!(published, CachePublish::Repaired);
+        assert_eq!(repaired.digest, verification.digest);
+        store
+            .trusted_tree(verification.digest, TreeLimits::default())
+            .unwrap();
 
         fs::remove_dir_all(layout.root()).unwrap();
     }

@@ -4,6 +4,7 @@ pub mod cache;
 mod cli_error;
 mod linker;
 mod project;
+mod remote_git;
 mod watch;
 
 use cli_error::{CliFailure, CliResult, CliSuccess};

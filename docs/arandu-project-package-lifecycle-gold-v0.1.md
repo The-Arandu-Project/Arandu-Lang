@@ -676,9 +676,9 @@ limits without weakening the local package contract.
 
 ### P6 — Remote Git, intentionally narrow
 
-- [ ] Accept secure Git/HTTPS sources pinned to an exact commit.
-- [ ] Record canonical origin, commit and content digest in the lockfile.
-- [ ] Disable network in `--offline`; never fall back from private to public origins.
+- [x] Accept secure Git/HTTPS sources pinned to an exact commit.
+- [x] Record canonical origin, commit and content digest in the lockfile.
+- [x] Disable network in `--offline`; never fall back from private to public origins.
 - [ ] Make first trust and every update an explicit reviewable graph diff.
 - [ ] Add `tree`, `verify`, `audit` and verified `vendor` foundations.
 - [ ] Defer floating branches, arbitrary URLs, registries and dependency scripts.
@@ -703,6 +703,25 @@ provenance. This makes origin substitution, commit substitution and content
 tampering independently visible in review instead of hiding all authority in
 one overloaded source string. Materialization will only publish a Git package
 after it can populate all three fields.
+
+P6-C materializes a remote through the system Git client only after the
+manifest has fixed a canonical HTTPS origin and complete commit ID. The child
+process is non-interactive, ignores system/global Git configuration, permits
+only the HTTPS transport, disables hooks and fetches no tags. Arandu verifies
+that `FETCH_HEAD^{commit}` is exactly the requested object, checks out without
+submodules, rejects symlinks and special/non-portable entries, hashes the
+bounded canonical tree and atomically publishes it under that SHA-256 identity.
+An existing cache hit is rehashed before every use; corruption fails closed in
+offline mode and an online refetch must still reproduce the digest in the lock.
+
+P6-D now connects verified Git roots to the same deterministic package graph,
+module export map and generated lock used by local dependencies. Remote Git
+dependencies may themselves depend on other exact-commit Git packages, graph
+budgets and cycle detection still apply, `--locked` refuses an unrecorded
+remote identity, and `--offline` cannot invoke Git. CLI project commands use
+this path today. LSP cache-only materialization and path subpackages contained
+inside a remote repository remain explicit follow-ups before P6-D is marked
+complete; neither silently falls back to a different origin or unlocked graph.
 
 ### P7 — Gold promotion
 

@@ -21,12 +21,24 @@ pub struct LocalPackage {
     pub source: String,
     pub data: ManifestData,
     pub dependencies: BTreeMap<String, String>,
+    pub origin: Option<String>,
+    pub commit: Option<String>,
+    pub content_digest: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocalPackageGraph {
     pub workspace_root: PathBuf,
     pub packages: Vec<LocalPackage>,
+}
+
+/// A Git package whose bytes were fetched and verified by CLI/LSP orchestration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MaterializedGitPackage {
+    pub root: PathBuf,
+    pub origin: String,
+    pub commit: String,
+    pub content_digest: String,
 }
 
 /// Resource limits applied while discovering local packages.
@@ -73,10 +85,20 @@ impl LocalPackageGraph {
         root_manifest: &Path,
         root_data: &ManifestData,
     ) -> Result<Self, String> {
-        Self::discover_with_limits(
+        Self::discover_materialized(workspace_root, root_manifest, root_data, &BTreeMap::new())
+    }
+
+    pub fn discover_materialized(
+        workspace_root: &Path,
+        root_manifest: &Path,
+        root_data: &ManifestData,
+        remote_packages: &BTreeMap<String, MaterializedGitPackage>,
+    ) -> Result<Self, String> {
+        Self::discover_materialized_with_limits(
             workspace_root,
             root_manifest,
             root_data,
+            remote_packages,
             PackageGraphLimits::default(),
         )
     }
@@ -85,6 +107,22 @@ impl LocalPackageGraph {
         workspace_root: &Path,
         root_manifest: &Path,
         root_data: &ManifestData,
+        limits: PackageGraphLimits,
+    ) -> Result<Self, String> {
+        Self::discover_materialized_with_limits(
+            workspace_root,
+            root_manifest,
+            root_data,
+            &BTreeMap::new(),
+            limits,
+        )
+    }
+
+    pub fn discover_materialized_with_limits(
+        workspace_root: &Path,
+        root_manifest: &Path,
+        root_data: &ManifestData,
+        remote_packages: &BTreeMap<String, MaterializedGitPackage>,
         limits: PackageGraphLimits,
     ) -> Result<Self, String> {
         if limits.max_packages == 0 || limits.max_dependency_edges == 0 || limits.max_depth == 0 {
@@ -112,6 +150,9 @@ impl LocalPackageGraph {
             root_data.clone(),
             true,
             allowed_members.as_ref(),
+            None,
+            None,
+            remote_packages,
             &mut visiting,
             &mut discovered,
             &mut budget,
@@ -136,9 +177,9 @@ impl LocalPackageGraph {
                 version: package.data.version.clone(),
                 source: package.source.clone(),
                 manifest_fingerprint: semantic_manifest_fingerprint(&package.data),
-                origin: None,
-                commit: None,
-                content_digest: None,
+                origin: package.origin.clone(),
+                commit: package.commit.clone(),
+                content_digest: package.content_digest.clone(),
                 dependencies: package
                     .dependencies
                     .iter()
@@ -369,6 +410,9 @@ fn discover_package(
     data: ManifestData,
     is_root: bool,
     allowed_members: Option<&BTreeSet<String>>,
+    remote_boundary: Option<&Path>,
+    source_override: Option<&str>,
+    remote_packages: &BTreeMap<String, MaterializedGitPackage>,
     visiting: &mut Vec<String>,
     discovered: &mut BTreeMap<String, LocalPackage>,
     budget: &mut GraphBudget,
@@ -378,29 +422,49 @@ fn discover_package(
         .ok_or_else(|| format!("manifest {} has no parent", manifest_path.display()))?;
     let package_root = fs::canonicalize(package_root)
         .map_err(|error| format!("cannot canonicalize {}: {error}", package_root.display()))?;
-    if !package_root.starts_with(workspace_root) {
+    let boundary = remote_boundary.unwrap_or(workspace_root);
+    if !package_root.starts_with(boundary) {
         return Err(format!(
-            "path dependency {} escapes workspace root {}",
+            "path dependency {} escapes package boundary {}",
             package_root.display(),
-            workspace_root.display()
+            boundary.display()
         ));
     }
     let relative = package_root
-        .strip_prefix(workspace_root)
+        .strip_prefix(boundary)
         .map_err(|error| error.to_string())?
         .to_string_lossy()
         .replace('\\', "/");
-    let source = if is_root || package_root == workspace_root {
+    let source = if let Some(source) = source_override {
+        source.to_string()
+    } else if let Some(remote) = remote_boundary {
+        if package_root == remote {
+            visiting
+                .last()
+                .cloned()
+                .unwrap_or_else(|| "remote".to_string())
+        } else {
+            format!(
+                "{}+path:{relative}",
+                visiting
+                    .last()
+                    .cloned()
+                    .unwrap_or_else(|| "remote".to_string())
+            )
+        }
+    } else if is_root || package_root == workspace_root {
         "root".to_string()
     } else {
         format!("path+{relative}")
     };
     if source != "root" {
-        if let Some(members) = allowed_members {
-            if !members.contains(&relative) {
-                return Err(format!(
-                    "path dependency `{relative}` is not declared in `[workspace].members`"
-                ));
+        if remote_boundary.is_none() {
+            if let Some(members) = allowed_members {
+                if !members.contains(&relative) {
+                    return Err(format!(
+                        "path dependency `{relative}` is not declared in `[workspace].members`"
+                    ));
+                }
             }
         }
         if data.library_target.is_none() {
@@ -426,14 +490,27 @@ fn discover_package(
     let mut identities = BTreeSet::new();
     for (alias, dependency) in &data.dependencies {
         budget.add_edge(&source, alias)?;
-        let ManifestDependency::Path { path } = dependency else {
-            return Err(format!(
-                "remote Git dependency `{alias}` has a valid pinned identity but is not materialized yet; complete P6 fetch before loading it"
-            ));
+        let (dependency_root, dependency_remote_boundary, dependency_source_hint) = match dependency
+        {
+            ManifestDependency::Path { path } => (
+                fs::canonicalize(package_root.join(path)).map_err(|error| {
+                    format!("cannot resolve dependency `{alias}` at `{path}`: {error}")
+                })?,
+                remote_boundary,
+                None,
+            ),
+            ManifestDependency::Git { origin, commit } => {
+                let identity = format!("git+{origin}#{commit}");
+                let remote = remote_packages.get(&identity).ok_or_else(|| {
+                    format!("remote Git dependency `{alias}` was not materialized and verified")
+                })?;
+                (
+                    remote.root.clone(),
+                    Some(remote.root.as_path()),
+                    Some(identity),
+                )
+            }
         };
-        let dependency_root = fs::canonicalize(package_root.join(path)).map_err(|error| {
-            format!("cannot resolve dependency `{alias}` at `{}`: {error}", path)
-        })?;
         let dependency_manifest = dependency_root.join(MANIFEST_FILENAME);
         let (dependency_data, _, _) = load_manifest(&dependency_manifest)
             .map_err(|error| format!("dependency `{alias}`: {error}"))?;
@@ -443,6 +520,9 @@ fn discover_package(
             dependency_data,
             false,
             allowed_members,
+            dependency_remote_boundary,
+            dependency_source_hint.as_deref(),
+            remote_packages,
             visiting,
             discovered,
             budget,
@@ -463,6 +543,15 @@ fn discover_package(
             source: source.clone(),
             data,
             dependencies: edges,
+            origin: remote_packages
+                .get(&source)
+                .map(|remote| remote.origin.clone()),
+            commit: remote_packages
+                .get(&source)
+                .map(|remote| remote.commit.clone()),
+            content_digest: remote_packages
+                .get(&source)
+                .map(|remote| remote.content_digest.clone()),
         },
     );
     Ok(source)
@@ -535,5 +624,60 @@ mod tests {
         assert!(error.contains("maximum depth"), "{error}");
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn materialized_git_package_enters_graph_and_lock_with_verified_provenance() {
+        let root = fixture_root("remote");
+        fs::write(
+            root.join(MANIFEST_FILENAME),
+            "schema=1\n[package]\nname='root'\nversion='0.1.0'\nedition='2026'\n[targets.bin]\nname='root'\nroot='src/main.aru'\n[dependencies]\nmath={git='https://example.com/math.git',rev='0123456789abcdef0123456789abcdef01234567'}\n",
+        )
+        .unwrap();
+        let remote = root.with_extension("remote-cache");
+        fs::create_dir_all(remote.join("src")).unwrap();
+        fs::write(
+            remote.join(MANIFEST_FILENAME),
+            "schema=1\n[package]\nname='math'\nversion='1.0.0'\nedition='2026'\n[targets.lib]\nname='math'\nroot='src/lib.aru'\n[targets.lib.exports]\n'.'='src/lib.aru'\n",
+        )
+        .unwrap();
+        fs::write(
+            remote.join("src/lib.aru"),
+            "public func answer(): int { return 42 }\n",
+        )
+        .unwrap();
+
+        let manifest = root.join(MANIFEST_FILENAME);
+        let (data, _, _) = load_manifest(&manifest).unwrap();
+        let source = "git+https://example.com/math.git#0123456789abcdef0123456789abcdef01234567";
+        let remotes = BTreeMap::from([(
+            source.to_string(),
+            MaterializedGitPackage {
+                root: fs::canonicalize(&remote).unwrap(),
+                origin: "https://example.com/math.git".into(),
+                commit: "0123456789abcdef0123456789abcdef01234567".into(),
+                content_digest:
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            },
+        )]);
+        let graph = LocalPackageGraph::discover_materialized(&root, &manifest, &data, &remotes)
+            .expect("verified remote graph");
+        let locked = graph.lockfile(&data);
+        let remote_package = locked
+            .packages
+            .iter()
+            .find(|package| package.source == source)
+            .expect("remote lock entry");
+        assert_eq!(
+            remote_package.origin.as_deref(),
+            Some("https://example.com/math.git")
+        );
+        assert_eq!(
+            remote_package.content_digest.as_deref(),
+            Some("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(remote);
     }
 }
