@@ -49,14 +49,17 @@ pub(crate) fn initialize_connection(
     workspace_roots.dedup();
 
     let aru_file_operations = || FileOperationRegistrationOptions {
-        filters: vec![FileOperationFilter {
-            scheme: Some("file".into()),
-            pattern: FileOperationPattern {
-                glob: "**/*.aru".into(),
-                matches: Some(FileOperationPatternKind::File),
-                options: None,
-            },
-        }],
+        filters: ["**/*.aru", "**/arandu.toml", "**/Arandu.toml"]
+            .into_iter()
+            .map(|glob| FileOperationFilter {
+                scheme: Some("file".into()),
+                pattern: FileOperationPattern {
+                    glob: glob.into(),
+                    matches: Some(FileOperationPatternKind::File),
+                    options: None,
+                },
+            })
+            .collect(),
     };
     let server_caps = ServerCapabilities {
         // UTF-16 is the mandatory LSP encoding. Advertise it explicitly even

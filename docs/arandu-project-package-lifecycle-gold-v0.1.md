@@ -24,7 +24,7 @@ identity, lockfile integrity and cache isolation are proven.
 | --- | --- | --- |
 | Project creation | transactional `new`/`init`, bin/lib targets, README, ignore file and VCS policy | lifecycle E2E remains in P7 |
 | Manifest | strict deterministic TOML with schema, edition, targets, path dependencies, exports, workspace members and compatibility validation | registry/Git origins and target-specific dependency features remain future work |
-| Incrementality | manifest fields and an authoritative `PackageModuleMap` are Salsa inputs | live LSP graph refresh on manifest edits remains |
+| Incrementality | manifest fields and an authoritative `PackageModuleMap` are stable Salsa inputs, including live background LSP reload | remote resolver/cache inputs begin in P5/P6 |
 | Build | Cranelift emits a baseline host object, links the packaged runtime and atomically publishes a content-addressed executable | cross-target builds and LLVM release mode remain out of scope |
 | Dependencies | deterministic local workspace DAG, direct aliases, explicit exports and a semantic lockfile | verified global cache and remote resolver start in P5/P6 |
 | Imports | `self`, `std` and direct dependency roots are logical; private, transitive and quoted filesystem access fail closed | complete live CLI/LSP graph refresh and edition removal of the temporary bare-local migration |
@@ -610,7 +610,7 @@ The lockfile is not ignored for applications/workspaces.
 - [x] Resolve a deterministic package DAG with cycle/collision diagnostics.
 - [x] Feed `PackageModuleMap` through Salsa inputs without filesystem reads in queries.
 - [x] Prove body-edit/export-surface/package-version invalidation boundaries.
-- [ ] Refresh the live CLI/LSP package graph with cutoff after manifest edits.
+- [x] Refresh the live CLI/LSP package graph with cutoff after manifest edits.
 
 The implemented P4 core resolves only workspace-contained relative path
 dependencies. Discovery canonicalizes each package root, rejects escapes,
@@ -624,10 +624,12 @@ The CLI registers source files before installing an authoritative
 only direct dependency aliases and explicit library exports become external
 bindings. A registered private file or transitive package therefore remains
 unresolvable even though its bytes are already known to the database. The
-remaining P4 bar covers live CLI/LSP graph refresh and cutoff across manifest
-edits; it is not implied by the static command E2E tests. Package mode already
-diagnoses quoted filesystem imports and emits a structured replacement for
-legacy bare local imports.
+live LSP reload is coalesced as background work and commits the manifest,
+directory roots and `PackageModuleMap` through stable Salsa input identities.
+Invalid intermediate manifests preserve the last valid graph; successful
+changes invalidate open importers without restarting the server. Package mode
+also diagnoses quoted filesystem imports and emits a structured replacement
+for legacy bare local imports. With these contracts covered, P4 is complete.
 
 ### P5 — Verified global cache
 

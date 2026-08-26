@@ -8,6 +8,7 @@ pub mod explain;
 pub mod highlight;
 pub mod lockfile;
 pub mod manifest;
+pub mod package_graph;
 pub mod passes;
 pub mod rename;
 pub mod stable_hash;
@@ -15,7 +16,10 @@ pub mod stdlib;
 pub mod vfs;
 pub mod watch_buf;
 
-pub use analysis::{AnalysisHost, AnalysisRevision, AnalysisSnapshot, LspSymbolId};
+pub use analysis::{
+    AnalysisHost, AnalysisRevision, AnalysisSnapshot, LspSymbolId, PackageConfiguration,
+    ResolvedPackageMap,
+};
 pub use dataflow::{
     block_borrow_facts, block_dataflow_facts, block_diagnostics, file_func_symbols,
     file_ide_diagnostics, file_signature_ide_diagnostics, func_amir, func_analysis_diags,
@@ -41,6 +45,7 @@ pub use manifest::{
     ManifestSpelling, ManifestTarget, ManifestWorkspace, PackageKind, ProjectManifest,
     LEGACY_MANIFEST_FILENAME, MANIFEST_FILENAME,
 };
+pub use package_graph::{LocalPackage, LocalPackageGraph, PackageModulePlan, PlannedModuleBinding};
 pub use rename::{prepare_rename, rename_occurrences, validate_rename, RenameError, RenameTarget};
 // re-export for tests/CLI convenience
 pub use debounce::{DebouncedMap, DEFAULT_DEBOUNCE};

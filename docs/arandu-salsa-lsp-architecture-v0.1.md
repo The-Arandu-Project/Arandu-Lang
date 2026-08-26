@@ -86,7 +86,12 @@ superfície pública na [matriz de capacidades](./arandu-lsp-capabilities-v0.1.m
     abertos; `resolve` declara essa listagem como dependência explícita, enquanto
     edições somente de corpo preservam o cutoff de exports. Chaves absoluta,
     qualificada e relativa podem apontar ao mesmo `SourceFile`, sem perder o
-    índice reverso enquanto algum alias continuar vivo.
+    índice reverso enquanto algum alias continuar vivo. Workspaces com
+    dependências locais usam o mesmo resolvedor determinístico da CLI; eventos
+    de manifesto recompõem o grafo em job de background coalescido e atualizam
+    as identidades existentes de `ProjectManifest`, `ModuleRoots` e
+    `PackageModuleMap` em uma única revisão. Manifesto inválido mantém o último
+    grafo válido e não interrompe recursos interativos.
 14. Rename usa análise pura em `arandu_query`: a gramática lexical rejeita
     nomes reservados/inválidos, scopes relacionados bloqueiam conflitos e os
     spans vêm dos tokens do CST cruzados com a identidade semântica. O LSP

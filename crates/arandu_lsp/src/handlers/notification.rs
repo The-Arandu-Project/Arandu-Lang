@@ -8,7 +8,7 @@
 use super::HandlerCtx;
 use crate::conv::apply_lsp_range_edit;
 use crate::diagnostics::{publish_diagnostics, spawn_diagnostics, spawn_open_diagnostics};
-use crate::uri_util::parse_uri;
+use crate::uri_util::{parse_uri, path_from_uri};
 use lsp_server::Notification;
 use lsp_types::notification::{
     Cancel, DidChangeTextDocument, DidChangeWatchedFiles, DidCloseTextDocument, DidCreateFiles,
@@ -101,18 +101,26 @@ pub(super) fn handle(
         DidCreateFiles::METHOD => {
             let params: lsp_types::CreateFilesParams = not.extract(DidCreateFiles::METHOD)?;
             pool.cancel_requests();
+            let manifest_changed = params.files.iter().any(|file| {
+                parse_uri(&file.uri).is_some_and(|uri| is_manifest_path(&path_from_uri(&uri)))
+            });
             for file in params.files {
                 let Some(uri) = parse_uri(&file.uri) else {
                     continue;
                 };
                 let _ = state.reload_uri_from_disk(&uri);
             }
-            state.refresh_package_listing();
-            spawn_open_diagnostics(state, pool, job_tx);
+            refresh_workspace_after_file_event(state, pool, job_tx, manifest_changed);
         }
         DidRenameFiles::METHOD => {
             let params: lsp_types::RenameFilesParams = not.extract(DidRenameFiles::METHOD)?;
             pool.cancel_requests();
+            let manifest_changed = params.files.iter().any(|file| {
+                [file.old_uri.as_str(), file.new_uri.as_str()]
+                    .into_iter()
+                    .filter_map(parse_uri)
+                    .any(|uri| is_manifest_path(&path_from_uri(&uri)))
+            });
             for file in params.files {
                 let (Some(old_uri), Some(new_uri)) =
                     (parse_uri(&file.old_uri), parse_uri(&file.new_uri))
@@ -128,12 +136,14 @@ pub(super) fn handle(
                     }
                 }
             }
-            state.refresh_package_listing();
-            spawn_open_diagnostics(state, pool, job_tx);
+            refresh_workspace_after_file_event(state, pool, job_tx, manifest_changed);
         }
         DidDeleteFiles::METHOD => {
             let params: lsp_types::DeleteFilesParams = not.extract(DidDeleteFiles::METHOD)?;
             pool.cancel_requests();
+            let manifest_changed = params.files.iter().any(|file| {
+                parse_uri(&file.uri).is_some_and(|uri| is_manifest_path(&path_from_uri(&uri)))
+            });
             for file in params.files {
                 let Some(uri) = parse_uri(&file.uri) else {
                     continue;
@@ -141,13 +151,16 @@ pub(super) fn handle(
                 state.remove_uri(&uri);
                 publish_diagnostics(connection, uri, Vec::new(), None)?;
             }
-            state.refresh_package_listing();
-            spawn_open_diagnostics(state, pool, job_tx);
+            refresh_workspace_after_file_event(state, pool, job_tx, manifest_changed);
         }
         DidChangeWatchedFiles::METHOD => {
             let params: lsp_types::DidChangeWatchedFilesParams =
                 not.extract(DidChangeWatchedFiles::METHOD)?;
             pool.cancel_requests();
+            let manifest_changed = params
+                .changes
+                .iter()
+                .any(|change| is_manifest_path(&path_from_uri(&change.uri)));
             for change in params.changes {
                 if change.typ == FileChangeType::DELETED {
                     state.remove_uri(&change.uri);
@@ -156,10 +169,32 @@ pub(super) fn handle(
                     let _ = state.reload_uri_from_disk(&change.uri);
                 }
             }
-            state.refresh_package_listing();
-            spawn_open_diagnostics(state, pool, job_tx);
+            refresh_workspace_after_file_event(state, pool, job_tx, manifest_changed);
         }
         _ => {}
     }
     Ok(())
+}
+
+fn is_manifest_path(path: &std::path::Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some(arandu_query::MANIFEST_FILENAME | arandu_query::LEGACY_MANIFEST_FILENAME)
+    )
+}
+
+fn refresh_workspace_after_file_event(
+    state: &mut crate::state::ServerState,
+    pool: &crate::pool::WorkerPool,
+    job_tx: &crossbeam_channel::Sender<crate::dispatcher::JobResult>,
+    manifest_changed: bool,
+) {
+    if manifest_changed {
+        if let Some(manifest_path) = state.package_manifest_path() {
+            crate::workspace::spawn_package_reload(pool, job_tx.clone(), manifest_path);
+        }
+    } else {
+        state.refresh_package_listing();
+        spawn_open_diagnostics(state, pool, job_tx);
+    }
 }

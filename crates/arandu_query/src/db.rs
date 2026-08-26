@@ -287,6 +287,14 @@ impl DatabaseImpl {
         *current = Some(map);
     }
 
+    pub fn clear_package_module_map(&self) {
+        let mut current = self
+            .package_modules
+            .write()
+            .unwrap_or_else(|error| error.into_inner());
+        *current = None;
+    }
+
     #[must_use]
     pub fn package_module_map(&self) -> Option<PackageModuleMap> {
         *self

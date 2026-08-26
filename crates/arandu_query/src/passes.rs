@@ -178,6 +178,14 @@ pub fn resolve(db: &dyn ArandCompilerDb, file: SourceFile) -> HashEq<ResolutionR
         let listing = roots.package_listing(db);
         let _ = listing.entries(db);
     }
+    if let Some(database) = db.as_db_impl() {
+        if let Some(manifest) = database.project_manifest() {
+            let _ = manifest.content_hash(db);
+        }
+        if let Some(map) = database.package_module_map() {
+            let _ = map.bindings(db);
+        }
+    }
     let program_res = parse(db, file);
     let locals_arc = local_symbols(db, file);
 

@@ -7,7 +7,9 @@
 use crate::db::{DatabaseImpl, SourceFile};
 use crate::manifest::{register_manifest, ManifestData, ProjectManifest};
 use crate::vfs::{DirectoryListing, ModuleRoots};
+use crate::{ModuleBinding, PackageModuleMap};
 use arandu_middle::SymbolId;
+use arandu_middle::{PackageId, TargetId};
 use salsa::Setter;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -16,6 +18,22 @@ use std::sync::Arc;
 /// register). IDE handles that embed a revision must match the live host.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct AnalysisRevision(u64);
+
+pub struct ResolvedPackageMap {
+    pub current_package: PackageId,
+    pub current_target: TargetId,
+    pub bindings: Vec<(String, ModuleBinding)>,
+}
+
+pub struct PackageConfiguration {
+    pub manifest_path: PathBuf,
+    pub manifest_data: ManifestData,
+    pub manifest_hash: String,
+    pub package_src: PathBuf,
+    pub entries: Vec<String>,
+    pub stdlib_root: Option<PathBuf>,
+    pub package_map: Option<ResolvedPackageMap>,
+}
 
 impl AnalysisRevision {
     #[must_use]
@@ -173,18 +191,102 @@ impl AnalysisHost {
         entries: Vec<String>,
         stdlib_root: Option<PathBuf>,
     ) -> (ProjectManifest, DirectoryListing, ModuleRoots) {
-        let listing =
-            DirectoryListing::new(&self.db, Arc::new(package_src.clone()), Arc::new(entries));
-        let roots = ModuleRoots::new(
-            &self.db,
-            manifest_data.name.clone(),
-            Arc::new(package_src),
-            stdlib_root.clone().map(Arc::new),
-            listing,
-        );
-        let manifest = register_manifest(&self.db, manifest_path, manifest_data, manifest_hash);
+        self.configure_package_with_map(PackageConfiguration {
+            manifest_path,
+            manifest_data,
+            manifest_hash,
+            package_src,
+            entries,
+            stdlib_root,
+            package_map: None,
+        })
+    }
+
+    /// Install package roots and an optional resolved namespace as one writer
+    /// transaction and one observable analysis revision.
+    pub fn configure_package_with_map(
+        &mut self,
+        configuration: PackageConfiguration,
+    ) -> (ProjectManifest, DirectoryListing, ModuleRoots) {
+        let PackageConfiguration {
+            manifest_path,
+            manifest_data,
+            manifest_hash,
+            package_src,
+            entries,
+            stdlib_root,
+            package_map,
+        } = configuration;
+        let (listing, roots) = if let Some(roots) = self.db.module_roots() {
+            let listing = *roots.package_listing(&self.db);
+            listing
+                .set_dir(&mut self.db)
+                .to(Arc::new(package_src.clone()));
+            listing.set_entries(&mut self.db).to(Arc::new(entries));
+            roots
+                .set_package_name(&mut self.db)
+                .to(manifest_data.name.clone());
+            roots
+                .set_package_src(&mut self.db)
+                .to(Arc::new(package_src));
+            roots
+                .set_stdlib_root(&mut self.db)
+                .to(stdlib_root.clone().map(Arc::new));
+            (listing, roots)
+        } else {
+            let listing =
+                DirectoryListing::new(&self.db, Arc::new(package_src.clone()), Arc::new(entries));
+            let roots = ModuleRoots::new(
+                &self.db,
+                manifest_data.name.clone(),
+                Arc::new(package_src),
+                stdlib_root.clone().map(Arc::new),
+                listing,
+            );
+            (listing, roots)
+        };
+        let manifest = if let Some(manifest) = self.db.project_manifest() {
+            manifest
+                .set_name(&mut self.db)
+                .to(manifest_data.name.clone());
+            manifest
+                .set_version(&mut self.db)
+                .to(manifest_data.version.clone());
+            manifest
+                .set_entry(&mut self.db)
+                .to(manifest_data.entry.clone());
+            manifest.set_content_hash(&mut self.db).to(manifest_hash);
+            manifest.set_path(&mut self.db).to(Arc::new(manifest_path));
+            manifest
+        } else {
+            register_manifest(&self.db, manifest_path, manifest_data, manifest_hash)
+        };
         self.db.set_module_roots(roots);
         self.db.set_project_manifest(manifest);
+        if let Some(package_map) = package_map {
+            let map = if let Some(map) = self.db.package_module_map() {
+                map.set_current_package(&mut self.db)
+                    .to(package_map.current_package);
+                map.set_current_target(&mut self.db)
+                    .to(package_map.current_target);
+                map.set_bindings(&mut self.db)
+                    .to(Arc::new(package_map.bindings));
+                map
+            } else {
+                PackageModuleMap::new(
+                    &self.db,
+                    package_map.current_package,
+                    package_map.current_target,
+                    Arc::new(package_map.bindings),
+                )
+            };
+            self.db.set_package_module_map(map);
+        } else {
+            if let Some(map) = self.db.package_module_map() {
+                map.set_bindings(&mut self.db).to(Arc::new(Vec::new()));
+            }
+            self.db.clear_package_module_map();
+        }
         if let Some(root) = stdlib_root {
             self.db.set_stdlib_root(root);
         }

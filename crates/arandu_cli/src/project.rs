@@ -6,7 +6,7 @@
 //! - `arandu doctor` diagnoses env using the same init points as compile
 //! - `build` default = Cranelift; `--release` reserved for future LLVM
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -15,9 +15,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::cli_error::{CliFailure, CliResult, CliSuccess};
 use arandu_query::{
-    DirectoryListing, MANIFEST_FILENAME, ManifestError, ManifestSpelling, ModuleRoots,
-    ProjectManifest, STDLIB_ENV, StdlibResolveOpts, StdlibRoot, ensure_toolchain_compatible,
-    find_manifest, load_manifest, register_manifest, resolve_stdlib_root, scan_aru_entries,
+    DirectoryListing, LocalPackageGraph, MANIFEST_FILENAME, ManifestError, ManifestSpelling,
+    ModuleRoots, ProjectManifest, STDLIB_ENV, StdlibResolveOpts, StdlibRoot,
+    ensure_toolchain_compatible, find_manifest, load_manifest, register_manifest,
+    resolve_stdlib_root, scan_aru_entries,
 };
 
 /// Official default entry path for `arandu new`.
@@ -54,176 +55,6 @@ pub struct ProjectContext {
     pub name: String,
     pub version: String,
     pub entry_rel: String,
-}
-
-#[derive(Debug)]
-struct LocalPackage {
-    root: PathBuf,
-    source: String,
-    data: arandu_query::ManifestData,
-    dependencies: BTreeMap<String, String>,
-}
-
-#[derive(Debug)]
-struct LocalPackageGraph {
-    packages: Vec<LocalPackage>,
-}
-
-impl LocalPackageGraph {
-    fn discover(
-        workspace_root: &Path,
-        root_manifest: &Path,
-        root_data: &arandu_query::ManifestData,
-    ) -> Result<Self, String> {
-        let workspace_root = fs::canonicalize(workspace_root).map_err(|error| {
-            format!(
-                "cannot canonicalize workspace root {}: {error}",
-                workspace_root.display()
-            )
-        })?;
-        let allowed_members = root_data.workspace.as_ref().map(|workspace| {
-            workspace
-                .members
-                .iter()
-                .map(|member| member.trim_end_matches('/').to_string())
-                .collect::<BTreeSet<_>>()
-        });
-        let mut discovered = BTreeMap::new();
-        let mut visiting = Vec::new();
-        discover_package(
-            &workspace_root,
-            root_manifest,
-            root_data.clone(),
-            true,
-            allowed_members.as_ref(),
-            &mut visiting,
-            &mut discovered,
-        )?;
-        let packages = discovered.into_values().collect::<Vec<_>>();
-        if packages.len() > u32::MAX as usize {
-            return Err("package graph exceeds the supported identity space".into());
-        }
-        Ok(Self { packages })
-    }
-
-    fn lockfile(&self, root: &arandu_query::ManifestData) -> arandu_query::Lockfile {
-        let packages = self
-            .packages
-            .iter()
-            .map(|package| arandu_query::LockedPackage {
-                name: package.data.name.clone(),
-                version: package.data.version.clone(),
-                source: package.source.clone(),
-                manifest_fingerprint: arandu_query::semantic_manifest_fingerprint(&package.data),
-                dependencies: package
-                    .dependencies
-                    .iter()
-                    .map(|(alias, source)| format!("{alias}={source}"))
-                    .collect(),
-            })
-            .collect();
-        arandu_query::Lockfile::for_packages(root, packages)
-    }
-}
-
-fn discover_package(
-    workspace_root: &Path,
-    manifest_path: &Path,
-    data: arandu_query::ManifestData,
-    is_root: bool,
-    allowed_members: Option<&BTreeSet<String>>,
-    visiting: &mut Vec<String>,
-    discovered: &mut BTreeMap<String, LocalPackage>,
-) -> Result<String, String> {
-    let package_root = manifest_path
-        .parent()
-        .ok_or_else(|| format!("manifest {} has no parent", manifest_path.display()))?;
-    let package_root = fs::canonicalize(package_root)
-        .map_err(|error| format!("cannot canonicalize {}: {error}", package_root.display()))?;
-    if !package_root.starts_with(workspace_root) {
-        return Err(format!(
-            "path dependency {} escapes workspace root {}",
-            package_root.display(),
-            workspace_root.display()
-        ));
-    }
-    let relative = package_root
-        .strip_prefix(workspace_root)
-        .map_err(|error| error.to_string())?
-        .to_string_lossy()
-        .replace('\\', "/");
-    let root_identity = package_root == workspace_root;
-    let source = if is_root || root_identity {
-        "root".to_string()
-    } else {
-        format!("path+{relative}")
-    };
-    if source != "root" {
-        if let Some(members) = allowed_members {
-            if !members.contains(&relative) {
-                return Err(format!(
-                    "path dependency `{relative}` is not declared in `[workspace].members`"
-                ));
-            }
-        }
-        if data.library_target.is_none() {
-            return Err(format!(
-                "dependency package `{}` has no `[targets.lib]`",
-                data.name
-            ));
-        }
-    }
-    if let Some(position) = visiting.iter().position(|item| item == &source) {
-        let mut cycle = visiting[position..].to_vec();
-        cycle.push(source.clone());
-        return Err(format!("cyclic package dependency: {}", cycle.join(" -> ")));
-    }
-    if discovered.contains_key(&source) {
-        return Ok(source);
-    }
-
-    visiting.push(source.clone());
-    let mut edges = BTreeMap::new();
-    let mut identities = BTreeSet::new();
-    for (alias, dependency) in &data.dependencies {
-        let dependency_root =
-            fs::canonicalize(package_root.join(&dependency.path)).map_err(|error| {
-                format!(
-                    "cannot resolve dependency `{alias}` at `{}`: {error}",
-                    dependency.path
-                )
-            })?;
-        let dependency_manifest = dependency_root.join(MANIFEST_FILENAME);
-        let (dependency_data, _, _) = load_manifest(&dependency_manifest)
-            .map_err(|error| format!("dependency `{alias}`: {error}"))?;
-        let dependency_source = discover_package(
-            workspace_root,
-            &dependency_manifest,
-            dependency_data,
-            false,
-            allowed_members,
-            visiting,
-            discovered,
-        )?;
-        if !identities.insert(dependency_source.clone()) {
-            return Err(format!(
-                "package `{}` binds the same dependency identity more than once",
-                data.name
-            ));
-        }
-        edges.insert(alias.clone(), dependency_source);
-    }
-    visiting.pop();
-    discovered.insert(
-        source.clone(),
-        LocalPackage {
-            root: package_root,
-            source: source.clone(),
-            data,
-            dependencies: edges,
-        },
-    );
-    Ok(source)
 }
 
 /// Shared flags for project / doctor commands.
@@ -1197,180 +1028,40 @@ fn install_package_module_map(
     graph: &LocalPackageGraph,
     entry_path: &Path,
 ) -> Result<(), String> {
-    let package_ids = graph
-        .packages
-        .iter()
-        .enumerate()
-        .map(|(index, package)| {
-            arandu_middle::PackageId::try_from_usize(index)
-                .map(|id| (package.source.clone(), id))
-                .ok_or_else(|| "package graph identity overflow".to_string())
-        })
-        .collect::<Result<BTreeMap<_, _>, _>>()?;
-
-    let mut target_ids = BTreeMap::new();
-    let mut next_target = 0usize;
-    for package in &graph.packages {
-        for kind in ["lib", "bin"] {
-            let present = match kind {
-                "lib" => package.data.library_target.is_some(),
-                "bin" => package.data.binary_target.is_some(),
-                _ => false,
-            };
-            if present {
-                let id = arandu_middle::TargetId::try_from_usize(next_target)
-                    .ok_or_else(|| "target identity overflow".to_string())?;
-                next_target = next_target
-                    .checked_add(1)
-                    .ok_or_else(|| "target identity overflow".to_string())?;
-                target_ids.insert((package.source.clone(), kind), id);
-            }
-        }
-    }
-
-    let root = graph
-        .packages
-        .iter()
-        .find(|package| package.source == "root")
-        .ok_or_else(|| "resolved graph has no root package".to_string())?;
-    let root_id = package_ids["root"];
-    let root_kind = if root.data.binary_target.is_some() {
-        "bin"
-    } else {
-        "lib"
-    };
-    let root_target = target_ids[&("root".to_string(), root_kind)];
-    // Root-only projects keep the existing DirectoryListing-driven map so
-    // watch-mode create/delete remains live. Explicit `self` is supported by
-    // ModuleRoots; PackageModuleMap becomes authoritative once dependency
-    // visibility needs an export boundary.
-    if root.dependencies.is_empty() {
+    let Some(plan) = graph.module_plan(entry_path)? else {
         return Ok(());
-    }
-    let package_src = entry_path
-        .parent()
-        .ok_or_else(|| format!("entry {} has no source directory", entry_path.display()))?;
-
+    };
     let mut bindings = BTreeMap::new();
-    let mut folded = BTreeSet::new();
     let mut files = BTreeMap::new();
-    let mut next_module = 0usize;
-    for relative in scan_aru_entries(package_src) {
-        let physical = package_src.join(&relative);
-        if physical == entry_path {
-            continue;
-        }
-        let (file, module) = registered_module(db, &physical, &mut files, &mut next_module)?;
-        let module_path = relative.trim_end_matches(".aru");
-        for logical in [
-            format!("self/{module_path}.aru"),
-            format!("{module_path}.aru"),
-            format!("{}/{module_path}.aru", root.data.name),
-        ] {
-            insert_module_binding(
-                &mut bindings,
-                &mut folded,
-                logical,
-                arandu_query::ModuleBinding {
-                    package: root_id,
-                    target: root_target,
-                    module,
-                    file,
-                },
-            )?;
-        }
-    }
-
-    for (alias, dependency_source) in &root.dependencies {
-        let dependency = graph
-            .packages
-            .iter()
-            .find(|package| &package.source == dependency_source)
-            .ok_or_else(|| format!("missing resolved dependency `{dependency_source}`"))?;
-        let library = dependency
-            .data
-            .library_target
-            .as_ref()
-            .ok_or_else(|| format!("dependency `{alias}` does not provide a library target"))?;
-        if library.exports.is_empty() {
-            return Err(format!(
-                "dependency `{alias}` must declare `[targets.lib.exports]`; deep imports are not inferred"
-            ));
-        }
-        let package = package_ids[dependency_source];
-        let target = target_ids[&(dependency_source.clone(), "lib")];
-        for (public_name, relative) in &library.exports {
-            let physical = fs::canonicalize(dependency.root.join(relative)).map_err(|error| {
-                format!("cannot resolve export `{alias}.{public_name}` at `{relative}`: {error}")
+    for planned in plan.bindings {
+        let file = if let Some(file) = files.get(&planned.physical) {
+            *file
+        } else {
+            let text = fs::read_to_string(&planned.physical).map_err(|error| {
+                format!("cannot read module {}: {error}", planned.physical.display())
             })?;
-            if !physical.starts_with(&dependency.root) || !physical.is_file() {
-                return Err(format!(
-                    "export `{alias}.{public_name}` escapes its package or is not a file"
-                ));
-            }
-            let (file, module) = registered_module(db, &physical, &mut files, &mut next_module)?;
-            let logical = if public_name == "." {
-                format!("{alias}.aru")
-            } else {
-                format!("{}/{}.aru", alias, public_name.replace('.', "/"))
-            };
-            insert_module_binding(
-                &mut bindings,
-                &mut folded,
-                logical,
-                arandu_query::ModuleBinding {
-                    package,
-                    target,
-                    module,
-                    file,
-                },
-            )?;
-        }
+            let file = db.new_file(planned.physical.to_string_lossy().into_owned(), text);
+            files.insert(planned.physical.clone(), file);
+            file
+        };
+        bindings.insert(
+            planned.logical,
+            arandu_query::ModuleBinding {
+                package: planned.package,
+                target: planned.target,
+                module: planned.module,
+                file,
+            },
+        );
     }
 
     let map = arandu_query::PackageModuleMap::new(
         db,
-        root_id,
-        root_target,
+        plan.current_package,
+        plan.current_target,
         std::sync::Arc::new(bindings.into_iter().collect()),
     );
     db.set_package_module_map(map);
-    Ok(())
-}
-
-fn registered_module(
-    db: &mut arandu_query::DatabaseImpl,
-    physical: &Path,
-    files: &mut BTreeMap<PathBuf, (arandu_query::SourceFile, arandu_middle::ModuleId)>,
-    next_module: &mut usize,
-) -> Result<(arandu_query::SourceFile, arandu_middle::ModuleId), String> {
-    if let Some(existing) = files.get(physical) {
-        return Ok(*existing);
-    }
-    let text = fs::read_to_string(physical)
-        .map_err(|error| format!("cannot read module {}: {error}", physical.display()))?;
-    let module = arandu_middle::ModuleId::try_from_usize(*next_module)
-        .ok_or_else(|| "module identity overflow".to_string())?;
-    *next_module = next_module
-        .checked_add(1)
-        .ok_or_else(|| "module identity overflow".to_string())?;
-    let file = db.new_file(physical.to_string_lossy().into_owned(), text);
-    files.insert(physical.to_path_buf(), (file, module));
-    Ok((file, module))
-}
-
-fn insert_module_binding(
-    bindings: &mut BTreeMap<String, arandu_query::ModuleBinding>,
-    folded: &mut BTreeSet<String>,
-    logical: String,
-    binding: arandu_query::ModuleBinding,
-) -> Result<(), String> {
-    if !folded.insert(logical.to_ascii_lowercase()) {
-        return Err(format!(
-            "case-fold collision or duplicate logical module `{logical}`"
-        ));
-    }
-    bindings.insert(logical, binding);
     Ok(())
 }
 

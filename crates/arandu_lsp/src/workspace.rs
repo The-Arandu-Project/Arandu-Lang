@@ -9,7 +9,7 @@ use crate::state::{discover_aru_files, ServerState};
 use crate::uri_util::uri_from_path;
 use arandu_query::{
     ensure_toolchain_compatible, find_manifest, load_manifest, resolve_stdlib_root,
-    scan_aru_entries, ManifestData, StdlibResolveOpts,
+    scan_aru_entries, LocalPackageGraph, ManifestData, PackageModulePlan, StdlibResolveOpts,
 };
 use crossbeam_channel::{bounded, Receiver};
 use std::path::PathBuf;
@@ -26,6 +26,8 @@ pub(crate) struct WorkspaceProject {
     pub(crate) package_src: PathBuf,
     pub(crate) entries: Vec<String>,
     pub(crate) stdlib_root: Option<PathBuf>,
+    pub(crate) module_plan: Option<PackageModulePlan>,
+    pub(crate) module_files: Vec<WorkspaceFile>,
 }
 
 pub(crate) enum WorkspaceEvent {
@@ -78,6 +80,35 @@ pub(crate) fn spawn_workspace_discovery(
     rx
 }
 
+/// Rebuild the active package graph after a manifest notification. Discovery
+/// stays on a coalesced background job; only the finished immutable plan is
+/// committed by the event-loop writer thread.
+pub(crate) fn spawn_package_reload(
+    pool: &WorkerPool,
+    tx: crossbeam_channel::Sender<crate::dispatcher::JobResult>,
+    manifest_path: PathBuf,
+) {
+    let _ = pool.spawn(
+        Priority::Background,
+        Some(crate::pool::JobKey::WorkspaceReload),
+        move |cancellation| {
+            if cancellation.is_cancelled() {
+                return;
+            }
+            let result = discover_workspace_project(std::slice::from_ref(&manifest_path))
+                .and_then(|project| {
+                    project.ok_or_else(|| {
+                        format!("no package manifest found from {}", manifest_path.display())
+                    })
+                })
+                .map(Box::new);
+            if !cancellation.is_cancelled() {
+                let _ = tx.send(crate::dispatcher::JobResult::WorkspaceReload(result));
+            }
+        },
+    );
+}
+
 pub(crate) fn discover_workspace_project(
     roots: &[PathBuf],
 ) -> Result<Option<WorkspaceProject>, String> {
@@ -99,8 +130,23 @@ pub(crate) fn discover_workspace_project(
         let package_src = entry_path
             .parent()
             .map(std::path::Path::to_path_buf)
-            .unwrap_or(package_root);
+            .unwrap_or_else(|| package_root.clone());
         let entries = scan_aru_entries(&package_src);
+        let graph = LocalPackageGraph::discover(&package_root, &manifest_path, &manifest_data)?;
+        let module_plan = graph.module_plan(&entry_path)?;
+        let mut module_files = Vec::new();
+        if let Some(plan) = module_plan.as_ref() {
+            let paths = plan
+                .bindings
+                .iter()
+                .map(|binding| binding.physical.clone())
+                .collect::<std::collections::BTreeSet<_>>();
+            for path in paths {
+                let text = std::fs::read_to_string(&path)
+                    .map_err(|error| format!("cannot read module {}: {error}", path.display()))?;
+                module_files.push(WorkspaceFile { path, text });
+            }
+        }
         let stdlib_root = resolve_stdlib_root(StdlibResolveOpts::default())
             .ok()
             .map(|stdlib| stdlib.path);
@@ -111,6 +157,8 @@ pub(crate) fn discover_workspace_project(
             package_src,
             entries,
             stdlib_root,
+            module_plan,
+            module_files,
         }));
     }
     Ok(None)
