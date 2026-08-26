@@ -234,7 +234,7 @@ fn usage_and_exit() -> ! {
         "  arandu_cli new <project-name> [--bin|--lib] [--vcs=auto|git|none]\n",
         "  arandu_cli init [--bin|--lib] [--vcs=auto|git|none]\n",
         "  arandu_cli doctor [--stdlib-path=<dir>] [-v]\n",
-        "  arandu_cli cache <dir|inspect|verify|prune> [--cache-dir=<absolute-dir>] [limits]\n",
+        "  arandu_cli cache <dir|inspect|verify|verify-tree|prune> [--cache-dir=<absolute-dir>] [limits]\n",
         "  arandu_cli hash-file <path>          # BLAKE3 hex (packaging checksums)\n",
         "  arandu_cli watch [package-path]      # re-check on FS changes (package mode)\n",
         "  arandu_cli clean [package-path]      # remove owned project artifacts\n",
@@ -410,6 +410,29 @@ fn main() {
                 finish(Ok(CliSuccess::Done));
             }
             let allow_dry_run = args[2] == "prune";
+            if args[2] == "verify-tree" {
+                if args.len() != 5 {
+                    fail_usage(
+                        "usage: arandu_cli cache verify-tree <archive-digest> <tree-digest>",
+                    );
+                }
+                let archive: arandu_query::CacheDigest = args[3].parse().unwrap_or_else(|error| {
+                    fail_usage(format!("error: invalid archive digest: {error}"))
+                });
+                let tree: arandu_query::CacheDigest = args[4].parse().unwrap_or_else(|error| {
+                    fail_usage(format!("error: invalid tree digest: {error}"))
+                });
+                let report = cache::CacheStore::new(layout)
+                    .verify_tree(archive, tree, cache::TreeLimits::default())
+                    .unwrap_or_else(|error| {
+                        fail_operational("verify extracted package tree", None, error.to_string())
+                    });
+                println!(
+                    "tree={} files={} bytes={} depth={}",
+                    report.digest, report.files, report.bytes, report.depth
+                );
+                finish(Ok(CliSuccess::Done));
+            }
             let (limits, dry_run) = cache::parse_scan_flags(&args[3..], allow_dry_run)
                 .unwrap_or_else(|error| fail_usage(format!("error: {error}")));
             let store = cache::CacheStore::new(layout);

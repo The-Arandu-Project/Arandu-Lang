@@ -636,8 +636,8 @@ for legacy bare local imports. With these contracts covered, P4 is complete.
 - [x] Specify platform-native cache/config locations and override flags.
 - [x] Store immutable content-addressed package sources with per-entry locking.
 - [x] Add `arandu cache inspect|verify|prune` with bounded, recoverable behavior.
-- [ ] Never trust an extracted directory without rechecking its recorded digest.
-- [ ] Bound archive bytes, expanded bytes, file count, graph depth and graph size.
+- [x] Never trust an extracted directory without rechecking its recorded digest.
+- [x] Bound archive bytes, expanded bytes, file count, graph depth and graph size.
 
 P5-A fixes the cache root precedence as `--cache-dir`, then
 `ARANDU_CACHE_DIR`, then the platform-native per-user cache: Local AppData on
@@ -664,6 +664,15 @@ symlinks and malformed address paths as valid objects, and fails closed when a
 budget is exhausted. `prune --dry-run` previews exactly the same candidate set;
 normal prune removes only staging and quarantined files. Valid archives remain
 untouched until remote lockfiles provide auditable garbage-collection roots.
+
+P5-D adds `cache verify-tree <archive-digest> <tree-digest>`. It computes a
+canonical SHA-256 over sorted portable paths, entry kinds, lengths and file
+bytes, rejects symlinks and non-portable path components, and enforces
+expanded-byte, file-count and depth limits. Package discovery now applies the
+same fail-closed policy to graph nodes, dependency edges and traversal depth
+(`PackageGraphLimits`), before assigning stable package identities. P5 therefore
+does not infer graph size from archive bytes, and P6 can add remote-resolution
+limits without weakening the local package contract.
 
 ### P6 — Remote Git, intentionally narrow
 

@@ -26,6 +26,28 @@ pub struct LocalPackageGraph {
     pub packages: Vec<LocalPackage>,
 }
 
+/// Resource limits applied while discovering local packages.
+///
+/// These limits are deliberately independent from the identity-space limits:
+/// they protect CLI/LSP callers from pathological manifests before the graph
+/// can consume unbounded recursion or memory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PackageGraphLimits {
+    pub max_packages: usize,
+    pub max_dependency_edges: usize,
+    pub max_depth: usize,
+}
+
+impl Default for PackageGraphLimits {
+    fn default() -> Self {
+        Self {
+            max_packages: 1024,
+            max_dependency_edges: 8192,
+            max_depth: 64,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlannedModuleBinding {
     pub logical: String,
@@ -48,6 +70,23 @@ impl LocalPackageGraph {
         root_manifest: &Path,
         root_data: &ManifestData,
     ) -> Result<Self, String> {
+        Self::discover_with_limits(
+            workspace_root,
+            root_manifest,
+            root_data,
+            PackageGraphLimits::default(),
+        )
+    }
+
+    pub fn discover_with_limits(
+        workspace_root: &Path,
+        root_manifest: &Path,
+        root_data: &ManifestData,
+        limits: PackageGraphLimits,
+    ) -> Result<Self, String> {
+        if limits.max_packages == 0 || limits.max_dependency_edges == 0 || limits.max_depth == 0 {
+            return Err("package graph limits must be greater than zero".into());
+        }
         let workspace_root = fs::canonicalize(workspace_root).map_err(|error| {
             format!(
                 "cannot canonicalize workspace root {}: {error}",
@@ -63,6 +102,7 @@ impl LocalPackageGraph {
         });
         let mut discovered = BTreeMap::new();
         let mut visiting = Vec::new();
+        let mut budget = GraphBudget::new(limits);
         discover_package(
             &workspace_root,
             root_manifest,
@@ -71,9 +111,10 @@ impl LocalPackageGraph {
             allowed_members.as_ref(),
             &mut visiting,
             &mut discovered,
+            &mut budget,
         )?;
         let packages = discovered.into_values().collect::<Vec<_>>();
-        if packages.len() > u32::MAX as usize {
+        if packages.len() > usize::try_from(u32::MAX).unwrap_or(usize::MAX) {
             return Err("package graph exceeds the supported identity space".into());
         }
         Ok(Self {
@@ -233,6 +274,56 @@ impl LocalPackageGraph {
     }
 }
 
+struct GraphBudget {
+    limits: PackageGraphLimits,
+    packages: usize,
+    dependency_edges: usize,
+}
+
+impl GraphBudget {
+    fn new(limits: PackageGraphLimits) -> Self {
+        Self {
+            limits,
+            packages: 0,
+            dependency_edges: 0,
+        }
+    }
+
+    fn enter_package(&mut self, source: &str, depth: usize) -> Result<(), String> {
+        if depth > self.limits.max_depth {
+            return Err(format!(
+                "package graph exceeds maximum depth {} at `{source}`",
+                self.limits.max_depth
+            ));
+        }
+        self.packages = self
+            .packages
+            .checked_add(1)
+            .ok_or_else(|| "package graph package counter overflow".to_string())?;
+        if self.packages > self.limits.max_packages {
+            return Err(format!(
+                "package graph exceeds maximum package count {}",
+                self.limits.max_packages
+            ));
+        }
+        Ok(())
+    }
+
+    fn add_edge(&mut self, package: &str, alias: &str) -> Result<(), String> {
+        self.dependency_edges = self
+            .dependency_edges
+            .checked_add(1)
+            .ok_or_else(|| "package graph dependency counter overflow".to_string())?;
+        if self.dependency_edges > self.limits.max_dependency_edges {
+            return Err(format!(
+                "package graph exceeds maximum dependency edge count {} at `{package}.{alias}`",
+                self.limits.max_dependency_edges
+            ));
+        }
+        Ok(())
+    }
+}
+
 fn module_id(
     physical: &Path,
     modules: &mut BTreeMap<PathBuf, ModuleId>,
@@ -274,6 +365,7 @@ fn discover_package(
     allowed_members: Option<&BTreeSet<String>>,
     visiting: &mut Vec<String>,
     discovered: &mut BTreeMap<String, LocalPackage>,
+    budget: &mut GraphBudget,
 ) -> Result<String, String> {
     let package_root = manifest_path
         .parent()
@@ -321,10 +413,13 @@ fn discover_package(
         return Ok(source);
     }
 
+    budget.enter_package(&source, visiting.len() + 1)?;
+
     visiting.push(source.clone());
     let mut edges = BTreeMap::new();
     let mut identities = BTreeSet::new();
     for (alias, dependency) in &data.dependencies {
+        budget.add_edge(&source, alias)?;
         let dependency_root =
             fs::canonicalize(package_root.join(&dependency.path)).map_err(|error| {
                 format!(
@@ -343,6 +438,7 @@ fn discover_package(
             allowed_members,
             visiting,
             discovered,
+            budget,
         )?;
         if !identities.insert(dependency_source.clone()) {
             return Err(format!(
@@ -363,4 +459,74 @@ fn discover_package(
         },
     );
     Ok(source)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn fixture_root(name: &str) -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock must be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("arandu-package-graph-{name}-{suffix}"));
+        fs::create_dir_all(root.join("src")).expect("create fixture");
+        fs::write(
+            root.join(MANIFEST_FILENAME),
+            "schema=1\n[package]\nname='root'\nversion='0.1.0'\nedition='2026'\n[targets.bin]\nname='root'\nroot='src/main.aru'\n[dependencies]\nmath={path='packages/math'}\n[workspace]\nmembers=['packages/math']\n",
+        )
+        .expect("write root manifest");
+        fs::write(root.join("src/main.aru"), "func main(): int { return 0 }\n")
+            .expect("write root source");
+        fs::create_dir_all(root.join("packages/math/src")).expect("create dependency");
+        fs::write(
+            root.join("packages/math/arandu.toml"),
+            "schema=1\n[package]\nname='math'\nversion='1.0.0'\nedition='2026'\n[targets.lib]\nname='math'\nroot='src/lib.aru'\n[targets.lib.exports]\n'.'='src/lib.aru'\n",
+        )
+        .expect("write dependency manifest");
+        fs::write(
+            root.join("packages/math/src/lib.aru"),
+            "public func answer(): int { return 42 }\n",
+        )
+        .expect("write dependency source");
+        root
+    }
+
+    #[test]
+    fn discovery_rejects_package_count_depth_and_edge_budgets() {
+        let root = fixture_root("limits");
+        let manifest = root.join(MANIFEST_FILENAME);
+        let (data, _, _) = load_manifest(&manifest).expect("fixture manifest");
+
+        let limits = PackageGraphLimits {
+            max_packages: 1,
+            ..PackageGraphLimits::default()
+        };
+        let error = LocalPackageGraph::discover_with_limits(&root, &manifest, &data, limits)
+            .expect_err("package count must be bounded");
+        assert!(error.contains("maximum package count"), "{error}");
+
+        let limits = PackageGraphLimits {
+            max_dependency_edges: 0,
+            ..PackageGraphLimits::default()
+        };
+        let error = LocalPackageGraph::discover_with_limits(&root, &manifest, &data, limits)
+            .expect_err("zero edge limit must be rejected");
+        assert!(
+            error.contains("limits must be greater than zero"),
+            "{error}"
+        );
+
+        let limits = PackageGraphLimits {
+            max_depth: 1,
+            ..PackageGraphLimits::default()
+        };
+        let error = LocalPackageGraph::discover_with_limits(&root, &manifest, &data, limits)
+            .expect_err("depth must be bounded");
+        assert!(error.contains("maximum depth"), "{error}");
+
+        let _ = fs::remove_dir_all(root);
+    }
 }

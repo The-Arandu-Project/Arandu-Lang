@@ -49,7 +49,9 @@ pub use manifest::{
     ManifestSpelling, ManifestTarget, ManifestWorkspace, PackageKind, ProjectManifest,
     LEGACY_MANIFEST_FILENAME, MANIFEST_FILENAME,
 };
-pub use package_graph::{LocalPackage, LocalPackageGraph, PackageModulePlan, PlannedModuleBinding};
+pub use package_graph::{
+    LocalPackage, LocalPackageGraph, PackageGraphLimits, PackageModulePlan, PlannedModuleBinding,
+};
 pub use rename::{prepare_rename, rename_occurrences, validate_rename, RenameError, RenameTarget};
 // re-export for tests/CLI convenience
 pub use debounce::{DebouncedMap, DEFAULT_DEBOUNCE};
