@@ -136,6 +136,9 @@ impl LocalPackageGraph {
                 version: package.data.version.clone(),
                 source: package.source.clone(),
                 manifest_fingerprint: semantic_manifest_fingerprint(&package.data),
+                origin: None,
+                commit: None,
+                content_digest: None,
                 dependencies: package
                     .dependencies
                     .iter()

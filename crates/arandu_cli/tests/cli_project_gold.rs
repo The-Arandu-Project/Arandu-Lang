@@ -114,7 +114,7 @@ fn new_scaffolds_package_and_check_run() {
     assert!(String::from_utf8_lossy(&check.stdout).contains("ok"));
     let lock_bytes = fs::read(project.join("arandu.lock")).unwrap();
     assert!(!lock_bytes.contains(&b'\r'));
-    assert!(String::from_utf8_lossy(&lock_bytes).contains("version = 1"));
+    assert!(String::from_utf8_lossy(&lock_bytes).contains("version = 2"));
 
     let run = run_cli_in(&project, &["run"]);
     assert!(

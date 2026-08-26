@@ -694,6 +694,16 @@ authority. This contract is already parsed and fingerprinted deterministically;
 CLI/LSP materialization, verified lock fields and network policy are the next
 P6 slices, so the top-level acceptance item remains open until those are wired.
 
+P6-B upgrades the generated lock format to version 2 and separates Git
+provenance into `origin`, `commit` and `content_digest`. The canonical
+`source = "git+<origin>#<commit>"` must agree byte-for-byte with the explicit
+fields, while `content_digest` is a lowercase SHA-256 identity for the verified
+source tree. Root and path packages are forbidden from carrying remote
+provenance. This makes origin substitution, commit substitution and content
+tampering independently visible in review instead of hiding all authority in
+one overloaded source string. Materialization will only publish a Git package
+after it can populate all three fields.
+
 ### P7 — Gold promotion
 
 - [ ] Native lifecycle E2E on Windows, Linux and macOS outside the checkout.

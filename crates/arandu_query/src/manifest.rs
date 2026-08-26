@@ -619,33 +619,35 @@ fn validate_schema(path: &Path, manifest: &ManifestSchema) -> Result<(), Manifes
 }
 
 fn validate_git_origin(path: &Path, origin: &str) -> Result<(), ManifestError> {
-    let invalid = |message: String| ManifestError::Parse {
-        path: path.to_path_buf(),
-        message,
-    };
+    validate_git_dependency_identity(origin, "0123456789abcdef0123456789abcdef01234567").map_err(
+        |message| ManifestError::Parse {
+            path: path.to_path_buf(),
+            message,
+        },
+    )?;
+    Ok(())
+}
+
+pub(crate) fn validate_git_dependency_identity(origin: &str, commit: &str) -> Result<(), String> {
     if origin.len() > 2048
         || !origin.is_ascii()
         || origin.bytes().any(|byte| byte.is_ascii_control())
     {
-        return Err(invalid(
+        return Err(
             "dependency `git` origin must be an ASCII HTTPS URL no longer than 2048 bytes".into(),
-        ));
+        );
     }
     let Some(remainder) = origin.strip_prefix("https://") else {
-        return Err(invalid(
-            "dependency `git` origin must use canonical `https://` transport".into(),
-        ));
+        return Err("dependency `git` origin must use canonical `https://` transport".into());
     };
     if remainder.contains(['@', '?', '#', '\\']) {
-        return Err(invalid(
+        return Err(
             "dependency `git` origin must not contain credentials, query, fragment or backslash"
                 .into(),
-        ));
+        );
     }
     let Some((host, repository)) = remainder.split_once('/') else {
-        return Err(invalid(
-            "dependency `git` origin must include a host and repository path".into(),
-        ));
+        return Err("dependency `git` origin must include a host and repository path".into());
     };
     if host.is_empty()
         || host.contains(':')
@@ -661,9 +663,9 @@ fn validate_git_origin(path: &Path, origin: &str) -> Result<(), ManifestError> {
                     .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
         })
     {
-        return Err(invalid(
+        return Err(
             "dependency `git` origin must use a lowercase DNS host without a custom port".into(),
-        ));
+        );
     }
     if !repository.ends_with(".git")
         || repository.split('/').any(|segment| {
@@ -675,24 +677,28 @@ fn validate_git_origin(path: &Path, origin: &str) -> Result<(), ManifestError> {
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
         })
     {
-        return Err(invalid(
+        return Err(
             "dependency `git` origin must use a portable repository path ending in `.git`".into(),
-        ));
+        );
     }
+    validate_git_commit_value(commit)?;
     Ok(())
 }
 
 fn validate_git_commit(path: &Path, commit: &str) -> Result<(), ManifestError> {
+    validate_git_commit_value(commit).map_err(|message| ManifestError::Parse {
+        path: path.to_path_buf(),
+        message,
+    })
+}
+
+fn validate_git_commit_value(commit: &str) -> Result<(), String> {
     if !matches!(commit.len(), 40 | 64)
         || !commit
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
-        return Err(ManifestError::Parse {
-            path: path.to_path_buf(),
-            message: "dependency `rev` must be a complete 40- or 64-character lowercase hexadecimal commit ID"
-                .into(),
-        });
+        return Err("dependency `rev` must be a complete 40- or 64-character lowercase hexadecimal commit ID".into());
     }
     Ok(())
 }
