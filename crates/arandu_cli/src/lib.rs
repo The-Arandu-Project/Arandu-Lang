@@ -7,3 +7,4 @@
 pub mod cache;
 pub mod remote_git;
 pub mod resolver;
+pub mod vendor;

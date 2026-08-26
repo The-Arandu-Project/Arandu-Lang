@@ -258,6 +258,15 @@ impl CacheStore {
         Ok(actual)
     }
 
+    /// Verify an already copied tree without requiring an archive namespace.
+    pub fn verify_tree_path(
+        &self,
+        path: &Path,
+        limits: TreeLimits,
+    ) -> Result<TreeVerification, CacheStoreError> {
+        hash_tree(path, limits)
+    }
+
     /// Hash a staging directory and publish it under its content identity.
     ///
     /// The staging directory must live below this cache's staging namespace so

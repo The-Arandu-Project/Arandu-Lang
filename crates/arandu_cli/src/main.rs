@@ -239,6 +239,8 @@ fn usage_and_exit() -> ! {
         "  arandu_cli watch [package-path]      # re-check on FS changes (package mode)\n",
         "  arandu_cli clean [package-path]      # remove owned project artifacts\n",
         "  arandu_cli tree [package-path]       # canonical resolved dependency graph\n",
+        "  arandu_cli audit [package-path]      # locked provenance and policy audit\n",
+        "  arandu_cli vendor [package-path]     # verified offline source snapshot\n",
         "  arandu_cli verify [package-path]     # locked, offline cache verification\n",
         "  arandu_cli check|run|build [--release] [--stdlib-path=<dir>] [package-path]\n\n",
         "  emit-c options: --layout=host|ptr4|ptr8|i686  (default: host)\n",
@@ -527,17 +529,38 @@ fn main() {
             }
             finish(Ok(CliSuccess::Done));
         }
-        "tree" | "verify" => {
+        "tree" | "verify" | "audit" | "vendor" => {
             let start = if args.len() >= 3 {
                 PathBuf::from(&args[2])
             } else {
                 env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
             };
-            finish(cmd_project_inspect(
-                &start,
-                &project_flags,
-                command == "verify",
-            ));
+            if command == "vendor" {
+                let mut db = arandu_query::DatabaseImpl::default();
+                let policy = project::ProjectFlags {
+                    locked: true,
+                    offline: true,
+                    ..project_flags.clone()
+                };
+                let ctx = project::load_project(&mut db, &start, &policy).unwrap_or_else(|e| {
+                    fail_operational("prepare verified vendor", Some(start.clone()), e)
+                });
+                let path =
+                    arandu_package::vendor::materialize(&ctx.root, &ctx.cache, &ctx.lockfile)
+                        .unwrap_or_else(|e| {
+                            fail_operational("publish verified vendor", Some(ctx.root.clone()), e)
+                        });
+                println!("vendored locked graph at {}", path.display());
+                finish(Ok(CliSuccess::Done));
+            } else if command == "audit" {
+                finish(cmd_project_audit(&start, &project_flags));
+            } else {
+                finish(cmd_project_inspect(
+                    &start,
+                    &project_flags,
+                    command == "verify",
+                ));
+            }
         }
         "build" => {
             // Package mode: always project-oriented.
@@ -1030,6 +1053,41 @@ fn cmd_project_check(
     let _ = pipeline_lower(&db, file, &filepath);
     eprintln!("{}", rebuild_log.status_line());
     println!("ok {} ({}/{})", filepath, ctx.name, ctx.version);
+    Ok(CliSuccess::Done)
+}
+
+fn cmd_project_audit(start: &Path, flags: &project::ProjectFlags) -> CliResult {
+    let mut db = arandu_query::DatabaseImpl::default();
+    let policy = project::ProjectFlags {
+        locked: true,
+        offline: true,
+        ..flags.clone()
+    };
+    let ctx = project::load_project(&mut db, start, &policy).map_err(|error| {
+        CliFailure::operational(
+            "audit locked project graph",
+            Some(start.to_path_buf()),
+            error,
+        )
+    })?;
+    println!("audit graph {}", ctx.lockfile.manifest_fingerprint);
+    let mut remote = 0usize;
+    for package in &ctx.lockfile.packages {
+        if let (Some(origin), Some(commit), Some(digest)) = (
+            package.origin.as_deref(),
+            package.commit.as_deref(),
+            package.content_digest.as_deref(),
+        ) {
+            remote += 1;
+            println!(
+                "remote {} origin={} commit={} digest={}",
+                package.name, origin, commit, digest
+            );
+        }
+    }
+    println!(
+        "integrity=verified locked=offline remote_packages={remote} advisories=not-configured"
+    );
     Ok(CliSuccess::Done)
 }
 

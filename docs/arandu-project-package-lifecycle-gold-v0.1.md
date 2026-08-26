@@ -680,7 +680,7 @@ limits without weakening the local package contract.
 - [x] Record canonical origin, commit and content digest in the lockfile.
 - [x] Disable network in `--offline`; never fall back from private to public origins.
 - [ ] Make first trust and every update an explicit reviewable graph diff.
-- [ ] Add `tree`, `verify`, `audit` and verified `vendor` foundations.
+- [x] Add `tree`, `verify`, `audit` and verified `vendor` foundations.
 - [ ] Defer floating branches, arbitrary URLs, registries and dependency scripts.
 
 P6-A freezes the remote manifest identity before networking is introduced:

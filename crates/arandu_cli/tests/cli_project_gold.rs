@@ -306,6 +306,41 @@ fn tree_is_canonical_and_verify_is_locked_offline() {
 }
 
 #[test]
+fn audit_and_vendor_are_locked_and_deterministic() {
+    let tmp = tempfile_dir("arandu_audit_vendor");
+    let project = tmp.join("audit_vendor");
+    assert!(
+        run_cli_in(&tmp, &["new", "audit_vendor", "--vcs=none"])
+            .status
+            .success()
+    );
+    assert!(run_cli_in(&project, &["check"]).status.success());
+    let audit = run_cli_in(&project, &["audit"]);
+    assert!(
+        audit.status.success(),
+        "{}",
+        String::from_utf8_lossy(&audit.stderr)
+    );
+    let text = String::from_utf8_lossy(&audit.stdout);
+    assert!(text.contains("integrity=verified"));
+    assert!(text.contains("advisories=not-configured"));
+    let vendor = run_cli_in(&project, &["vendor"]);
+    assert!(
+        vendor.status.success(),
+        "{}",
+        String::from_utf8_lossy(&vendor.stderr)
+    );
+    assert!(project.join("vendor/arandu/arandu-vendor.toml").is_file());
+    let first = fs::read(project.join("vendor/arandu/arandu-vendor.toml")).unwrap();
+    assert!(run_cli_in(&project, &["vendor"]).status.success());
+    assert_eq!(
+        first,
+        fs::read(project.join("vendor/arandu/arandu-vendor.toml")).unwrap()
+    );
+    fs::remove_dir_all(tmp).unwrap();
+}
+
+#[test]
 fn stale_or_corrupt_lock_never_builds_under_locked_policy() {
     let tmp = tempfile_dir("arandu_stale_lock");
     let project = tmp.join("stale_lock");
