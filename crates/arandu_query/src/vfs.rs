@@ -12,6 +12,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use arandu_middle::{ModuleId, PackageId, TargetId};
+
+use crate::SourceFile;
+
 /// Reserved package name roots that must never appear in `Arandu.toml` `name`.
 ///
 /// Prevents ambiguous resolution between `std.*` and a local package named `std`.
@@ -112,6 +116,40 @@ pub struct ModuleRoots {
     pub package_listing: DirectoryListing,
 }
 
+/// One pre-resolved logical module binding. Physical discovery and source
+/// registration happen before this value enters Salsa.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct ModuleBinding {
+    pub package: PackageId,
+    pub target: TargetId,
+    pub module: ModuleId,
+    pub file: SourceFile,
+}
+
+/// Immutable package/module namespace for one analysis root.
+///
+/// Keys are sorted logical imports (`self/x.aru`, `alias/x.aru`); queries never
+/// turn them into filesystem paths.
+#[salsa::input]
+pub struct PackageModuleMap {
+    pub current_package: PackageId,
+    pub current_target: TargetId,
+    #[returns(ref)]
+    pub bindings: Arc<Vec<(String, ModuleBinding)>>,
+}
+
+#[must_use]
+pub fn package_module(
+    db: &dyn salsa::Database,
+    map: PackageModuleMap,
+    logical_path: &str,
+) -> Option<ModuleBinding> {
+    map.bindings(db)
+        .binary_search_by(|(path, _)| path.as_str().cmp(logical_path))
+        .ok()
+        .map(|index| map.bindings(db)[index].1)
+}
+
 /// True if `rel` is present in the listing (exact relative path match).
 #[must_use]
 pub fn listing_contains(db: &dyn salsa::Database, listing: DirectoryListing, rel: &str) -> bool {
@@ -173,6 +211,14 @@ pub fn map_import_key(
     // my_app/util.aru → package_src/util.aru
     let pkg_prefix = format!("{pkg}/");
     if let Some(rest) = key.strip_prefix(&pkg_prefix) {
+        if listing_contains(db, *listing, rest) {
+            return Some(src.join(rest));
+        }
+        return None;
+    }
+
+    // self/util.aru → current target source root. `self` is logical, never cwd.
+    if let Some(rest) = key.strip_prefix("self/") {
         if listing_contains(db, *listing, rest) {
             return Some(src.join(rest));
         }

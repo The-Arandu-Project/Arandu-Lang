@@ -135,6 +135,8 @@ pub enum DiagCode {
     M001UnresolvedImport,
     M002UndefinedNamespaceMember,
     M003NamespaceUsedAsValue,
+    M004LegacyLocalImport,
+    M005FilesystemImportForbidden,
 
     // ── Name Resolution / Scope (N) ──
     N001UndefinedValue,
@@ -260,6 +262,8 @@ impl DiagCode {
             M001UnresolvedImport,
             M002UndefinedNamespaceMember,
             M003NamespaceUsedAsValue,
+            M004LegacyLocalImport,
+            M005FilesystemImportForbidden,
             N001UndefinedValue,
             N002UndefinedType,
             N003RedefinedName,
@@ -380,6 +384,8 @@ impl DiagCode {
             DiagCode::M001UnresolvedImport => "M001",
             DiagCode::M002UndefinedNamespaceMember => "M002",
             DiagCode::M003NamespaceUsedAsValue => "M003",
+            DiagCode::M004LegacyLocalImport => "M004",
+            DiagCode::M005FilesystemImportForbidden => "M005",
             DiagCode::N001UndefinedValue => "N001",
             DiagCode::N002UndefinedType => "N002",
             DiagCode::N003RedefinedName => "N003",

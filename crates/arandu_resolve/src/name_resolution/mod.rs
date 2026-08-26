@@ -90,7 +90,54 @@ pub fn resolve_imports_and_bodies(
     let global = resolver.symbols.global_scope();
 
     for import in &program.imports {
-        // Collect alias for import
+        if db.package_mode() {
+            match crate::logical_import(import) {
+                Some(crate::LogicalImport::LegacyExternal { source }) => {
+                    resolver.diagnostics.push(
+                        crate::Diagnostic::error(
+                            arandu_middle::DiagCode::M005FilesystemImportForbidden,
+                            format!(
+                                "quoted filesystem import `{source}` is forbidden in package mode"
+                            ),
+                            import.span(),
+                        )
+                        .with_hint(
+                            "declare a dependency in arandu.toml and import it through its alias",
+                        ),
+                    );
+                    continue;
+                }
+                Some(crate::LogicalImport::LegacyLocal { ref module }) => {
+                    let path = format!("{module}.aru");
+                    if db.resolve_module_path(&path).is_some()
+                        && let Some(replacement) = explicit_self_import(import)
+                    {
+                        resolver.diagnostics.push(
+                            crate::Diagnostic::warning(
+                                arandu_middle::DiagCode::M004LegacyLocalImport,
+                                format!(
+                                    "implicit local import `{module}` is deprecated in package mode"
+                                ),
+                                import.span(),
+                            )
+                            .with_hint_replacement(
+                                arandu_middle::Hint {
+                                    message: "use the explicit `self` import root".into(),
+                                    replacement: Some(arandu_middle::CodeReplacement {
+                                        span: import.span(),
+                                        new_text: replacement,
+                                    }),
+                                },
+                            ),
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Collect aliases only after package policy accepts the import. A rejected
+        // filesystem import must not leave a partially usable namespace behind.
         if let arandu_parser::ImportDecl::ExternalAlias { source, alias, .. } = import {
             resolver
                 .import_aliases
@@ -358,6 +405,26 @@ pub fn resolve_imports_and_bodies(
         resolved: resolver.resolved,
         docs: resolver.docs,
         diagnostics: resolver.diagnostics,
+    }
+}
+
+fn explicit_self_import(import: &arandu_parser::ImportDecl) -> Option<String> {
+    match import {
+        arandu_parser::ImportDecl::ModuleAlias { path, alias, .. } if path.len() == 1 => {
+            Some(format!("import self.{} as {alias}", path[0]))
+        }
+        arandu_parser::ImportDecl::Named { path, items, .. } if path.len() == 1 => {
+            let items = items
+                .iter()
+                .map(|item| match &item.alias {
+                    Some(alias) => format!("{} as {alias}", item.name),
+                    None => item.name.to_string(),
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some(format!("from self.{} import {{ {items} }}", path[0]))
+        }
+        _ => None,
     }
 }
 

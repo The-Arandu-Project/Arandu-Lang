@@ -36,11 +36,17 @@ pub struct ManifestData {
     pub effect_policy: EffectPolicy,
     /// Dependency requirements, ordered by import alias. Resolution lands in P4.
     pub dependencies: std::collections::BTreeMap<String, ManifestDependency>,
+    pub workspace: Option<ManifestWorkspace>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestDependency {
     pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestWorkspace {
+    pub members: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +66,8 @@ pub enum PackageKind {
 pub struct ManifestTarget {
     pub name: String,
     pub root: String,
+    /// Public logical module path → package-relative source path.
+    pub exports: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -100,11 +108,16 @@ impl ManifestData {
             edition: ManifestEdition::Legacy,
             kind: PackageKind::Binary,
             toolchain_requirement: None,
-            binary_target: Some(ManifestTarget { name, root: entry }),
+            binary_target: Some(ManifestTarget {
+                name,
+                root: entry,
+                exports: std::collections::BTreeMap::new(),
+            }),
             library_target: None,
             capabilities: CapabilityPolicy::default(),
             effect_policy: EffectPolicy::default(),
             dependencies: std::collections::BTreeMap::new(),
+            workspace: None,
         }
     }
 }
@@ -138,6 +151,8 @@ struct ManifestSchema {
     policy: RawPolicy,
     #[serde(default)]
     metadata: toml::Table,
+    #[serde(default)]
+    workspace: Option<WorkspaceSection>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -168,12 +183,20 @@ struct TargetsSection {
 struct TargetSection {
     name: String,
     root: String,
+    #[serde(default)]
+    exports: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PathDependency {
     path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkspaceSection {
+    members: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -401,6 +424,9 @@ pub fn parse_manifest_str(path: &Path, text: &str) -> Result<ManifestData, Manif
                     )
                 })
                 .collect(),
+            workspace: manifest.workspace.map(|workspace| ManifestWorkspace {
+                members: workspace.members,
+            }),
         }
     } else {
         for field in ["name", "version", "entry"] {
@@ -451,6 +477,7 @@ impl From<TargetSection> for ManifestTarget {
         Self {
             name: target.name,
             root: target.root,
+            exports: target.exports,
         }
     }
 }
@@ -489,12 +516,44 @@ fn validate_schema(path: &Path, manifest: &ManifestSchema) -> Result<(), Manifes
         }
         validate_relative_path(path, &target.root, "target root", false)?;
     }
+    if manifest
+        .targets
+        .bin
+        .as_ref()
+        .is_some_and(|target| !target.exports.is_empty())
+    {
+        return Err(ManifestError::Parse {
+            path: path.to_path_buf(),
+            message: "`targets.bin.exports` is invalid; only a library target exports modules"
+                .into(),
+        });
+    }
+    if let Some(library) = &manifest.targets.lib {
+        validate_exports(path, library)?;
+    }
     for (alias, dependency) in &manifest.dependencies {
         crate::vfs::validate_package_name(alias).map_err(|error| ManifestError::ReservedName {
             path: path.to_path_buf(),
             message: format!("invalid dependency alias `{alias}`: {error}"),
         })?;
         validate_relative_path(path, &dependency.path, "dependency path", true)?;
+    }
+    if let Some(workspace) = &manifest.workspace {
+        let mut members = std::collections::BTreeSet::new();
+        let mut folded = std::collections::BTreeSet::new();
+        for member in &workspace.members {
+            validate_relative_path(path, member, "workspace member", false)?;
+            let canonical = member.trim_end_matches('/');
+            if canonical.is_empty()
+                || !members.insert(canonical)
+                || !folded.insert(canonical.to_ascii_lowercase())
+            {
+                return Err(ManifestError::Parse {
+                    path: path.to_path_buf(),
+                    message: format!("duplicate or case-colliding workspace member `{member}`"),
+                });
+            }
+        }
     }
     for (name, values) in [
         ("capabilities.network", &manifest.capabilities.network),
@@ -530,6 +589,45 @@ fn validate_schema(path: &Path, manifest: &ManifestSchema) -> Result<(), Manifes
     }
     let _ = &manifest.metadata;
     Ok(())
+}
+
+fn validate_exports(path: &Path, target: &TargetSection) -> Result<(), ManifestError> {
+    let mut folded_names = std::collections::BTreeSet::new();
+    let mut folded_paths = std::collections::BTreeSet::new();
+    for (public_name, source) in &target.exports {
+        if public_name != "." && !public_name.split('.').all(is_portable_module_segment) {
+            return Err(ManifestError::Parse {
+                path: path.to_path_buf(),
+                message: format!("invalid library export name `{public_name}`"),
+            });
+        }
+        validate_relative_path(path, source, "library export target", false)?;
+        if !source.ends_with(".aru") {
+            return Err(ManifestError::Parse {
+                path: path.to_path_buf(),
+                message: format!("library export target `{source}` must be an `.aru` file"),
+            });
+        }
+        if !folded_names.insert(public_name.to_ascii_lowercase()) {
+            return Err(ManifestError::Parse {
+                path: path.to_path_buf(),
+                message: format!("case-fold collision in library export `{public_name}`"),
+            });
+        }
+        if !folded_paths.insert(source.to_ascii_lowercase()) {
+            return Err(ManifestError::Parse {
+                path: path.to_path_buf(),
+                message: format!("duplicate library export target `{source}`"),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn is_portable_module_segment(segment: &str) -> bool {
+    let mut chars = segment.chars();
+    matches!(chars.next(), Some(first) if first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
 fn validate_policy_values(
@@ -783,6 +881,57 @@ note = "preserved for third-party tools"
             data.toolchain_requirement.as_deref(),
             Some(">=0.1.0-rc.4, <0.2.0")
         );
+    }
+
+    #[test]
+    fn library_exports_are_typed_and_reject_deep_import_ambiguity() {
+        let text = r#"
+schema = 1
+[package]
+name = "math"
+version = "1.0.0"
+edition = "2026"
+[targets.lib]
+name = "math"
+root = "src/lib.aru"
+[targets.lib.exports]
+"." = "src/lib.aru"
+"geometry.vector" = "src/geometry/vector.aru"
+"#;
+        let data = parse_manifest_str(Path::new("arandu.toml"), text).unwrap();
+        assert_eq!(
+            data.library_target.unwrap().exports["geometry.vector"],
+            "src/geometry/vector.aru"
+        );
+
+        let collision = text.replace(
+            "\"geometry.vector\" = \"src/geometry/vector.aru\"",
+            "\"Geometry\" = \"src/geometry.aru\"\n\"geometry\" = \"src/other.aru\"",
+        );
+        assert!(parse_manifest_str(Path::new("arandu.toml"), &collision)
+            .unwrap_err()
+            .to_string()
+            .contains("case-fold collision"));
+    }
+
+    #[test]
+    fn binary_target_cannot_publish_module_exports() {
+        let text = r#"
+schema = 1
+[package]
+name = "app"
+version = "1.0.0"
+edition = "2026"
+[targets.bin]
+name = "app"
+root = "src/main.aru"
+[targets.bin.exports]
+"." = "src/main.aru"
+"#;
+        assert!(parse_manifest_str(Path::new("arandu.toml"), text)
+            .unwrap_err()
+            .to_string()
+            .contains("only a library target"));
     }
 
     #[test]

@@ -38,8 +38,8 @@ pub use manifest::{
     ensure_toolchain_compatible, find_manifest, hash_manifest_bytes, load_manifest,
     manifest_fingerprint, parse_manifest_str, register_manifest, CapabilityPolicy, EffectPolicy,
     ManifestData, ManifestDependency, ManifestDiscovery, ManifestEdition, ManifestError,
-    ManifestSpelling, ManifestTarget, PackageKind, ProjectManifest, LEGACY_MANIFEST_FILENAME,
-    MANIFEST_FILENAME,
+    ManifestSpelling, ManifestTarget, ManifestWorkspace, PackageKind, ProjectManifest,
+    LEGACY_MANIFEST_FILENAME, MANIFEST_FILENAME,
 };
 pub use rename::{prepare_rename, rename_occurrences, validate_rename, RenameError, RenameTarget};
 // re-export for tests/CLI convenience
@@ -52,8 +52,9 @@ pub use stdlib::{
     StdlibResolveOpts, StdlibRoot, StdlibSource, INSTALL_RELATIVE, STDLIB_ENV,
 };
 pub use vfs::{
-    listing_contains, map_import_key, scan_aru_entries, validate_package_name, DirectoryListing,
-    ModuleRoots, ReservedNameError, RESERVED_PACKAGE_ROOTS,
+    listing_contains, map_import_key, package_module, scan_aru_entries, validate_package_name,
+    DirectoryListing, ModuleBinding, ModuleRoots, PackageModuleMap, ReservedNameError,
+    RESERVED_PACKAGE_ROOTS,
 };
 pub use watch_buf::{
     abs_path, FsChange, PackageWatchConfig, PackageWatchSession, WatchBuffer, WatchCommitSummary,

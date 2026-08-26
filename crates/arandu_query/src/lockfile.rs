@@ -23,6 +23,7 @@ pub struct LockedPackage {
     pub name: String,
     pub version: String,
     pub source: String,
+    pub manifest_fingerprint: String,
     pub dependencies: Vec<String>,
 }
 
@@ -51,6 +52,8 @@ struct RawPackage {
     name: String,
     version: String,
     source: String,
+    #[serde(default)]
+    manifest_fingerprint: String,
     dependencies: Vec<String>,
 }
 
@@ -63,10 +66,45 @@ impl Lockfile {
                 name: manifest.name.clone(),
                 version: manifest.version.clone(),
                 source: "root".into(),
+                manifest_fingerprint: semantic_manifest_fingerprint(manifest),
                 // P3 freezes the single root. P4 replaces these aliases with
                 // resolved package identities while retaining format v1.
                 dependencies: manifest.dependencies.keys().cloned().collect(),
             }],
+        }
+    }
+
+    #[must_use]
+    pub fn for_packages(manifest: &ManifestData, mut packages: Vec<LockedPackage>) -> Self {
+        packages.sort_by(|left, right| {
+            (&left.source, &left.name, &left.version).cmp(&(
+                &right.source,
+                &right.name,
+                &right.version,
+            ))
+        });
+        let mut graph = semantic_manifest_fingerprint(manifest);
+        for package in &packages {
+            push_component(&mut graph, "package.source", &package.source);
+            push_component(&mut graph, "package.name", &package.name);
+            push_component(&mut graph, "package.version", &package.version);
+            push_component(
+                &mut graph,
+                "package.manifest",
+                &package.manifest_fingerprint,
+            );
+            let mut dependencies = package.dependencies.clone();
+            dependencies.sort();
+            for dependency in dependencies {
+                push_component(&mut graph, "package.dependency", &dependency);
+            }
+        }
+        Self {
+            manifest_fingerprint: format!(
+                "{DIGEST_PREFIX}{}",
+                blake3::hash(graph.as_bytes()).to_hex()
+            ),
+            packages,
         }
     }
 
@@ -98,6 +136,9 @@ impl Lockfile {
                 ))
             })?;
             validate_portable_source(&package.source)?;
+            if !package.manifest_fingerprint.is_empty() {
+                validate_digest(&package.manifest_fingerprint)?;
+            }
             let identity = (package.source.clone(), package.name.clone());
             if !identities.insert(identity) {
                 return Err(LockfileError(format!(
@@ -123,6 +164,7 @@ impl Lockfile {
                 name: package.name,
                 version: package.version,
                 source: package.source,
+                manifest_fingerprint: package.manifest_fingerprint,
                 dependencies,
             });
         }
@@ -167,6 +209,11 @@ impl Lockfile {
             push_string_field(&mut output, "name", &package.name);
             push_string_field(&mut output, "version", &package.version);
             push_string_field(&mut output, "source", &package.source);
+            push_string_field(
+                &mut output,
+                "manifest_fingerprint",
+                &package.manifest_fingerprint,
+            );
             output.push_str("dependencies = [");
             let mut dependencies = package.dependencies.clone();
             dependencies.sort();
@@ -218,6 +265,13 @@ pub fn semantic_manifest_fingerprint(manifest: &ManifestData) -> String {
         if let Some(target) = target {
             push_component(&mut canonical, &format!("target.{kind}.name"), &target.name);
             push_component(&mut canonical, &format!("target.{kind}.root"), &target.root);
+            for (public_name, source) in &target.exports {
+                push_component(
+                    &mut canonical,
+                    &format!("target.{kind}.export.{public_name}"),
+                    source,
+                );
+            }
         }
     }
     for (alias, dependency) in &manifest.dependencies {
@@ -226,6 +280,11 @@ pub fn semantic_manifest_fingerprint(manifest: &ManifestData) -> String {
             &format!("dependency.{alias}"),
             &dependency.path,
         );
+    }
+    if let Some(workspace) = &manifest.workspace {
+        for member in &workspace.members {
+            push_component(&mut canonical, "workspace.member", member);
+        }
     }
     format!(
         "{DIGEST_PREFIX}{}",
@@ -263,9 +322,15 @@ fn validate_digest(value: &str) -> Result<(), LockfileError> {
 }
 
 fn validate_portable_source(source: &str) -> Result<(), LockfileError> {
-    // P3 has only the package root. P4 will replace this with a typed source
-    // enum instead of broadening acceptance of arbitrary strings.
-    if source != "root" {
+    let portable_path = source.strip_prefix("path+").is_some_and(|path| {
+        !path.is_empty()
+            && !path.contains('\\')
+            && !path.starts_with('/')
+            && !path
+                .split('/')
+                .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    });
+    if source != "root" && !portable_path {
         return Err(LockfileError(format!(
             "nonportable package source `{source}` in lockfile"
         )));

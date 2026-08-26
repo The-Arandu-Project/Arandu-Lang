@@ -23,11 +23,11 @@ identity, lockfile integrity and cache isolation are proven.
 | Area | Current state | Gold gap |
 | --- | --- | --- |
 | Project creation | transactional `new`/`init`, bin/lib targets, README, ignore file and VCS policy | lifecycle E2E remains in P7 |
-| Manifest | strict deterministic TOML with schema, edition, targets and compatibility validation | dependency graph and lockfile begin in P3/P4 |
-| Incrementality | raw manifest BLAKE3 and fields are Salsa inputs | package graph, target declarations and resolved dependencies are absent |
+| Manifest | strict deterministic TOML with schema, edition, targets, path dependencies, exports, workspace members and compatibility validation | registry/Git origins and target-specific dependency features remain future work |
+| Incrementality | manifest fields and an authoritative `PackageModuleMap` are Salsa inputs | live LSP graph refresh on manifest edits remains |
 | Build | Cranelift emits a baseline host object, links the packaged runtime and atomically publishes a content-addressed executable | cross-target builds and LLVM release mode remain out of scope |
-| Dependencies | package-local modules and stdlib roots work | no dependency declaration, resolver, lockfile, workspace or global source cache |
-| Imports | dotted imports lower deterministically to `.aru` keys; public symbols are cutoff-friendly | package name, logical module and physical file are conflated; bare/quoted paths can bypass future package boundaries |
+| Dependencies | deterministic local workspace DAG, direct aliases, explicit exports and a semantic lockfile | verified global cache and remote resolver start in P5/P6 |
+| Imports | `self`, `std` and direct dependency roots are logical; private, transitive and quoted filesystem access fail closed | complete live CLI/LSP graph refresh and edition removal of the temporary bare-local migration |
 | Portability | installed SDK smoke is native on three OS families | generated projects are not yet exercised as a complete lifecycle outside checkout |
 
 The existing narrow query boundaries are retained. Parsing a manifest is pure;
@@ -144,10 +144,10 @@ iteration order.
 P3 implements this as a strict typed model rather than a generic preserved
 metadata map. The manifest fingerprint hashes a length-delimited semantic
 projection, so comments and TOML layout do not create lock churn while every
-resolution input does. Version 1 currently admits only the single `root`
-source; P4 must introduce a typed source enum before registry, Git or path
-origins become readable. This fail-closed boundary prevents an old client from
-silently interpreting a future origin incorrectly.
+resolution input does. Version 1 admits only `root` and normalized
+workspace-relative `path+...` sources; registry, Git and other origins remain
+unreadable until their typed contracts exist. This fail-closed boundary prevents
+an old client from silently interpreting a future origin incorrectly.
 
 The implementation deliberately avoids two ecosystem traps. Cargo's own
 format notes discourage opaque metadata that old clients merely preserve, so
@@ -601,15 +601,33 @@ The lockfile is not ignored for applications/workspaces.
 
 ### P4 — Local packages and workspaces
 
-- [ ] Introduce typed `PackageId`, `TargetId`, `ModuleId` and logical import roots.
-- [ ] Support `bin` and `lib` targets plus relative path dependencies.
-- [ ] Bind source imports through direct dependency aliases, `self` and `std`.
-- [ ] Add explicit library export maps and reject dependency deep imports.
-- [ ] Migrate bare local and quoted filesystem imports without ambiguous lookup.
-- [ ] Add a single-root workspace with members and shared output/lockfile.
-- [ ] Resolve a deterministic package DAG with cycle/collision diagnostics.
-- [ ] Feed `PackageModuleMap` through Salsa inputs without filesystem reads in queries.
-- [ ] Prove body-edit/export-surface/package-version invalidation boundaries.
+- [x] Introduce typed `PackageId`, `TargetId`, `ModuleId` and logical import roots.
+- [x] Support `bin` and `lib` targets plus relative path dependencies.
+- [x] Bind source imports through direct dependency aliases, `self` and `std`.
+- [x] Add explicit library export maps and reject dependency deep imports.
+- [x] Migrate bare local and quoted filesystem imports without ambiguous lookup.
+- [x] Add a single-root workspace with members and shared output/lockfile.
+- [x] Resolve a deterministic package DAG with cycle/collision diagnostics.
+- [x] Feed `PackageModuleMap` through Salsa inputs without filesystem reads in queries.
+- [x] Prove body-edit/export-surface/package-version invalidation boundaries.
+- [ ] Refresh the live CLI/LSP package graph with cutoff after manifest edits.
+
+The implemented P4 core resolves only workspace-contained relative path
+dependencies. Discovery canonicalizes each package root, rejects escapes,
+undeclared members, duplicate identity aliases and package cycles, then sorts
+the graph before allocating checked typed IDs. The resulting lock records each
+package's portable workspace-relative source and semantic manifest fingerprint;
+no host path enters it.
+
+The CLI registers source files before installing an authoritative
+`PackageModuleMap` Salsa input. `self` bindings cover current-package modules;
+only direct dependency aliases and explicit library exports become external
+bindings. A registered private file or transitive package therefore remains
+unresolvable even though its bytes are already known to the database. The
+remaining P4 bar covers live CLI/LSP graph refresh and cutoff across manifest
+edits; it is not implied by the static command E2E tests. Package mode already
+diagnoses quoted filesystem imports and emits a structured replacement for
+legacy bare local imports.
 
 ### P5 — Verified global cache
 

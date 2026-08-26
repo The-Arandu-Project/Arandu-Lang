@@ -285,6 +285,154 @@ fn stale_or_corrupt_lock_never_builds_under_locked_policy() {
 }
 
 #[test]
+fn local_workspace_dependency_resolves_only_declared_exports() {
+    let project = tempfile_dir("arandu_p4_workspace");
+    fs::create_dir_all(project.join("src")).unwrap();
+    fs::create_dir_all(project.join("packages/math/src/internal")).unwrap();
+    fs::write(
+        project.join("arandu.toml"),
+        r#"schema = 1
+[package]
+name = "calculator"
+version = "0.1.0"
+edition = "2026"
+[targets.bin]
+name = "calculator"
+root = "src/main.aru"
+[dependencies]
+math = { path = "packages/math" }
+[workspace]
+members = ["packages/math"]
+"#,
+    )
+    .unwrap();
+    fs::write(
+        project.join("src/main.aru"),
+        "import math.geometry as geometry\nfunc main(): int { return geometry.answer() }\n",
+    )
+    .unwrap();
+    fs::write(
+        project.join("packages/math/arandu.toml"),
+        r#"schema = 1
+[package]
+name = "upstream_math"
+version = "1.2.3"
+edition = "2026"
+[targets.lib]
+name = "math"
+root = "src/lib.aru"
+[targets.lib.exports]
+"." = "src/lib.aru"
+"geometry" = "src/geometry.aru"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        project.join("packages/math/src/lib.aru"),
+        "public func root_answer(): int { return 7 }\n",
+    )
+    .unwrap();
+    fs::write(
+        project.join("packages/math/src/geometry.aru"),
+        "public func answer(): int { return 42 }\n",
+    )
+    .unwrap();
+    fs::write(
+        project.join("packages/math/src/internal/secret.aru"),
+        "public func secret(): int { return 99 }\n",
+    )
+    .unwrap();
+
+    let check = run_cli_in(&project, &["check"]);
+    assert!(
+        check.status.success(),
+        "declared dependency export failed: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let lock = fs::read_to_string(project.join("arandu.lock")).unwrap();
+    assert!(lock.contains("source = \"path+packages/math\""));
+    assert!(lock.contains("name = \"upstream_math\""));
+    assert!(!lock.contains(&project.to_string_lossy().to_string()));
+
+    fs::write(
+        project.join("src/main.aru"),
+        "import math.internal.secret as secret\nfunc main(): int { return secret.secret() }\n",
+    )
+    .unwrap();
+    let deep_import = run_cli_in(&project, &["check", "--locked"]);
+    assert!(!deep_import.status.success());
+    assert!(String::from_utf8_lossy(&deep_import.stderr).contains("M001"));
+}
+
+#[test]
+fn workspace_rejects_cycles_undeclared_members_and_duplicate_identity_aliases() {
+    let project = tempfile_dir("arandu_p4_graph_rejection");
+    fs::create_dir_all(project.join("src")).unwrap();
+    fs::create_dir_all(project.join("packages/a/src")).unwrap();
+    fs::write(
+        project.join("src/main.aru"),
+        "func main(): int { return 0 }\n",
+    )
+    .unwrap();
+    fs::write(
+        project.join("arandu.toml"),
+        r#"schema=1
+[package]
+name="root_app"
+version="0.1.0"
+edition="2026"
+[targets.bin]
+name="root_app"
+root="src/main.aru"
+[dependencies]
+a = { path = "packages/a" }
+a_again = { path = "packages/a" }
+[workspace]
+members=["packages/a"]
+"#,
+    )
+    .unwrap();
+    fs::write(
+        project.join("packages/a/arandu.toml"),
+        r#"schema=1
+[package]
+name="a"
+version="1.0.0"
+edition="2026"
+[targets.lib]
+name="a"
+root="src/lib.aru"
+[targets.lib.exports]
+"."="src/lib.aru"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        project.join("packages/a/src/lib.aru"),
+        "public func value(): int { return 1 }\n",
+    )
+    .unwrap();
+    let duplicate = run_cli_in(&project, &["check"]);
+    assert!(!duplicate.status.success());
+    assert!(String::from_utf8_lossy(&duplicate.stderr).contains("more than once"));
+
+    let manifest = fs::read_to_string(project.join("arandu.toml"))
+        .unwrap()
+        .replace("a_again = { path = \"packages/a\" }\n", "");
+    fs::write(project.join("arandu.toml"), manifest).unwrap();
+    let member_manifest = fs::read_to_string(project.join("packages/a/arandu.toml"))
+        .unwrap()
+        .replace(
+            "[targets.lib.exports]",
+            "[dependencies]\nroot_app = { path = \"../..\" }\n[targets.lib.exports]",
+        );
+    fs::write(project.join("packages/a/arandu.toml"), member_manifest).unwrap();
+    let cycle = run_cli_in(&project, &["check"]);
+    assert!(!cycle.status.success());
+    assert!(String::from_utf8_lossy(&cycle.stderr).contains("cyclic package dependency"));
+}
+
+#[test]
 fn new_lib_and_init_create_the_requested_targets_without_git() {
     let tmp = tempfile_dir("arandu_scaffold_kinds");
     let new_lib = run_cli_in(&tmp, &["new", "math_lib", "--lib", "--vcs=none"]);

@@ -19,6 +19,10 @@ pub trait ModuleLoader {
     fn missing_import_is_error(&self) -> bool {
         true
     }
+
+    fn package_mode(&self) -> bool {
+        false
+    }
 }
 
 /// Never finds modules. Prelude short-circuit and local symbols still work.
@@ -52,5 +56,9 @@ impl ModuleLoader for SourceDbLoader<'_> {
 
     fn exported_symbols(&self, file: SourceFile) -> Arc<ExportedSymbolTable> {
         self.0.exported_symbols(file)
+    }
+
+    fn package_mode(&self) -> bool {
+        self.0.package_mode()
     }
 }

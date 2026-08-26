@@ -42,6 +42,10 @@ jobs:
         run: cargo fetch --locked
       - name: P3 deterministic lockfile contract
         run: cargo test --locked -p arandu_query lockfile
+      - name: P4 logical package namespaces
+        run: cargo test --locked -p arandu_query --test package_modules_p4
+      - name: P4 local workspace export boundary
+        run: cargo test --locked -p arandu_cli --test cli_project_gold local_workspace_dependency_resolves_only_declared_exports -- --exact
       - name: 1. Format
         run: cargo fmt --all -- --check
       - name: 2. Check
@@ -151,6 +155,10 @@ jobs:
         run: cargo fetch --locked
       - name: P3 deterministic lockfile contract
         run: cargo test --locked -p arandu_query lockfile
+      - name: P4 logical package namespaces
+        run: cargo test --locked -p arandu_query --test package_modules_p4
+      - name: P4 local workspace export boundary
+        run: cargo test --locked -p arandu_cli --test cli_project_gold local_workspace_dependency_resolves_only_declared_exports -- --exact
       - name: Import cycles and registration-order determinism
         run: cargo test --locked -p arandu_query --test salsa_imports
       - name: Query boundaries and incremental cutoffs

@@ -206,6 +206,8 @@ Abaixo estão listados todos os diagnósticos mapeados para o compilador Arandu.
 | Código | Mensagem Principal no Compilador | Severidade Padrão | Introduzido em | Descrição e Contexto |
 | :--- | :--- | :--- | :--- | :--- |
 | **M001** | `unresolved import: cannot find '{name}' in module '{module}'` | Error | `0.1.0` | Falha ao tentar importar um membro específico ou sub-módulo que não existe no caminho de importação. (Antigo `N006`). |
+| **M004** | `implicit local import is deprecated in package mode` | Warning | `0.1.0` | Migração estruturada de imports locais bare para a raiz explícita `self`. |
+| **M005** | `quoted filesystem import is forbidden in package mode` | Error | `0.1.0` | Impede caminhos/URLs fora do grafo declarado no manifesto. |
 | **M002** | `undefined namespace member: '{member}' not found in namespace '{namespace}'` | Error | `0.1.0` | Acesso a um membro inexistente dentro de um namespace importado. (Antigo `N009`). |
 | **M003** | `namespace '{name}' used as a value` | Error | `0.1.0` | Tentativa de avaliar um namespace/módulo diretamente como se fosse uma variável ou objeto. (Antigo `N008`). |
 
