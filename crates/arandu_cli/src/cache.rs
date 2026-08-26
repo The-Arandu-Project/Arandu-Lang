@@ -2,14 +2,84 @@
 
 use std::env;
 use std::fmt;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arandu_query::{CacheDigest, CacheLayout};
+use sha2::{Digest as _, Sha256};
 
 pub const CACHE_DIR_ENV: &str = "ARANDU_CACHE_DIR";
+
+pub const DEFAULT_SCAN_ENTRIES: usize = 100_000;
+pub const DEFAULT_SCAN_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CacheScanLimits {
+    pub max_entries: usize,
+    pub max_bytes: u64,
+}
+
+impl Default for CacheScanLimits {
+    fn default() -> Self {
+        Self {
+            max_entries: DEFAULT_SCAN_ENTRIES,
+            max_bytes: DEFAULT_SCAN_BYTES,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct CacheInspect {
+    pub archives: usize,
+    pub archive_bytes: u64,
+    pub invalid_entries: usize,
+    pub staging_files: usize,
+    pub quarantine_files: usize,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct CacheVerify {
+    pub verified: usize,
+    pub verified_bytes: u64,
+    pub corrupt: usize,
+    pub invalid_entries: usize,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct CachePrune {
+    pub files: usize,
+    pub bytes: u64,
+    pub dry_run: bool,
+}
+
+pub fn parse_scan_flags(
+    args: &[String],
+    allow_dry_run: bool,
+) -> Result<(CacheScanLimits, bool), String> {
+    let mut limits = CacheScanLimits::default();
+    let mut dry_run = false;
+    for argument in args {
+        if let Some(value) = argument.strip_prefix("--max-entries=") {
+            limits.max_entries = value
+                .parse()
+                .map_err(|_| "--max-entries requires a positive integer".to_string())?;
+        } else if let Some(value) = argument.strip_prefix("--max-bytes=") {
+            limits.max_bytes = value
+                .parse()
+                .map_err(|_| "--max-bytes requires a positive integer".to_string())?;
+        } else if argument == "--dry-run" && allow_dry_run {
+            dry_run = true;
+        } else {
+            return Err(format!("unknown cache option `{argument}`"));
+        }
+    }
+    if limits.max_entries == 0 || limits.max_bytes == 0 {
+        return Err("cache scan limits must be greater than zero".to_string());
+    }
+    Ok((limits, dry_run))
+}
 
 /// Result of publishing a verified immutable cache object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +165,56 @@ impl CacheStore {
         })
     }
 
+    /// Inspect recognized cache namespaces without hashing archive contents.
+    pub fn inspect(&self, limits: CacheScanLimits) -> Result<CacheInspect, CacheStoreError> {
+        let archives = scan_archives(&self.layout, limits, false)?;
+        let (staging_files, _) = scan_transient(&self.layout.staging(), limits, false)?;
+        let (quarantine_files, _) = scan_transient(&self.layout.quarantine(), limits, false)?;
+        Ok(CacheInspect {
+            archives: archives.valid,
+            archive_bytes: archives.bytes,
+            invalid_entries: archives.invalid,
+            staging_files,
+            quarantine_files,
+        })
+    }
+
+    /// Re-hash every recognized archive within the caller-provided limits.
+    pub fn verify(&self, limits: CacheScanLimits) -> Result<CacheVerify, CacheStoreError> {
+        let archives = scan_archives(&self.layout, limits, true)?;
+        Ok(CacheVerify {
+            verified: archives.valid.saturating_sub(archives.corrupt),
+            verified_bytes: archives.bytes,
+            corrupt: archives.corrupt,
+            invalid_entries: archives.invalid,
+        })
+    }
+
+    /// Remove only transient staging/quarantine files, never valid archives.
+    pub fn prune(
+        &self,
+        limits: CacheScanLimits,
+        dry_run: bool,
+    ) -> Result<CachePrune, CacheStoreError> {
+        let (staging_files, staging_bytes) =
+            scan_transient(&self.layout.staging(), limits, !dry_run)?;
+        let remaining_entries = limits.max_entries.saturating_sub(staging_files);
+        let remaining_bytes = limits.max_bytes.saturating_sub(staging_bytes);
+        let (quarantine_files, quarantine_bytes) = scan_transient(
+            &self.layout.quarantine(),
+            CacheScanLimits {
+                max_entries: remaining_entries,
+                max_bytes: remaining_bytes,
+            },
+            !dry_run,
+        )?;
+        Ok(CachePrune {
+            files: staging_files.saturating_add(quarantine_files),
+            bytes: staging_bytes.saturating_add(quarantine_bytes),
+            dry_run,
+        })
+    }
+
     fn quarantine_corrupt(&self, path: &Path, digest: CacheDigest) -> Result<(), CacheStoreError> {
         let quarantine = self.layout.quarantine();
         fs::create_dir_all(&quarantine)
@@ -119,6 +239,211 @@ impl CacheStore {
     }
 }
 
+#[derive(Debug, Default)]
+struct ArchiveScan {
+    scanned: usize,
+    valid: usize,
+    corrupt: usize,
+    invalid: usize,
+    bytes: u64,
+}
+
+fn scan_archives(
+    layout: &CacheLayout,
+    limits: CacheScanLimits,
+    verify: bool,
+) -> Result<ArchiveScan, CacheStoreError> {
+    validate_limits(limits)?;
+    let root = layout.root().join("v1/archives/sha256");
+    let mut scan = ArchiveScan::default();
+    for fanout in sorted_entries(&root, limits.max_entries)? {
+        consume_entry(&mut scan, limits)?;
+        if !is_plain_directory(&fanout)? {
+            scan.invalid = scan.invalid.saturating_add(1);
+            continue;
+        }
+        let prefix = fanout
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        if prefix.len() != 2 || !is_lower_hex(prefix) {
+            scan.invalid = scan.invalid.saturating_add(1);
+            continue;
+        }
+        let remaining = limits.max_entries.saturating_sub(scan.scanned);
+        for archive in sorted_entries(&fanout, remaining)? {
+            consume_entry(&mut scan, limits)?;
+            let metadata = fs::symlink_metadata(&archive)
+                .map_err(|error| CacheStoreError::io("inspect cache archive", &archive, error))?;
+            if !metadata.file_type().is_file() {
+                scan.invalid = scan.invalid.saturating_add(1);
+                continue;
+            }
+            let Some(suffix) = archive.file_name().and_then(|name| name.to_str()) else {
+                scan.invalid = scan.invalid.saturating_add(1);
+                continue;
+            };
+            let Some(tail) = suffix.strip_suffix(".tar.zst") else {
+                scan.invalid = scan.invalid.saturating_add(1);
+                continue;
+            };
+            let encoded = format!("{prefix}{tail}");
+            if encoded.len() != 64 || !is_lower_hex(&encoded) {
+                scan.invalid = scan.invalid.saturating_add(1);
+                continue;
+            }
+            let expected: CacheDigest = format!("sha256:{encoded}").parse().map_err(
+                |error: arandu_query::CacheDigestError| {
+                    CacheStoreError::MalformedCache(error.to_string())
+                },
+            )?;
+            scan.bytes = scan.bytes.checked_add(metadata.len()).ok_or_else(|| {
+                CacheStoreError::LimitExceeded("cache byte count overflowed".to_string())
+            })?;
+            if scan.bytes > limits.max_bytes {
+                return Err(CacheStoreError::LimitExceeded(format!(
+                    "cache scan exceeded {} bytes",
+                    limits.max_bytes
+                )));
+            }
+            scan.valid = scan.valid.saturating_add(1);
+            if verify && hash_file_bounded(&archive, metadata.len())? != expected {
+                scan.corrupt = scan.corrupt.saturating_add(1);
+            }
+        }
+    }
+    Ok(scan)
+}
+
+fn consume_entry(scan: &mut ArchiveScan, limits: CacheScanLimits) -> Result<(), CacheStoreError> {
+    if scan.scanned >= limits.max_entries {
+        return Err(CacheStoreError::LimitExceeded(format!(
+            "cache scan exceeded {} entries",
+            limits.max_entries
+        )));
+    }
+    scan.scanned = scan.scanned.saturating_add(1);
+    Ok(())
+}
+
+fn scan_transient(
+    root: &Path,
+    limits: CacheScanLimits,
+    remove: bool,
+) -> Result<(usize, u64), CacheStoreError> {
+    validate_limits(limits)?;
+    let mut files = 0_usize;
+    let mut bytes = 0_u64;
+    let mut seen = 0_usize;
+    for path in sorted_entries(root, limits.max_entries)? {
+        seen = seen.saturating_add(1);
+        if seen > limits.max_entries {
+            return Err(CacheStoreError::LimitExceeded(
+                "cache transient entry limit exceeded".to_string(),
+            ));
+        }
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| CacheStoreError::io("inspect transient cache entry", &path, error))?;
+        if !metadata.file_type().is_file() {
+            continue;
+        }
+        bytes = bytes.checked_add(metadata.len()).ok_or_else(|| {
+            CacheStoreError::LimitExceeded("cache prune byte count overflowed".to_string())
+        })?;
+        if bytes > limits.max_bytes {
+            return Err(CacheStoreError::LimitExceeded(format!(
+                "cache prune exceeded {} bytes",
+                limits.max_bytes
+            )));
+        }
+        files = files.saturating_add(1);
+        if remove {
+            fs::remove_file(&path).map_err(|error| {
+                CacheStoreError::io("prune transient cache entry", &path, error)
+            })?;
+        }
+    }
+    Ok((files, bytes))
+}
+
+fn sorted_entries(root: &Path, max_entries: usize) -> Result<Vec<PathBuf>, CacheStoreError> {
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(CacheStoreError::io("read cache directory", root, error)),
+    };
+    let mut paths = Vec::new();
+    for entry in entries {
+        if paths.len() >= max_entries {
+            return Err(CacheStoreError::LimitExceeded(format!(
+                "cache directory {} exceeded {max_entries} entries",
+                root.display()
+            )));
+        }
+        paths.push(
+            entry
+                .map(|entry| entry.path())
+                .map_err(|error| CacheStoreError::io("read cache directory entry", root, error))?,
+        );
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+fn is_plain_directory(path: &Path) -> Result<bool, CacheStoreError> {
+    fs::symlink_metadata(path)
+        .map(|metadata| metadata.file_type().is_dir())
+        .map_err(|error| CacheStoreError::io("inspect cache directory", path, error))
+}
+
+fn is_lower_hex(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn hash_file_bounded(path: &Path, expected_len: u64) -> Result<CacheDigest, CacheStoreError> {
+    let mut file = File::open(path)
+        .map_err(|error| CacheStoreError::io("open cached archive", path, error))?;
+    let mut hasher = Sha256::new();
+    let mut remaining = expected_len;
+    let mut buffer = [0_u8; 32 * 1024];
+    while remaining > 0 {
+        let requested = usize::try_from(remaining)
+            .unwrap_or(buffer.len())
+            .min(buffer.len());
+        let read = file
+            .read(&mut buffer[..requested])
+            .map_err(|error| CacheStoreError::io("hash cached archive", path, error))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        remaining = remaining.saturating_sub(u64::try_from(read).unwrap_or(0));
+    }
+    let mut extra = [0_u8; 1];
+    let has_extra = file
+        .read(&mut extra)
+        .map_err(|error| CacheStoreError::io("hash cached archive", path, error))?
+        != 0;
+    if remaining != 0 || has_extra {
+        return Err(CacheStoreError::MalformedCache(format!(
+            "archive changed size while verifying {}",
+            path.display()
+        )));
+    }
+    Ok(CacheDigest::from_bytes(hasher.finalize().into()))
+}
+
+fn validate_limits(limits: CacheScanLimits) -> Result<(), CacheStoreError> {
+    if limits.max_entries == 0 || limits.max_bytes == 0 {
+        return Err(CacheStoreError::LimitExceeded(
+            "cache limits must be greater than zero".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 pub enum CacheStoreError {
     DigestMismatch {
@@ -130,6 +455,8 @@ pub enum CacheStoreError {
         path: PathBuf,
         source: std::io::Error,
     },
+    LimitExceeded(String),
+    MalformedCache(String),
 }
 
 impl CacheStoreError {
@@ -156,6 +483,9 @@ impl fmt::Display for CacheStoreError {
                 path,
                 source,
             } => write!(formatter, "{operation} {}: {source}", path.display()),
+            Self::LimitExceeded(message) | Self::MalformedCache(message) => {
+                formatter.write_str(message)
+            }
         }
     }
 }
@@ -165,6 +495,7 @@ impl std::error::Error for CacheStoreError {
         match self {
             Self::DigestMismatch { .. } => None,
             Self::Io { source, .. } => Some(source),
+            Self::LimitExceeded(_) | Self::MalformedCache(_) => None,
         }
     }
 }
@@ -504,6 +835,87 @@ mod tests {
             CachePublish::Added
         );
         assert_eq!(fs::read(layout.archive(digest)).unwrap(), bytes);
+
+        fs::remove_dir_all(layout.root()).unwrap();
+    }
+
+    #[test]
+    fn inspect_and_verify_report_tampering_deterministically() {
+        let layout = temp_layout("verify-command");
+        let store = CacheStore::new(layout.clone());
+        let first = b"first archive";
+        let second = b"second archive";
+        let first_digest = CacheDigest::sha256(first);
+        let second_digest = CacheDigest::sha256(second);
+        store.publish_archive(first_digest, first).unwrap();
+        store.publish_archive(second_digest, second).unwrap();
+
+        let inspect = store.inspect(CacheScanLimits::default()).unwrap();
+        assert_eq!(inspect.archives, 2);
+        assert_eq!(
+            inspect.archive_bytes,
+            u64::try_from(first.len() + second.len()).unwrap()
+        );
+        assert_eq!(inspect.invalid_entries, 0);
+
+        fs::write(layout.archive(second_digest), b"tampered archive").unwrap();
+        let verify = store.verify(CacheScanLimits::default()).unwrap();
+        assert_eq!(verify.verified, 1);
+        assert_eq!(verify.corrupt, 1);
+        assert_eq!(verify.invalid_entries, 0);
+
+        fs::remove_dir_all(layout.root()).unwrap();
+    }
+
+    #[test]
+    fn prune_is_dry_run_capable_and_never_removes_archives() {
+        let layout = temp_layout("prune-command");
+        let store = CacheStore::new(layout.clone());
+        let bytes = b"keep this archive";
+        let digest = CacheDigest::sha256(bytes);
+        store.publish_archive(digest, bytes).unwrap();
+        fs::write(layout.staging().join("stale.tmp"), b"partial").unwrap();
+        fs::create_dir_all(layout.quarantine()).unwrap();
+        fs::write(layout.quarantine().join("bad.corrupt"), b"bad").unwrap();
+
+        let preview = store.prune(CacheScanLimits::default(), true).unwrap();
+        assert_eq!(preview.files, 2);
+        assert!(layout.staging().join("stale.tmp").exists());
+        assert!(layout.quarantine().join("bad.corrupt").exists());
+
+        let removed = store.prune(CacheScanLimits::default(), false).unwrap();
+        assert_eq!(removed.files, 2);
+        assert!(layout.archive(digest).exists());
+        assert!(!layout.staging().join("stale.tmp").exists());
+        assert!(!layout.quarantine().join("bad.corrupt").exists());
+
+        fs::remove_dir_all(layout.root()).unwrap();
+    }
+
+    #[test]
+    fn scans_fail_closed_at_entry_and_byte_limits() {
+        let layout = temp_layout("limits");
+        let store = CacheStore::new(layout.clone());
+        let bytes = b"bounded archive";
+        let digest = CacheDigest::sha256(bytes);
+        store.publish_archive(digest, bytes).unwrap();
+
+        assert!(
+            store
+                .verify(CacheScanLimits {
+                    max_entries: 1,
+                    max_bytes: u64::MAX,
+                })
+                .is_err()
+        );
+        assert!(
+            store
+                .verify(CacheScanLimits {
+                    max_entries: 10,
+                    max_bytes: 1,
+                })
+                .is_err()
+        );
 
         fs::remove_dir_all(layout.root()).unwrap();
     }

@@ -635,7 +635,7 @@ for legacy bare local imports. With these contracts covered, P4 is complete.
 
 - [x] Specify platform-native cache/config locations and override flags.
 - [x] Store immutable content-addressed package sources with per-entry locking.
-- [ ] Add `arandu cache inspect|verify|prune` with bounded, recoverable behavior.
+- [x] Add `arandu cache inspect|verify|prune` with bounded, recoverable behavior.
 - [ ] Never trust an extracted directory without rechecking its recorded digest.
 - [ ] Bound archive bytes, expanded bytes, file count, graph depth and graph size.
 
@@ -656,6 +656,14 @@ file, flushes it before an atomic same-volume rename and never rewrites a valid
 object. A same-address object with different bytes is quarantined and repaired;
 staging files are never cache hits. Extracted trees remain untrusted until the
 P5 verification step records and rechecks their deterministic tree digest.
+
+P5-C exposes deterministic `cache inspect`, streaming `cache verify` and
+transient-only `cache prune`. Every traversal is bounded by entry and byte
+budgets (with explicit `--max-entries` and `--max-bytes` overrides), refuses
+symlinks and malformed address paths as valid objects, and fails closed when a
+budget is exhausted. `prune --dry-run` previews exactly the same candidate set;
+normal prune removes only staging and quarantined files. Valid archives remain
+untouched until remote lockfiles provide auditable garbage-collection roots.
 
 ### P6 — Remote Git, intentionally narrow
 

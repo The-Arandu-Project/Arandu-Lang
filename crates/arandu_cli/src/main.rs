@@ -234,7 +234,7 @@ fn usage_and_exit() -> ! {
         "  arandu_cli new <project-name> [--bin|--lib] [--vcs=auto|git|none]\n",
         "  arandu_cli init [--bin|--lib] [--vcs=auto|git|none]\n",
         "  arandu_cli doctor [--stdlib-path=<dir>] [-v]\n",
-        "  arandu_cli cache dir [--cache-dir=<absolute-dir>]\n",
+        "  arandu_cli cache <dir|inspect|verify|prune> [--cache-dir=<absolute-dir>] [limits]\n",
         "  arandu_cli hash-file <path>          # BLAKE3 hex (packaging checksums)\n",
         "  arandu_cli watch [package-path]      # re-check on FS changes (package mode)\n",
         "  arandu_cli clean [package-path]      # remove owned project artifacts\n",
@@ -397,13 +397,63 @@ fn main() {
             ))));
         }
         "cache" => {
-            if args.len() != 3 || args[2] != "dir" {
-                fail_usage("usage: arandu_cli cache dir [--cache-dir=<absolute-dir>]");
+            if args.len() < 3 {
+                fail_usage("usage: arandu_cli cache <dir|inspect|verify|prune> [options]");
             }
             let layout = cache::resolve_cache_layout(project_flags.cache_dir.as_deref())
                 .unwrap_or_else(|error| fail_usage(format!("error: {error}")));
-            println!("{}", layout.root().display());
-            finish(Ok(CliSuccess::Done));
+            if args[2] == "dir" {
+                if args.len() != 3 {
+                    fail_usage("usage: arandu_cli cache dir [--cache-dir=<absolute-dir>]");
+                }
+                println!("{}", layout.root().display());
+                finish(Ok(CliSuccess::Done));
+            }
+            let allow_dry_run = args[2] == "prune";
+            let (limits, dry_run) = cache::parse_scan_flags(&args[3..], allow_dry_run)
+                .unwrap_or_else(|error| fail_usage(format!("error: {error}")));
+            let store = cache::CacheStore::new(layout);
+            match args[2].as_str() {
+                "inspect" => {
+                    let report = store.inspect(limits).unwrap_or_else(|error| {
+                        fail_operational("inspect package cache", None, error.to_string())
+                    });
+                    println!(
+                        "archives={} bytes={} invalid={} staging={} quarantine={}",
+                        report.archives,
+                        report.archive_bytes,
+                        report.invalid_entries,
+                        report.staging_files,
+                        report.quarantine_files
+                    );
+                    finish(Ok(CliSuccess::Done));
+                }
+                "verify" => {
+                    let report = store.verify(limits).unwrap_or_else(|error| {
+                        fail_operational("verify package cache", None, error.to_string())
+                    });
+                    println!(
+                        "verified={} bytes={} corrupt={} invalid={}",
+                        report.verified,
+                        report.verified_bytes,
+                        report.corrupt,
+                        report.invalid_entries
+                    );
+                    let code = i32::from(report.corrupt != 0 || report.invalid_entries != 0);
+                    finish(Ok(CliSuccess::ProgramExit(code)));
+                }
+                "prune" => {
+                    let report = store.prune(limits, dry_run).unwrap_or_else(|error| {
+                        fail_operational("prune package cache", None, error.to_string())
+                    });
+                    println!(
+                        "files={} bytes={} dry_run={}",
+                        report.files, report.bytes, report.dry_run
+                    );
+                    finish(Ok(CliSuccess::Done));
+                }
+                _ => fail_usage("usage: arandu_cli cache <dir|inspect|verify|prune> [options]"),
+            }
         }
         "hash-file" => {
             if args.len() != 3 {

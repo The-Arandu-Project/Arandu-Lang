@@ -21,6 +21,7 @@ arandu_middle = { path = "../arandu_middle" }
 arandu_base = { path = "../arandu_base" }
 tracing.workspace = true
 blake3 = { workspace = true }
+sha2 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rayon = "1.12.0"
