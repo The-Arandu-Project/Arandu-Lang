@@ -19,6 +19,7 @@ fn concurrent_builds_publish_one_complete_state_after_interrupted_staging() {
     fs::create_dir_all(&profile_root).unwrap();
     let interrupted_state = profile_root.join("build-state.write-tmp-interrupted");
     fs::write(&interrupted_state, b"{").unwrap();
+    let runtime = test_runtime_library();
 
     let mut children = Vec::new();
     for _ in 0..3 {
@@ -26,6 +27,7 @@ fn concurrent_builds_publish_one_complete_state_after_interrupted_staging() {
             Command::new(env!("CARGO_BIN_EXE_arandu_cli"))
                 .arg("build")
                 .current_dir(&project)
+                .env("ARANDU_RUNTIME_LIB", &runtime)
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -58,6 +60,34 @@ fn concurrent_builds_publish_one_complete_state_after_interrupted_staging() {
     );
 
     fs::remove_dir_all(root).unwrap();
+}
+
+fn test_runtime_library() -> std::path::PathBuf {
+    let deps = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let (prefix, extension) = if cfg!(windows) {
+        ("arandu_runtime-", "lib")
+    } else {
+        ("libarandu_runtime-", "a")
+    };
+    let mut candidates = fs::read_dir(&deps)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_stem()
+                .and_then(|stem| stem.to_str())
+                .is_some_and(|stem| stem.starts_with(prefix))
+                && path.extension().and_then(|value| value.to_str()) == Some(extension)
+        })
+        .collect::<Vec<_>>();
+    candidates.sort();
+    candidates
+        .pop()
+        .expect("workspace tests must compile the arandu_runtime static library")
 }
 
 fn host_triple() -> String {
