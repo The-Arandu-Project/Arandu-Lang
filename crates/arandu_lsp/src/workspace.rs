@@ -260,7 +260,7 @@ mod tests {
         let staging = layout.staging().join("math");
         std::fs::create_dir_all(staging.join("src")).unwrap();
         std::fs::write(
-            staging.join("Arandu.toml"),
+            staging.join("arandu.toml"),
             "schema=1\n[package]\nname='math'\nversion='1.0.0'\nedition='2026'\n[targets.lib]\nname='math'\nroot='src/lib.aru'\n[targets.lib.exports]\n'.'='src/lib.aru'\n",
         )
         .unwrap();
