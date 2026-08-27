@@ -246,7 +246,7 @@ jobs:
       - name: Run isolated adversarial fuzz regressions
         run: cargo run --locked -p xtask -- check-fuzz-regressions
       - name: Prepare native runtime for cross-process build tests
-        run: cargo build --locked -p arandu_runtime
+        run: cargo rustc --locked -p arandu_runtime --crate-type staticlib
       - name: P7-B / Stress cross-process cache and build publication
         run: cargo test --locked -p arandu_cli --test cache_process_concurrency --test cli_project_concurrency -- --nocapture
       - name: P7-C / Prove package output determinism under environment variance
