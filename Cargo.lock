@@ -87,6 +87,7 @@ dependencies = [
  "arandu_backend_c",
  "arandu_backend_cranelift",
  "arandu_base",
+ "arandu_codegen",
  "arandu_fmt",
  "arandu_lexer",
  "arandu_middle",

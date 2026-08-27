@@ -33,7 +33,7 @@ fn test_list_uses_package_qualified_deterministic_ids() {
     );
     fs::write(
         project.join("src/main.aru"),
-        "module sample\n\n@Test\nfunc sourceCase(): void {}\n\nfunc main(): int { return 0 }\n",
+        "module sample\n\n@Test\nfunc sourceCase(): void {}\n\n@Test\nfunc resultCase(): Result<void, Err> { return nil }\n\nfunc main(): int { return 0 }\n",
     )
     .unwrap();
     fs::write(
@@ -53,8 +53,50 @@ fn test_list_uses_package_qualified_deterministic_ids() {
     );
     assert_eq!(
         String::from_utf8_lossy(&listed.stdout),
-        "sample::bin::main::sourceCase\nsample::test::smoke::smoke\n"
+        "sample::bin::main::resultCase\nsample::bin::main::sourceCase\nsample::test::smoke::smoke\n"
     );
+    let selected = common::cli_command()
+        .args([
+            "test",
+            project.to_str().unwrap(),
+            "--list",
+            "--exact",
+            "sample::test::smoke::smoke",
+        ])
+        .output()
+        .expect("select test");
+    assert!(selected.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&selected.stdout),
+        "sample::test::smoke::smoke\n"
+    );
+    let executed = common::cli_command()
+        .args(["test", project.to_str().unwrap()])
+        .output()
+        .expect("run tests");
+    assert!(
+        executed.status.success(),
+        "test run failed: {}",
+        String::from_utf8_lossy(&executed.stderr)
+    );
+    assert!(String::from_utf8_lossy(&executed.stdout).contains("ok sample::"));
+    let harness_pointer = project.join("target/dev/x86_64-pc-windows-msvc/test-harness.json");
+    assert!(
+        harness_pointer.is_file(),
+        "test harness manifest was not published at {}",
+        harness_pointer.display()
+    );
+    for policy in ["--locked", "--offline", "--frozen"] {
+        let checked = common::cli_command()
+            .args([policy, "test", project.to_str().unwrap(), "--list"])
+            .output()
+            .expect("run policy test");
+        assert!(
+            checked.status.success(),
+            "{policy} test failed: {}",
+            String::from_utf8_lossy(&checked.stderr)
+        );
+    }
     let _ = fs::remove_dir_all(temporary);
 }
 

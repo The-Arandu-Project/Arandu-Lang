@@ -238,7 +238,7 @@ fn usage_and_exit() -> ! {
         "  arandu_cli cache <dir|inspect|verify|verify-tree|prune> [--cache-dir=<absolute-dir>] [limits]\n",
         "  arandu_cli hash-file <path>          # BLAKE3 hex (packaging checksums)\n",
         "  arandu_cli watch [package-path]      # re-check on FS changes (package mode)\n",
-        "  arandu_cli test [package-path] --list # list compiler-validated tests\n",
+        "  arandu_cli test [package-path] --list [--exact <id>] # list compiler-validated tests\n",
         "  arandu_cli clean [package-path]      # remove owned project artifacts\n",
         "  arandu_cli tree [package-path]       # canonical resolved dependency graph\n",
         "  arandu_cli audit [package-path]      # locked provenance and policy audit\n",
@@ -589,21 +589,30 @@ fn main() {
         "test" => {
             let mut start = None;
             let mut list = false;
-            for argument in &args[2..] {
+            let mut exact = None;
+            let mut arguments = args[2..].iter();
+            while let Some(argument) = arguments.next() {
                 if argument == "--list" {
                     list = true;
+                } else if argument == "--exact" {
+                    exact = arguments.next().cloned();
+                    if exact.is_none() {
+                        fail_usage("usage: arandu_cli test [package-path] --list [--exact <id>]");
+                    }
                 } else if argument.starts_with('-') || start.is_some() {
-                    fail_usage("usage: arandu_cli test [package-path] --list");
+                    fail_usage("usage: arandu_cli test [package-path] --list [--exact <id>]");
                 } else {
                     start = Some(PathBuf::from(argument));
                 }
             }
-            if !list {
-                fail_usage("only 'arandu test --list' is available in SL_T.0");
-            }
             let start =
                 start.unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-            finish(cmd_project_test_list(&start, &project_flags));
+            finish(cmd_project_test_list(
+                &start,
+                &project_flags,
+                list,
+                exact.as_deref(),
+            ));
         }
         // Project-mode check/run when the path is a package (Arandu.toml) or omitted.
         "check" | "run"
@@ -1127,7 +1136,12 @@ fn project_test_sources(ctx: &project::ProjectContext) -> Result<Vec<(PathBuf, S
     Ok(sources.into_iter().collect())
 }
 
-fn cmd_project_test_list(start: &Path, flags: &project::ProjectFlags) -> CliResult {
+fn cmd_project_test_list(
+    start: &Path,
+    flags: &project::ProjectFlags,
+    list_only: bool,
+    exact: Option<&str>,
+) -> CliResult {
     let mut db = arandu_query::DatabaseImpl::new();
     let ctx = project::load_project(&mut db, start, flags).map_err(|error| {
         CliFailure::operational("load test project", Some(start.to_path_buf()), error)
@@ -1135,7 +1149,7 @@ fn cmd_project_test_list(start: &Path, flags: &project::ProjectFlags) -> CliResu
     let sources = project_test_sources(&ctx).map_err(|error| {
         CliFailure::operational("discover test sources", Some(ctx.root.clone()), error)
     })?;
-    let mut cases = Vec::new();
+    let mut registry = arandu_codegen::testing::TestRegistry::default();
     for (path, module) in sources {
         let key = path.to_string_lossy().into_owned();
         let file = if let Some(existing) = db.as_source_db().resolve_module_path(&key) {
@@ -1158,15 +1172,130 @@ fn cmd_project_test_list(start: &Path, flags: &project::ProjectFlags) -> CliResu
             ));
         }
         for case in arandu_query::file_test_manifest(&db, file).iter() {
-            cases.push(format!("{}::{module}::{}", ctx.name, case.name));
+            let id = format!("{}::{module}::{}", ctx.name, case.name);
+            registry.insert(arandu_codegen::testing::TestEntry {
+                id,
+                function: case.name.to_string(),
+            });
         }
     }
-    cases.sort();
-    cases.dedup();
-    for case in cases {
-        println!("{case}");
+    let cases: Vec<String> = registry.iter().map(|entry| entry.id.clone()).collect();
+    let (harness_manifest, harness_c) = artifact::publish_test_harness(&ctx.root, &registry)?;
+    if let Some(exact) = exact {
+        if !cases.iter().any(|case| case == exact) {
+            return Err(CliFailure::operational(
+                "select test case",
+                Some(ctx.root),
+                format!("test case `{exact}` was not found"),
+            ));
+        }
+        if list_only {
+            println!("{exact}");
+        } else {
+            run_exact_test(&ctx, exact)?;
+            println!("ok {exact}");
+        }
+    } else if list_only {
+        for case in cases {
+            println!("{case}");
+        }
+    } else {
+        eprintln!(
+            "test harness: {} cases (manifest={}, c={})",
+            cases.len(),
+            harness_manifest.display(),
+            harness_c.display()
+        );
+        for case in cases {
+            run_exact_test(&ctx, &case)?;
+            println!("ok {case}");
+        }
     }
     Ok(CliSuccess::Done)
+}
+
+fn run_exact_test(ctx: &project::ProjectContext, exact: &str) -> CliResult {
+    let function = exact.rsplit("::").next().unwrap_or_default();
+    let sources = project_test_sources(ctx).map_err(|error| {
+        CliFailure::operational("discover test sources", Some(ctx.root.clone()), error)
+    })?;
+    for (path, module) in sources {
+        let db = arandu_query::DatabaseImpl::new();
+        let (file, filepath) =
+            open_entry_file(&db, &mut arandu_base::SourceRegistry::default(), &path);
+        let artifacts = pipeline_lower(&db, file, &filepath);
+        let target = format!("{}::{}::{}", ctx.name, module, function);
+        if !exact.eq(&target) {
+            continue;
+        }
+        let backend = arandu_backend_cranelift::CraneliftBackend::try_new()
+            .map_err(|diag| CliFailure::diagnostics([diag], Some(path.clone())))?;
+        let output = arandu_semantics::CodegenBackend::compile(
+            backend,
+            &artifacts.amir,
+            artifacts.type_check.symbols.as_ref(),
+            artifacts.type_check.type_info.as_ref(),
+        )
+        .map_err(|diag| CliFailure::diagnostics([diag], Some(path.clone())))?;
+        let return_type = artifacts
+            .amir
+            .funcs
+            .iter()
+            .find(|func_def| {
+                artifacts
+                    .type_check
+                    .symbols
+                    .get(func_def.symbol)
+                    .name
+                    .as_str()
+                    == function
+            })
+            .map(|func_def| {
+                artifacts
+                    .type_check
+                    .type_info
+                    .type_interner
+                    .resolve(func_def.return_type)
+            });
+        unsafe {
+            if matches!(return_type, Some(arandu_semantics::types::ArType::Void)) {
+                if let Some(test_fn) =
+                    arandu_semantics::CompiledCode::get_fn::<unsafe fn()>(&output, function)
+                {
+                    test_fn();
+                    return Ok(CliSuccess::Done);
+                }
+            } else if let Some(arandu_semantics::types::ArType::Result(ok, _)) = return_type
+                && matches!(
+                    artifacts.type_check.type_info.type_interner.resolve(ok),
+                    arandu_semantics::types::ArType::Void
+                )
+                && let Some(test_fn) = arandu_semantics::CompiledCode::get_fn::<
+                    unsafe fn() -> *mut u8,
+                >(&output, function)
+            {
+                let result = test_fn();
+                if result.is_null() || *(result.cast::<usize>()) == 0 {
+                    return Ok(CliSuccess::Done);
+                }
+                return Err(CliFailure::operational(
+                    "run test case",
+                    Some(path),
+                    "test returned Result::Err",
+                ));
+            }
+        }
+        return Err(CliFailure::operational(
+            "run test case",
+            Some(path),
+            format!("test function `{function}` is not callable as `fn() -> void`"),
+        ));
+    }
+    Err(CliFailure::operational(
+        "run test case",
+        Some(ctx.root.clone()),
+        format!("test case `{exact}` could not be compiled"),
+    ))
 }
 
 fn cmd_project_audit(start: &Path, flags: &project::ProjectFlags) -> CliResult {

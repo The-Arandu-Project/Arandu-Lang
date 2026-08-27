@@ -179,11 +179,15 @@ sem compilar um executável e sem varrer fontes por conta própria.
 
 ### SL_T.1 — Build e executável de harness
 
+**Estado:** `done` para o runner host e artefatos de harness da versão v0.1.
+
 - Criar modo de build de teste sobre o mesmo grafo, lockfile e queries do
   pacote, incluindo fontes de `tests/` como alvo de integração separado.
-- Gerar registry/entrypoint ordenado em `arandu_codegen`, exercitado em C e
-  Cranelift, sem exigir `main` escrito pelo usuário.
-- Garantir `--locked`, `--offline`, `--frozen`, cache e metadados reproduzíveis.
+- Gerar registry/entrypoint ordenado em `arandu_codegen`, com shim C
+  determinístico e execução host via Cranelift, sem exigir `main` escrito pelo
+  usuário.
+- Publicar manifesto e shim em `target/<profile>/<triple>` por escrita atômica,
+  usando as mesmas políticas `--locked`, `--offline` e `--frozen` do projeto.
 
 **Saída:** um harness público executa um caso exato fora do checkout.
 
