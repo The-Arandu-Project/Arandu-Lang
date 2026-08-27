@@ -216,6 +216,10 @@ impl AranduModule<JITModule> {
         );
         // SL_T.3: std.testing expectation and runner symbols
         builder.symbol(
+            "ar_test_set_span",
+            crate::testing_runtime::ar_test_set_span as *const u8,
+        );
+        builder.symbol(
             "ar_test_expect",
             crate::testing_runtime::ar_test_expect as *const u8,
         );

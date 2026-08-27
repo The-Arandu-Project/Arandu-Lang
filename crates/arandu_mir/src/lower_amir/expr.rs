@@ -533,6 +533,45 @@ impl LowerCtx<'_> {
                     HirExprKind::TypePath { member_symbol, .. } => Some(*member_symbol),
                     _ => None,
                 });
+                if let Some(callee_symbol) = callee_symbol {
+                    let callee_name = symbols.get(callee_symbol).name.as_str();
+                    let is_testing_operation = [
+                        "expect",
+                        "expectEqualInt",
+                        "expectEqualFloat",
+                        "expectEqualBool",
+                        "expectEqualStr",
+                        "fail",
+                        "skip",
+                        "log",
+                        "tempDir",
+                    ]
+                    .iter()
+                    .any(|operation| {
+                        callee_name == *operation || callee_name.ends_with(&format!(".{operation}"))
+                    });
+                    if is_testing_operation
+                        && let Some(set_span_id) = symbols
+                            .iter()
+                            .find(|symbol| symbol.name == "ar_test_set_span")
+                            .map(|symbol| symbol.id)
+                    {
+                        let file_id = AmirOperand::Constant(
+                            self.intern_literal_int(expr.span.file_id.to_string()),
+                        );
+                        let start = AmirOperand::Constant(
+                            self.intern_literal_int(expr.span.start.to_string()),
+                        );
+                        let end = AmirOperand::Constant(
+                            self.intern_literal_int(expr.span.end.to_string()),
+                        );
+                        self.push_stmt(AmirStmt::Call {
+                            lhs: None,
+                            callee: AmirOperand::FunctionRef(set_span_id),
+                            args: smallvec::smallvec![file_id, start, end],
+                        });
+                    }
+                }
                 let callee_op = if let Some(method_symbol) = method_target {
                     AmirOperand::FunctionRef(method_symbol)
                 } else {

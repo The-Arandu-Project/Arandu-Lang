@@ -97,6 +97,12 @@ pub struct TestEventV1 {
     pub stdout: CapturedOutput,
     pub stderr: CapturedOutput,
     pub failure: Option<TestFailure>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secondary_failures: Vec<TestFailure>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub logs: Vec<String>,
+    #[serde(default)]
+    pub logs_truncated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -346,6 +352,9 @@ mod tests {
                 truncated: false,
             },
             failure: None,
+            secondary_failures: Vec::new(),
+            logs: Vec::new(),
+            logs_truncated: false,
         };
 
         let mut buffer = Vec::new();
@@ -396,6 +405,9 @@ mod tests {
                 truncated: false,
             },
             failure: Some(TestFailure::simple("failed assertion")),
+            secondary_failures: Vec::new(),
+            logs: Vec::new(),
+            logs_truncated: false,
         };
 
         let mut buffer = Vec::new();

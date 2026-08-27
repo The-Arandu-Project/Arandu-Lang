@@ -78,6 +78,12 @@ fn expect_passes_and_fails_with_structured_failure() {
     assert_eq!(failure["message"], "must fail with structured failure");
     assert_eq!(failure["expected"], "true");
     assert_eq!(failure["actual"], "false");
+    assert!(
+        failure["location"]
+            .as_str()
+            .is_some_and(|location| location.split(':').count() == 3),
+        "compiler must attach the real call span: {failure}"
+    );
 
     let _ = fs::remove_dir_all(tmp);
 }
@@ -144,6 +150,7 @@ fn skip_marks_test_as_skipped() {
     let src = "module skip_test\n\nimport std.testing as testing\n\n\
         @Test\nfunc skipped_case(): void {\n\
             testing.skip(\"feature not implemented yet on this OS\")\n\
+            testing.fail(\"must not replace the skip terminal state\")\n\
         }\n\n\
         @Test\nfunc normal_case(): void {\n\
             testing.expect(true, \"passes\")\n\
@@ -175,15 +182,15 @@ fn skip_marks_test_as_skipped() {
     assert_eq!(report["summary"]["passed"], 1);
 
     let cases = report["cases"].as_array().expect("cases array");
-    let skipped = cases.iter().find(|c| c["status"] == "skipped");
-    if let Some(skipped) = skipped {
-        assert_eq!(skipped["failure"]["operation"], "skip");
-        assert_eq!(
-            skipped["failure"]["message"],
-            "feature not implemented yet on this OS"
-        );
-    }
-    // If skip is not yet wired to Skipped status, the test may pass normally — that's acceptable.
+    let skipped = cases
+        .iter()
+        .find(|c| c["status"] == "skipped")
+        .expect("skip must produce the distinct skipped status");
+    assert_eq!(skipped["failure"]["operation"], "skip");
+    assert_eq!(
+        skipped["failure"]["message"],
+        "feature not implemented yet on this OS"
+    );
 
     let _ = fs::remove_dir_all(tmp);
 }
@@ -261,6 +268,60 @@ fn parallel_jobs_isolate_test_expectations() {
         "all expects(true) should pass; report: {report}"
     );
     assert_eq!(report["summary"]["failed"], 0);
+
+    let _ = fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn logs_multiple_failures_and_temp_dir_reach_the_structured_report() {
+    let tmp = temp_dir("context_report");
+    let proj = tmp.join("context_report");
+    let src = "module context_report\n\nimport std.testing as testing\nimport std.path as path\n\n\
+        @Test\nfunc context_case(): void {\n\
+            testing.log(\"before failures\")\n\
+            let temporary = testing.tempDir(0)\n\
+            testing.expect(!path.is_empty(temporary), \"temporary path must be usable\")\n\
+            testing.fail(\"primary\")\n\
+            testing.fail(\"secondary\")\n\
+        }\n\n\
+        func main(): int { return 0 }\n";
+    create_project(&tmp, "context_report", src);
+
+    let out = common::cli_command()
+        .args(["test", proj.to_str().unwrap(), "--format", "json"])
+        .output()
+        .expect("run test");
+    assert_eq!(out.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
+    let case = &report["cases"][0];
+    assert_eq!(case["failure"]["message"], "primary");
+    assert_eq!(case["secondary_failures"][0]["message"], "secondary");
+    assert_eq!(case["logs"][0], "before failures");
+    assert_eq!(case["logs_truncated"], false);
+
+    let _ = fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn c_backend_preserves_testing_calls_and_compiler_span_hook() {
+    let tmp = temp_dir("c_backend");
+    let proj = tmp.join("c_backend");
+    let src = "module c_backend\n\nimport std.testing as testing\n\n\
+        @Test\nfunc portable_case(): void { testing.expect(false, \"portable\") }\n\n\
+        func main(): int { return 0 }\n";
+    create_project(&tmp, "c_backend", src);
+    let out = common::cli_command()
+        .args(["emit-c", proj.to_str().unwrap(), "--layout=host"])
+        .output()
+        .expect("emit C");
+    assert!(
+        out.status.success(),
+        "emit-c failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let emitted = String::from_utf8_lossy(&out.stdout);
+    assert!(emitted.contains("ar_test_set_span"));
+    assert!(emitted.contains("ar_test_expect"));
 
     let _ = fs::remove_dir_all(tmp);
 }

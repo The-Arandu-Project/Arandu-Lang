@@ -259,6 +259,7 @@ name = "arandu_runtime"
 version = "0.1.0-rc.4"
 dependencies = [
  "arandu_codegen",
+ "blake3",
  "io-uring",
  "libc",
  "windows-sys 0.60.2",

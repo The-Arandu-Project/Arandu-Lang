@@ -12,7 +12,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const CAPTURE_LIMIT: usize = 1024 * 1024; // 1MB
 
@@ -64,6 +64,9 @@ pub struct JsonCase<'a> {
     pub stdout_truncated: bool,
     pub stderr_truncated: bool,
     pub failure: Option<TestFailure>,
+    pub secondary_failures: Vec<TestFailure>,
+    pub logs: Vec<String>,
+    pub logs_truncated: bool,
 }
 
 /// Registers Ctrl-C signal handler to set global cancellation flag.
@@ -184,6 +187,23 @@ pub fn run_cases(
 
 fn run_case(project: &Path, id: &str, timeout: Duration, sequence: u64) -> TestEventV1 {
     let started = Instant::now();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temp_root = std::env::temp_dir().join(format!(
+        "arandu-test-run-{}-{sequence}-{nonce}",
+        blake3::hash(id.as_bytes()).to_hex()
+    ));
+    if let Err(error) = fs::create_dir(&temp_root) {
+        return failed_event(
+            sequence,
+            id,
+            started,
+            TestStatus::Crashed,
+            format!("failed creating test sandbox: {error}"),
+        );
+    }
 
     let (parent_reader, child_stdio) = match create_ipc_pipe_pair() {
         Ok(pair) => pair,
@@ -221,6 +241,7 @@ fn run_case(project: &Path, id: &str, timeout: Duration, sequence: u64) -> TestE
             "--harness-child",
         ])
         .env("ARANDU_TEST_SEQUENCE", sequence.to_string())
+        .env("ARANDU_TEST_TEMP_ROOT", &temp_root)
         .stdin(child_stdio)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -252,20 +273,37 @@ fn run_case(project: &Path, id: &str, timeout: Duration, sequence: u64) -> TestE
 
     let stdout = join_capture(stdout_handle);
     let stderr = join_capture(stderr_handle);
+    let _ = fs::remove_dir_all(&temp_root);
 
-    let (event_status, failure) = match status_outcome {
+    let (event_status, failure, secondary_failures, logs, logs_truncated) = match status_outcome {
         WaitOutcome::TimedOut => (
             TestStatus::TimedOut,
             Some(TestFailure::simple("test timed out")),
+            Vec::new(),
+            Vec::new(),
+            false,
         ),
         WaitOutcome::Exited(exit) => match frame_result {
-            Ok(event) if exit.success() && event.status == TestStatus::Passed => {
-                (TestStatus::Passed, None)
-            }
-            Ok(event) => (event.status, event.failure),
+            Ok(event) if exit.success() && event.status == TestStatus::Passed => (
+                TestStatus::Passed,
+                None,
+                event.secondary_failures,
+                event.logs,
+                event.logs_truncated,
+            ),
+            Ok(event) => (
+                event.status,
+                event.failure,
+                event.secondary_failures,
+                event.logs,
+                event.logs_truncated,
+            ),
             Err(error) => (
                 TestStatus::Crashed,
                 Some(TestFailure::simple(format!("protocol failure: {error}"))),
+                Vec::new(),
+                Vec::new(),
+                false,
             ),
         },
     };
@@ -278,6 +316,9 @@ fn run_case(project: &Path, id: &str, timeout: Duration, sequence: u64) -> TestE
         stdout,
         stderr,
         failure,
+        secondary_failures,
+        logs,
+        logs_truncated,
     }
 }
 
@@ -406,6 +447,9 @@ fn failed_event(
         stdout: empty_capture(),
         stderr: empty_capture(),
         failure: Some(TestFailure::simple(failure)),
+        secondary_failures: Vec::new(),
+        logs: Vec::new(),
+        logs_truncated: false,
     }
 }
 
@@ -533,6 +577,9 @@ fn report(events: &[TestEventV1], options: &RunnerOptions) -> Result<(), String>
                 stdout_truncated: event.stdout.truncated,
                 stderr_truncated: event.stderr.truncated,
                 failure: event.failure.clone(),
+                secondary_failures: event.secondary_failures.clone(),
+                logs: event.logs.clone(),
+                logs_truncated: event.logs_truncated,
             })
             .collect();
 
@@ -588,6 +635,15 @@ fn report(events: &[TestEventV1], options: &RunnerOptions) -> Result<(), String>
                 if !failure.message.is_empty() {
                     eprintln!("    message:  {}", failure.message);
                 }
+            }
+            for failure in &event.secondary_failures {
+                eprintln!("    secondary: {}", failure.message);
+            }
+            for log in &event.logs {
+                eprintln!("    log: {log}");
+            }
+            if event.logs_truncated {
+                eprintln!("    log: <truncated>");
             }
         }
         eprintln!(

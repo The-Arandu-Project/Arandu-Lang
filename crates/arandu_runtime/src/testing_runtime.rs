@@ -11,6 +11,7 @@ use arandu_codegen::testing::{TestFailure, TestStatus};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_LOG_ENTRIES: usize = 1000;
 const MAX_LOG_TOTAL_BYTES: usize = 64 * 1024; // 64 KB
@@ -23,6 +24,7 @@ pub struct TestContext {
     pub seed: u64,
     pub status: TestStatus,
     pub failure: Option<TestFailure>,
+    pub secondary_failures: Vec<TestFailure>,
     pub skip_reason: Option<String>,
     pub logs: Vec<String>,
     pub log_bytes: usize,
@@ -30,6 +32,7 @@ pub struct TestContext {
     pub cleanups: Vec<CleanupFn>,
     pub temp_dirs: Vec<PathBuf>,
     pub temp_root: PathBuf,
+    pub current_location: Option<String>,
 }
 
 impl TestContext {
@@ -39,6 +42,7 @@ impl TestContext {
             seed,
             status: TestStatus::Passed,
             failure: None,
+            secondary_failures: Vec::new(),
             skip_reason: None,
             logs: Vec::new(),
             log_bytes: 0,
@@ -46,13 +50,19 @@ impl TestContext {
             cleanups: Vec::new(),
             temp_dirs: Vec::new(),
             temp_root,
+            current_location: None,
         }
     }
 
     pub fn record_failure(&mut self, failure: TestFailure) {
-        if self.status != TestStatus::Failed {
+        if self.status == TestStatus::Skipped {
+            return;
+        }
+        if self.failure.is_none() {
             self.status = TestStatus::Failed;
             self.failure = Some(failure);
+        } else {
+            self.secondary_failures.push(failure);
         }
     }
 
@@ -87,6 +97,22 @@ impl TestContext {
     }
 }
 
+/// Records the source span of the next `std.testing` operation. The compiler
+/// emits this call immediately before the public testing helper call.
+#[unsafe(no_mangle)]
+pub extern "C" fn ar_test_set_span(file_id: i64, start: i64, end: i64) {
+    with_active_context(|ctx| {
+        ctx.current_location = Some(format!("{file_id}:{start}:{end}"));
+    });
+}
+
+fn effective_location(location: Option<String>) -> Option<String> {
+    if location.is_some() {
+        return location;
+    }
+    with_active_context(|ctx| ctx.current_location.take()).flatten()
+}
+
 thread_local! {
     static ACTIVE_CONTEXT: RefCell<Option<TestContext>> = const { RefCell::new(None) };
 }
@@ -117,6 +143,7 @@ pub struct TestContextResult {
     pub id: String,
     pub status: TestStatus,
     pub failure: Option<TestFailure>,
+    pub secondary_failures: Vec<TestFailure>,
     pub logs: Vec<String>,
     pub logs_truncated: bool,
 }
@@ -131,6 +158,7 @@ pub fn finish_test_context() -> TestContextResult {
             id: String::new(),
             status: TestStatus::Passed,
             failure: None,
+            secondary_failures: Vec::new(),
             logs: Vec::new(),
             logs_truncated: false,
         };
@@ -139,9 +167,8 @@ pub fn finish_test_context() -> TestContextResult {
     // 1. Run all cleanups in LIFO order (reverse of registration).
     while let Some(cleanup) = ctx.cleanups.pop() {
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(cleanup));
-        if res.is_err() && ctx.status != TestStatus::Failed {
-            ctx.status = TestStatus::Failed;
-            ctx.failure = Some(TestFailure::simple("test cleanup handler panicked"));
+        if res.is_err() {
+            ctx.record_failure(TestFailure::simple("test cleanup handler panicked"));
         }
     }
 
@@ -154,6 +181,7 @@ pub fn finish_test_context() -> TestContextResult {
         id: ctx.id,
         status: ctx.status,
         failure: ctx.failure,
+        secondary_failures: ctx.secondary_failures,
         logs: ctx.logs,
         logs_truncated: ctx.logs_truncated,
     }
@@ -169,7 +197,6 @@ pub fn register_cleanup(f: impl FnOnce() + Send + 'static) {
 /// Validates containment and safely removes a temporary directory.
 fn safe_cleanup_temp_dir(temp_root: &Path, dir: &Path) {
     let Ok(canonical_root) = temp_root.canonicalize() else {
-        let _ = std::fs::remove_dir_all(dir);
         return;
     };
     if let Ok(canonical_dir) = dir.canonicalize() {
@@ -186,7 +213,8 @@ unsafe fn parse_str_arg(ptr: *const u8, len: i64) -> Option<String> {
     if len <= 0 || ptr.is_null() {
         return None;
     }
-    let slice = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+    let len = usize::try_from(len).ok()?;
+    let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
     std::str::from_utf8(slice).ok().map(|s| s.to_string())
 }
 
@@ -212,7 +240,7 @@ pub unsafe extern "C" fn ar_test_expect(
     }
     let expr = unsafe { parse_str_arg(expr_ptr, expr_len) };
     let msg = unsafe { parse_str_arg(msg_ptr, msg_len) };
-    let loc = unsafe { parse_str_arg(loc_ptr, loc_len) };
+    let loc = effective_location(unsafe { parse_str_arg(loc_ptr, loc_len) });
 
     with_active_context(|ctx| {
         let failure = TestFailure::expectation(
@@ -250,7 +278,7 @@ pub unsafe extern "C" fn ar_test_expect_equal_i64(
     }
     let expr = unsafe { parse_str_arg(expr_ptr, expr_len) };
     let msg = unsafe { parse_str_arg(msg_ptr, msg_len) };
-    let loc = unsafe { parse_str_arg(loc_ptr, loc_len) };
+    let loc = effective_location(unsafe { parse_str_arg(loc_ptr, loc_len) });
 
     with_active_context(|ctx| {
         let failure = TestFailure::expectation(
@@ -288,7 +316,7 @@ pub unsafe extern "C" fn ar_test_expect_equal_f64(
     }
     let expr = unsafe { parse_str_arg(expr_ptr, expr_len) };
     let msg = unsafe { parse_str_arg(msg_ptr, msg_len) };
-    let loc = unsafe { parse_str_arg(loc_ptr, loc_len) };
+    let loc = effective_location(unsafe { parse_str_arg(loc_ptr, loc_len) });
 
     with_active_context(|ctx| {
         let failure = TestFailure::expectation(
@@ -328,7 +356,7 @@ pub unsafe extern "C" fn ar_test_expect_equal_bool(
     }
     let expr = unsafe { parse_str_arg(expr_ptr, expr_len) };
     let msg = unsafe { parse_str_arg(msg_ptr, msg_len) };
-    let loc = unsafe { parse_str_arg(loc_ptr, loc_len) };
+    let loc = effective_location(unsafe { parse_str_arg(loc_ptr, loc_len) });
 
     with_active_context(|ctx| {
         let failure = TestFailure::expectation(
@@ -371,7 +399,7 @@ pub unsafe extern "C" fn ar_test_expect_equal_str(
     }
     let expr = unsafe { parse_str_arg(expr_ptr, expr_len) };
     let msg = unsafe { parse_str_arg(msg_ptr, msg_len) };
-    let loc = unsafe { parse_str_arg(loc_ptr, loc_len) };
+    let loc = effective_location(unsafe { parse_str_arg(loc_ptr, loc_len) });
 
     with_active_context(|ctx| {
         let failure = TestFailure::expectation(
@@ -401,7 +429,7 @@ pub unsafe extern "C" fn ar_test_fail(
 ) {
     let msg = unsafe { parse_str_arg(msg_ptr, msg_len) }
         .unwrap_or_else(|| "test failed explicitly".to_string());
-    let loc = unsafe { parse_str_arg(loc_ptr, loc_len) };
+    let loc = effective_location(unsafe { parse_str_arg(loc_ptr, loc_len) });
 
     with_active_context(|ctx| {
         let failure = TestFailure {
@@ -431,7 +459,7 @@ pub unsafe extern "C" fn ar_test_skip(
 ) {
     let reason = unsafe { parse_str_arg(reason_ptr, reason_len) }
         .unwrap_or_else(|| "test skipped explicitly".to_string());
-    let loc = unsafe { parse_str_arg(loc_ptr, loc_len) };
+    let loc = effective_location(unsafe { parse_str_arg(loc_ptr, loc_len) });
 
     with_active_context(|ctx| {
         ctx.record_skip(reason, loc);
@@ -456,24 +484,45 @@ pub unsafe extern "C" fn ar_test_log(msg_ptr: *const u8, msg_len: i64) {
 ///
 /// # Safety
 /// No pointer args; `nonce_val` is a plain integer. Always safe to call from JIT.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn ar_test_temp_dir(nonce_val: i64) -> i64 {
-    let nonce = if nonce_val > 0 {
-        nonce_val as u64
-    } else {
-        NONCE_COUNTER.fetch_add(1, Ordering::Relaxed)
-    };
+fn ar_test_temp_dir_impl(nonce_val: i64) -> crate::rt_runtime::ArFatStr {
+    let counter = NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let clock = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let nonce =
+        blake3::hash(format!("{}:{counter}:{clock}:{nonce_val}", std::process::id()).as_bytes());
 
-    let mut created = 0;
+    let mut created = String::new();
     with_active_context(|ctx| {
-        let dir_name = format!("t_{}_{}_{}", ctx.id.replace(':', "_"), ctx.seed, nonce);
+        let dir_name = format!("t_{}", nonce.to_hex());
         let target = ctx.temp_root.join(dir_name);
-        if std::fs::create_dir_all(&target).is_ok() {
+        if std::fs::create_dir(&target).is_ok() {
+            created = target.to_string_lossy().into_owned();
             ctx.temp_dirs.push(target);
-            created = 1;
         }
     });
-    created
+    crate::rt_runtime::fat_str_from_string(created)
+}
+
+#[cfg(not(windows))]
+#[unsafe(no_mangle)]
+/// Creates a contained temporary directory and returns its fat-string path.
+///
+/// # Safety
+/// Uses the Arandu fat-string return ABI expected by generated code.
+pub unsafe extern "C" fn ar_test_temp_dir(nonce_val: i64) -> crate::rt_runtime::ArFatStr {
+    ar_test_temp_dir_impl(nonce_val)
+}
+
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+/// Creates a contained temporary directory and returns its fat-string path.
+///
+/// # Safety
+/// Uses the System V ABI selected by the Cranelift multi-value string contract.
+pub unsafe extern "sysv64" fn ar_test_temp_dir(nonce_val: i64) -> crate::rt_runtime::ArFatStr {
+    ar_test_temp_dir_impl(nonce_val)
 }
 
 #[cfg(test)]
@@ -593,5 +642,86 @@ mod tests {
         let out = finish_test_context();
         assert_eq!(out.status, TestStatus::Skipped);
         assert_eq!(out.failure.unwrap().message, "not supported on windows");
+    }
+
+    #[test]
+    fn preserves_primary_and_secondary_failures_and_truncates_logs() {
+        let temp = std::env::temp_dir().join("ar_test_ctx_unit5");
+        let _ = std::fs::create_dir_all(&temp);
+        init_test_context("pkg::mod::test_multiple", 42, Some(temp));
+        with_active_context(|ctx| {
+            ctx.record_failure(TestFailure::simple("primary"));
+            ctx.record_failure(TestFailure::simple("secondary"));
+            ctx.log("x".repeat(MAX_LOG_TOTAL_BYTES));
+            ctx.log("overflow".to_string());
+        });
+        let out = finish_test_context();
+        assert_eq!(
+            out.failure.as_ref().map(|f| f.message.as_str()),
+            Some("primary")
+        );
+        assert_eq!(out.secondary_failures.len(), 1);
+        assert_eq!(out.secondary_failures[0].message, "secondary");
+        assert!(out.logs_truncated);
+    }
+
+    #[test]
+    fn temp_dir_returns_a_usable_path_and_cleanup_removes_it() {
+        let root = std::env::temp_dir().join(format!(
+            "ar_test_ctx_temp_{}",
+            NONCE_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&root).unwrap();
+        init_test_context("pkg::mod::test_temp", 42, Some(root.clone()));
+        let returned = unsafe { ar_test_temp_dir(0) };
+        let bytes = unsafe {
+            std::slice::from_raw_parts(returned.ptr, usize::try_from(returned.len).unwrap())
+        };
+        let path = PathBuf::from(std::str::from_utf8(bytes).unwrap());
+        assert!(path.is_dir());
+        let _ = finish_test_context();
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_rejects_unix_symlink_escape() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join("ar_test_ctx_symlink_root");
+        let outside = std::env::temp_dir().join("ar_test_ctx_symlink_outside");
+        let link = root.join("escape");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir(&root).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("sentinel"), b"safe").unwrap();
+        symlink(&outside, &link).unwrap();
+        safe_cleanup_temp_dir(&root, &link);
+        assert!(outside.join("sentinel").is_file());
+        let _ = std::fs::remove_file(&link);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cleanup_rejects_windows_symlink_escape_when_supported() {
+        use std::os::windows::fs::symlink_dir;
+        let root = std::env::temp_dir().join("ar_test_ctx_symlink_root");
+        let outside = std::env::temp_dir().join("ar_test_ctx_symlink_outside");
+        let link = root.join("escape");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir(&root).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("sentinel"), b"safe").unwrap();
+        if symlink_dir(&outside, &link).is_ok() {
+            safe_cleanup_temp_dir(&root, &link);
+            assert!(outside.join("sentinel").is_file());
+            let _ = std::fs::remove_dir(&link);
+        }
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
     }
 }

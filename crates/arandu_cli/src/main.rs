@@ -1270,7 +1270,8 @@ fn cmd_project_test_list(
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0);
-            arandu_runtime::testing_runtime::init_test_context(exact, sequence, None);
+            let temp_root = std::env::var_os("ARANDU_TEST_TEMP_ROOT").map(PathBuf::from);
+            arandu_runtime::testing_runtime::init_test_context(exact, sequence, temp_root);
             let result = run_exact_test(&ctx, exact);
             let outcome = arandu_runtime::testing_runtime::finish_test_context();
 
@@ -1307,6 +1308,9 @@ fn cmd_project_test_list(
                     truncated: false,
                 },
                 failure,
+                secondary_failures: outcome.secondary_failures,
+                logs: outcome.logs,
+                logs_truncated: outcome.logs_truncated,
             };
             let _ = test_runner::send_child_event(sequence, &event);
             if status == arandu_codegen::testing::TestStatus::Failed {

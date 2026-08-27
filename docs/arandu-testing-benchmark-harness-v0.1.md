@@ -193,7 +193,8 @@ sem compilar um executável e sem varrer fontes por conta própria.
 
 ### SL_T.2 — Runner confiável e reporters
 
-**Estado:** `planned`; inicia depois do harness SL_T.1 verde nos dois backends.
+**Estado:** `done`; runner isolado, protocolo enquadrado, cancelamento,
+agendamento determinístico e reporters humano/JSON cobertos pela suíte nativa.
 
 #### SL_T.2A — Contratos do runner
 
@@ -284,6 +285,10 @@ protocolo ou dependência do texto apresentado.
 ### SL_T.3 — `std.testing` e diagnósticos de expectativa
 
 Plano executável detalhado: [`arandu-testing-slt3-plan.md`](arandu-testing-slt3-plan.md).
+
+**Estado:** `done` no contrato v0.1; expectativas estruturadas, spans de chamada,
+logs limitados, falhas secundárias, skip distinto e temporários contidos passam
+pelo mesmo protocolo humano/JSON. Integração de editor permanece em SL_T.5.
 
 - Entregar contexto de caso, expect/expectEqual/fail/skip/log, cleanup LIFO e
   diretórios temporários com containment e remoção segura.
