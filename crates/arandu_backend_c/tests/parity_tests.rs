@@ -275,6 +275,44 @@ int main() {
 }
 
 #[test]
+fn generated_test_registry_entrypoint_compiles_and_executes() {
+    let (amir, tc) = compile_src("func smoke(): void {}");
+    let mut source = emit_c(&amir, &tc);
+    let mut registry = arandu_codegen::testing::TestRegistry::default();
+    registry.insert(arandu_codegen::testing::TestEntry {
+        id: "sample::test::smoke::smoke".into(),
+        function: "smoke".into(),
+    });
+    source.push_str(&registry.emit_c_entrypoint());
+
+    let out_dir = env::temp_dir().join("arandu_c_tests");
+    fs::create_dir_all(&out_dir).unwrap();
+    let c_file = out_dir.join("generated_test_harness.c");
+    let exe_file = out_dir.join("generated_test_harness.exe");
+    fs::write(&c_file, source).unwrap();
+
+    let cc = env::var("CC").unwrap_or_else(|_| "gcc".to_string());
+    let compiled = c_compiler(&cc)
+        .arg(&c_file)
+        .arg("-o")
+        .arg(&exe_file)
+        .arg("-lm")
+        .status()
+        .unwrap_or_else(|_| panic!("failed to invoke C compiler '{cc}'"));
+    assert!(
+        compiled.success(),
+        "generated C test harness did not compile"
+    );
+    let status = Command::new(&exe_file)
+        .status()
+        .expect("failed to execute generated C test harness");
+    assert!(
+        status.success(),
+        "generated C test harness failed: {status}"
+    );
+}
+
+#[test]
 fn c_emission_is_byte_deterministic() {
     let src = r#"
         struct Pair { left: int; right: int }
