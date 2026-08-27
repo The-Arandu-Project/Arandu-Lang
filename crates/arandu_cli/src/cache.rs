@@ -1031,10 +1031,10 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(
-            resolved,
-            Path::new(r"C:\Users\test\AppData\Local\Arandu\Cache")
-        );
+        let mut expected = PathBuf::from(r"C:\Users\test\AppData\Local");
+        expected.push("Arandu");
+        expected.push("Cache");
+        assert_eq!(resolved, expected);
     }
 
     #[test]
