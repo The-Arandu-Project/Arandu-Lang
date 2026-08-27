@@ -5,15 +5,17 @@
 use std::fs;
 use std::process::Command;
 
+mod common;
+
 fn run_cli(args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_arandu_cli"))
+    common::cli_command()
         .args(args)
         .output()
         .expect("cli should run")
 }
 
 fn run_cli_in(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_arandu_cli"))
+    common::cli_command()
         .args(args)
         .current_dir(dir)
         .output()

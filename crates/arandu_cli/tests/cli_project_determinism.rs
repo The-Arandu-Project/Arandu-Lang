@@ -2,8 +2,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::fs;
-use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+mod common;
 
 #[test]
 fn equivalent_projects_produce_identical_graph_lock_and_build_metadata() {
@@ -94,7 +95,7 @@ name = "deterministic_gold"
 }
 
 fn cli(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_arandu_cli"))
+    common::cli_command()
         .args(args)
         .current_dir(dir)
         .output()
@@ -107,7 +108,7 @@ fn cli_with_variance(
     epoch: &str,
     timezone: &str,
 ) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_arandu_cli"))
+    common::cli_command()
         .args(args)
         .current_dir(dir)
         .env("SOURCE_DATE_EPOCH", epoch)
