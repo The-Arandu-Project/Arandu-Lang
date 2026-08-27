@@ -247,6 +247,16 @@ jobs:
         run: cargo run --locked -p xtask -- check-fuzz-regressions
       - name: Prepare native runtime for cross-process build tests
         run: cargo rustc --locked -p arandu_runtime --crate-type staticlib
+      - name: Export native runtime artifact path
+        shell: pwsh
+        run: |
+          $pattern = if ($IsWindows) { 'arandu_runtime*.lib' } else { 'libarandu_runtime*.a' }
+          $runtime = Get-ChildItem -LiteralPath target -Recurse -File -Filter $pattern |
+            Sort-Object @{ Expression = { if ($_.Directory.Name -eq 'deps') { 1 } else { 0 } } }, LastWriteTime -Descending |
+            Select-Object -First 1
+          if ($null -eq $runtime) { throw "cargo did not produce $pattern" }
+          "ARANDU_RUNTIME_LIB=$($runtime.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "runtime: $($runtime.FullName)"
       - name: P7-B / Stress cross-process cache and build publication
         run: cargo test --locked -p arandu_cli --test cache_process_concurrency --test cli_project_concurrency -- --nocapture
       - name: P7-C / Prove package output determinism under environment variance
