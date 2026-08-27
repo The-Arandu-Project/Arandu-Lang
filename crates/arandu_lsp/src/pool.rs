@@ -16,6 +16,7 @@ type JobFn = Box<dyn FnOnce(CancellationToken) + Send + 'static>;
 pub enum JobKey {
     Request(RequestId),
     Diagnostics(DocumentId),
+    WorkspaceReload,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

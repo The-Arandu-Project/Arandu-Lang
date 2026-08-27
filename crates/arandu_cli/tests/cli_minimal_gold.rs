@@ -1,6 +1,6 @@
 //! Arandu Minimal 0.1 gold suite — `examples/minimal/*`.
 //!
-//! Tracking: docs/arandu-minimal-0.1-freeze.md (D2 / P0.2 / P0.3).
+//! Tracking: docs/arandu-compiler-roadmap-v0.1.md (Minimal 0.1 campaign).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::process::Command;

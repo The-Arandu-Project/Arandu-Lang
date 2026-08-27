@@ -1,7 +1,8 @@
 # Arandu — Salsa, LSP e Identidades (v0.1)
 
-**Status:** caminho arquitetural implementado (F0–F5, inclusive delta por item/bloco); maturidade de produto acompanhada no [roadmap gold do LSP/editor](./arandu-lsp-editor-gold-roadmap-v0.1.md).
-**Plano de produto:** [`arandu-lsp-editor-gold-roadmap-v0.1.md`](./arandu-lsp-editor-gold-roadmap-v0.1.md).
+**Status:** caminho arquitetural e campanha L0–L3 implementados; maturidade e
+resíduos vivem no [roadmap mestre](./arandu-compiler-roadmap-v0.1.md), e a
+superfície pública na [matriz de capacidades](./arandu-lsp-capabilities-v0.1.md).
 **Dono do grafo de queries:** `arandu_query` apenas.
 
 ## Salsa toca / não toca
@@ -85,7 +86,15 @@
     abertos; `resolve` declara essa listagem como dependência explícita, enquanto
     edições somente de corpo preservam o cutoff de exports. Chaves absoluta,
     qualificada e relativa podem apontar ao mesmo `SourceFile`, sem perder o
-    índice reverso enquanto algum alias continuar vivo.
+    índice reverso enquanto algum alias continuar vivo. Workspaces com
+    dependências locais usam o mesmo resolvedor determinístico da CLI; eventos
+    de manifesto recompõem o grafo em job de background coalescido e atualizam
+    as identidades existentes de `ProjectManifest`, `ModuleRoots` e
+    `PackageModuleMap` em uma única revisão. Manifesto inválido mantém o último
+    grafo válido e não interrompe recursos interativos.
+    Dependências Git remotas são materializadas fora de Salsa pela biblioteca
+    compartilhada `arandu_package`; o LSP opera apenas com lock e cache
+    revalidado, sem rede durante descoberta ou reload.
 14. Rename usa análise pura em `arandu_query`: a gramática lexical rejeita
     nomes reservados/inválidos, scopes relacionados bloqueiam conflitos e os
     spans vêm dos tokens do CST cruzados com a identidade semântica. O LSP

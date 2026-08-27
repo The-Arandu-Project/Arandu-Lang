@@ -29,6 +29,11 @@ pub trait SourceDatabase: salsa::Database {
 
     /// Maps a module import path to a Salsa SourceFile.
     fn resolve_module_path(&self, path: &str) -> Option<SourceFile>;
+
+    /// Whether imports are interpreted under a discovered package manifest.
+    fn package_mode(&self) -> bool {
+        false
+    }
 }
 
 /// Diagnostic accumulator for Salsa.

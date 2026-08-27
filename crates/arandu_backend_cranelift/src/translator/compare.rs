@@ -1,12 +1,11 @@
 use arandu_semantics::amir::AmirOperand;
 use arandu_semantics::ops::BinaryOp;
 use cranelift_codegen::ir::{InstBuilder, Value};
-use cranelift_module::Module;
 
 use super::FunctionTranslator;
 use crate::types::ar_type_is_unsigned_integer;
 
-impl FunctionTranslator<'_, '_> {
+impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
     pub(super) fn operand_is_unsigned_integer(&self, operand: &AmirOperand) -> Option<bool> {
         let temp_id = match operand {
             AmirOperand::Copy(temp_id) | AmirOperand::Move(temp_id) => *temp_id,

@@ -1,7 +1,8 @@
 # Arandu backend contract v0.1
 
 **Status:** S1-C contract; audited 2026-08-20.
-**Scope:** the public boundary from validated AMIR to C source or host JIT code.
+**Scope:** the public boundary from validated AMIR to C source, host JIT code,
+or a host-native AOT object.
 
 This document is intentionally conservative. A green frontend test means that a
 program reaches AMIR; it does not automatically promote every runtime facility,
@@ -29,12 +30,12 @@ typed diagnostic before a successful artifact is exposed.
 
 | Capability | C backend | Cranelift backend |
 |---|---|---|
-| Product | One GNU C translation unit | Native code held in the current process |
-| Execution model | External compiler and linker | JIT only |
-| Target selection | Explicit `DataLayout`; no triple | Host ISA, ABI, pointer width, and calling convention |
+| Product | One GNU C translation unit | JIT module or relocatable native object |
+| Execution model | External compiler and linker | Host JIT; host AOT uses a native linker and packaged static runtime |
+| Target selection | Explicit `DataLayout`; no triple | Explicit Cranelift triple; public build selects a baseline host ISA |
 | Cross-target status | Source emission only; caller supplies matching compiler, flags, sysroot, libc/runtime, and linker | Unsupported |
 | C dialect/toolchain | GCC or Clang GNU extensions; MSVC is unsupported | Not applicable |
-| Validated CI hosts | Host parity on the S0 Linux gate; install smoke on Linux and macOS | Host tests on the S0 Linux gate; release/install smoke does not prove all JIT runtime paths |
+| Validated CI hosts | Host parity on the S0 Linux gate; install smoke on Linux and macOS | Object structure/determinism locally; installed native build smoke on release hosts |
 | Invalid AMIR | Shared validator runs before emission | Shared validator runs before JIT mutation |
 | Backend failure | `Err(Diagnostic)`; no successful partial source | `Err(Diagnostic)`; no successful partial module |
 
@@ -73,7 +74,8 @@ does not override language-phase status or promise a stable external ABI.
 4. A source-language feature deliberately unavailable to users produces its
    documented user diagnostic before code generation.
 5. C source is returned only after the entire translation succeeds. Cranelift
-   returns a module only after definitions are finalized successfully.
+   returns a JIT module only after finalization or an object only after complete
+   serialization; the CLI commits build provenance only after successful link.
 
 ## What is required for real cross compilation
 
@@ -96,7 +98,8 @@ Primary references used for this decision:
 
 The C backend becomes Gold for a named target only when its generated source is
 compiled and linked with the declared toolchain and runtime, then executed in a
-mandatory CI job. The Cranelift backend becomes Gold on a host only after that
-host runs the JIT parity and runtime suites as required checks. Cross-target
-object emission, LLVM release codegen, freestanding C, and a stable public ABI
-remain separate future milestones.
+mandatory CI job. Cranelift JIT and AOT are promoted independently per host:
+AOT additionally requires object validation, link, execution and
+failure-retention tests using the distributed runtime. Cross-target execution,
+LLVM release codegen, freestanding C, and a stable public ABI remain separate
+future milestones.

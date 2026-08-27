@@ -1,9 +1,9 @@
 use cranelift_codegen::ir::{InstBuilder, Value};
-use cranelift_module::{FuncId, Module};
+use cranelift_module::FuncId;
 
 use super::FunctionTranslator;
 
-impl FunctionTranslator<'_, '_> {
+impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
     pub(super) fn fmod_func_id(&mut self) -> Option<FuncId> {
         match self.func_ids.get("fmod") {
             Some(func_id) => Some(*func_id),

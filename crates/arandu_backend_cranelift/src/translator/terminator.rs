@@ -2,12 +2,11 @@ use arandu_semantics::amir::AmirTerminator;
 use arandu_semantics::passes::type_checker::types::{ArType, Primitive};
 use cranelift_codegen::ir::{BlockArg, InstBuilder, TrapCode};
 use cranelift_frontend::Switch;
-use cranelift_module::Module;
 
 use super::FunctionTranslator;
 use crate::types::{ClifType, clif_type};
 
-impl FunctionTranslator<'_, '_> {
+impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
     pub(super) fn translate_terminator(&mut self, terminator: &AmirTerminator) {
         match terminator {
             AmirTerminator::Return => {

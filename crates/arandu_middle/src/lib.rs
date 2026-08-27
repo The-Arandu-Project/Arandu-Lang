@@ -23,6 +23,7 @@ pub mod ice;
 pub mod layout;
 pub mod literal_pool;
 pub mod ops;
+pub mod package;
 pub mod resolved;
 pub mod symbol_table;
 pub mod types;
@@ -40,6 +41,7 @@ pub use layout::{
     DataLayout, DenseRange, EnumPayloadShape, GenPayloadLayout, LayoutEngine, LayoutError,
     LayoutOperation, SizeAlign, StructLayoutProvider, TypeLayout,
 };
+pub use package::{ModuleId, PackageId, TargetId};
 
 pub use amir_validate::validate_amir_program;
 pub use diagnostics::{CodeReplacement, DiagCode, Diagnostic, Hint, Label, Severity};

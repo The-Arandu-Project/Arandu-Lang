@@ -36,6 +36,7 @@ pub(crate) const JSON_RPC_INTERNAL_ERROR: i32 = -32603;
 
 /// Outcomes sent from worker threads back to the main loop.
 pub(crate) enum JobResult {
+    WorkspaceReload(Result<Box<crate::workspace::WorkspaceProject>, String>),
     Diagnostics {
         uri: lsp_types::Uri,
         doc_id: DocumentId,
@@ -130,23 +131,23 @@ pub(crate) fn event_loop(
             }
             recv(job_rx) -> job => {
                 if let Ok(job) = job {
-                    handle_job_result(connection, state, job)?;
+                    handle_job_result(connection, state, pool, &job_tx, job)?;
                 }
             }
             recv(workspace_rx) -> event => {
                 match event {
                     Ok(WorkspaceEvent::Project(project)) => {
-                        state.configure_package(
-                            project.manifest_path,
-                            project.manifest_data,
-                            project.manifest_hash,
-                            project.package_src,
-                            project.entries,
-                            project.stdlib_root,
-                        );
+                        let mut project = *project;
+                        for file in project.module_files.drain(..) {
+                            crate::workspace::register_workspace_file(state, file);
+                        }
+                        state.configure_package(project).map_err(std::io::Error::other)?;
                     }
                     Ok(WorkspaceEvent::File(file)) => {
                         crate::workspace::register_workspace_file(state, file);
+                    }
+                    Ok(WorkspaceEvent::Error(error)) => {
+                        send_server_status(connection, "error", &error)?;
                     }
                     Ok(WorkspaceEvent::Done) => {
                         spawn_open_diagnostics(state, pool, &job_tx);
@@ -428,9 +429,25 @@ pub(crate) fn send_cancelled_if_needed(
 fn handle_job_result(
     connection: &Connection,
     state: &mut ServerState,
+    pool: &WorkerPool,
+    job_tx: &Sender<JobResult>,
     job: JobResult,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
     match job {
+        JobResult::WorkspaceReload(Ok(project)) => {
+            let mut project = *project;
+            for file in project.module_files.drain(..) {
+                crate::workspace::register_workspace_file(state, file);
+            }
+            state
+                .configure_package(project)
+                .map_err(std::io::Error::other)?;
+            spawn_open_diagnostics(state, pool, job_tx);
+            send_server_status(connection, "ready", "Package graph refreshed")?;
+        }
+        JobResult::WorkspaceReload(Err(error)) => {
+            send_server_status(connection, "error", &error)?;
+        }
         JobResult::Diagnostics {
             uri,
             doc_id,

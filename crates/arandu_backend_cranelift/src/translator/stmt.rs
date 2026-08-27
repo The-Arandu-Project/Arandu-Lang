@@ -1,12 +1,11 @@
 use arandu_semantics::amir::AmirStmt;
 use arandu_semantics::passes::type_checker::types::{ArType, Primitive};
 use cranelift_codegen::ir::InstBuilder;
-use cranelift_module::Module;
 
 use super::FunctionTranslator;
 use crate::types::{ClifType, clif_type};
 
-impl FunctionTranslator<'_, '_> {
+impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
     #[tracing::instrument(level = "trace", target = "arandu_backend_cranelift", skip(self))]
     pub(super) fn translate_stmt(&mut self, stmt: &AmirStmt) {
         if self.error.is_some() {

@@ -32,12 +32,14 @@ try {
     try {
         foreach ($entry in $zip.Entries) {
             $name = $entry.FullName
-            if ($name.Contains('\') -or $name.StartsWith('/') -or $name.Split('/') -contains '..') { throw "unsafe zip entry: $name" }
+            $components = $name.Split('/')
+            if ($name.Contains('\') -or $name.StartsWith('/') -or $components -contains '' -or $components -contains '.' -or $components -contains '..') { throw "unsafe zip entry: $name" }
+            $unixType = (($entry.ExternalAttributes -shr 16) -band 0xF000)
+            if ($unixType -ne 0 -and $unixType -ne 0x8000) { throw "unsupported zip entry type: $name" }
             if (-not $name.StartsWith("$treeName/", [StringComparison]::Ordinal)) { throw "entry outside package root: $name" }
             if (-not $seen.Add($name)) { throw "duplicate zip entry: $name" }
-            if ($name.EndsWith('/')) { continue }
             $relative = $name.Substring($treeName.Length + 1)
-            $fixed = @('bin/arandu.exe','bin/arandu_cli.exe','bin/arandu-lsp.exe','BLAKE3SUMS','LICENSE-MIT','LICENSE-APACHE','release-manifest.json')
+            $fixed = @('bin/arandu.exe','bin/arandu_cli.exe','bin/arandu-lsp.exe',"lib/$target/arandu_runtime.lib",'BLAKE3SUMS','LICENSE-MIT','LICENSE-APACHE','release-manifest.json')
             if ($relative -notin $fixed -and -not $relative.StartsWith('share/arandu/stdlib/', [StringComparison]::Ordinal)) {
                 throw "unexpected zip content: $name"
             }
@@ -47,7 +49,7 @@ try {
             [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $destination, $false)
         }
     } finally { $zip.Dispose() }
-    foreach ($required in 'bin/arandu.exe','bin/arandu-lsp.exe','share/arandu/stdlib','BLAKE3SUMS','release-manifest.json','LICENSE-MIT','LICENSE-APACHE') {
+    foreach ($required in 'bin/arandu.exe','bin/arandu-lsp.exe',"lib/$target/arandu_runtime.lib",'share/arandu/stdlib','BLAKE3SUMS','release-manifest.json','LICENSE-MIT','LICENSE-APACHE') {
         if (-not (Test-Path -LiteralPath (Join-Path $tree $required))) { throw "archive missing $required" }
     }
     $manifest = Get-Content -Raw -LiteralPath "$tree/release-manifest.json" | ConvertFrom-Json

@@ -5,6 +5,47 @@
 
 use arandu_parser::ImportDecl;
 
+/// Transport-free import identity. Package discovery supplies its mapping.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LogicalImport {
+    Std { module: String },
+    SelfModule { module: String },
+    DependencyModule { alias: String, module: String },
+    LegacyLocal { module: String },
+    LegacyExternal { source: String },
+}
+
+#[must_use]
+pub fn logical_import(import: &ImportDecl) -> Option<LogicalImport> {
+    match import {
+        ImportDecl::ModuleAlias { path, .. } | ImportDecl::Named { path, .. } => {
+            let mut segments = path.iter().map(ToString::to_string);
+            let first = segments.next()?;
+            let rest = segments.collect::<Vec<_>>().join("/");
+            match first.as_str() {
+                "std" => Some(LogicalImport::Std { module: rest }),
+                "self" if !rest.is_empty() => Some(LogicalImport::SelfModule { module: rest }),
+                _ if rest.is_empty() => Some(LogicalImport::LegacyLocal { module: first }),
+                _ => Some(LogicalImport::DependencyModule {
+                    alias: first,
+                    module: rest,
+                }),
+            }
+        }
+        ImportDecl::ExternalAlias { source, .. } | ImportDecl::ExternalNamed { source, .. } => {
+            if let Some(module) = source.strip_prefix("std.") {
+                Some(LogicalImport::Std {
+                    module: module.replace('.', "/"),
+                })
+            } else {
+                Some(LogicalImport::LegacyExternal {
+                    source: source.to_string(),
+                })
+            }
+        }
+    }
+}
+
 /// Canonical on-disk / registry key for an import, if any.
 ///
 /// Returns keys understood by [`arandu_middle::db::SourceDatabase::resolve_module_path`]:
@@ -156,6 +197,39 @@ mod tests {
         assert_eq!(
             canonicalize_import_path(&import).as_deref(),
             Some("my_app/util.aru")
+        );
+    }
+
+    #[test]
+    fn logical_roots_do_not_embed_transport_or_filesystem_policy() {
+        let self_import = ImportDecl::ModuleAlias {
+            span: span(),
+            path: vec![
+                SmolStr::new("self"),
+                SmolStr::new("geometry"),
+                SmolStr::new("vector"),
+            ]
+            .into(),
+            alias: SmolStr::new("vector"),
+        };
+        assert_eq!(
+            logical_import(&self_import),
+            Some(LogicalImport::SelfModule {
+                module: "geometry/vector".into()
+            })
+        );
+
+        let dependency = ImportDecl::ModuleAlias {
+            span: span(),
+            path: vec![SmolStr::new("math"), SmolStr::new("geometry")].into(),
+            alias: SmolStr::new("geometry"),
+        };
+        assert_eq!(
+            logical_import(&dependency),
+            Some(LogicalImport::DependencyModule {
+                alias: "math".into(),
+                module: "geometry".into()
+            })
         );
     }
 }

@@ -55,7 +55,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Arandu
     traceOutputChannel = vscode.window.createOutputChannel('Arandu Language Server', { log: true });
     context.subscriptions.push(traceOutputChannel);
 
-    const fileWatcher = vscode.workspace.createFileSystemWatcher('**/*.aru');
+    const fileWatcher = vscode.workspace.createFileSystemWatcher('**/{*.aru,arandu.toml,Arandu.toml}');
     context.subscriptions.push(fileWatcher);
 
     context.subscriptions.push(

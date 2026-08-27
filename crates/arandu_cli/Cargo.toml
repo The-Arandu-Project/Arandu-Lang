@@ -8,6 +8,10 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[lib]
+name = "arandu_package"
+path = "src/lib.rs"
+
 [dependencies]
 arandu_lexer = { path = "../arandu_lexer" }
 arandu_parser = { path = "../arandu_parser" }
@@ -21,9 +25,15 @@ arandu_middle = { path = "../arandu_middle" }
 arandu_base = { path = "../arandu_base" }
 tracing.workspace = true
 blake3 = { workspace = true }
+sha2 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 rayon = "1.12.0"
 miette = { workspace = true }
 thiserror = { workspace = true }
 petgraph = { workspace = true }
 notify = "8.2.0"
 notify-debouncer-full = "0.7.0"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.60.2", features = ["Win32_Storage_FileSystem"] }

@@ -6,9 +6,11 @@ use crate::uri_util::{parse_uri, path_from_uri};
 use crate::vfs::Vfs;
 use arandu_middle::resolved::NodeKey;
 use arandu_query::db::SourceFile;
+#[cfg(test)]
+use arandu_query::ManifestData;
 use arandu_query::{
     scan_aru_entries, AnalysisHost, AnalysisRevision, AnalysisSnapshot, DirectoryListing,
-    DocumentId, DocumentStore, ManifestData,
+    DocumentId, DocumentStore, ModuleBinding,
 };
 use arandu_semantics::TypeCheckResult;
 use lsp_types::Uri;
@@ -18,6 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub struct PackageState {
+    pub manifest_path: PathBuf,
     pub package_src: PathBuf,
     pub package_name: String,
     pub listing: DirectoryListing,
@@ -125,23 +128,72 @@ impl ServerState {
 
     pub fn configure_package(
         &mut self,
-        manifest_path: PathBuf,
-        manifest_data: ManifestData,
-        manifest_hash: String,
-        package_src: PathBuf,
-        entries: Vec<String>,
-        stdlib_root: Option<PathBuf>,
-    ) {
-        let package_name = manifest_data.name.clone();
-        let (_, listing, _) = self.host.configure_package(
+        project: crate::workspace::WorkspaceProject,
+    ) -> Result<(), String> {
+        let crate::workspace::WorkspaceProject {
             manifest_path,
             manifest_data,
             manifest_hash,
-            package_src.clone(),
-            entries.clone(),
+            package_src,
+            entries,
             stdlib_root,
-        );
+            module_plan,
+            module_files: _,
+        } = project;
+        let package_name = manifest_data.name.clone();
+        let package_bindings = module_plan
+            .as_ref()
+            .map(|plan| {
+                plan.bindings
+                    .iter()
+                    .map(|binding| {
+                        let normalized = normalize_path_soft(&binding.physical);
+                        let source = self
+                            .by_uri
+                            .values()
+                            .filter_map(|&id| self.docs.get(id))
+                            .find(|doc| normalize_path_soft(doc.path.as_ref()) == normalized)
+                            .map(|doc| doc.source)
+                            .ok_or_else(|| {
+                                format!(
+                                    "package module {} was not registered before graph commit",
+                                    binding.physical.display()
+                                )
+                            })?;
+                        Ok((
+                            binding.logical.clone(),
+                            ModuleBinding {
+                                package: binding.package,
+                                target: binding.target,
+                                module: binding.module,
+                                file: source,
+                            },
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, String>>()
+            })
+            .transpose()?;
+        let package_map = module_plan
+            .as_ref()
+            .zip(package_bindings)
+            .map(|(plan, bindings)| arandu_query::ResolvedPackageMap {
+                current_package: plan.current_package,
+                current_target: plan.current_target,
+                bindings,
+            });
+        let (_, listing, _) =
+            self.host
+                .configure_package_with_map(arandu_query::PackageConfiguration {
+                    manifest_path: manifest_path.clone(),
+                    manifest_data,
+                    manifest_hash,
+                    package_src: package_src.clone(),
+                    entries: entries.clone(),
+                    stdlib_root,
+                    package_map,
+                });
         self.package = Some(PackageState {
+            manifest_path,
             package_src,
             package_name,
             listing,
@@ -159,6 +211,14 @@ impl ServerState {
         for (path, source) in known {
             self.register_package_aliases(&path, source);
         }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn package_manifest_path(&self) -> Option<PathBuf> {
+        self.package
+            .as_ref()
+            .map(|package| package.manifest_path.clone())
     }
 
     /// Rescan package structure outside Salsa queries and commit one listing
@@ -693,20 +753,26 @@ mod tests {
         );
         std::fs::write(&main_path, main_text).expect("write entry");
         let mut state = ServerState::new();
-        state.configure_package(
-            root.join("Arandu.toml"),
-            ManifestData {
-                name: "editor_gold".into(),
-                version: "0.1.0".into(),
-                entry: "src/main.aru".into(),
-            },
-            "fixture".into(),
-            discovered_src,
-            vec!["main.aru".into()],
-            arandu_query::resolve_stdlib_root(arandu_query::StdlibResolveOpts::default())
+        state
+            .configure_package(crate::workspace::WorkspaceProject {
+                manifest_path: root.join("Arandu.toml"),
+                manifest_data: ManifestData::legacy(
+                    "editor_gold".into(),
+                    "0.1.0".into(),
+                    "src/main.aru".into(),
+                ),
+                manifest_hash: "fixture".into(),
+                package_src: discovered_src,
+                entries: vec!["main.aru".into()],
+                stdlib_root: arandu_query::resolve_stdlib_root(
+                    arandu_query::StdlibResolveOpts::default(),
+                )
                 .ok()
                 .map(|stdlib| stdlib.path),
-        );
+                module_plan: None,
+                module_files: Vec::new(),
+            })
+            .expect("configure package");
         let main_uri = uri_from_path(&main_path).expect("main URI");
         let _discovered_id = state.open_or_commit(&main_uri, main_text.into());
         let main_id = state.open_or_commit(&main_uri, main_text.into());

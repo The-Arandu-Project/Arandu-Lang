@@ -8,7 +8,8 @@
 use crate::db::{DatabaseImpl, SourceFile};
 use crate::debounce::{DebouncedMap, DEFAULT_DEBOUNCE};
 use crate::manifest::{
-    load_manifest, register_manifest, ManifestError, ProjectManifest, MANIFEST_FILENAME,
+    load_manifest, register_manifest, ManifestError, ProjectManifest, LEGACY_MANIFEST_FILENAME,
+    MANIFEST_FILENAME,
 };
 use crate::vfs::{scan_aru_entries, DirectoryListing, ModuleRoots};
 use salsa::Setter;
@@ -238,7 +239,10 @@ impl PackageWatchSession {
         let mut ops: Vec<(PathBuf, FsOp)> = Vec::new();
         for (path, change) in batch {
             if path == self.manifest_path
-                || path.file_name().and_then(|s| s.to_str()) == Some(MANIFEST_FILENAME)
+                || matches!(
+                    path.file_name().and_then(|s| s.to_str()),
+                    Some(MANIFEST_FILENAME | LEGACY_MANIFEST_FILENAME)
+                )
             {
                 manifest_touch = true;
                 continue;

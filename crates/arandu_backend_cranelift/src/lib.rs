@@ -1,4 +1,4 @@
-//! Cranelift JIT backend for Arandu.
+//! Cranelift native-code backend for Arandu.
 //!
 //! Exposes [`CraneliftBackend`] which implements the [`CodegenBackend`] trait.
 //! The backend compiles an [`AmirProgram`] to native machine code in memory
@@ -11,6 +11,7 @@
 
 #![allow(clippy::collapsible_if)]
 pub mod abi;
+pub mod aot;
 pub mod jit;
 pub mod translator;
 pub mod types;
@@ -22,6 +23,7 @@ pub use arandu_runtime::{
     supervisor_runtime, to_str_runtime, vec_runtime, waker_runtime,
 };
 
+pub use crate::aot::{CraneliftObjectBackend, ObjectArtifact};
 pub use crate::jit::CompiledModule;
 
 use crate::jit::AranduJit;

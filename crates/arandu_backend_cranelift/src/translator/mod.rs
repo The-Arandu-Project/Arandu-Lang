@@ -24,8 +24,7 @@ use arandu_semantics::passes::type_checker::types::{ArType, Primitive};
 use arandu_semantics::{DiagCode, Diagnostic, SymbolTable};
 use cranelift_codegen::ir::{Block, InstBuilder, StackSlot, Type, Value};
 use cranelift_frontend::{FunctionBuilder, Variable};
-use cranelift_jit::JITModule;
-use cranelift_module::FuncId;
+use cranelift_module::{FuncId, Module};
 use rustc_hash::FxHashMap;
 
 use crate::types::{ClifType, clif_type, clif_types};
@@ -45,9 +44,9 @@ pub trait AmirVisitor {
 /// Holds all per-function compilation state: block/temp/local mappings,
 /// string fat-pointer variables, and a deferred error slot so that
 /// translation can continue after the first failure.
-pub struct FunctionTranslator<'a, 'b> {
+pub struct FunctionTranslator<'a, 'b, M: Module> {
     pub builder: FunctionBuilder<'a>,
-    pub module: &'b mut JITModule,
+    pub module: &'b mut M,
     pub symbol_table: &'b SymbolTable,
     pub func_ids: &'b FxHashMap<String, FuncId>,
     pub block_map: FxHashMap<BlockId, Block>,
@@ -65,11 +64,11 @@ pub struct FunctionTranslator<'a, 'b> {
     pub(crate) error: Option<Diagnostic>,
 }
 
-impl<'a, 'b> FunctionTranslator<'a, 'b> {
+impl<'a, 'b, M: Module> FunctionTranslator<'a, 'b, M> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         builder: FunctionBuilder<'a>,
-        module: &'b mut JITModule,
+        module: &'b mut M,
         symbol_table: &'b SymbolTable,
         func_ids: &'b FxHashMap<String, FuncId>,
         ptr_type: Type,
@@ -342,7 +341,7 @@ impl<'a, 'b> FunctionTranslator<'a, 'b> {
     }
 }
 
-impl<'a, 'b> AmirVisitor for FunctionTranslator<'a, 'b> {
+impl<'a, 'b, M: Module> AmirVisitor for FunctionTranslator<'a, 'b, M> {
     fn visit_block(&mut self, block: &AmirBasicBlock) {
         if self.error.is_some() {
             return;

@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use crate::explain::RebuildLog;
 use crate::manifest::ProjectManifest;
-use crate::vfs::ModuleRoots;
+use crate::vfs::{ModuleRoots, PackageModuleMap};
 use salsa::Storage;
 
 pub type FileId = u32;
@@ -153,6 +153,8 @@ pub struct DatabaseImpl {
     project_manifest: Arc<RwLock<Option<ProjectManifest>>>,
     /// Dual roots: package (`Arandu.toml`) + stdlib. Same `resolve_module_path`.
     module_roots: Arc<RwLock<Option<ModuleRoots>>>,
+    /// P4 pre-resolved logical namespace. When present it is authoritative.
+    package_modules: Arc<RwLock<Option<PackageModuleMap>>>,
 }
 
 // Manual Clone: Storage is cloneable; share Arc file registry + log + CST cache.
@@ -166,6 +168,7 @@ impl Clone for DatabaseImpl {
             stdlib_root: Arc::clone(&self.stdlib_root),
             project_manifest: Arc::clone(&self.project_manifest),
             module_roots: Arc::clone(&self.module_roots),
+            package_modules: Arc::clone(&self.package_modules),
         }
     }
 }
@@ -191,6 +194,7 @@ impl DatabaseImpl {
             stdlib_root: Arc::new(RwLock::new(None)),
             project_manifest: Arc::new(RwLock::new(None)),
             module_roots: Arc::new(RwLock::new(None)),
+            package_modules: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -207,6 +211,7 @@ impl DatabaseImpl {
             stdlib_root: Arc::new(RwLock::new(None)),
             project_manifest: Arc::new(RwLock::new(None)),
             module_roots: Arc::new(RwLock::new(None)),
+            package_modules: Arc::new(RwLock::new(None)),
         };
         (db, log)
     }
@@ -272,6 +277,30 @@ impl DatabaseImpl {
     #[must_use]
     pub fn module_roots(&self) -> Option<ModuleRoots> {
         *self.module_roots.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn set_package_module_map(&self, map: PackageModuleMap) {
+        let mut current = self
+            .package_modules
+            .write()
+            .unwrap_or_else(|error| error.into_inner());
+        *current = Some(map);
+    }
+
+    pub fn clear_package_module_map(&self) {
+        let mut current = self
+            .package_modules
+            .write()
+            .unwrap_or_else(|error| error.into_inner());
+        *current = None;
+    }
+
+    #[must_use]
+    pub fn package_module_map(&self) -> Option<PackageModuleMap> {
+        *self
+            .package_modules
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
     }
 
     pub fn new_file(&mut self, path: String, text: String) -> SourceFile {
@@ -394,6 +423,16 @@ impl arandu_middle::db::SourceDatabase for DatabaseImpl {
     }
 
     fn resolve_module_path(&self, path: &str) -> Option<SourceFile> {
+        if let Some(map) = self.package_module_map() {
+            if let Some(binding) = crate::vfs::package_module(self, map, path) {
+                return Some(binding.file);
+            }
+            // Package mode is fail-closed. Stdlib retains its separately
+            // installed root; no arbitrary registry/cwd fallback is allowed.
+            if !path.starts_with("stdlib/") && !path.starts_with("stdlib\\") {
+                return None;
+            }
+        }
         // Fast path: O(1) lookup by import path string (registry key).
         {
             let reg = self.files.read().unwrap_or_else(|e| e.into_inner());
@@ -460,6 +499,10 @@ impl arandu_middle::db::SourceDatabase for DatabaseImpl {
         reg.insert(path.to_string(), file_id, file);
 
         Some(file)
+    }
+
+    fn package_mode(&self) -> bool {
+        self.project_manifest().is_some()
     }
 }
 

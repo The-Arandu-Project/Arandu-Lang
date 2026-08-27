@@ -12,7 +12,7 @@ pub mod import_path;
 pub mod module_loader;
 pub mod name_resolution;
 
-pub use import_path::canonicalize_import_path;
+pub use import_path::{LogicalImport, canonicalize_import_path, logical_import};
 pub use module_loader::{EmptyModuleLoader, ModuleLoader, SourceDbLoader};
 pub use name_resolution::{resolve_for_test, resolve_imports_and_bodies, resolve_local};
 

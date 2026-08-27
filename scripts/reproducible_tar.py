@@ -105,6 +105,7 @@ def validate(archive_path: Path, root: str, target: str, version: str) -> None:
         f"{root}/bin/arandu_cli",
         f"{root}/bin/arandu",
         f"{root}/bin/arandu-lsp",
+        f"{root}/lib/{target}/libarandu_runtime.a",
         f"{root}/BLAKE3SUMS",
         f"{root}/LICENSE-MIT",
         f"{root}/LICENSE-APACHE",
@@ -114,14 +115,21 @@ def validate(archive_path: Path, root: str, target: str, version: str) -> None:
         for member in archive.getmembers():
             name = member.name
             normalized = posixpath.normpath(name)
-            if name.startswith("/") or normalized == ".." or normalized.startswith("../"):
+            if (
+                name != normalized
+                or name.startswith("/")
+                or "\\" in name
+                or normalized == ".."
+                or normalized.startswith("../")
+            ):
                 raise SystemExit(f"unsafe archive path: {name}")
-            if name in seen:
+            folded = name.casefold()
+            if folded in seen:
                 raise SystemExit(f"duplicate archive entry: {name}")
-            seen.add(name)
+            seen.add(folded)
             if name != root and not name.startswith(f"{root}/"):
                 raise SystemExit(f"entry outside package root: {name}")
-            allowed = name in required or name == root or name.startswith(f"{root}/share/arandu/stdlib/") or name in {f"{root}/bin", f"{root}/share", f"{root}/share/arandu", f"{root}/share/arandu/stdlib"}
+            allowed = name in required or name == root or name.startswith(f"{root}/share/arandu/stdlib/") or name in {f"{root}/bin", f"{root}/lib", f"{root}/lib/{target}", f"{root}/share", f"{root}/share/arandu", f"{root}/share/arandu/stdlib"}
             if not allowed:
                 raise SystemExit(f"unexpected archive content: {name}")
             if member.issym():
@@ -134,16 +142,16 @@ def validate(archive_path: Path, root: str, target: str, version: str) -> None:
                 if extracted is None:
                     raise SystemExit("release manifest is not a regular file")
                 manifest_bytes = extracted.read()
-    missing = sorted(required - seen)
+    missing = sorted(name for name in required if name.casefold() not in seen)
     if missing:
         raise SystemExit(f"archive missing required entries: {', '.join(missing)}")
-    if not any(name.startswith(f"{root}/share/arandu/stdlib/") and name.endswith(".aru") for name in seen):
+    if not any(name.startswith(f"{root.casefold()}/share/arandu/stdlib/") and name.endswith(".aru") for name in seen):
         raise SystemExit("archive contains no stdlib .aru files")
     try:
         release = json.loads((manifest_bytes or b"").decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise SystemExit(f"invalid release manifest: {error}") from error
-    expected = {"schema": 1, "version": version, "target": target, "components": ["arandu", "arandu-lsp", "stdlib"], "archive": "tar.gz"}
+    expected = {"schema": 1, "version": version, "target": target, "components": ["arandu", "arandu-lsp", "runtime", "stdlib"], "archive": "tar.gz"}
     if release != expected:
         raise SystemExit(f"release manifest mismatch: {release!r}")
 

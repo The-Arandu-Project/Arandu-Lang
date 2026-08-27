@@ -1,4 +1,4 @@
-//! Project manifest (`Arandu.toml`) — Salsa input from day 1.
+//! Project manifest (`arandu.toml`) — Salsa input from day 1.
 //!
 //! Gold bar (P2): the manifest is a `#[salsa::input]` whose **content hash**
 //! participates in the invalidation key. Changing `entry` / `name` / `version`
@@ -12,8 +12,13 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use serde::Deserialize;
+
 /// Canonical on-disk filename for a project package.
-pub const MANIFEST_FILENAME: &str = "Arandu.toml";
+pub const MANIFEST_FILENAME: &str = "arandu.toml";
+
+/// Previous case-sensitive spelling, readable only during migration.
+pub const LEGACY_MANIFEST_FILENAME: &str = "Arandu.toml";
 
 /// Parsed package fields (MVP: name / version / entry).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +26,243 @@ pub struct ManifestData {
     pub name: String,
     pub version: String,
     pub entry: String,
+    pub schema: u32,
+    pub edition: ManifestEdition,
+    pub kind: PackageKind,
+    pub toolchain_requirement: Option<String>,
+    pub binary_target: Option<ManifestTarget>,
+    pub library_target: Option<ManifestTarget>,
+    pub capabilities: CapabilityPolicy,
+    pub effect_policy: EffectPolicy,
+    /// Dependency requirements, ordered by import alias. Resolution lands in P4.
+    pub dependencies: std::collections::BTreeMap<String, ManifestDependency>,
+    pub workspace: Option<ManifestWorkspace>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ManifestDependency {
+    Path { path: String },
+    Git { origin: String, commit: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestWorkspace {
+    pub members: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManifestEdition {
+    Legacy,
+    V2026,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageKind {
+    Binary,
+    Library,
+    Mixed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestTarget {
+    pub name: String,
+    pub root: String,
+    /// Public logical module path → package-relative source path.
+    pub exports: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CapabilityPolicy {
+    pub network: Vec<String>,
+    pub filesystem_read: Vec<String>,
+    pub filesystem_write: Vec<String>,
+    pub environment: Vec<String>,
+    pub process: Vec<String>,
+    pub foreign: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectPolicy {
+    pub deny_new_authority: bool,
+    pub warn_new_resources: bool,
+    pub deny: Vec<String>,
+}
+
+impl Default for EffectPolicy {
+    fn default() -> Self {
+        Self {
+            deny_new_authority: true,
+            warn_new_resources: true,
+            deny: vec!["UnknownCapability".into()],
+        }
+    }
+}
+
+impl ManifestData {
+    #[must_use]
+    pub fn legacy(name: String, version: String, entry: String) -> Self {
+        Self {
+            name: name.clone(),
+            version,
+            entry: entry.clone(),
+            schema: 0,
+            edition: ManifestEdition::Legacy,
+            kind: PackageKind::Binary,
+            toolchain_requirement: None,
+            binary_target: Some(ManifestTarget {
+                name,
+                root: entry,
+                exports: std::collections::BTreeMap::new(),
+            }),
+            library_target: None,
+            capabilities: CapabilityPolicy::default(),
+            effect_policy: EffectPolicy::default(),
+            dependencies: std::collections::BTreeMap::new(),
+            workspace: None,
+        }
+    }
+}
+
+/// Result of filesystem discovery before the manifest enters Salsa.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestDiscovery {
+    pub path: PathBuf,
+    pub spelling: ManifestSpelling,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManifestSpelling {
+    Canonical,
+    Legacy,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManifestSchema {
+    schema: u32,
+    package: PackageSection,
+    #[serde(default)]
+    toolchain: Option<ToolchainSection>,
+    targets: TargetsSection,
+    #[serde(default)]
+    dependencies: std::collections::BTreeMap<String, RawDependency>,
+    #[serde(default)]
+    capabilities: RawCapabilityPolicy,
+    #[serde(default)]
+    policy: RawPolicy,
+    #[serde(default)]
+    metadata: toml::Table,
+    #[serde(default)]
+    workspace: Option<WorkspaceSection>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PackageSection {
+    name: String,
+    version: String,
+    edition: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ToolchainSection {
+    arandu: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TargetsSection {
+    #[serde(default)]
+    bin: Option<TargetSection>,
+    #[serde(default)]
+    lib: Option<TargetSection>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TargetSection {
+    name: String,
+    root: String,
+    #[serde(default)]
+    exports: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PathDependency {
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RawDependency {
+    Path(PathDependency),
+    Git(GitDependency),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GitDependency {
+    git: String,
+    rev: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkspaceSection {
+    members: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawCapabilityPolicy {
+    #[serde(default)]
+    network: Vec<String>,
+    #[serde(default)]
+    filesystem_read: Vec<String>,
+    #[serde(default)]
+    filesystem_write: Vec<String>,
+    #[serde(default)]
+    environment: Vec<String>,
+    #[serde(default)]
+    process: Vec<String>,
+    #[serde(default)]
+    foreign: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawPolicy {
+    #[serde(default)]
+    effects: Option<RawEffectPolicy>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawEffectPolicy {
+    deny_new_authority: bool,
+    warn_new_resources: bool,
+    deny: Vec<String>,
+}
+
+impl Default for RawEffectPolicy {
+    fn default() -> Self {
+        let policy = EffectPolicy::default();
+        Self {
+            deny_new_authority: policy.deny_new_authority,
+            warn_new_resources: policy.warn_new_resources,
+            deny: policy.deny,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyManifest {
+    name: String,
+    version: String,
+    entry: String,
 }
 
 /// Why reading or parsing `Arandu.toml` failed.
@@ -43,6 +285,15 @@ pub enum ManifestError {
         path: PathBuf,
         message: String,
     },
+    ConflictingFiles {
+        canonical: PathBuf,
+        legacy: PathBuf,
+    },
+    IncompatibleToolchain {
+        path: PathBuf,
+        required: String,
+        current: String,
+    },
 }
 
 impl fmt::Display for ManifestError {
@@ -64,6 +315,21 @@ impl fmt::Display for ManifestError {
             ManifestError::ReservedName { path, message } => {
                 write!(f, "invalid {}: {message}", path.display())
             }
+            ManifestError::ConflictingFiles { canonical, legacy } => write!(
+                f,
+                "conflicting package manifests: both {} and {} exist; keep only `{MANIFEST_FILENAME}`",
+                canonical.display(),
+                legacy.display()
+            ),
+            ManifestError::IncompatibleToolchain {
+                path,
+                required,
+                current,
+            } => write!(
+                f,
+                "incompatible {}: requires Arandu `{required}`, current toolchain is `{current}`",
+                path.display()
+            ),
         }
     }
 }
@@ -98,96 +364,457 @@ pub fn hash_manifest_bytes(bytes: &[u8]) -> String {
 
 /// Parse `Arandu.toml` text. Does **not** read the filesystem.
 ///
-/// Minimal TOML subset: top-level `key = "value"` string assignments only.
-/// Unknown keys are ignored (forward-compatible). Missing required fields fail.
+/// Complete TOML syntax with a strict Arandu-owned schema. The legacy three-key
+/// shape remains readable during the migration window.
 pub fn parse_manifest_str(path: &Path, text: &str) -> Result<ManifestData, ManifestError> {
-    let mut name: Option<String> = None;
-    let mut version: Option<String> = None;
-    let mut entry: Option<String> = None;
-
-    for (line_no, raw_line) in text.lines().enumerate() {
-        let line = strip_toml_comment(raw_line).trim();
-        if line.is_empty() {
-            continue;
-        }
-        // Sections / tables not supported in MVP — reject so we never silently
-        // ignore structured config the user thought was active.
-        if line.starts_with('[') {
-            return Err(ManifestError::Parse {
+    let value: toml::Value = toml::from_str(text).map_err(|error| ManifestError::Parse {
+        path: path.to_path_buf(),
+        message: error.to_string(),
+    })?;
+    let data = if value.get("schema").is_some()
+        || value.get("package").is_some()
+        || value.get("targets").is_some()
+    {
+        let manifest: ManifestSchema = value.try_into().map_err(|error| ManifestError::Parse {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        })?;
+        validate_schema(path, &manifest)?;
+        let binary_target = manifest.targets.bin.map(ManifestTarget::from);
+        let library_target = manifest.targets.lib.map(ManifestTarget::from);
+        let Some(primary_target) = binary_target.as_ref().or(library_target.as_ref()) else {
+            return Err(ManifestError::MissingField {
                 path: path.to_path_buf(),
-                message: format!(
-                    "line {}: tables/sections are not supported yet (got `{line}`)",
-                    line_no + 1
-                ),
-            });
-        }
-        let Some((key, rest)) = line.split_once('=') else {
-            return Err(ManifestError::Parse {
-                path: path.to_path_buf(),
-                message: format!(
-                    "line {}: expected `key = \"value\"`, got `{line}`",
-                    line_no + 1
-                ),
+                field: "targets.bin or targets.lib",
             });
         };
-        let key = key.trim();
-        let value = match parse_toml_string(rest.trim()) {
-            Ok(v) => v,
-            Err(msg) => {
-                return Err(ManifestError::Parse {
+        let primary_root = primary_target.root.clone();
+        let kind = match (binary_target.is_some(), library_target.is_some()) {
+            (true, false) => PackageKind::Binary,
+            (false, true) => PackageKind::Library,
+            (true, true) => PackageKind::Mixed,
+            (false, false) => {
+                return Err(ManifestError::MissingField {
                     path: path.to_path_buf(),
-                    message: format!("line {}: {msg}", line_no + 1),
+                    field: "targets.bin or targets.lib",
                 });
             }
         };
-        match key {
-            "name" => name = Some(value),
-            "version" => version = Some(value),
-            "entry" => entry = Some(value),
-            // Forward-compatible: ignore unknown keys for now.
-            _ => {}
+        ManifestData {
+            name: manifest.package.name,
+            version: manifest.package.version,
+            entry: primary_root,
+            schema: manifest.schema,
+            edition: ManifestEdition::V2026,
+            kind,
+            toolchain_requirement: manifest.toolchain.map(|toolchain| toolchain.arandu),
+            binary_target,
+            library_target,
+            capabilities: CapabilityPolicy {
+                network: manifest.capabilities.network,
+                filesystem_read: manifest.capabilities.filesystem_read,
+                filesystem_write: manifest.capabilities.filesystem_write,
+                environment: manifest.capabilities.environment,
+                process: manifest.capabilities.process,
+                foreign: manifest.capabilities.foreign,
+            },
+            effect_policy: manifest
+                .policy
+                .effects
+                .map(|effects| EffectPolicy {
+                    deny_new_authority: effects.deny_new_authority,
+                    warn_new_resources: effects.warn_new_resources,
+                    deny: effects.deny,
+                })
+                .unwrap_or_default(),
+            dependencies: manifest
+                .dependencies
+                .into_iter()
+                .map(|(alias, dependency)| {
+                    let dependency = match dependency {
+                        RawDependency::Path(dependency) => ManifestDependency::Path {
+                            path: dependency.path,
+                        },
+                        RawDependency::Git(dependency) => ManifestDependency::Git {
+                            origin: dependency.git,
+                            commit: dependency.rev,
+                        },
+                    };
+                    (alias, dependency)
+                })
+                .collect(),
+            workspace: manifest.workspace.map(|workspace| ManifestWorkspace {
+                members: workspace.members,
+            }),
         }
-    }
+    } else {
+        for field in ["name", "version", "entry"] {
+            if value.get(field).is_none() {
+                return Err(ManifestError::MissingField {
+                    path: path.to_path_buf(),
+                    field,
+                });
+            }
+        }
+        let legacy: LegacyManifest = value.try_into().map_err(|error| ManifestError::Parse {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        })?;
+        ManifestData::legacy(legacy.name, legacy.version, legacy.entry)
+    };
 
-    let path_buf = path.to_path_buf();
-    let name = name.ok_or(ManifestError::MissingField {
-        path: path_buf.clone(),
-        field: "name",
-    })?;
-    let version = version.ok_or(ManifestError::MissingField {
-        path: path_buf.clone(),
-        field: "version",
-    })?;
-    let entry = entry.ok_or(ManifestError::MissingField {
-        path: path_buf,
-        field: "entry",
-    })?;
-
-    if name.is_empty() {
+    if data.name.is_empty() {
         return Err(ManifestError::Parse {
             path: path.to_path_buf(),
             message: "`name` must be non-empty".into(),
         });
     }
-    if entry.is_empty() {
+    if data.entry.is_empty() {
         return Err(ManifestError::Parse {
             path: path.to_path_buf(),
             message: "`entry` must be non-empty".into(),
         });
     }
+    semver::Version::parse(&data.version).map_err(|error| ManifestError::Parse {
+        path: path.to_path_buf(),
+        message: format!("`package.version` is not valid SemVer: {error}"),
+    })?;
+    validate_relative_path(path, &data.entry, "target root", false)?;
     // PROMOTE-L2: package name must not collide with stdlib roots.
-    if let Err(e) = crate::vfs::validate_package_name(&name) {
+    if let Err(e) = crate::vfs::validate_package_name(&data.name) {
         return Err(ManifestError::ReservedName {
             path: path.to_path_buf(),
             message: e.to_string(),
         });
     }
 
-    Ok(ManifestData {
-        name,
-        version,
-        entry,
+    Ok(data)
+}
+
+impl From<TargetSection> for ManifestTarget {
+    fn from(target: TargetSection) -> Self {
+        Self {
+            name: target.name,
+            root: target.root,
+            exports: target.exports,
+        }
+    }
+}
+
+fn validate_schema(path: &Path, manifest: &ManifestSchema) -> Result<(), ManifestError> {
+    if manifest.schema != 1 {
+        return Err(ManifestError::Parse {
+            path: path.to_path_buf(),
+            message: format!("unsupported schema {}; expected 1", manifest.schema),
+        });
+    }
+    if manifest.package.edition != "2026" {
+        return Err(ManifestError::Parse {
+            path: path.to_path_buf(),
+            message: format!(
+                "unsupported package edition `{}`; expected `2026`",
+                manifest.package.edition
+            ),
+        });
+    }
+    if let Some(toolchain) = &manifest.toolchain {
+        semver::VersionReq::parse(&toolchain.arandu).map_err(|error| ManifestError::Parse {
+            path: path.to_path_buf(),
+            message: format!("invalid `toolchain.arandu` requirement: {error}"),
+        })?;
+    }
+    for target in [manifest.targets.bin.as_ref(), manifest.targets.lib.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        if target.name.is_empty() {
+            return Err(ManifestError::Parse {
+                path: path.to_path_buf(),
+                message: "target `name` must be non-empty".into(),
+            });
+        }
+        validate_relative_path(path, &target.root, "target root", false)?;
+    }
+    if manifest
+        .targets
+        .bin
+        .as_ref()
+        .is_some_and(|target| !target.exports.is_empty())
+    {
+        return Err(ManifestError::Parse {
+            path: path.to_path_buf(),
+            message: "`targets.bin.exports` is invalid; only a library target exports modules"
+                .into(),
+        });
+    }
+    if let Some(library) = &manifest.targets.lib {
+        validate_exports(path, library)?;
+    }
+    for (alias, dependency) in &manifest.dependencies {
+        crate::vfs::validate_package_name(alias).map_err(|error| ManifestError::ReservedName {
+            path: path.to_path_buf(),
+            message: format!("invalid dependency alias `{alias}`: {error}"),
+        })?;
+        match dependency {
+            RawDependency::Path(dependency) => {
+                validate_relative_path(path, &dependency.path, "dependency path", true)?;
+            }
+            RawDependency::Git(dependency) => {
+                validate_git_origin(path, &dependency.git)?;
+                validate_git_commit(path, &dependency.rev)?;
+            }
+        }
+    }
+    if let Some(workspace) = &manifest.workspace {
+        let mut members = std::collections::BTreeSet::new();
+        let mut folded = std::collections::BTreeSet::new();
+        for member in &workspace.members {
+            validate_relative_path(path, member, "workspace member", false)?;
+            let canonical = member.trim_end_matches('/');
+            if canonical.is_empty()
+                || !members.insert(canonical)
+                || !folded.insert(canonical.to_ascii_lowercase())
+            {
+                return Err(ManifestError::Parse {
+                    path: path.to_path_buf(),
+                    message: format!("duplicate or case-colliding workspace member `{member}`"),
+                });
+            }
+        }
+    }
+    for (name, values) in [
+        ("capabilities.network", &manifest.capabilities.network),
+        (
+            "capabilities.filesystem_read",
+            &manifest.capabilities.filesystem_read,
+        ),
+        (
+            "capabilities.filesystem_write",
+            &manifest.capabilities.filesystem_write,
+        ),
+        (
+            "capabilities.environment",
+            &manifest.capabilities.environment,
+        ),
+        ("capabilities.process", &manifest.capabilities.process),
+    ] {
+        validate_policy_values(path, name, values)?;
+    }
+    if let Some(effects) = &manifest.policy.effects {
+        validate_policy_values(path, "policy.effects.deny", &effects.deny)?;
+        if effects.deny.iter().any(|effect| {
+            !effect
+                .chars()
+                .next()
+                .is_some_and(|first| first.is_ascii_uppercase())
+        }) {
+            return Err(ManifestError::Parse {
+                path: path.to_path_buf(),
+                message: "`policy.effects.deny` names must use PascalCase".into(),
+            });
+        }
+    }
+    let _ = &manifest.metadata;
+    Ok(())
+}
+
+fn validate_git_origin(path: &Path, origin: &str) -> Result<(), ManifestError> {
+    validate_git_dependency_identity(origin, "0123456789abcdef0123456789abcdef01234567").map_err(
+        |message| ManifestError::Parse {
+            path: path.to_path_buf(),
+            message,
+        },
+    )?;
+    Ok(())
+}
+
+pub(crate) fn validate_git_dependency_identity(origin: &str, commit: &str) -> Result<(), String> {
+    if origin.len() > 2048
+        || !origin.is_ascii()
+        || origin.bytes().any(|byte| byte.is_ascii_control())
+    {
+        return Err(
+            "dependency `git` origin must be an ASCII HTTPS URL no longer than 2048 bytes".into(),
+        );
+    }
+    let Some(remainder) = origin.strip_prefix("https://") else {
+        return Err("dependency `git` origin must use canonical `https://` transport".into());
+    };
+    if remainder.contains(['@', '?', '#', '\\']) {
+        return Err(
+            "dependency `git` origin must not contain credentials, query, fragment or backslash"
+                .into(),
+        );
+    }
+    let Some((host, repository)) = remainder.split_once('/') else {
+        return Err("dependency `git` origin must include a host and repository path".into());
+    };
+    if host.is_empty()
+        || host.contains(':')
+        || host != host.to_ascii_lowercase()
+        || host.starts_with('.')
+        || host.ends_with('.')
+        || host.split('.').any(|label| {
+            label.is_empty()
+                || label.starts_with('-')
+                || label.ends_with('-')
+                || !label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+    {
+        return Err(
+            "dependency `git` origin must use a lowercase DNS host without a custom port".into(),
+        );
+    }
+    if !repository.ends_with(".git")
+        || repository.split('/').any(|segment| {
+            segment.is_empty()
+                || segment == "."
+                || segment == ".."
+                || !segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        })
+    {
+        return Err(
+            "dependency `git` origin must use a portable repository path ending in `.git`".into(),
+        );
+    }
+    validate_git_commit_value(commit)?;
+    Ok(())
+}
+
+fn validate_git_commit(path: &Path, commit: &str) -> Result<(), ManifestError> {
+    validate_git_commit_value(commit).map_err(|message| ManifestError::Parse {
+        path: path.to_path_buf(),
+        message,
     })
+}
+
+fn validate_git_commit_value(commit: &str) -> Result<(), String> {
+    if !matches!(commit.len(), 40 | 64)
+        || !commit
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("dependency `rev` must be a complete 40- or 64-character lowercase hexadecimal commit ID".into());
+    }
+    Ok(())
+}
+
+fn validate_exports(path: &Path, target: &TargetSection) -> Result<(), ManifestError> {
+    let mut folded_names = std::collections::BTreeSet::new();
+    let mut folded_paths = std::collections::BTreeSet::new();
+    for (public_name, source) in &target.exports {
+        if public_name != "." && !public_name.split('.').all(is_portable_module_segment) {
+            return Err(ManifestError::Parse {
+                path: path.to_path_buf(),
+                message: format!("invalid library export name `{public_name}`"),
+            });
+        }
+        validate_relative_path(path, source, "library export target", false)?;
+        if !source.ends_with(".aru") {
+            return Err(ManifestError::Parse {
+                path: path.to_path_buf(),
+                message: format!("library export target `{source}` must be an `.aru` file"),
+            });
+        }
+        if !folded_names.insert(public_name.to_ascii_lowercase()) {
+            return Err(ManifestError::Parse {
+                path: path.to_path_buf(),
+                message: format!("case-fold collision in library export `{public_name}`"),
+            });
+        }
+        if !folded_paths.insert(source.to_ascii_lowercase()) {
+            return Err(ManifestError::Parse {
+                path: path.to_path_buf(),
+                message: format!("duplicate library export target `{source}`"),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn is_portable_module_segment(segment: &str) -> bool {
+    let mut chars = segment.chars();
+    matches!(chars.next(), Some(first) if first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|character| character.is_ascii_alphanumeric() || character == '_')
+}
+
+fn validate_policy_values(
+    path: &Path,
+    field: &str,
+    values: &[String],
+) -> Result<(), ManifestError> {
+    let mut seen = std::collections::BTreeSet::new();
+    for value in values {
+        if value.is_empty() || !seen.insert(value) {
+            return Err(ManifestError::Parse {
+                path: path.to_path_buf(),
+                message: format!("`{field}` contains an empty or duplicate value"),
+            });
+        }
+    }
+    Ok(())
+}
+
+pub fn ensure_toolchain_compatible(
+    path: &Path,
+    manifest: &ManifestData,
+    current: &str,
+) -> Result<(), ManifestError> {
+    let Some(required) = &manifest.toolchain_requirement else {
+        return Ok(());
+    };
+    let current_version =
+        semver::Version::parse(current).map_err(|error| ManifestError::Parse {
+            path: path.to_path_buf(),
+            message: format!("compiler version `{current}` is not valid SemVer: {error}"),
+        })?;
+    let requirement =
+        semver::VersionReq::parse(required).map_err(|error| ManifestError::Parse {
+            path: path.to_path_buf(),
+            message: format!("invalid `toolchain.arandu` requirement: {error}"),
+        })?;
+    if requirement.matches(&current_version) {
+        Ok(())
+    } else {
+        Err(ManifestError::IncompatibleToolchain {
+            path: path.to_path_buf(),
+            required: required.clone(),
+            current: current.to_owned(),
+        })
+    }
+}
+
+fn validate_relative_path(
+    manifest_path: &Path,
+    value: &str,
+    field: &str,
+    allow_parent: bool,
+) -> Result<(), ManifestError> {
+    let candidate = Path::new(value);
+    let bytes = value.as_bytes();
+    let windows_drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    let rooted = value.starts_with('/') || value.starts_with("//") || windows_drive;
+    let has_parent = candidate
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir));
+    if value.is_empty()
+        || candidate.is_absolute()
+        || rooted
+        || (!allow_parent && has_parent)
+        || value.contains('\\')
+    {
+        return Err(ManifestError::Parse {
+            path: manifest_path.to_path_buf(),
+            message: format!(
+                "unsafe `{field}` `{value}`; use a non-empty relative path with `/` separators"
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// Read and parse `Arandu.toml` at `path`. Propagates I/O and parse errors.
@@ -222,13 +849,16 @@ pub fn register_manifest(
     )
 }
 
-/// Walk parents of `start` looking for `Arandu.toml` (project discovery).
+/// Walk parents of `start` looking for `arandu.toml` (project discovery).
 ///
 /// This is **not** stdlib resolution — package roots may use cwd/path walk
 /// (Cargo convention). Stdlib uses [`crate::stdlib::resolve_stdlib_root`].
-pub fn find_manifest(start: &Path) -> Option<PathBuf> {
+pub fn find_manifest(start: &Path) -> Result<Option<ManifestDiscovery>, ManifestError> {
     let mut current = if start.is_file() {
-        start.parent()?.to_path_buf()
+        let Some(parent) = start.parent() else {
+            return Ok(None);
+        };
+        parent.to_path_buf()
     } else {
         start.to_path_buf()
     };
@@ -237,68 +867,62 @@ pub fn find_manifest(start: &Path) -> Option<PathBuf> {
         current = abs;
     }
     loop {
-        let candidate = current.join(MANIFEST_FILENAME);
-        if candidate.is_file() {
-            return Some(candidate);
+        if let Some(discovery) = discover_manifest_in(&current)? {
+            return Ok(Some(discovery));
         }
         if !current.pop() {
             break;
         }
     }
-    None
+    Ok(None)
 }
 
-fn strip_toml_comment(line: &str) -> &str {
-    // Naive: `#` starts a comment unless inside quotes. Good enough for MVP
-    // keys which are simple strings without embedded `#`.
-    let mut in_string = false;
-    let bytes = line.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'"' if in_string => {
-                // Handle escaped quote.
-                if i > 0 && bytes[i - 1] == b'\\' {
-                    i += 1;
-                    continue;
-                }
-                in_string = false;
-            }
-            b'"' => in_string = true,
-            b'#' if !in_string => return &line[..i],
-            _ => {}
-        }
-        i += 1;
-    }
-    line
-}
-
-fn parse_toml_string(s: &str) -> Result<String, String> {
-    let s = s.trim();
-    if s.len() < 2 || !s.starts_with('"') || !s.ends_with('"') {
-        return Err(format!("expected double-quoted string, got `{s}`"));
-    }
-    let inner = &s[1..s.len() - 1];
-    // Minimal escapes: \\ \" \n \t
-    let mut out = String::with_capacity(inner.len());
-    let mut chars = inner.chars();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.next() {
-                Some('\\') => out.push('\\'),
-                Some('"') => out.push('"'),
-                Some('n') => out.push('\n'),
-                Some('t') => out.push('\t'),
-                Some(other) => {
-                    return Err(format!("unknown escape `\\{other}` in string"));
-                }
-                None => return Err("trailing backslash in string".into()),
-            }
-        } else {
-            out.push(c);
+fn discover_manifest_in(directory: &Path) -> Result<Option<ManifestDiscovery>, ManifestError> {
+    let entries = std::fs::read_dir(directory).map_err(|error| ManifestError::Io {
+        path: directory.to_path_buf(),
+        message: error.to_string(),
+    })?;
+    let mut canonical = None;
+    let mut legacy = None;
+    for entry in entries {
+        let entry = entry.map_err(|error| ManifestError::Io {
+            path: directory.to_path_buf(),
+            message: error.to_string(),
+        })?;
+        if entry.file_name() == MANIFEST_FILENAME && entry.path().is_file() {
+            canonical = Some(entry.path());
+        } else if entry.file_name() == LEGACY_MANIFEST_FILENAME && entry.path().is_file() {
+            legacy = Some(entry.path());
         }
     }
-    Ok(out)
+    match (canonical, legacy) {
+        (Some(canonical), Some(legacy)) => {
+            let same_file = matches!(
+                (
+                    std::fs::canonicalize(&canonical),
+                    std::fs::canonicalize(&legacy)
+                ),
+                (Ok(canonical_real), Ok(legacy_real)) if canonical_real == legacy_real
+            );
+            if same_file {
+                Ok(Some(ManifestDiscovery {
+                    path: canonical,
+                    spelling: ManifestSpelling::Canonical,
+                }))
+            } else {
+                Err(ManifestError::ConflictingFiles { canonical, legacy })
+            }
+        }
+        (Some(path), None) => Ok(Some(ManifestDiscovery {
+            path,
+            spelling: ManifestSpelling::Canonical,
+        })),
+        (None, Some(path)) => Ok(Some(ManifestDiscovery {
+            path,
+            spelling: ManifestSpelling::Legacy,
+        })),
+        (None, None) => Ok(None),
+    }
 }
 
 /// Tracked helper so dependents can pin work to the manifest fingerprint.
@@ -333,6 +957,279 @@ entry = "src/main.aru"
         assert_eq!(data.name, "hello");
         assert_eq!(data.version, "0.0.1");
         assert_eq!(data.entry, "src/main.aru");
+    }
+
+    #[test]
+    fn parse_schema_one_with_path_dependency() {
+        let text = r#"
+schema = 1
+
+[package]
+name = "hello"
+version = "1.2.3"
+edition = "2026"
+
+[toolchain]
+arandu = ">=0.1.0-rc.4, <0.2.0"
+
+[targets.bin]
+name = "hello"
+root = "src/main.aru"
+
+[dependencies]
+math = { path = "../math" }
+
+[metadata.example]
+note = "preserved for third-party tools"
+"#;
+        let data = parse_manifest_str(Path::new("arandu.toml"), text).unwrap();
+        assert_eq!(data.name, "hello");
+        assert_eq!(data.version, "1.2.3");
+        assert_eq!(data.entry, "src/main.aru");
+        assert_eq!(data.schema, 1);
+        assert_eq!(data.edition, ManifestEdition::V2026);
+        assert_eq!(data.kind, PackageKind::Binary);
+        assert_eq!(
+            data.toolchain_requirement.as_deref(),
+            Some(">=0.1.0-rc.4, <0.2.0")
+        );
+        assert_eq!(
+            data.dependencies["math"],
+            ManifestDependency::Path {
+                path: "../math".into()
+            }
+        );
+    }
+
+    #[test]
+    fn git_dependency_requires_canonical_https_origin_and_full_commit() {
+        let manifest = |dependency: &str| {
+            format!(
+                "schema=1\n[package]\nname='app'\nversion='1.0.0'\nedition='2026'\n[targets.bin]\nname='app'\nroot='src/main.aru'\n[dependencies]\nmath={dependency}\n"
+            )
+        };
+        let commit = "0123456789abcdef0123456789abcdef01234567";
+        let valid = manifest(&format!(
+            "{{ git='https://github.com/example/math.git', rev='{commit}' }}"
+        ));
+        let data = parse_manifest_str(Path::new("arandu.toml"), &valid).unwrap();
+        assert_eq!(
+            data.dependencies["math"],
+            ManifestDependency::Git {
+                origin: "https://github.com/example/math.git".into(),
+                commit: commit.into(),
+            }
+        );
+
+        for dependency in [
+            "{ git='http://github.com/example/math.git', rev='0123456789abcdef0123456789abcdef01234567' }",
+            "{ git='https://token@github.com/example/math.git', rev='0123456789abcdef0123456789abcdef01234567' }",
+            "{ git='https://github.com/example/math', rev='0123456789abcdef0123456789abcdef01234567' }",
+            "{ git='https://github.com/example/math.git', rev='main' }",
+            "{ git='https://github.com/example/math.git', rev='0123456' }",
+            "{ git='https://github.com/example/math.git', rev='0123456789ABCDEF0123456789ABCDEF01234567' }",
+            "{ git='https://github.com/example/math.git', rev='0123456789abcdef0123456789abcdef01234567', branch='main' }",
+            "{ path='../math', git='https://github.com/example/math.git', rev='0123456789abcdef0123456789abcdef01234567' }",
+        ] {
+            assert!(
+                parse_manifest_str(Path::new("arandu.toml"), &manifest(dependency)).is_err(),
+                "unsafe or ambiguous dependency was accepted: {dependency}"
+            );
+        }
+    }
+
+    #[test]
+    fn library_exports_are_typed_and_reject_deep_import_ambiguity() {
+        let text = r#"
+schema = 1
+[package]
+name = "math"
+version = "1.0.0"
+edition = "2026"
+[targets.lib]
+name = "math"
+root = "src/lib.aru"
+[targets.lib.exports]
+"." = "src/lib.aru"
+"geometry.vector" = "src/geometry/vector.aru"
+"#;
+        let data = parse_manifest_str(Path::new("arandu.toml"), text).unwrap();
+        assert_eq!(
+            data.library_target.unwrap().exports["geometry.vector"],
+            "src/geometry/vector.aru"
+        );
+
+        let collision = text.replace(
+            "\"geometry.vector\" = \"src/geometry/vector.aru\"",
+            "\"Geometry\" = \"src/geometry.aru\"\n\"geometry\" = \"src/other.aru\"",
+        );
+        assert!(parse_manifest_str(Path::new("arandu.toml"), &collision)
+            .unwrap_err()
+            .to_string()
+            .contains("case-fold collision"));
+    }
+
+    #[test]
+    fn binary_target_cannot_publish_module_exports() {
+        let text = r#"
+schema = 1
+[package]
+name = "app"
+version = "1.0.0"
+edition = "2026"
+[targets.bin]
+name = "app"
+root = "src/main.aru"
+[targets.bin.exports]
+"." = "src/main.aru"
+"#;
+        assert!(parse_manifest_str(Path::new("arandu.toml"), text)
+            .unwrap_err()
+            .to_string()
+            .contains("only a library target"));
+    }
+
+    #[test]
+    fn mixed_package_prefers_binary_entry_and_preserves_library_target() {
+        let text = r#"
+schema = 1
+[package]
+name = "mixed"
+version = "1.0.0"
+edition = "2026"
+[targets.lib]
+name = "mixed"
+root = "src/lib.aru"
+[targets.bin]
+name = "mixed-cli"
+root = "src/main.aru"
+"#;
+        let data = parse_manifest_str(Path::new("arandu.toml"), text).unwrap();
+        assert_eq!(data.kind, PackageKind::Mixed);
+        assert_eq!(data.entry, "src/main.aru");
+        assert_eq!(data.library_target.unwrap().root, "src/lib.aru");
+    }
+
+    #[test]
+    fn toolchain_requirement_is_enforced_against_explicit_version() {
+        let text = r#"
+schema = 1
+[package]
+name = "future"
+version = "1.0.0"
+edition = "2026"
+[toolchain]
+arandu = ">=9.0.0"
+[targets.lib]
+name = "future"
+root = "src/lib.aru"
+"#;
+        let data = parse_manifest_str(Path::new("arandu.toml"), text).unwrap();
+        let error =
+            ensure_toolchain_compatible(Path::new("arandu.toml"), &data, "0.1.0-rc.4").unwrap_err();
+        assert!(matches!(error, ManifestError::IncompatibleToolchain { .. }));
+        assert!(ensure_toolchain_compatible(Path::new("arandu.toml"), &data, "9.1.0").is_ok());
+    }
+
+    #[test]
+    fn capability_and_effect_policy_are_typed_but_not_claimed_as_inferred() {
+        let text = r#"
+schema = 1
+[package]
+name = "server"
+version = "1.0.0"
+edition = "2026"
+[targets.bin]
+name = "server"
+root = "src/main.aru"
+[capabilities]
+network = ["api.example.com:443"]
+filesystem_read = ["assets/**"]
+foreign = false
+[policy.effects]
+deny_new_authority = true
+warn_new_resources = true
+deny = ["UnknownCapability"]
+"#;
+        let data = parse_manifest_str(Path::new("arandu.toml"), text).unwrap();
+        assert_eq!(data.capabilities.network, ["api.example.com:443"]);
+        assert_eq!(data.capabilities.filesystem_read, ["assets/**"]);
+        assert!(!data.capabilities.foreign);
+        assert_eq!(data.effect_policy.deny, ["UnknownCapability"]);
+    }
+
+    #[test]
+    fn parse_rejects_unknown_owned_field() {
+        let text = r#"
+schema = 1
+[package]
+name = "hello"
+version = "1.2.3"
+edition = "2026"
+surprise = true
+[targets.bin]
+name = "hello"
+root = "src/main.aru"
+"#;
+        let err = parse_manifest_str(Path::new("arandu.toml"), text).unwrap_err();
+        assert!(err.to_string().contains("unknown field `surprise`"));
+    }
+
+    #[test]
+    fn parse_rejects_duplicate_keys_and_host_foreign_absolute_paths() {
+        let duplicate = r#"
+schema = 1
+schema = 1
+[package]
+name = "hello"
+version = "1.0.0"
+edition = "2026"
+[targets.bin]
+name = "hello"
+root = "src/main.aru"
+"#;
+        assert!(matches!(
+            parse_manifest_str(Path::new("arandu.toml"), duplicate),
+            Err(ManifestError::Parse { .. })
+        ));
+
+        let windows_absolute = duplicate
+            .replacen("schema = 1\nschema = 1", "schema = 1", 1)
+            .replace("src/main.aru", "C:/project/main.aru");
+        assert!(
+            parse_manifest_str(Path::new("arandu.toml"), &windows_absolute)
+                .unwrap_err()
+                .to_string()
+                .contains("unsafe `target root`")
+        );
+    }
+
+    #[test]
+    fn parse_rejects_invalid_semver_and_unsafe_target_path() {
+        let invalid_version = r#"
+schema = 1
+[package]
+name = "hello"
+version = "latest"
+edition = "2026"
+[targets.bin]
+name = "hello"
+root = "src/main.aru"
+"#;
+        assert!(
+            parse_manifest_str(Path::new("arandu.toml"), invalid_version)
+                .unwrap_err()
+                .to_string()
+                .contains("not valid SemVer")
+        );
+
+        let escaping_root = invalid_version
+            .replace("latest", "1.0.0")
+            .replace("src/main.aru", "../main.aru");
+        assert!(parse_manifest_str(Path::new("arandu.toml"), &escaping_root)
+            .unwrap_err()
+            .to_string()
+            .contains("unsafe `target root`"));
     }
 
     #[test]
@@ -374,5 +1271,52 @@ entry = "src/main.aru"
         assert_eq!(a, b);
         assert_ne!(a, c);
         assert_eq!(a.len(), 64);
+    }
+
+    #[test]
+    fn discovery_prefers_canonical_and_classifies_legacy() {
+        let root = test_directory("manifest_discovery");
+        std::fs::write(root.join(LEGACY_MANIFEST_FILENAME), "legacy").unwrap();
+        let legacy = find_manifest(&root).unwrap().unwrap();
+        assert_eq!(legacy.spelling, ManifestSpelling::Legacy);
+
+        std::fs::write(root.join(MANIFEST_FILENAME), "canonical").unwrap();
+        let exact_names = std::fs::read_dir(&root)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .collect::<Vec<_>>();
+        let has_both = exact_names.iter().any(|name| name == MANIFEST_FILENAME)
+            && exact_names
+                .iter()
+                .any(|name| name == LEGACY_MANIFEST_FILENAME);
+        if has_both {
+            assert!(matches!(
+                find_manifest(&root),
+                Err(ManifestError::ConflictingFiles { .. })
+            ));
+        } else {
+            let discovery = find_manifest(&root).unwrap().unwrap();
+            let expected = if exact_names.iter().any(|name| name == MANIFEST_FILENAME) {
+                ManifestSpelling::Canonical
+            } else {
+                ManifestSpelling::Legacy
+            };
+            assert_eq!(discovery.spelling, expected);
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn test_directory(prefix: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "arandu-{prefix}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        root
     }
 }

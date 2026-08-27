@@ -207,7 +207,10 @@ fn map_debounced_event(sess: &mut PackageWatchSession, ev: &DebouncedEvent) {
             // Treat other kinds that touch .aru / Arandu.toml as modify.
             for p in paths {
                 if p.extension().and_then(|e| e.to_str()) == Some("aru")
-                    || p.file_name().and_then(|s| s.to_str()) == Some("Arandu.toml")
+                    || matches!(
+                        p.file_name().and_then(|s| s.to_str()),
+                        Some("arandu.toml" | "Arandu.toml")
+                    )
                 {
                     sess.push(p, FsChange::Modify);
                 }

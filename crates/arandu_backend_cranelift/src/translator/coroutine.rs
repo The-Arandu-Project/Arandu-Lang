@@ -1,10 +1,9 @@
 use arandu_semantics::amir::AmirOperand;
 use cranelift_codegen::ir::{InstBuilder, Value};
-use cranelift_module::Module;
 
 use super::FunctionTranslator;
 
-impl FunctionTranslator<'_, '_> {
+impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
     /// A3.0/A3.3/A3.6: state blob with disc@0 and payload@8.
     /// `stack == true` → stack slot (zero-heap); else `malloc` (escaping / returned).
     pub(super) fn translate_coroutine_ready(

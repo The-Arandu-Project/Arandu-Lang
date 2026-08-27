@@ -26,7 +26,7 @@ range of a program return value.
 | `fmt` | format source files | none | partial | `0` |
 | `run` | execute `main` | Cranelift host JIT | experimental | program return code |
 | `emit-c` | emit GNU C source | C | experimental; see backend contract | `0` |
-| `build` | build package in development mode | Cranelift host JIT | experimental | `0` |
+| `build` | publish a host-native package executable | Cranelift AOT object + native linker | stable project workflow | `0` |
 | `build --release` | reserved release pipeline | LLVM when implemented | unavailable | usage/unsupported exit `2` |
 | `new`, `doctor`, `watch`, `hash-file` | project/tooling operations | varies | partial | `0` |
 

@@ -1,34 +1,95 @@
 # Arandu Compiler Architecture — Master Roadmap (v0.1 → v0.4)
 
+> **Fonte única de planejamento.** Itens marcados como concluídos abaixo são
+> decisões consolidadas, não tarefas pendentes. Os documentos técnicos ligados
+> aqui preservam apenas contratos necessários para implementar e validar essas
+> decisões.
+
+## Decisões consolidadas (Gold v0.1)
+
+- **Projeto e pacotes:** `arandu.toml` + `arandu.lock`, TOML versionado,
+  identidade por pacote/alvo/módulo, imports por alias explícito e grafo DAG
+  determinístico. Dependências remotas ficam presas a origem HTTPS/Git e
+  commit exato; não há branches flutuantes, registries ou scripts de build.
+- **Integridade:** lockfile canônico, hashes de conteúdo, cache imutável por
+  digest, publicação staging/rename e políticas `--locked`, `--offline` e
+  `--frozen`. Archives rejeitam traversal, links, duplicatas e bombas de
+  expansão; raízes são canonicalizadas em Windows, Linux e macOS.
+- **Reprodutibilidade:** manifests, grafos, lockfiles e metadados de artefatos
+  devem ser byte-estáveis entre sistemas suportados. A promoção Gold exige
+  E2E nativo fora do checkout e recuperação após interrupção.
+- **Tooling:** LSP incremental prioriza documentos abertos; snapshots stale
+  são descartados, filas são limitadas e diagnósticos permanecem estruturados.
+  O servidor classifica semantic tokens; cores e ícones pertencem à extensão
+  e ao tema do editor.
+- **Memória e execução:** GenRef é o fallback seguro e explícito; efeitos,
+  ownership, layout por alvo e invariantes SSA/AMIR permanecem contratos do
+  compilador. RC/ARC e tracing GC não são requisitos da Gold v0.1.
+
+Detalhes históricos de pesquisa, checklists já executados e evidências de CI
+vivem no Git e nos contratos técnicos; não são novas tarefas do roadmap.
+
 **Fonte única de verdade (checklist executivo).**
 Este documento consolida as decisões arquiteturais sobre Data-Oriented Design (Interning), Polimorfismo Híbrido, OSSA (Ownership SSA), Effects, Async Colorless, Arquitetura de Memória e Binários de Pegada Zero em uma especificação técnica unificada e acionável.
 
-> **Execução atual:** S0, S1 e S2 estão `gold`; novas grandes fases permanecem subordinadas ao
-> [roadmap de estabilização gold](./arandu-stability-gold-roadmap-v0.1.md), cujo foco atual é
-> [S3 — distribuição beta gold](./arandu-s3-beta-distribution-roadmap-v0.1.md), e ao
-> [roadmap gold do LSP/editor](./arandu-lsp-editor-gold-roadmap-v0.1.md).
-> Este arquivo continua sendo a visão de produto e dependências, não a fila
-> diária de hardening.
+> **Execução atual:** as campanhas transversais S0–S3, L0–L3, decomposição de
+> monólitos, anotações PascalCase e GenRef estão encerradas no escopo publicado.
+> Este é o único roadmap executivo; contratos técnicos vivos permanecem em
+> documentos próprios e campanhas concluídas permanecem recuperáveis no Git.
+
+> **Campanha ativa:** [Project & Package Lifecycle Gold](./arandu-project-package-lifecycle-gold-v0.1.md)
+> fecha manifesto, lockfile, artefatos, workspaces e dependências locais antes
+> de SL_T, compiler service/playground e runtime/stdlib completos.
 
 ### Semântica de status
 
 O checklist histórico `[x]` significa que a implementação prevista naquele
 marco foi integrada; não significa automaticamente qualidade `gold`. A
 classificação canônica de maturidade é `gold`, `done`, `partial`,
-`experimental` ou `planned`, conforme definida no roadmap de estabilização.
+`experimental` ou `planned`, conforme definida abaixo.
 Uma fase posterior pode liberar a versão completa de um item antigo sem apagar
 o marco anterior: o item antigo permanece implementado, mas só vira `gold`
 quando cumprir seu contrato atual.
 
-| Documento | Status |
-|-----------|--------|
-| `arandu-strategic-plan-v0.1.md` | **Síntese** — decisões, bugs, papers, fases |
-| `arandu-ir-architecture-v0.1.md` | Referência técnica de IR |
-| `arandu-amir-v0.1.md` | Contrato AMIR + invariantes formais |
-| `README.md` Next Steps | **Alinhado** — aponta para memória/backend como próximos marcos |
-| `arandu-s1-contracts-recovery-roadmap-v0.1.md` | **Gold** — PR #8, contratos de falha e determinismo |
-| `arandu-s2-real-projects-endurance-roadmap-v0.1.md` | **Gold** — corpus, churn, memória, performance e fuzz regressivo |
-| `arandu-s3-beta-distribution-roadmap-v0.1.md` | **Ativo** — matriz de release, compatibilidade v0.x, provenance e RC beta gold |
+| Estado | Significado |
+| --- | --- |
+| `gold` | escopo publicado implementado, exercitado pelo gate correspondente e sem bloqueador conhecido |
+| `done` | implementação prevista existe, mas falta ao menos uma prova ou obrigação de produto |
+| `partial` | caminho útil existe, porém partes do contrato ainda estão ausentes |
+| `experimental` | disponível sem promessa de estabilidade ou suporte completo |
+| `planned` | decisão aceita ou investigação registrada, ainda sem implementação |
+
+### Registro consolidado das campanhas encerradas
+
+| Campanha | Estado | Evidência e contrato vivo |
+| --- | --- | --- |
+| S0 — baseline reproduzível | `gold` | toolchain/lockfile fixos e `S0 / Gate` obrigatório |
+| S1 — contratos e recovery | `gold` | falhas tipadas, ICE reportável, determinismo e contratos de [backend](./arandu-backend-contract-v0.1.md) e [CLI/LSP](./arandu-cli-lsp-contract-v0.1.md) |
+| S2 — projetos reais/endurance | `gold` | corpus versionado, churn, budgets, fuzz regressivo e `S2 / Endurance` |
+| S3 — distribuição beta | `gold` no canal RC publicado | pacotes nativos Linux x86-64, macOS ARM64 e Windows x86-64; [contrato de distribuição](./arandu-distribution-contract-v0.1.md) e [verificação](./release-verification.md) |
+| L0–L3 — LSP/editor | `gold` no escopo publicado | VFS/snapshots, Unicode, cancelamento, multi-file, UX e Extension Host; [arquitetura](./arandu-salsa-lsp-architecture-v0.1.md) e [matriz pública](./arandu-lsp-capabilities-v0.1.md) |
+| Decomposição arquitetural | `gold` | LSP handlers, pass manager, `arandu_runtime` e `arandu_codegen`; separação futura de geração/resolução de constraints permanece backlog do type checker |
+| Minimal 0.1 e CLI de projeto | `gold` | superfície exercitada por `examples/minimal/` e comandos `new/check/run/build/doctor` |
+| Anotações públicas | `gold` | contrato [PascalCase](./arandu-attribute-naming-v0.1.md), aliases legados apenas na janela de migração |
+| GenRef | `gold` no escopo seguro publicado | [RFC Gold](./arandu-genref-gold-rfc-v0.1.md), AMIR tipada, payload/drop, C/Cranelift, O004/LSP, fuzz, Miri e sanitizers |
+
+### Fila de execução
+
+1. [Project & Package Lifecycle Gold](./arandu-project-package-lifecycle-gold-v0.1.md).
+2. SL_T — testing e benchmark harness.
+3. Stdlib mínima necessária a aplicações e experimentos.
+4. Compiler service com sandbox e site/editor com compilação remota.
+5. SL_R e SL_S Gold para runtime assíncrono e sistema completos.
+
+### Resíduos que continuam abertos
+
+- GenRef não promete concorrência, persistência, FFI direta ou Cranelift
+  32-bit; i686 permanece layout + emissão C estrutural, não execução nativa.
+- A remoção dos aliases legados de anotações exige uma fronteira de release.
+- A separação completa `constraint_gen`/solver do type checker é melhoria de
+  arquitetura planejada, não bloqueador das garantias atuais.
+- Runtime async completo, effect system, ABI pública geral, LLVM, cache estável,
+  ecossistema e self-hosting continuam nos marcos futuros abaixo.
 
 ---
 
@@ -69,6 +130,9 @@ Fase 2 — A Construção da Infraestrutura & Execução (v0.2) · [FECHADA no c
                   · Residual de produto em Fase 3 (F2 OSSA, A3 compiler model) tratado abaixo.
 [x] INF2.1 Refatoração para InternPool (AstPool & TypeInterner centralizado)
 [x] HIR Pool-first migration — structural HIR nodes (blocks, stmts, expr-blocks) stored in `HirPool` and referenced via `HirBlockId` (lowering, monomorphize, pretty-print, AMIR lowering and tests updated)
+[x] ARCH   Decomposição de monólitos — pass manager/AmirBuilder, handlers LSP,
+           `arandu_runtime` e `arandu_codegen` extraídos; ownership dos crates
+           e testes arquiteturais impedem reacoplamento.
 [x] A5     Layout de Dados Orientado a Objetos/Registros (SoA, dense ID-based graphs no AMIR/CFG)
 [x] A6     CPU-Oriented Execution Model (table-driven parsing, branchless categorization)
 [x] A7     Portable SIMD Infrastructure (AVX2/NEON UTF-8 validation e keyword matching)
@@ -152,17 +216,15 @@ Fase 3 — OSSA Avançado, Semântica e OS Runtime (v0.3) · [PARCIAL; vários m
    │    ├─ [x] F2.3.1 Escape detection (return → O010; heap-store → O004 path)
    │    ├─ [x] F2.3.2 O004 nota informativa (Magia Inspecionável — nunca silencioso)
    │    └─ [x] F2.3.3 G2: `@NoFallback` / `--no-generational-fallback` promove O004→erro
-   └─ [~] F2.3.runtime  GenRef MVP concluído; estabilização Gold em campanha
-        ├─ [x] Spec: `docs/arandu-genref-abi-rfc-v0.1.md`
-        ├─ [~] Gold: `docs/arandu-genref-gold-strategy-v0.1.md`
-        ├─ [x] `stdlib/core/intrinsics.aru` — `abort_generational_mismatch`
-        ├─ [x] `stdlib/alloc/gen_arena.aru` — API GenRef/GenArena (surface tipada)
-        ├─ [x] AMIR `GenInsert`/`GenGet`/`GenRemove` + `ArType::GenRef`
-        ├─ [x] Host JIT `gen_runtime` + Cranelift (insert/get/remove; mismatch abort)
-        ├─ [x] C backend helpers (`ar_gen_*_i64`)
-        ├─ [x] `gen_promote`: rewrite Borrow→GenInsert/Load for HeapStore int locals
-        └─ [→] `GenArena<T>` tables self-host / post-MVP — **não** bloqueia F2;
-                  API stdlib tipada existe; host permanece i64 até self-host
+   └─ [x] F2.3.runtime  GenRef Gold no escopo seguro do
+        │               `docs/arandu-genref-gold-rfc-v0.1.md`
+        ├─ [x] Handle opaco tipado, identidade de arena, zero inválido e retirement sem ABA
+        ├─ [x] AMIR `GenInsert`/`GenGet`/`GenSet`/`GenUpsert`/`GenRemove` validada
+        ├─ [x] Payload type-erased com `DataLayout`, ownership e drop glue explícitos
+        ├─ [x] Promoção CFG para raízes representáveis; projeções sem owner/path first-class são rejeitadas
+        ├─ [x] Paridade C/Cranelift, shutdown determinístico e ausência do limite legado de 256 slots
+        ├─ [x] O004 rico, quick fix `@NoFallback`, relatório opt-in e métricas puras
+        └─ [x] Fuzz/oracle, endurance, Miri, ASan e UBSan; thread/FFI/persistência fora do escopo
 [x] M2     Move checker avançado (O002, O003, O006) — `borrow_check` sobre F2.1/F2.2
            └─ Poison 0xDE em debug (BC.2/BC.3) permanece defesa extra, não substituto de M2
 [x] G2     fundido em F2.3.3 (promote O004; ver acima)
@@ -209,6 +271,7 @@ Fase 5 — Otimização Global, CodeGen & Ecossistema (v0.4+) · [NÃO INICIADA]
 Fase 6 — Bootstrap & Auto-Hospedagem (v1.0) · [NÃO INICIADA]
 [ ] HOST   Self-Hosting: compilador Arandu compilando a si mesmo de forma convergente (3-passos)
 [ ] BOOT   Remoção total de dependências do compilador Rust para build releases
+[ ] DIST   Validadores TAR/ZIP nativos no CLI (`arandu archive validate`), removendo Python dos instaladores e containers; manter Python apenas como oracle de testes
 [ ] MS     Completa compilação paralela usando o runtime nativo de concorrência com compilação < 3 segundos
 
 Fase E — Ferramentas Integradas e Ecossistema (Evoluções Fora do Core) · [NÃO INICIADA]
@@ -341,13 +404,51 @@ Inspirado por Salsa e o request-evaluator do Swift, o compilador é estruturado 
 
 #### A2 — Effect System (v0.3)
 
-Um sistema de efeitos estrito e rastreável pelo compilador que decora as assinaturas de funções e garante propriedades semânticas:
+Um sistema de efeitos estrito e rastreável pelo compilador. Effects são
+**inferidos transitivamente** a partir do código resolvido e tipado; anotações
+como `@Effects(Net)` declaram um contrato verificável, nunca uma afirmação em
+que o compilador confia cegamente. Omitir a anotação não oculta comportamento,
+e uma declaração menor que o conjunto inferido é erro.
+
+O modelo separa três dimensões para que alertas permaneçam úteis:
+
+* **autoridade/segurança**: `Net`, `FileRead`, `FileWrite`, `Environment`,
+  `Process`, `Foreign` e `UnknownCapability`;
+* **recursos**: `Heap`, `Blocking`, `Suspend` e `Thread`;
+* **semântica**: estado, não determinismo e falhas tipadas.
+
+`Unsafe` não concede autoridade. Operações de rede dentro de código unsafe
+continuam exigindo `Net`; FFI não classificada introduz conservadoramente
+`Foreign + Unsafe + UnknownCapability`. Uso interno auditável de memória unsafe
+é registrado como risco de implementação, mas não contamina automaticamente
+toda API pública. `UnknownCapability` sempre se propaga e políticas rigorosas o
+bloqueiam.
+
+O resumo inferido da API pública e os riscos de implementação formarão metadata
+assinada pelo compilador. O gerenciador de pacotes compara versões e exige
+aprovação para ampliações como `{} -> {Net}` ou alerta para mudanças de recurso
+como `{} -> {Heap}`. Manifesto define o teto autorizado, lockfile registra o
+perfil observado, e sandbox/runtime aplica a autoridade; checksum sozinho só
+prova identidade dos bytes.
+
+Propriedades semânticas iniciais:
 
 * `pure`: Garante ausência de efeitos colaterais e mutações globais. Permite otimização agressiva de GVN (Global Value Numbering) e eliminação total de sub-chamadas redundantes.
 * `readonly`: Permite ler dados arbitrários mas proíbe qualquer mutação. O compilador usa isso para promover borrows mutáveis em compartilhados de forma segura.
 * `noalloc`: Proíbe alocações na heap. Ideal para kernels, drivers e hot-paths de alta performance.
 * `nothrow`: Garante que a função nunca pânico/abort, eliminando caminhos de erro nas análises de controle de fluxo do AMIR.
 * `nosuspend`: Garante que a função é síncrona e nunca suspende controle, permitindo chamadas diretas sem overhead de corrotinas.
+
+**Marcos de implementação:**
+
+1. IDs estáveis de effects/capabilities e representação canônica de conjuntos;
+2. effects intrínsecos da stdlib e fronteiras conservadoras de FFI/unsafe;
+3. inferência local e propagação interprocedural com ciclos até ponto fixo;
+4. contratos explícitos e diagnósticos com cadeia causal;
+5. resumo público separado do risco interno, preservando early-cutoff;
+6. metadata de pacote, diff de atualização e políticas no manifesto/lockfile;
+7. enforcement por sandbox para autoridade — análise estática não substitui
+   isolamento de código nativo.
 
 #### A3 — Modelo Async Semântico e Colorless (v0.3)
 
@@ -634,7 +735,7 @@ O compilador do Arandu rejeita abordagens extremas e escolhe a estratégia ótim
 
 O compilador do Arandu abandona o acoplamento exclusivo a um único backend:
 
-* **arandu build --dev**: Utiliza o backend **Cranelift** gerando código de máquina diretamente em memória de forma quase instantânea para testes e iteração rápida.
+* **arandu run / build --dev**: `run` utiliza o JIT **Cranelift** em memória; `build` reutiliza o mesmo lowering para emitir objeto baseline do host, ligar o runtime estático distribuído e publicar um executável nativo transacional.
 * **arandu build --release**: Utiliza o backend **LLVM** aplicando vetorização avançada, PGO (Profile-Guided Optimization) e LTO (Link-Time Optimization) para desempenho máximo de produção.
 * **arandu build --portability**: Utiliza o backend **C** puro para transpilar o código linearizado 1:1, servindo estritamente como fallback para plataformas de nicho, embarcados de arquiteturas exóticas e bootstrapping.
 

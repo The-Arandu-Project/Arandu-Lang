@@ -125,7 +125,7 @@ arandu_alloc
 
 > **F2.3 / GenRef:** `gen_arena` is the only place dynamic generational tables live.
 > Trap on mismatch is `std.core.intrinsics.abort_generational_mismatch`.
-> Compiler ABI: `docs/arandu-genref-abi-rfc-v0.1.md`.
+> Compiler ABI: `docs/arandu-genref-gold-rfc-v0.1.md`.
 
 ### Filosofia de Alocadores Customizados
 Diferente de linguagens tradicionais onde todas as coleções apontam implicitamente para um único alocador global, todas as estruturas em `arandu_alloc` suportam um parâmetro genérico opcional de alocador:

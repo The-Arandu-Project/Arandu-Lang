@@ -91,7 +91,7 @@ struct SliceLayout {
 
 ### Generational reference (`GenRef`) — F2.3.runtime
 
-See **`docs/arandu-genref-abi-rfc-v0.1.md`**. Summary:
+See **`docs/arandu-genref-gold-rfc-v0.1.md`**. Summary:
 
 ```text
 struct GenRef {

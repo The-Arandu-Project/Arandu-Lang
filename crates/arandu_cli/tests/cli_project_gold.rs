@@ -5,19 +5,41 @@
 use std::fs;
 use std::process::Command;
 
+mod common;
+
 fn run_cli(args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_arandu_cli"))
+    common::cli_command()
         .args(args)
         .output()
         .expect("cli should run")
 }
 
 fn run_cli_in(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_arandu_cli"))
+    common::cli_command()
         .args(args)
         .current_dir(dir)
         .output()
         .expect("cli should run")
+}
+
+#[test]
+fn cache_dir_reports_the_absolute_override_without_creating_it() {
+    let tmp = tempfile_dir("arandu_cache_dir");
+    let cache = tmp.join("global-cache");
+    let out = run_cli(&["cache", "dir", &format!("--cache-dir={}", cache.display())]);
+    assert!(
+        out.status.success(),
+        "cache dir failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        cache.to_string_lossy()
+    );
+    assert!(
+        !cache.exists(),
+        "cache discovery must not mutate the filesystem"
+    );
 }
 
 #[test]
@@ -78,8 +100,11 @@ fn new_scaffolds_package_and_check_run() {
         "new failed: {}",
         String::from_utf8_lossy(&new_out.stderr)
     );
-    assert!(project.join("Arandu.toml").is_file());
+    assert!(project.join("arandu.toml").is_file());
     assert!(project.join("src/main.aru").is_file());
+    assert!(project.join("README.md").is_file());
+    assert!(project.join(".gitignore").is_file());
+    assert!(project.join("tests/smoke.aru").is_file());
 
     let check = run_cli_in(&project, &["check"]);
     assert!(
@@ -89,6 +114,9 @@ fn new_scaffolds_package_and_check_run() {
         String::from_utf8_lossy(&check.stderr)
     );
     assert!(String::from_utf8_lossy(&check.stdout).contains("ok"));
+    let lock_bytes = fs::read(project.join("arandu.lock")).unwrap();
+    assert!(!lock_bytes.contains(&b'\r'));
+    assert!(String::from_utf8_lossy(&lock_bytes).contains("version = 2"));
 
     let run = run_cli_in(&project, &["run"]);
     assert!(
@@ -110,6 +138,94 @@ fn new_scaffolds_package_and_check_run() {
         String::from_utf8_lossy(&build.stderr)
     );
     assert!(String::from_utf8_lossy(&build.stdout).contains("cranelift"));
+    let build_states = files_named(&project.join("target"), "build-state.json");
+    assert_eq!(build_states.len(), 1);
+    let state = fs::read_to_string(&build_states[0]).unwrap();
+    assert!(state.contains("\"schema\": 2"));
+    assert!(state.contains("\"backend\": \"cranelift-aot\""));
+    assert!(state.contains("\"compiler_version\""));
+    assert!(state.contains("\"linker\""));
+    let first_state: serde_json::Value = serde_json::from_str(&state).unwrap();
+    let first_artifact = build_states[0]
+        .parent()
+        .unwrap()
+        .join(first_state["artifact"].as_str().unwrap());
+    assert!(first_artifact.is_file());
+    assert_eq!(
+        Command::new(&first_artifact)
+            .output()
+            .unwrap()
+            .status
+            .code(),
+        Some(0)
+    );
+    let object_extension = if cfg!(windows) { "obj" } else { "o" };
+    assert_eq!(
+        files_with_extension(&project.join("target"), object_extension).len(),
+        1
+    );
+    let repeated = run_cli_in(&project, &["build"]);
+    assert!(repeated.status.success());
+    let repeated_state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&build_states[0]).unwrap()).unwrap();
+    assert_eq!(
+        repeated_state["artifact"], first_state["artifact"],
+        "identical native inputs must select a byte-identical executable"
+    );
+
+    fs::write(
+        project.join("src/main.aru"),
+        "module hello_gold\nfunc main(): int { return 1 }\n",
+    )
+    .unwrap();
+    let rebuild = run_cli_in(&project, &["build"]);
+    assert!(rebuild.status.success());
+    assert_eq!(
+        files_with_extension(&project.join("target"), object_extension).len(),
+        2,
+        "a successful rebuild retains the previous immutable artifact"
+    );
+    let second_state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&build_states[0]).unwrap()).unwrap();
+    let second_artifact = build_states[0]
+        .parent()
+        .unwrap()
+        .join(second_state["artifact"].as_str().unwrap());
+    assert_ne!(first_artifact, second_artifact);
+    assert!(
+        first_artifact.is_file(),
+        "last valid artifact was discarded"
+    );
+    assert_eq!(
+        Command::new(&second_artifact)
+            .output()
+            .unwrap()
+            .status
+            .code(),
+        Some(1)
+    );
+
+    fs::write(
+        project.join("src/main.aru"),
+        "module hello_gold\nfunc main(): int { return missing_name }\n",
+    )
+    .unwrap();
+    let failed = run_cli_in(&project, &["build"]);
+    assert_eq!(failed.status.code(), Some(1));
+    let state_after_failure = fs::read_to_string(&build_states[0]).unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&state_after_failure).unwrap()["artifact"],
+        second_state["artifact"],
+        "failed build must leave the last valid publication selected"
+    );
+    assert_eq!(
+        Command::new(&second_artifact)
+            .output()
+            .unwrap()
+            .status
+            .code(),
+        Some(1)
+    );
 
     // --release is reserved for LLVM — must not silently change meaning.
     let rel = run_cli_in(&project, &["build", "--release"]);
@@ -119,7 +235,329 @@ fn new_scaffolds_package_and_check_run() {
             || String::from_utf8_lossy(&rel.stderr).contains("llvm")
     );
 
+    let clean = run_cli_in(&project, &["clean"]);
+    assert!(clean.status.success());
+    assert!(!project.join("target").exists());
+    let clean_again = run_cli_in(&project, &["clean"]);
+    assert!(clean_again.status.success());
+    assert!(String::from_utf8_lossy(&clean_again.stdout).contains("already clean"));
+
     let _ = fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn locked_offline_and_frozen_have_independent_policy() {
+    let tmp = tempfile_dir("arandu_lock_policy");
+    let project = tmp.join("lock_policy");
+    assert!(
+        run_cli_in(&tmp, &["new", "lock_policy", "--vcs=none"])
+            .status
+            .success()
+    );
+
+    let missing_locked = run_cli_in(&project, &["check", "--locked"]);
+    assert!(!missing_locked.status.success());
+    assert!(String::from_utf8_lossy(&missing_locked.stderr).contains("--locked"));
+    assert!(!project.join("arandu.lock").exists());
+
+    let offline = run_cli_in(&project, &["check", "--offline"]);
+    assert!(
+        offline.status.success(),
+        "offline root resolution failed: {}",
+        String::from_utf8_lossy(&offline.stderr)
+    );
+    let original = fs::read(project.join("arandu.lock")).unwrap();
+
+    let frozen = run_cli_in(&project, &["check", "--frozen"]);
+    assert!(frozen.status.success());
+    assert_eq!(fs::read(project.join("arandu.lock")).unwrap(), original);
+}
+
+#[test]
+fn tree_is_canonical_and_verify_is_locked_offline() {
+    let tmp = tempfile_dir("arandu_graph_inspect");
+    let project = tmp.join("graph_inspect");
+    assert!(
+        run_cli_in(&tmp, &["new", "graph_inspect", "--vcs=none"])
+            .status
+            .success()
+    );
+
+    let tree = run_cli_in(&project, &["tree"]);
+    assert!(tree.status.success());
+    let first = String::from_utf8_lossy(&tree.stdout).into_owned();
+    assert!(first.starts_with("graph blake3:"));
+    assert!(first.contains(" root local"), "{first}");
+    assert!(project.join("arandu.lock").is_file());
+    let second = run_cli_in(&project, &["tree", "--locked"]);
+    assert!(second.status.success());
+    assert_eq!(first, String::from_utf8_lossy(&second.stdout));
+
+    let verified = run_cli_in(&project, &["verify"]);
+    assert!(verified.status.success());
+    assert!(String::from_utf8_lossy(&verified.stdout).contains("verified locked offline graph"));
+
+    let manifest = project.join("arandu.toml");
+    let changed = fs::read_to_string(&manifest)
+        .unwrap()
+        .replace("version = \"0.0.1\"", "version = \"0.0.2\"");
+    fs::write(&manifest, changed).unwrap();
+    assert!(!run_cli_in(&project, &["verify"]).status.success());
+
+    fs::remove_dir_all(tmp).unwrap();
+}
+
+#[test]
+fn audit_and_vendor_are_locked_and_deterministic() {
+    let tmp = tempfile_dir("arandu_audit_vendor");
+    let project = tmp.join("audit_vendor");
+    assert!(
+        run_cli_in(&tmp, &["new", "audit_vendor", "--vcs=none"])
+            .status
+            .success()
+    );
+    assert!(run_cli_in(&project, &["check"]).status.success());
+    let misplaced_accept = run_cli_in(&project, &["check", "--accept"]);
+    assert_eq!(misplaced_accept.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&misplaced_accept.stderr).contains("only"));
+    let audit = run_cli_in(&project, &["audit"]);
+    assert!(
+        audit.status.success(),
+        "{}",
+        String::from_utf8_lossy(&audit.stderr)
+    );
+    let text = String::from_utf8_lossy(&audit.stdout);
+    assert!(text.contains("integrity=verified"));
+    assert!(text.contains("advisories=not-configured"));
+    let vendor = run_cli_in(&project, &["vendor"]);
+    assert!(
+        vendor.status.success(),
+        "{}",
+        String::from_utf8_lossy(&vendor.stderr)
+    );
+    assert!(project.join("vendor/arandu/arandu-vendor.toml").is_file());
+    let first = fs::read(project.join("vendor/arandu/arandu-vendor.toml")).unwrap();
+    assert!(run_cli_in(&project, &["vendor"]).status.success());
+    assert_eq!(
+        first,
+        fs::read(project.join("vendor/arandu/arandu-vendor.toml")).unwrap()
+    );
+    fs::remove_dir_all(tmp).unwrap();
+}
+
+#[test]
+fn stale_or_corrupt_lock_never_builds_under_locked_policy() {
+    let tmp = tempfile_dir("arandu_stale_lock");
+    let project = tmp.join("stale_lock");
+    assert!(
+        run_cli_in(&tmp, &["new", "stale_lock", "--vcs=none"])
+            .status
+            .success()
+    );
+    assert!(run_cli_in(&project, &["check"]).status.success());
+    let lock_path = project.join("arandu.lock");
+    let original = fs::read(&lock_path).unwrap();
+
+    let manifest_path = project.join("arandu.toml");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    fs::write(&manifest_path, manifest.replace("0.1.0", "0.1.1")).unwrap();
+    let stale = run_cli_in(&project, &["check", "--locked"]);
+    assert!(!stale.status.success());
+    assert_eq!(fs::read(&lock_path).unwrap(), original);
+
+    fs::write(
+        &lock_path,
+        b"version = 1\nmanifest_fingerprint = 'broken'\n",
+    )
+    .unwrap();
+    let corrupt = run_cli_in(&project, &["check"]);
+    assert!(!corrupt.status.success());
+    assert_eq!(
+        fs::read(&lock_path).unwrap(),
+        b"version = 1\nmanifest_fingerprint = 'broken'\n"
+    );
+}
+
+#[test]
+fn local_workspace_dependency_resolves_only_declared_exports() {
+    let project = tempfile_dir("arandu_p4_workspace");
+    fs::create_dir_all(project.join("src")).unwrap();
+    fs::create_dir_all(project.join("packages/math/src/internal")).unwrap();
+    fs::write(
+        project.join("arandu.toml"),
+        r#"schema = 1
+[package]
+name = "calculator"
+version = "0.1.0"
+edition = "2026"
+[targets.bin]
+name = "calculator"
+root = "src/main.aru"
+[dependencies]
+math = { path = "packages/math" }
+[workspace]
+members = ["packages/math"]
+"#,
+    )
+    .unwrap();
+    fs::write(
+        project.join("src/main.aru"),
+        "import math.geometry as geometry\nfunc main(): int { return geometry.answer() }\n",
+    )
+    .unwrap();
+    fs::write(
+        project.join("packages/math/arandu.toml"),
+        r#"schema = 1
+[package]
+name = "upstream_math"
+version = "1.2.3"
+edition = "2026"
+[targets.lib]
+name = "math"
+root = "src/lib.aru"
+[targets.lib.exports]
+"." = "src/lib.aru"
+"geometry" = "src/geometry.aru"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        project.join("packages/math/src/lib.aru"),
+        "public func root_answer(): int { return 7 }\n",
+    )
+    .unwrap();
+    fs::write(
+        project.join("packages/math/src/geometry.aru"),
+        "public func answer(): int { return 42 }\n",
+    )
+    .unwrap();
+    fs::write(
+        project.join("packages/math/src/internal/secret.aru"),
+        "public func secret(): int { return 99 }\n",
+    )
+    .unwrap();
+
+    let check = run_cli_in(&project, &["check"]);
+    assert!(
+        check.status.success(),
+        "declared dependency export failed: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let lock = fs::read_to_string(project.join("arandu.lock")).unwrap();
+    assert!(lock.contains("source = \"path+packages/math\""));
+    assert!(lock.contains("name = \"upstream_math\""));
+    assert!(!lock.contains(&project.to_string_lossy().to_string()));
+
+    fs::write(
+        project.join("src/main.aru"),
+        "import math.internal.secret as secret\nfunc main(): int { return secret.secret() }\n",
+    )
+    .unwrap();
+    let deep_import = run_cli_in(&project, &["check", "--locked"]);
+    assert!(!deep_import.status.success());
+    assert!(String::from_utf8_lossy(&deep_import.stderr).contains("M001"));
+}
+
+#[test]
+fn workspace_rejects_cycles_undeclared_members_and_duplicate_identity_aliases() {
+    let project = tempfile_dir("arandu_p4_graph_rejection");
+    fs::create_dir_all(project.join("src")).unwrap();
+    fs::create_dir_all(project.join("packages/a/src")).unwrap();
+    fs::write(
+        project.join("src/main.aru"),
+        "func main(): int { return 0 }\n",
+    )
+    .unwrap();
+    fs::write(
+        project.join("arandu.toml"),
+        r#"schema=1
+[package]
+name="root_app"
+version="0.1.0"
+edition="2026"
+[targets.bin]
+name="root_app"
+root="src/main.aru"
+[dependencies]
+a = { path = "packages/a" }
+a_again = { path = "packages/a" }
+[workspace]
+members=["packages/a"]
+"#,
+    )
+    .unwrap();
+    fs::write(
+        project.join("packages/a/arandu.toml"),
+        r#"schema=1
+[package]
+name="a"
+version="1.0.0"
+edition="2026"
+[targets.lib]
+name="a"
+root="src/lib.aru"
+[targets.lib.exports]
+"."="src/lib.aru"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        project.join("packages/a/src/lib.aru"),
+        "public func value(): int { return 1 }\n",
+    )
+    .unwrap();
+    let duplicate = run_cli_in(&project, &["check"]);
+    assert!(!duplicate.status.success());
+    assert!(String::from_utf8_lossy(&duplicate.stderr).contains("more than once"));
+
+    let manifest = fs::read_to_string(project.join("arandu.toml"))
+        .unwrap()
+        .replace("a_again = { path = \"packages/a\" }\n", "");
+    fs::write(project.join("arandu.toml"), manifest).unwrap();
+    let member_manifest = fs::read_to_string(project.join("packages/a/arandu.toml"))
+        .unwrap()
+        .replace(
+            "[targets.lib.exports]",
+            "[dependencies]\nroot_app = { path = \"../..\" }\n[targets.lib.exports]",
+        );
+    fs::write(project.join("packages/a/arandu.toml"), member_manifest).unwrap();
+    let cycle = run_cli_in(&project, &["check"]);
+    assert!(!cycle.status.success());
+    assert!(String::from_utf8_lossy(&cycle.stderr).contains("cyclic package dependency"));
+}
+
+#[test]
+fn new_lib_and_init_create_the_requested_targets_without_git() {
+    let tmp = tempfile_dir("arandu_scaffold_kinds");
+    let new_lib = run_cli_in(&tmp, &["new", "math_lib", "--lib", "--vcs=none"]);
+    assert!(
+        new_lib.status.success(),
+        "{}",
+        String::from_utf8_lossy(&new_lib.stderr)
+    );
+    let library = tmp.join("math_lib");
+    assert!(library.join("src/lib.aru").is_file());
+    assert!(!library.join("src/main.aru").exists());
+    assert!(!library.join(".git").exists());
+    let manifest = fs::read_to_string(library.join("arandu.toml")).unwrap();
+    assert!(manifest.contains("[targets.lib]"));
+
+    let existing = tmp.join("existing_app");
+    fs::create_dir(&existing).unwrap();
+    fs::write(existing.join("keep.txt"), "untouched\n").unwrap();
+    let init = run_cli_in(&existing, &["init", "--bin", "--vcs=none"]);
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    assert!(existing.join("arandu.toml").is_file());
+    assert!(existing.join("src/main.aru").is_file());
+    assert_eq!(
+        fs::read_to_string(existing.join("keep.txt")).unwrap(),
+        "untouched\n"
+    );
+    let _ = fs::remove_dir_all(tmp);
 }
 
 #[test]
@@ -146,6 +584,121 @@ fn new_classifies_usage_and_operational_failures() {
     assert!(occupied_stderr.contains("path already exists"));
 
     let _ = fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn new_rejects_nonportable_names_and_case_collisions() {
+    let tmp = tempfile_dir("arandu_new_portable_names");
+    fs::create_dir(tmp.join("Hello_App")).unwrap();
+
+    for name in ["std", "olá", "hello world"] {
+        let output = run_cli_in(&tmp, &["new", name, "--vcs=none"]);
+        assert_eq!(output.status.code(), Some(1), "name `{name}` should fail");
+        assert!(!tmp.join(name).exists());
+    }
+
+    let collision = run_cli_in(&tmp, &["new", "hello_app", "--vcs=none"]);
+    assert_eq!(collision.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&collision.stderr).contains("only by case"),
+        "{}",
+        String::from_utf8_lossy(&collision.stderr)
+    );
+    let _ = fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn init_is_transactional_when_a_generated_file_exists() {
+    let tmp = tempfile_dir("arandu_init_transaction");
+    fs::write(tmp.join("README.md"), "keep me\n").unwrap();
+
+    let output = run_cli_in(&tmp, &["init", "--vcs=none"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        fs::read_to_string(tmp.join("README.md")).unwrap(),
+        "keep me\n"
+    );
+    assert!(!tmp.join("arandu.toml").exists());
+    assert!(!tmp.join("src").exists());
+    assert!(!tmp.join("tests").exists());
+    let _ = fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn stale_interrupted_staging_does_not_block_new() {
+    let tmp = tempfile_dir("arandu_new_interrupted");
+    let stale = tmp.join(format!(".recoverable.arandu-new-{}", std::process::id()));
+    fs::create_dir(&stale).unwrap();
+    fs::write(stale.join("partial"), "incomplete\n").unwrap();
+
+    let output = run_cli_in(&tmp, &["new", "recoverable", "--vcs=none"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(tmp.join("recoverable/arandu.toml").is_file());
+    assert_eq!(
+        fs::read_to_string(stale.join("partial")).unwrap(),
+        "incomplete\n"
+    );
+    let _ = fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn vcs_auto_reuses_parent_and_explicit_git_creates_repository() {
+    if Command::new("git").arg("--version").output().is_err() {
+        return;
+    }
+    let tmp = tempfile_dir("arandu_new_vcs");
+    assert!(
+        Command::new("git")
+            .arg("init")
+            .arg("--quiet")
+            .arg(&tmp)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let nested = run_cli_in(&tmp, &["new", "nested", "--vcs=auto"]);
+    assert!(
+        nested.status.success(),
+        "{}",
+        String::from_utf8_lossy(&nested.stderr)
+    );
+    assert!(!tmp.join("nested/.git").exists());
+
+    let explicit = run_cli_in(&tmp, &["new", "standalone", "--vcs=git"]);
+    assert!(
+        explicit.status.success(),
+        "{}",
+        String::from_utf8_lossy(&explicit.stderr)
+    );
+    assert!(tmp.join("standalone/.git").is_dir());
+    let _ = fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn clean_refuses_an_unowned_target_directory() {
+    let tmp = tempfile_dir("arandu_clean_unowned");
+    assert!(
+        run_cli_in(&tmp, &["new", "guarded", "--vcs=none"])
+            .status
+            .success()
+    );
+    let project = tmp.join("guarded");
+    fs::create_dir(project.join("target")).unwrap();
+    fs::write(project.join("target/keep.txt"), "user data\n").unwrap();
+
+    let clean = run_cli_in(&project, &["clean"]);
+    assert_eq!(clean.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&clean.stderr).contains("refusing"));
+    assert_eq!(
+        fs::read_to_string(project.join("target/keep.txt")).unwrap(),
+        "user data\n"
+    );
+    let _ = fs::remove_dir_all(tmp);
 }
 
 #[test]
@@ -239,6 +792,25 @@ fn malformed_manifest_is_hard_error() {
 }
 
 #[test]
+fn legacy_manifest_loads_with_migration_warning() {
+    let tmp = tempfile_dir("arandu_legacy_manifest");
+    fs::create_dir_all(tmp.join("src")).unwrap();
+    fs::write(
+        tmp.join("Arandu.toml"),
+        "name = \"legacy_app\"\nversion = \"0.1.0\"\nentry = \"src/main.aru\"\n",
+    )
+    .unwrap();
+    fs::write(tmp.join("src/main.aru"), "func main(): int { return 0 }\n").unwrap();
+
+    let out = run_cli_in(&tmp, &["check"]);
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("deprecated"));
+    assert!(stderr.contains("arandu.toml"));
+    let _ = fs::remove_dir_all(tmp);
+}
+
+#[test]
 fn missing_entry_field_is_hard_error() {
     let tmp = tempfile_dir("arandu_missing_entry");
     fs::write(
@@ -293,4 +865,34 @@ fn tempfile_dir(prefix: &str) -> std::path::PathBuf {
     ));
     fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+fn files_named(root: &std::path::Path, name: &str) -> Vec<std::path::PathBuf> {
+    collect_files(root, &|path| {
+        path.file_name().and_then(|value| value.to_str()) == Some(name)
+    })
+}
+
+fn files_with_extension(root: &std::path::Path, extension: &str) -> Vec<std::path::PathBuf> {
+    collect_files(root, &|path| {
+        path.extension().and_then(|value| value.to_str()) == Some(extension)
+    })
+}
+
+fn collect_files(
+    root: &std::path::Path,
+    predicate: &dyn Fn(&std::path::Path) -> bool,
+) -> Vec<std::path::PathBuf> {
+    let mut result = Vec::new();
+    if let Ok(entries) = fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                result.extend(collect_files(&path, predicate));
+            } else if predicate(&path) {
+                result.push(path);
+            }
+        }
+    }
+    result
 }

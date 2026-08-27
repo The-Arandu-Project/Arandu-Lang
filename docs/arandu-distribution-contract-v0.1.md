@@ -1,7 +1,6 @@
 # Contrato de distribuição Arandu v0.1
 
-**Estado:** normativo para S3-A; implementação e promoção dependem de S3-B a
-S3-E.  
+**Estado:** S3 Gold; contrato normativo da distribuição nativa v0.1.
 **Modelo:** SDK autocontido, semelhante ao Flutter: CLI, servidor de linguagem
 e biblioteca padrão formam uma unidade versionada; a extensão do editor é um
 cliente separado.
@@ -24,6 +23,7 @@ Cada distribuição contém versões compatíveis de:
 
 - `arandu` (`arandu.exe` no Windows), a CLI;
 - `arandu-lsp` (`arandu-lsp.exe` no Windows), usado por editores;
+- a biblioteca estática interna do runtime para o target do SDK;
 - a árvore completa da stdlib;
 - licença, manifest de release e hashes do conteúdo.
 
@@ -53,21 +53,24 @@ PowerShell e CMD. O sufixo `.exe` é transparente no Windows.
 | --- | --- |
 | `arandu --version`, `doctor`, `new`, `check`, `fmt` | nenhuma |
 | `arandu run` pelo Cranelift JIT do host | nenhuma |
+| `arandu build` para executável AOT do host | linker nativo: MSVC Build Tools, `cc` ou Clang |
 | executar `arandu-lsp` | nenhuma; o editor/cliente LSP é separado |
 | gerar fonte com `emit-c` | nenhuma |
 | compilar e ligar a fonte C gerada | GCC/Clang compatível; caminho experimental |
 | compilar o próprio Arandu a partir da fonte | Rust fixado e toolchain nativo do host |
 
-No build da fonte, Windows MSVC requer Visual Studio Build Tools e Windows SDK;
+No AOT e no build da fonte, Windows MSVC requer Visual Studio Build Tools e Windows SDK;
 macOS requer Xcode Command Line Tools; Linux requer linker, headers libc e
-GCC/Clang. Isso não é requisito de uma instalação binária. `arandu doctor`
-deve mostrar ferramentas do backend C como opcionais, não transformar sua
-ausência em falha do SDK básico.
+GCC/Clang. Isso não impede `check`, `run` JIT ou o LSP numa instalação binária,
+mas `build` falha de forma operacional e preserva o último artefato válido.
+O SDK inclui a biblioteca estática do runtime correspondente ao target.
 
 ## Limites explícitos de v0.1
 
-- `run` é host-JIT; não há promessa de cross-compilation ou executável AOT
-  portátil.
+- `run` é host-JIT; `build` gera executável AOT apenas para o host. Não há
+  promessa de cross-compilation nem de executar um artefato em outro target.
+- A ABI da biblioteca estática do runtime é interna e versionada junto com o
+  compilador; ela não é uma ABI pública para link manual.
 - `build --release`/LLVM, ABI estável, freestanding, self-hosting e debugger
   estão fora do contrato.
 - O backend C é experimental; gerar C não significa suporte ao ABI/toolchain

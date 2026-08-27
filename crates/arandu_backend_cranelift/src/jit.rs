@@ -18,7 +18,7 @@ use cranelift_module::{FuncId, Linkage, Module};
 use rustc_hash::FxHashMap;
 use std::sync::OnceLock;
 
-fn codegen_ice(message: impl Into<String>) -> Diagnostic {
+pub(crate) fn codegen_ice(message: impl Into<String>) -> Diagnostic {
     Diagnostic::ice(DiagCode::ICEGEN001, message, Span::new(0, 0, 0))
 }
 
@@ -58,11 +58,14 @@ fn cached_host_isa() -> Result<OwnedTargetIsa, Diagnostic> {
 /// [`AmirProgram`]: function declaration, translation, and memory finalization.
 /// Consumed by [`AranduJit::compile_program`] — create a fresh instance for
 /// each compilation.
-pub struct AranduJit {
-    pub module: JITModule,
+pub struct AranduModule<M> {
+    pub module: M,
 }
 
-impl AranduJit {
+/// Host-JIT specialization of the shared Cranelift module compiler.
+pub type AranduJit = AranduModule<JITModule>;
+
+impl AranduModule<JITModule> {
     /// Creates a new [`AranduJit`] with default Cranelift settings.
     ///
     /// Reuses a process-cached host [`OwnedTargetIsa`] (Arc clone). Each call
@@ -366,23 +369,43 @@ impl AranduJit {
         Ok(Self { module })
     }
 
-    /// Compiles all functions in `program` to native machine code.
-    ///
-    /// Three-phase compilation:
-    /// 1. Declare all functions (enabling mutual recursion).
-    /// 2. Define/translate each function body via [`FunctionTranslator`].
-    /// 3. Finalize in-memory code and return a [`CompiledModule`].
-    #[tracing::instrument(
-        level = "trace",
-        target = "arandu_backend_cranelift",
-        skip(self, program, symbols, type_info)
-    )]
+    /// Compile and finalize a callable host JIT module.
     pub fn compile_program(
         mut self,
         program: &AmirProgram,
         symbols: &SymbolTable,
         type_info: &arandu_semantics::TypeInfo,
     ) -> Result<CompiledModule, Diagnostic> {
+        let func_ids = self.compile_module(program, symbols, type_info)?;
+        self.module
+            .finalize_definitions()
+            .map_err(|err| codegen_ice(format!("failed to finalize JIT definitions: {err:?}")))?;
+        Ok(CompiledModule {
+            module: self.module,
+            func_ids,
+        })
+    }
+}
+
+impl<M: Module> AranduModule<M> {
+    /// Compiles all functions in `program` to native machine code.
+    ///
+    /// Two-phase compilation shared by the JIT and object backends:
+    /// 1. Declare all functions (enabling mutual recursion).
+    /// 2. Define/translate each function body via [`FunctionTranslator`].
+    ///
+    /// The caller owns the module-specific finalization step.
+    #[tracing::instrument(
+        level = "trace",
+        target = "arandu_backend_cranelift",
+        skip(self, program, symbols, type_info)
+    )]
+    pub(crate) fn compile_module(
+        &mut self,
+        program: &AmirProgram,
+        symbols: &SymbolTable,
+        type_info: &arandu_semantics::TypeInfo,
+    ) -> Result<FxHashMap<String, FuncId>, Diagnostic> {
         if let Some(issue) =
             arandu_semantics::validate_amir_program(program, symbols, &type_info.type_interner)
                 .into_iter()
@@ -1450,15 +1473,7 @@ impl AranduJit {
             self.module.clear_context(&mut context);
         }
 
-        // 3. Finalize in-memory compilation
-        self.module
-            .finalize_definitions()
-            .map_err(|err| codegen_ice(format!("failed to finalize JIT definitions: {err:?}")))?;
-
-        Ok(CompiledModule {
-            module: self.module,
-            func_ids,
-        })
+        Ok(func_ids)
     }
 }
 

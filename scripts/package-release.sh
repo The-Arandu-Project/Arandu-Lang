@@ -24,9 +24,23 @@ OUT_DIR="${OUT_DIR:-$ROOT/dist}"
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git -C "$ROOT" log -1 --format=%ct)}"
 
 if [[ -z "$VERSION" ]]; then
-  VERSION="$(
-    sed -n 's/^version = "\([^"]*\)"/\1/p' "$ROOT/crates/arandu_cli/Cargo.toml" | head -1
-  )"
+  VERSION="$(python3 - "$ROOT/crates/arandu_cli/Cargo.toml" <<'PY'
+from pathlib import Path
+import sys
+import tomllib
+
+with Path(sys.argv[1]).open("rb") as manifest:
+    sys.stdout.write(tomllib.load(manifest)["package"]["version"])
+PY
+)"
+fi
+if [[ ! "$VERSION" =~ ^[0-9][0-9A-Za-z.-]*$ ]]; then
+  echo "error: invalid release version: $(printf '%q' "$VERSION")" >&2
+  exit 2
+fi
+if [[ ! "$TARGET" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]; then
+  echo "error: invalid release target: $(printf '%q' "$TARGET")" >&2
+  exit 2
 fi
 
 NAME="arandu-${VERSION}"
@@ -36,31 +50,43 @@ trap 'rm -rf "$STAGE"' EXIT
 
 echo "==> package-release VERSION=$VERSION TARGET=$TARGET"
 
-cargo build --locked -p arandu_cli -p arandu_lsp --release --manifest-path "$ROOT/Cargo.toml"
+cargo build --locked -p arandu_cli -p arandu_lsp -p arandu_runtime --release --manifest-path "$ROOT/Cargo.toml"
 BIN="$ROOT/target/release/arandu_cli"
 LSP="$ROOT/target/release/arandu-lsp"
+RUNTIME="$ROOT/target/release/libarandu_runtime.a"
 
 TREE="$STAGE/$NAME"
-mkdir -p "$TREE/bin" "$TREE/share/arandu"
+mkdir -p "$TREE/bin" "$TREE/lib/$TARGET" "$TREE/share/arandu"
 install -m 755 "$BIN" "$TREE/bin/arandu_cli"
 install -m 755 "$LSP" "$TREE/bin/arandu-lsp"
+install -m 644 "$RUNTIME" "$TREE/lib/$TARGET/libarandu_runtime.a"
 ln -sfn arandu_cli "$TREE/bin/arandu"
 cp -a "$ROOT/stdlib" "$TREE/share/arandu/stdlib"
 install -m 644 "$ROOT/LICENSE-MIT" "$ROOT/LICENSE-APACHE" "$TREE/"
-cat >"$TREE/release-manifest.json" <<EOF
-{
-  "schema": 1,
-  "version": "$VERSION",
-  "target": "$TARGET",
-  "components": ["arandu", "arandu-lsp", "stdlib"],
-  "archive": "tar.gz"
+python3 - "$TREE/release-manifest.json" "$VERSION" "$TARGET" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+path, version, target = sys.argv[1:]
+manifest = {
+    "schema": 1,
+    "version": version,
+    "target": target,
+    "components": ["arandu", "arandu-lsp", "runtime", "stdlib"],
+    "archive": "tar.gz",
 }
-EOF
+Path(path).write_text(
+    json.dumps(manifest, indent=2, separators=(",", ": ")) + "\n",
+    encoding="utf-8",
+    newline="\n",
+)
+PY
 
 {
   cd "$TREE"
   # shellcheck disable=SC2044
-  for f in LICENSE-APACHE LICENSE-MIT bin/arandu_cli bin/arandu-lsp release-manifest.json $(find share/arandu/stdlib -type f -name '*.aru' | sort); do
+  for f in LICENSE-APACHE LICENSE-MIT bin/arandu_cli bin/arandu-lsp "lib/$TARGET/libarandu_runtime.a" release-manifest.json $(find share/arandu/stdlib -type f -name '*.aru' | sort); do
     hash="$("$BIN" hash-file "$TREE/$f")"
     printf '%s  %s\n' "$hash" "$f"
   done

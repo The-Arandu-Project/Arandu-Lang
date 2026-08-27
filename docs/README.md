@@ -1,39 +1,36 @@
 # Documentação do Arandu
 
-Este índice separa fontes normativas de registros históricos. O histórico dos
-arquivos removidos continua disponível no Git; um documento substituído não
-permanece como stub na raiz.
+Esta pasta tem uma única fila de planejamento: o [roadmap mestre](arandu-compiler-roadmap-v0.1.md). Os demais documentos são decisões aceitas, contratos estáveis ou evidências; não crie checklists paralelos.
 
-## Fontes vivas
+## Planejamento e decisões
 
-- [Roadmap mestre do compilador](arandu-compiler-roadmap-v0.1.md)
-- [Roadmap de estabilidade Gold](arandu-stability-gold-roadmap-v0.1.md)
-- [Roadmap Gold de decomposição de monólitos e arquitetura](arandu-architecture-decomposition-gold-roadmap-v0.1.md)
-- [Roadmap Gold do LSP/editor](arandu-lsp-editor-gold-roadmap-v0.1.md)
-- [Estratégia GenRef Gold](arandu-genref-gold-strategy-v0.1.md)
-- [Arquitetura Salsa/LSP](arandu-salsa-lsp-architecture-v0.1.md)
-- [Plano estratégico](arandu-strategic-plan-v0.1.md)
-- [Contrato de distribuição](arandu-distribution-contract-v0.1.md)
-- [Verificação de releases](release-verification.md)
-- [Especificação de diagnósticos](diagnostics/SPEC.md)
-- [Contrato de nomes de anotações](arandu-attribute-naming-v0.1.md)
+- [Roadmap mestre](arandu-compiler-roadmap-v0.1.md) — fases abertas e decisões Gold consolidadas.
+- [Projeto/pacotes Gold](arandu-project-package-lifecycle-gold-v0.1.md) — contrato detalhado implementado.
+- [Guia de migração](arandu-project-package-migration-v0.1.md) — uso do contrato de projeto e dependências.
+- [GenRef Gold](arandu-genref-gold-rfc-v0.1.md) — RFC aceita e implementada.
+- [Nomes de anotações](arandu-attribute-naming-v0.1.md) — decisão PascalCase e migração.
+- [Contrato de ferramentas e scripts](tooling-scripts-contract.md) — dono e plataforma de cada automação.
 
-## Contratos técnicos
+## Contratos de arquitetura
 
-Os documentos `arandu-*-v0.1.md` que descrevem lexer, parser, AST, IR, ABI,
-backends, stdlib, CLI/LSP e instrumentação são contratos da implementação.
-Planos concluídos são consolidados nas fontes vivas acima e removidos da raiz.
+| Área | Documentos |
+| --- | --- |
+| Frontend | [lexer](arandu-lexer-v0.1.md), [parser](arandu-parser-v0.1.md), [AST](arandu-ast-v0.1.md) |
+| IR e execução | [AHIR](arandu-ahir-v0.1.md), [AMIR](arandu-amir-v0.1.md), [IR/SSA](arandu-ir-architecture-v0.1.md), [backends](arandu-backend-contract-v0.1.md) |
+| ABI e memória | [ABI/layout](arandu-abi-layout-v0.1.md), [JIT/memória](arandu-jit-memory-v0.1.md), [stdlib](arandu-stdlib-architecture-v0.1.md) |
+| Incrementalidade e IDE | [Salsa/LSP](arandu-salsa-lsp-architecture-v0.1.md), [LSP/editor](arandu-lsp-capabilities-v0.1.md), [CLI/LSP](arandu-cli-lsp-contract-v0.1.md) |
+| Runtime e distribuição | [async runtime](arandu-async-runtime-design-v0.1.md), [instrumentação](arandu-compiler-instrumentation-v0.1.md), [distribuição](arandu-distribution-contract-v0.1.md) |
 
 ## Diagnósticos e releases
 
-- `errors/` contém uma página por `DiagCode`; essa bijeção é validada por
-  `xtask check-diag-docs` e não é duplicação descartável.
-- `releases/` contém a evidência de cada candidata publicada.
+- [Especificação de diagnósticos](diagnostics/SPEC.md) e [catálogo por código](errors/).
+- [Notas de release](releases/) são evidências imutáveis das versões publicadas.
+- [OSSÀ virtual anchoring](ossa-virtual-anchoring.md) registra a decisão de estabilidade de IDs.
 
-## Política de manutenção
+## Regras de manutenção
 
 1. Uma decisão tem uma única fonte normativa.
-2. Pesquisa temporária vira decisão/risco/teste na fonte viva e depois é
-   removida; não acumulamos notas soltas.
-3. Um roadmap concluído é resumido no roadmap pai antes de ser removido.
-4. Links relativos são verificados antes do merge.
+2. Pesquisa concluída vira decisão, risco ou teste; notas temporárias são removidas.
+3. Plano concluído é resumido no roadmap mestre e deixa de ser fila de trabalho.
+4. Contratos declaram status, escopo e invariantes; exemplos longos ficam nos testes.
+5. Antes do merge, valide links relativos e execute `xtask check-diag-docs`.

@@ -216,7 +216,7 @@ jobs:
             "dist/arandu-$env:VERSION-$env:TARGET.zip" `
             -Prefix "$env:RUNNER_TEMP/arandu-sdk" -NoModifyPath
 
-      - name: S3 / installed SDK smoke (Unix)
+      - name: P7-A / installed lifecycle smoke (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
@@ -225,7 +225,7 @@ jobs:
             --lsp "$RUNNER_TEMP/arandu-sdk/current/bin/arandu-lsp" \
             --corpus tests/projects --expected-version "$VERSION"
 
-      - name: S3 / installed SDK smoke (Windows)
+      - name: P7-A / installed lifecycle smoke (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |

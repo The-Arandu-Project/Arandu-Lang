@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 arandu_query = { path = "../arandu_query" }
+arandu_package = { package = "arandu_cli", path = "../arandu_cli" } # shared verified cache
 arandu_parser = { path = "../arandu_parser" }
 arandu_fmt = { path = "../arandu_fmt" }
 arandu_middle = { path = "../arandu_middle" }

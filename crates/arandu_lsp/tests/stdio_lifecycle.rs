@@ -163,6 +163,17 @@ impl LspProcess {
                 Some("**/*.aru"),
                 "server must scope {operation} notifications to Arandu files: {response}"
             );
+            for (index, manifest) in [(1, "**/arandu.toml"), (2, "**/Arandu.toml")] {
+                assert_eq!(
+                    response
+                        .pointer(&format!(
+                            "/result/capabilities/workspace/fileOperations/{operation}/filters/{index}/pattern/glob"
+                        ))
+                        .and_then(Value::as_str),
+                    Some(manifest),
+                    "server must watch package manifests for {operation}: {response}"
+                );
+            }
         }
         assert_eq!(
             response
@@ -1369,6 +1380,112 @@ fn stdio_package_imports_refresh_completion_goto_and_diagnostics() {
     lsp.shutdown(8);
 }
 
+#[test]
+fn stdio_manifest_edit_reloads_direct_dependency_alias_without_restart() {
+    let fixture = FixtureDir::new();
+    let src = fixture.path().join("src");
+    let dependency_src = fixture.path().join("packages/math/src");
+    fs::create_dir_all(&src).expect("create application source");
+    fs::create_dir_all(&dependency_src).expect("create dependency source");
+    let manifest = fixture.path().join("arandu.toml");
+    let manifest_text = |alias: &str| {
+        format!(
+            r#"schema = 1
+[package]
+name = "calculator"
+version = "0.1.0"
+edition = "2026"
+[targets.bin]
+name = "calculator"
+root = "src/main.aru"
+[dependencies]
+{alias} = {{ path = "packages/math" }}
+[workspace]
+members = ["packages/math"]
+"#
+        )
+    };
+    fs::write(&manifest, manifest_text("math")).expect("write application manifest");
+    fs::write(
+        fixture.path().join("packages/math/arandu.toml"),
+        r#"schema = 1
+[package]
+name = "upstream_math"
+version = "1.0.0"
+edition = "2026"
+[targets.lib]
+name = "math"
+root = "src/lib.aru"
+[targets.lib.exports]
+"geometry" = "src/geometry.aru"
+"#,
+    )
+    .expect("write dependency manifest");
+    fs::write(
+        dependency_src.join("geometry.aru"),
+        "public func answer(): int { return 42 }\n",
+    )
+    .expect("write dependency export");
+    fs::write(
+        dependency_src.join("lib.aru"),
+        "public func root_answer(): int { return 7 }\n",
+    )
+    .expect("write dependency root");
+    let main = src.join("main.aru");
+    let main_uri = file_uri(&main);
+    let source =
+        "import math.geometry as geometry\nfunc main(): int { return geometry.answer() }\n";
+    fs::write(&main, source).expect("write application entry");
+
+    let mut lsp = LspProcess::spawn();
+    lsp.initialize(fixture.path(), 1);
+    request_workspace_symbol(&mut lsp, 2, "answer", true);
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "method": "textDocument/didOpen",
+        "params": { "textDocument": {
+            "uri": main_uri, "languageId": "arandu", "version": 1, "text": source
+        }}
+    }));
+    let initial = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && message.pointer("/params/uri").and_then(Value::as_str) == Some(main_uri.as_str())
+            && message
+                .pointer("/params/diagnostics")
+                .and_then(Value::as_array)
+                .is_some_and(Vec::is_empty)
+    });
+    assert_eq!(initial.pointer("/params/version"), Some(&json!(1)));
+
+    fs::write(&manifest, manifest_text("calc")).expect("change dependency alias");
+    lsp.send(&json!({
+        "jsonrpc": "2.0", "method": "workspace/didChangeWatchedFiles",
+        "params": { "changes": [{ "uri": file_uri(&manifest), "type": 2 }] }
+    }));
+    let refreshed = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("arandu/status")
+            && message.pointer("/params/message").and_then(Value::as_str)
+                == Some("Package graph refreshed")
+    });
+    assert_eq!(
+        refreshed.pointer("/params/state").and_then(Value::as_str),
+        Some("ready")
+    );
+    let invalidated = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && message.pointer("/params/uri").and_then(Value::as_str) == Some(main_uri.as_str())
+            && message
+                .pointer("/params/diagnostics")
+                .and_then(Value::as_array)
+                .is_some_and(|diagnostics| {
+                    diagnostics
+                        .iter()
+                        .any(|diagnostic| diagnostic.get("code") == Some(&json!("M001")))
+                })
+    });
+    assert_eq!(invalidated.pointer("/params/version"), Some(&json!(1)));
+    lsp.shutdown(3);
+}
+
 fn request_workspace_symbol(lsp: &mut LspProcess, id: i64, query: &str, expected: bool) -> Value {
     let deadline = Instant::now() + MESSAGE_TIMEOUT;
     let response = loop {
@@ -2188,7 +2305,12 @@ fn read_message(reader: &mut impl BufRead) -> std::io::Result<Option<Value>> {
 
 fn file_uri(path: &Path) -> String {
     let absolute = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let normalized = absolute.to_string_lossy().replace('\\', "/");
+    let path_text = absolute.to_string_lossy();
+    #[cfg(windows)]
+    let path_text = path_text
+        .strip_prefix(r"\\?\")
+        .unwrap_or(path_text.as_ref());
+    let normalized = path_text.replace('\\', "/");
     let encoded = encode_uri_path(&normalized);
     if normalized.starts_with('/') {
         format!("file://{encoded}")

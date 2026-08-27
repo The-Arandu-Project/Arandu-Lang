@@ -1,11 +1,10 @@
 use arandu_semantics::amir::{AmirOperand, AmirRvalue};
 use arandu_semantics::passes::type_checker::types::{ArType, Primitive};
 use cranelift_codegen::ir::{InstBuilder, Value};
-use cranelift_module::Module;
 
 use super::FunctionTranslator;
 
-impl FunctionTranslator<'_, '_> {
+impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
     pub(super) fn translate_str_rvalue(&mut self, rvalue: &AmirRvalue) -> (Value, Value) {
         if self.error.is_some() {
             return (self.poison_i32(), self.poison_i32());

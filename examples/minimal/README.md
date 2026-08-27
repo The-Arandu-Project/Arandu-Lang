@@ -1,7 +1,7 @@
 # Arandu Minimal 0.1 — gold examples
 
-These programs define the **installable** language surface.  
-See `docs/arandu-minimal-0.1-freeze.md`.
+These programs define the **installable** language surface tracked by the
+[master roadmap](../../docs/arandu-compiler-roadmap-v0.1.md).
 
 ## Contract
 
