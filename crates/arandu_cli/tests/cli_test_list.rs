@@ -79,7 +79,7 @@ fn test_list_uses_package_qualified_deterministic_ids() {
         "test run failed: {}",
         String::from_utf8_lossy(&executed.stderr)
     );
-    assert!(String::from_utf8_lossy(&executed.stdout).contains("ok sample::"));
+    assert!(String::from_utf8_lossy(&executed.stderr).contains("passed sample::"));
     let harness_pointer = project.join("target/dev/x86_64-pc-windows-msvc/test-harness.json");
     assert!(
         harness_pointer.is_file(),
@@ -97,6 +97,30 @@ fn test_list_uses_package_qualified_deterministic_ids() {
             String::from_utf8_lossy(&checked.stderr)
         );
     }
+    let json = common::cli_command()
+        .args([
+            "test",
+            project.to_str().unwrap(),
+            "--format",
+            "json",
+            "--jobs",
+            "2",
+            "--seed",
+            "42",
+            "--timeout",
+            "30",
+        ])
+        .output()
+        .expect("run JSON test reporter");
+    assert!(
+        json.status.success(),
+        "JSON run failed: {}",
+        String::from_utf8_lossy(&json.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(report["schema"], "arandu.test/v1");
+    assert_eq!(report["seed"], 42);
+    assert_eq!(report["cases"].as_array().map(Vec::len), Some(3));
     let _ = fs::remove_dir_all(temporary);
 }
 
@@ -122,5 +146,59 @@ fn test_list_rejects_an_invalid_test_contract() {
         .expect("list tests");
     assert_eq!(listed.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&listed.stderr).contains("T036"));
+    let _ = fs::remove_dir_all(temporary);
+}
+
+#[test]
+fn runner_classifies_result_error_and_timeout() {
+    let temporary = temporary_directory();
+    let project = temporary.join("runner_failures");
+    let created = common::cli_command()
+        .args(["new", "runner_failures", "--vcs=none"])
+        .current_dir(&temporary)
+        .output()
+        .expect("create project");
+    assert!(created.status.success());
+    fs::write(
+        project.join("tests/smoke.aru"),
+        "module runner_failures_tests\n\nimport err\n\n@Test\nfunc fails(): Result<void, Err> { return Result.Err(err.new(\"boom\")) }\n",
+    )
+    .unwrap();
+    let failed = common::cli_command()
+        .args([
+            "test",
+            project.to_str().unwrap(),
+            "--format",
+            "json",
+            "--exact",
+            "runner_failures::test::smoke::fails",
+        ])
+        .output()
+        .expect("run failing test");
+    assert_eq!(failed.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&failed.stdout).unwrap();
+    assert_eq!(report["cases"][0]["status"], "failed");
+
+    fs::write(
+        project.join("tests/smoke.aru"),
+        "module runner_failures_tests\n\n@Test\nfunc hangs(): void { while true {} }\n",
+    )
+    .unwrap();
+    let timed_out = common::cli_command()
+        .args([
+            "test",
+            project.to_str().unwrap(),
+            "--format",
+            "json",
+            "--timeout",
+            "1",
+            "--exact",
+            "runner_failures::test::smoke::hangs",
+        ])
+        .output()
+        .expect("run timed out test");
+    assert_eq!(timed_out.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&timed_out.stdout).unwrap();
+    assert_eq!(report["cases"][0]["status"], "timed_out");
     let _ = fs::remove_dir_all(temporary);
 }

@@ -3,6 +3,7 @@ mod artifact;
 mod cli_error;
 mod linker;
 mod project;
+mod test_runner;
 mod watch;
 
 use arandu_package::cache;
@@ -587,17 +588,72 @@ fn main() {
             finish(cmd_project_build(&start, &project_flags, opt, debug));
         }
         "test" => {
+            test_runner::install_ctrlc_handler();
             let mut start = None;
             let mut list = false;
             let mut exact = None;
+            let mut filter = None;
+            let mut harness_child = false;
+            let mut runner = test_runner::RunnerOptions {
+                jobs: 1,
+                timeout: std::time::Duration::from_secs(300),
+                fail_fast: false,
+                seed: 0,
+                format_json: false,
+                output: None,
+                target: None,
+                backend: None,
+            };
             let mut arguments = args[2..].iter();
             while let Some(argument) = arguments.next() {
                 if argument == "--list" {
                     list = true;
+                } else if argument == "--harness-child" {
+                    harness_child = true;
                 } else if argument == "--exact" {
                     exact = arguments.next().cloned();
                     if exact.is_none() {
                         fail_usage("usage: arandu_cli test [package-path] --list [--exact <id>]");
+                    }
+                } else if argument == "--fail-fast" {
+                    runner.fail_fast = true;
+                } else if argument == "--jobs" {
+                    runner.jobs = arguments
+                        .next()
+                        .and_then(|value| value.parse().ok())
+                        .filter(|jobs| *jobs > 0)
+                        .unwrap_or_else(|| {
+                            fail_usage("--jobs requires an integer greater than zero")
+                        });
+                } else if argument == "--timeout" {
+                    let seconds = arguments
+                        .next()
+                        .and_then(|value| value.parse::<u64>().ok())
+                        .filter(|seconds| *seconds > 0)
+                        .unwrap_or_else(|| {
+                            fail_usage("--timeout requires seconds greater than zero")
+                        });
+                    runner.timeout = std::time::Duration::from_secs(seconds);
+                } else if argument == "--seed" {
+                    runner.seed = arguments
+                        .next()
+                        .and_then(|value| value.parse().ok())
+                        .unwrap_or_else(|| fail_usage("--seed requires an unsigned integer"));
+                } else if argument == "--format" {
+                    runner.format_json = match arguments.next().map(String::as_str) {
+                        Some("json") => true,
+                        Some("human") => false,
+                        _ => fail_usage("--format requires 'human' or 'json'"),
+                    };
+                } else if argument == "--filter" {
+                    filter = arguments.next().cloned();
+                    if filter.is_none() {
+                        fail_usage("--filter requires a literal substring");
+                    }
+                } else if argument == "--output" {
+                    runner.output = arguments.next().map(PathBuf::from);
+                    if runner.output.is_none() {
+                        fail_usage("--output requires a file path");
                     }
                 } else if argument.starts_with('-') || start.is_some() {
                     fail_usage("usage: arandu_cli test [package-path] --list [--exact <id>]");
@@ -612,6 +668,9 @@ fn main() {
                 &project_flags,
                 list,
                 exact.as_deref(),
+                filter.as_deref(),
+                harness_child,
+                &runner,
             ));
         }
         // Project-mode check/run when the path is a package (Arandu.toml) or omitted.
@@ -1141,6 +1200,9 @@ fn cmd_project_test_list(
     flags: &project::ProjectFlags,
     list_only: bool,
     exact: Option<&str>,
+    filter: Option<&str>,
+    harness_child: bool,
+    runner: &test_runner::RunnerOptions,
 ) -> CliResult {
     let mut db = arandu_query::DatabaseImpl::new();
     let ctx = project::load_project(&mut db, start, flags).map_err(|error| {
@@ -1180,7 +1242,18 @@ fn cmd_project_test_list(
         }
     }
     let cases: Vec<String> = registry.iter().map(|entry| entry.id.clone()).collect();
-    let (harness_manifest, harness_c) = artifact::publish_test_harness(&ctx.root, &registry)?;
+    let cases: Vec<String> = match filter {
+        Some(filter) => cases
+            .into_iter()
+            .filter(|case| case.contains(filter))
+            .collect(),
+        None => cases,
+    };
+    let harness = if harness_child {
+        None
+    } else {
+        Some(artifact::publish_test_harness(&ctx.root, &registry)?)
+    };
     if let Some(exact) = exact {
         if !cases.iter().any(|case| case == exact) {
             return Err(CliFailure::operational(
@@ -1191,24 +1264,74 @@ fn cmd_project_test_list(
         }
         if list_only {
             println!("{exact}");
+        } else if harness_child {
+            let start = std::time::Instant::now();
+            let result = run_exact_test(&ctx, exact);
+            let sequence: u64 = std::env::var("ARANDU_TEST_SEQUENCE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            let status = if result.is_ok() {
+                arandu_codegen::testing::TestStatus::Passed
+            } else {
+                arandu_codegen::testing::TestStatus::Failed
+            };
+            let failure = result
+                .as_ref()
+                .err()
+                .map(|error| arandu_codegen::testing::TestFailure::simple(format!("{error:?}")));
+            let event = arandu_codegen::testing::TestEventV1 {
+                sequence,
+                id: exact.to_string(),
+                status,
+                duration: start.elapsed(),
+                stdout: arandu_codegen::testing::CapturedOutput {
+                    bytes: Vec::new(),
+                    truncated: false,
+                },
+                stderr: arandu_codegen::testing::CapturedOutput {
+                    bytes: Vec::new(),
+                    truncated: false,
+                },
+                failure,
+            };
+            let _ = test_runner::send_child_event(sequence, &event);
+            return result;
         } else {
-            run_exact_test(&ctx, exact)?;
-            println!("ok {exact}");
+            let passed = test_runner::run_cases(&ctx.root, vec![exact.to_string()], runner)
+                .map_err(|error| CliFailure::operational("run tests", None, error))?;
+            if !passed {
+                return Err(CliFailure::operational(
+                    "run tests",
+                    None,
+                    "one or more tests failed",
+                ));
+            }
         }
     } else if list_only {
         for case in cases {
             println!("{case}");
         }
     } else {
-        eprintln!(
-            "test harness: {} cases (manifest={}, c={})",
-            cases.len(),
-            harness_manifest.display(),
-            harness_c.display()
-        );
-        for case in cases {
-            run_exact_test(&ctx, &case)?;
-            println!("ok {case}");
+        if !runner.format_json {
+            let (harness_manifest, harness_c) = harness.as_ref().ok_or_else(|| {
+                CliFailure::operational("run tests", None, "missing published harness")
+            })?;
+            eprintln!(
+                "test harness: {} cases (manifest={}, c={})",
+                cases.len(),
+                harness_manifest.display(),
+                harness_c.display()
+            );
+        }
+        let passed = test_runner::run_cases(&ctx.root, cases, runner)
+            .map_err(|error| CliFailure::operational("run tests", None, error))?;
+        if !passed {
+            return Err(CliFailure::operational(
+                "run tests",
+                None,
+                "one or more tests failed",
+            ));
         }
     }
     Ok(CliSuccess::Done)

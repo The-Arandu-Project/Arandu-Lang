@@ -193,11 +193,90 @@ sem compilar um executável e sem varrer fontes por conta própria.
 
 ### SL_T.2 — Runner confiável e reporters
 
-- Implementar `arandu test` com list/filter/exact, captura, timeout, fail-fast,
-  seed, jobs, interrupção e classificação de crash.
-- Adicionar protocolo estruturado, reporter humano e JSON versionado.
-- Testar stdout hostil, payload truncado, processo morto, nomes Unicode,
-  timeouts e ordenação em Windows, Linux e macOS.
+**Estado:** `planned`; inicia depois do harness SL_T.1 verde nos dois backends.
+
+#### SL_T.2A — Contratos do runner
+
+- Definir em `arandu_codegen` DTOs sem dependência de CLI ou Salsa:
+  `TestEventV1`, `TestStatus`, `TestFailure`, `CapturedOutput` e versão do
+  protocolo. Eventos carregam ID canônico, sequência monotônica, duração e
+  falha estruturada; nunca carregam `Debug` de IR, `FileId` ou caminhos
+  absolutos como identidade.
+- Reservar códigos de saída distintos: `0` para todos aprovados, `1` para
+  teste reprovado/timeout/crash, `2` para uso inválido e o código operacional
+  existente para falha de build/protocolo.
+- Fixar limites explícitos para frame, stdout e stderr. Payload acima do limite
+  é marcado como truncado, sem bloquear o dreno dos pipes nem consumir memória
+  sem limite.
+
+**Gate:** round-trip e rejeição determinística de versão, frame truncado,
+tamanho excessivo, sequência duplicada e status desconhecido.
+
+#### SL_T.2B — Processo isolado e canal de controle
+
+- Separar modo coordenador e modo interno do harness. Cada caso roda em um
+  processo filho com cwd e ambiente imutáveis; eventos estruturados usam um
+  pipe dedicado e stdout/stderr permanecem pipes independentes.
+- Implementar leitura concorrente e limitada dos três canais para evitar o
+  deadlock clássico em que o filho enche stdout enquanto o pai aguarda o canal
+  de controle.
+- Timeout encerra a árvore do processo, aguarda reap e produz `timed_out`.
+  Saída sem evento terminal, sinal Unix ou exceção Windows produz `crashed`;
+  EOF parcial produz falha de protocolo, não falso sucesso.
+- Ctrl-C para de agendar casos, encerra filhos vivos e ainda imprime um resumo
+  completo dos casos iniciados.
+
+**Gate:** fixtures que escrevem acima da capacidade do pipe, fecham o canal no
+meio de um frame, abortam, ficam presas e geram filhos próprios.
+
+#### SL_T.2C — Seleção e agendamento reproduzíveis
+
+- Completar `arandu test [filtro]`, `--exact`, `--list`, `--fail-fast`,
+  `--timeout <duração>`, `--jobs <N>` e `--seed <u64>`.
+- Filtro inicial é substring literal Unicode; regex fica fora do contrato.
+  `--exact` exige um único ID existente e não aceita correspondência parcial.
+- O plano de execução nasce da ordem canônica do registry. A seed somente
+  permuta a ordem de início; apresentação e JSON finais voltam à ordem
+  canônica. `--jobs 1` é o padrão.
+- Paralelismo ocorre apenas entre processos. O coordenador nunca altera cwd ou
+  ambiente global por caso e usa fila limitada a `jobs`.
+- `--fail-fast` interrompe novos agendamentos, mas drena e relata todos os
+  filhos já iniciados.
+
+**Gate:** a mesma seed gera o mesmo plano; seeds diferentes não alteram IDs nem
+o resumo; jobs 1/N produzem o mesmo conjunto e ordenação final.
+
+#### SL_T.2D — Reporters humano e JSON
+
+- Reporter humano escreve progresso e resumo em stderr; stdout fica reservado
+  ao formato solicitado. Cor somente quando o destino é terminal e respeita
+  `NO_COLOR`.
+- `--format json` emite um único documento schema `arandu.test/v1`, com
+  configuração efetiva, alvo/backend, casos ordenados, duração, status,
+  captura e indicador de truncamento. Nada depende do texto humano.
+- O reporter consome apenas eventos validados. Build, execução e apresentação
+  não compartilham enums ad hoc nem inferem falha pelo exit code isolado.
+- Escrita JSON interrompida retorna falha operacional; não deixa um documento
+  aparentemente válido pela metade quando `--output <arquivo>` for usado.
+
+**Gate:** snapshots sem tempo absoluto, paths temporários ou ordem de mapa;
+round-trip em Windows, Linux e macOS e compatibilidade de leitura de `v1`.
+
+#### SL_T.2E — Campanha adversarial e integração
+
+- Adicionar E2E para nomes Unicode, stdout que imita frames, bytes não UTF-8,
+  CRLF/LF, payload truncado, processo morto, timeout, Ctrl-C, zero testes,
+  seleção inexistente e múltiplas falhas simultâneas.
+- Rodar matriz nativa Windows/Linux/macOS. Testes de processo usam deadlines
+  amplas no CI, mas o relógio apresentado é normalizado nos snapshots.
+- Medir overhead do coordenador com 1, 100 e 1.000 casos vazios. O benchmark é
+  informativo nesta fase e não entra no `S0 / Gate` até haver baseline estável.
+- Atualizar help, documentação de CI e contrato de saída. Integração com VS
+  Code, expectativas de `std.testing` e JUnit permanecem em SL_T.3/SL_T.5.
+
+**Gate final:** nenhuma combinação de saída hostil, timeout, crash ou
+paralelismo perde um resultado iniciado, deadlocka o runner ou transforma uma
+falha em exit code zero.
 
 **Saída:** testes de projeto são usáveis em terminal e CI sem flakiness de
 protocolo ou dependência do texto apresentado.
