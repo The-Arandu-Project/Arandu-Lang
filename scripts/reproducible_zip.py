@@ -4,6 +4,7 @@
 import argparse
 from datetime import datetime, timezone
 from pathlib import Path
+import sys
 import zipfile
 import json
 import posixpath
@@ -50,6 +51,16 @@ def validate(path: Path, root: str, version: str, target: str) -> None:
 
 
 def main() -> None:
+    if len(sys.argv) >= 2 and sys.argv[1] == 'validate':
+        parser = argparse.ArgumentParser()
+        parser.add_argument('command')
+        parser.add_argument('archive', type=Path)
+        parser.add_argument('--root', required=True)
+        parser.add_argument('--version', required=True)
+        parser.add_argument('--target', required=True)
+        args = parser.parse_args()
+        validate(args.archive, args.root, args.version, args.target)
+        return
     parser = argparse.ArgumentParser()
     parser.add_argument("source", type=Path)
     parser.add_argument("output", type=Path)

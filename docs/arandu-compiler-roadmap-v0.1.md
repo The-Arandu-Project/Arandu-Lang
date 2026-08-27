@@ -271,6 +271,7 @@ Fase 5 — Otimização Global, CodeGen & Ecossistema (v0.4+) · [NÃO INICIADA]
 Fase 6 — Bootstrap & Auto-Hospedagem (v1.0) · [NÃO INICIADA]
 [ ] HOST   Self-Hosting: compilador Arandu compilando a si mesmo de forma convergente (3-passos)
 [ ] BOOT   Remoção total de dependências do compilador Rust para build releases
+[ ] DIST   Validadores TAR/ZIP nativos no CLI (`arandu archive validate`), removendo Python dos instaladores e containers; manter Python apenas como oracle de testes
 [ ] MS     Completa compilação paralela usando o runtime nativo de concorrência com compilação < 3 segundos
 
 Fase E — Ferramentas Integradas e Ecossistema (Evoluções Fora do Core) · [NÃO INICIADA]

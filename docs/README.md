@@ -9,6 +9,7 @@ Esta pasta tem uma única fila de planejamento: o [roadmap mestre](arandu-compil
 - [Guia de migração](arandu-project-package-migration-v0.1.md) — uso do contrato de projeto e dependências.
 - [GenRef Gold](arandu-genref-gold-rfc-v0.1.md) — RFC aceita e implementada.
 - [Nomes de anotações](arandu-attribute-naming-v0.1.md) — decisão PascalCase e migração.
+- [Contrato de ferramentas e scripts](tooling-scripts-contract.md) — dono e plataforma de cada automação.
 
 ## Contratos de arquitetura
 
