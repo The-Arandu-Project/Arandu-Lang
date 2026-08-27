@@ -24,9 +24,15 @@ OUT_DIR="${OUT_DIR:-$ROOT/dist}"
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git -C "$ROOT" log -1 --format=%ct)}"
 
 if [[ -z "$VERSION" ]]; then
-  VERSION="$(
-    sed -n 's/^version = "\([^"]*\)"/\1/p' "$ROOT/crates/arandu_cli/Cargo.toml" | head -1
-  )"
+  VERSION="$(python3 - "$ROOT/crates/arandu_cli/Cargo.toml" <<'PY'
+from pathlib import Path
+import sys
+import tomllib
+
+with Path(sys.argv[1]).open("rb") as manifest:
+    sys.stdout.write(tomllib.load(manifest)["package"]["version"])
+PY
+)"
 fi
 if [[ ! "$VERSION" =~ ^[0-9][0-9A-Za-z.-]*$ ]]; then
   echo "error: invalid release version: $(printf '%q' "$VERSION")" >&2
