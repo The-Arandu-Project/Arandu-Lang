@@ -247,6 +247,13 @@ jobs:
         run: cargo run --locked -p xtask -- check-fuzz-regressions
       - name: P7-B / Stress cross-process cache and build publication
         run: cargo test --locked -p arandu_cli --test cache_process_concurrency --test cli_project_concurrency -- --nocapture
+      - name: P7-C / Prove package output determinism under environment variance
+        run: cargo test --locked -p arandu_cli --test cli_project_determinism -- --nocapture
+      - name: P7-D / Reject hostile paths and archive entries
+        run: cargo test --locked -p arandu_cli --test cli_project_adversarial -- --nocapture
+      - name: P7-D / Validate malformed release archives
+        shell: bash
+        run: python3 scripts/test_release_archives.py
       - name: Stress LSP snapshots, debounce and stale document generations
         run: cargo test --locked -p arandu_lsp state::tests::s2_endurance_batches_edits_and_discards_stale_snapshots -- --exact
       - name: Measure L2 LSP end-to-end latency budgets

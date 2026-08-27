@@ -930,10 +930,16 @@ pub fn load_project(
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
+    let canonical_root = fs::canonicalize(&root).map_err(|error| {
+        format!(
+            "cannot canonicalize project root {}: {error}",
+            root.display()
+        )
+    })?;
 
     let cache = arandu_package::cache::resolve_cache_layout(flags.cache_dir.as_deref())?;
     let remote_packages = arandu_package::resolver::materialize_remote_graph(
-        &root,
+        &canonical_root,
         &manifest_path,
         &data,
         &cache,
@@ -942,18 +948,30 @@ pub fn load_project(
             offline: flags.offline,
         },
     )?;
-    let package_graph =
-        LocalPackageGraph::discover_materialized(&root, &manifest_path, &data, &remote_packages)?;
+    let package_graph = LocalPackageGraph::discover_materialized(
+        &canonical_root,
+        &manifest_path,
+        &data,
+        &remote_packages,
+    )?;
     let lockfile = package_graph.lockfile(&data);
-    synchronize_lockfile(&root, lockfile.clone(), flags)?;
+    synchronize_lockfile(&canonical_root, lockfile.clone(), flags)?;
 
-    let entry_path = root.join(&data.entry);
-    if !entry_path.is_file() {
-        return Err(format!(
-            "entry `{}` from {} does not exist (resolved to {})",
+    let entry_candidate = canonical_root.join(&data.entry);
+    let entry_path = fs::canonicalize(&entry_candidate).map_err(|error| {
+        format!(
+            "entry `{}` from {} does not exist (resolved to {}): {error}",
             data.entry,
             manifest_path.display(),
-            entry_path.display()
+            entry_candidate.display()
+        )
+    })?;
+    if !entry_path.starts_with(&canonical_root) || !entry_path.is_file() {
+        return Err(format!(
+            "entry `{}` from {} escapes the project root or is not a file (resolved to {})",
+            data.entry,
+            manifest_path.display(),
+            entry_path.display(),
         ));
     }
 
@@ -995,7 +1013,7 @@ pub fn load_project(
     db.set_project_manifest(manifest);
 
     Ok(ProjectContext {
-        root,
+        root: canonical_root,
         manifest_path,
         manifest,
         entry_path,

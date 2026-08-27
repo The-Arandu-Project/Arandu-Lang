@@ -365,8 +365,64 @@ pub fn semantic_manifest_fingerprint(manifest: &ManifestData) -> String {
             }
         }
     }
+    for (name, values) in [
+        ("network", &manifest.capabilities.network),
+        ("filesystem_read", &manifest.capabilities.filesystem_read),
+        ("filesystem_write", &manifest.capabilities.filesystem_write),
+        ("environment", &manifest.capabilities.environment),
+        ("process", &manifest.capabilities.process),
+    ] {
+        let mut values = values.iter().map(String::as_str).collect::<Vec<_>>();
+        values.sort_unstable();
+        for value in values {
+            push_component(&mut canonical, &format!("capability.{name}"), value);
+        }
+    }
+    push_component(
+        &mut canonical,
+        "capability.foreign",
+        if manifest.capabilities.foreign {
+            "true"
+        } else {
+            "false"
+        },
+    );
+    push_component(
+        &mut canonical,
+        "policy.effects.deny_new_authority",
+        if manifest.effect_policy.deny_new_authority {
+            "true"
+        } else {
+            "false"
+        },
+    );
+    push_component(
+        &mut canonical,
+        "policy.effects.warn_new_resources",
+        if manifest.effect_policy.warn_new_resources {
+            "true"
+        } else {
+            "false"
+        },
+    );
+    let mut denied_effects = manifest
+        .effect_policy
+        .deny
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    denied_effects.sort_unstable();
+    for effect in denied_effects {
+        push_component(&mut canonical, "policy.effects.deny", effect);
+    }
     if let Some(workspace) = &manifest.workspace {
-        for member in &workspace.members {
+        let mut members = workspace
+            .members
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        members.sort_unstable();
+        for member in members {
             push_component(&mut canonical, "workspace.member", member);
         }
     }
@@ -554,6 +610,63 @@ mod tests {
     }
 
     #[test]
+    fn semantic_fingerprint_sorts_sets_and_tracks_authority_policy() {
+        let first = manifest(
+            "schema=1\n[package]\nname='app'\nversion='1.0.0'\nedition='2026'\n[targets.bin]\nname='app'\nroot='src/main.aru'\n[capabilities]\nnetwork=['api.example.com', 'cdn.example.com']\nprocess=['git', 'cc']\n[policy.effects]\ndeny=['Network', 'Process']\n[workspace]\nmembers=['packages/z', 'packages/a']\n",
+        );
+        let reordered = manifest(
+            "schema=1\n[package]\nname='app'\nversion='1.0.0'\nedition='2026'\n[workspace]\nmembers=['packages/a', 'packages/z']\n[targets.bin]\nroot='src/main.aru'\nname='app'\n[policy.effects]\ndeny=['Process', 'Network']\n[capabilities]\nprocess=['cc', 'git']\nnetwork=['cdn.example.com', 'api.example.com']\n",
+        );
+        assert_eq!(
+            semantic_manifest_fingerprint(&first),
+            semantic_manifest_fingerprint(&reordered),
+            "set and TOML declaration order must not create lockfile churn"
+        );
+
+        let mut broader_authority = reordered;
+        broader_authority.capabilities.foreign = true;
+        assert_ne!(
+            semantic_manifest_fingerprint(&first),
+            semantic_manifest_fingerprint(&broader_authority),
+            "an authority-policy change must alter the semantic identity"
+        );
+    }
+
+    #[test]
+    fn canonical_lock_sorts_package_and_edge_input_order() {
+        let data = manifest(
+            "schema=1\n[package]\nname='app'\nversion='1.0.0'\nedition='2026'\n[targets.bin]\nname='app'\nroot='src/main.aru'\n",
+        );
+        let digest = semantic_manifest_fingerprint(&data);
+        let package = |name: &str, source: &str, dependencies: Vec<&str>| LockedPackage {
+            name: name.into(),
+            version: "1.0.0".into(),
+            source: source.into(),
+            manifest_fingerprint: digest.clone(),
+            origin: None,
+            commit: None,
+            content_digest: None,
+            dependencies: dependencies.into_iter().map(str::to_string).collect(),
+        };
+        let first = Lockfile::for_packages(
+            &data,
+            vec![
+                package("z", "path+packages/z", vec!["b=root", "a=root"]),
+                package("app", "root", vec!["z=path+packages/z"]),
+            ],
+        );
+        let second = Lockfile::for_packages(
+            &data,
+            vec![
+                package("app", "root", vec!["z=path+packages/z"]),
+                package("z", "path+packages/z", vec!["a=root", "b=root"]),
+            ],
+        );
+        assert_eq!(first.manifest_fingerprint, second.manifest_fingerprint);
+        assert_eq!(first.to_canonical_bytes(), second.to_canonical_bytes());
+    }
+
+    #[test]
     fn parser_rejects_unknown_corrupt_duplicate_and_nonportable_data() {
         let digest = format!("blake3:{}", "0".repeat(64));
         let base = format!("version=2\nmanifest_fingerprint='{digest}'\n[[package]]\nname='a'\nversion='1.0.0'\nsource='root'\ndependencies=[]\n");
@@ -609,5 +722,52 @@ mod tests {
             )
         )
         .is_err());
+    }
+
+    #[test]
+    fn git_origin_substitution_is_rejected_even_with_a_valid_commit() {
+        let digest = format!("blake3:{}", "0".repeat(64));
+        let commit = "0123456789abcdef0123456789abcdef01234567";
+        let source_origin = "https://github.com/example/math.git";
+        let declared_origin = "https://evil.example/math.git";
+        let text = format!(
+            "version=2\nmanifest_fingerprint='{digest}'\n[[package]]\nname='math'\nversion='1.0.0'\nsource='git+{source_origin}#{commit}'\nmanifest_fingerprint='{digest}'\norigin='{declared_origin}'\ncommit='{commit}'\ncontent_digest='sha256:{}'\ndependencies=[]\n",
+            "1".repeat(64)
+        );
+        assert!(Lockfile::parse(Path::new("arandu.lock"), &text).is_err());
+    }
+
+    #[test]
+    fn graph_diff_exposes_version_and_digest_rollbacks() {
+        let data = manifest("name='app'\nversion='1.0.0'\nentry='src/main.aru'\n");
+        let digest = semantic_manifest_fingerprint(&data);
+        let package = |version: &str, content_digest: &str| LockedPackage {
+            name: "dep".into(),
+            version: version.into(),
+            source: "git+https://example.com/dep.git#0123456789abcdef0123456789abcdef01234567"
+                .into(),
+            manifest_fingerprint: digest.clone(),
+            origin: Some("https://example.com/dep.git".into()),
+            commit: Some("0123456789abcdef0123456789abcdef01234567".into()),
+            content_digest: Some(content_digest.into()),
+            dependencies: vec![],
+        };
+        let old = Lockfile::for_packages(
+            &data,
+            vec![package(
+                "2.0.0",
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )],
+        );
+        let rollback = Lockfile::for_packages(
+            &data,
+            vec![package(
+                "1.0.0",
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            )],
+        );
+        let diff = old.graph_diff(&rollback).join("\n");
+        assert!(diff.contains("version=1.0.0"));
+        assert!(diff.contains("digest=sha256:bbbb"));
     }
 }

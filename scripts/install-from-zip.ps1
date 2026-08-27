@@ -32,10 +32,12 @@ try {
     try {
         foreach ($entry in $zip.Entries) {
             $name = $entry.FullName
-            if ($name.Contains('\') -or $name.StartsWith('/') -or $name.Split('/') -contains '..') { throw "unsafe zip entry: $name" }
+            $components = $name.Split('/')
+            if ($name.Contains('\') -or $name.StartsWith('/') -or $components -contains '' -or $components -contains '.' -or $components -contains '..') { throw "unsafe zip entry: $name" }
+            $unixType = (($entry.ExternalAttributes -shr 16) -band 0xF000)
+            if ($unixType -ne 0 -and $unixType -ne 0x8000) { throw "unsupported zip entry type: $name" }
             if (-not $name.StartsWith("$treeName/", [StringComparison]::Ordinal)) { throw "entry outside package root: $name" }
             if (-not $seen.Add($name)) { throw "duplicate zip entry: $name" }
-            if ($name.EndsWith('/')) { continue }
             $relative = $name.Substring($treeName.Length + 1)
             $fixed = @('bin/arandu.exe','bin/arandu_cli.exe','bin/arandu-lsp.exe',"lib/$target/arandu_runtime.lib",'BLAKE3SUMS','LICENSE-MIT','LICENSE-APACHE','release-manifest.json')
             if ($relative -notin $fixed -and -not $relative.StartsWith('share/arandu/stdlib/', [StringComparison]::Ordinal)) {

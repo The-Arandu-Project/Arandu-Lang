@@ -31,6 +31,37 @@ class ArchiveValidationTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 tar_tools.validate(archive, "arandu-0.0.1", "x86_64-unknown-linux-gnu", "0.0.1")
 
+    def test_tar_rejects_noncanonical_path_that_escapes_package_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "bad-normalized.tar.gz"
+            with tarfile.open(archive, "w:gz") as output:
+                output.addfile(
+                    tarfile.TarInfo(
+                        "arandu-0.0.1/share/arandu/stdlib/a/../../../../escape"
+                    )
+                )
+            with self.assertRaises(SystemExit):
+                tar_tools.validate(
+                    archive,
+                    "arandu-0.0.1",
+                    "x86_64-unknown-linux-gnu",
+                    "0.0.1",
+                )
+
+    def test_tar_rejects_case_insensitive_duplicate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "bad-case.tar.gz"
+            with tarfile.open(archive, "w:gz") as output:
+                output.addfile(tarfile.TarInfo("arandu-0.0.1/bin/arandu"))
+                output.addfile(tarfile.TarInfo("arandu-0.0.1/BIN/ARANDU"))
+            with self.assertRaises(SystemExit):
+                tar_tools.validate(
+                    archive,
+                    "arandu-0.0.1",
+                    "x86_64-unknown-linux-gnu",
+                    "0.0.1",
+                )
+
     def test_zip_rejects_case_insensitive_duplicate(self):
         with tempfile.TemporaryDirectory() as directory:
             archive = Path(directory) / "bad.zip"
@@ -47,6 +78,22 @@ class ArchiveValidationTests(unittest.TestCase):
                 output.writestr("arandu-0.0.1/../../escape", b"bad")
             with self.assertRaises(SystemExit):
                 zip_tools.validate(archive, "arandu-0.0.1", "0.0.1", "x86_64-pc-windows-msvc")
+
+    def test_zip_rejects_unix_symlink_entry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "symlink.zip"
+            entry = zipfile.ZipInfo("arandu-0.0.1/bin/arandu.exe")
+            entry.create_system = 3
+            entry.external_attr = 0o120777 << 16
+            with zipfile.ZipFile(archive, "w") as output:
+                output.writestr(entry, b"../../escape")
+            with self.assertRaises(SystemExit):
+                zip_tools.validate(
+                    archive,
+                    "arandu-0.0.1",
+                    "0.0.1",
+                    "x86_64-pc-windows-msvc",
+                )
 
     def test_zip_rejects_incomplete_package(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -7,6 +7,7 @@ from pathlib import Path
 import zipfile
 import json
 import posixpath
+import stat
 
 
 def validate(path: Path, root: str, version: str, target: str) -> None:
@@ -15,8 +16,17 @@ def validate(path: Path, root: str, version: str, target: str) -> None:
         for entry in archive.infolist():
             name = entry.filename
             normalized = posixpath.normpath(name)
-            if name.startswith("/") or "\\" in name or normalized == ".." or normalized.startswith("../"):
+            if (
+                name != normalized
+                or name.startswith("/")
+                or "\\" in name
+                or normalized == ".."
+                or normalized.startswith("../")
+            ):
                 raise SystemExit(f"unsafe zip entry: {name}")
+            unix_type = stat.S_IFMT(entry.external_attr >> 16)
+            if unix_type not in (0, stat.S_IFREG):
+                raise SystemExit(f"unsupported zip entry type: {name}")
             folded = name.casefold()
             if folded in seen:
                 raise SystemExit(f"duplicate zip entry: {name}")

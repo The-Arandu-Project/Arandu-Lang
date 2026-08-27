@@ -149,14 +149,27 @@ impl CacheStore {
         lock.lock()
             .map_err(|error| CacheStoreError::io("lock cache entry", &lock_path, error))?;
 
-        let repaired = match fs::read(&destination) {
-            Ok(existing) if CacheDigest::sha256(&existing) == expected => {
-                return Ok(CachePublish::AlreadyPresent);
-            }
-            Ok(_) => {
+        let repaired = match fs::symlink_metadata(&destination) {
+            Ok(metadata) if is_link_like(&metadata) || !metadata.file_type().is_file() => {
                 self.quarantine_corrupt(&destination, expected)?;
                 true
             }
+            Ok(_) => match fs::read(&destination) {
+                Ok(existing) if CacheDigest::sha256(&existing) == expected => {
+                    return Ok(CachePublish::AlreadyPresent);
+                }
+                Ok(_) => {
+                    self.quarantine_corrupt(&destination, expected)?;
+                    true
+                }
+                Err(error) => {
+                    return Err(CacheStoreError::io(
+                        "read cached archive",
+                        &destination,
+                        error,
+                    ));
+                }
+            },
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
             Err(error) => {
                 return Err(CacheStoreError::io(
@@ -441,7 +454,7 @@ fn walk_tree(
             .strip_prefix(root)
             .map_err(|error| CacheStoreError::MalformedCache(error.to_string()))?;
         let portable = portable_relative(name)?;
-        if metadata.file_type().is_symlink() {
+        if is_link_like(&metadata) {
             return Err(CacheStoreError::MalformedCache(format!(
                 "symlink in extracted tree: {portable}"
             )));
@@ -699,8 +712,25 @@ fn sorted_entries(root: &Path, max_entries: usize) -> Result<Vec<PathBuf>, Cache
 
 fn is_plain_directory(path: &Path) -> Result<bool, CacheStoreError> {
     fs::symlink_metadata(path)
-        .map(|metadata| metadata.file_type().is_dir())
+        .map(|metadata| !is_link_like(&metadata) && metadata.file_type().is_dir())
         .map_err(|error| CacheStoreError::io("inspect cache directory", path, error))
+}
+
+fn is_link_like(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
 }
 
 fn is_lower_hex(value: &str) -> bool {
@@ -1180,6 +1210,90 @@ mod tests {
             .trusted_tree(verification.digest, TreeLimits::default())
             .unwrap();
 
+        fs::remove_dir_all(layout.root()).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn archive_publication_quarantines_symlink_without_reading_its_target() {
+        use std::os::unix::fs::symlink;
+
+        let layout = temp_layout("archive-symlink");
+        let store = CacheStore::new(layout.clone());
+        let bytes = b"verified archive bytes";
+        let digest = CacheDigest::sha256(bytes);
+        let outside = layout.root().with_extension("outside");
+        fs::write(&outside, bytes).unwrap();
+        let archive = layout.archive(digest);
+        create_parent(&archive).unwrap();
+        symlink(&outside, &archive).unwrap();
+
+        assert_eq!(
+            store.publish_archive(digest, bytes).unwrap(),
+            CachePublish::Repaired
+        );
+        assert_eq!(fs::read(&archive).unwrap(), bytes);
+        assert_eq!(fs::read(&outside).unwrap(), bytes);
+        assert!(
+            !fs::symlink_metadata(&archive)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+
+        fs::remove_dir_all(layout.root()).unwrap();
+        fs::remove_file(outside).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extracted_tree_rejects_nested_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let layout = temp_layout("tree-symlink");
+        let tree = layout.staging().join("tree");
+        let outside = layout.root().join("outside");
+        fs::create_dir_all(&tree).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("secret.aru"), b"secret").unwrap();
+        symlink(&outside, tree.join("escaped")).unwrap();
+
+        assert!(matches!(
+            hash_tree(&tree, TreeLimits::default()),
+            Err(CacheStoreError::MalformedCache(message)) if message.contains("symlink")
+        ));
+        fs::remove_dir_all(layout.root()).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn extracted_tree_rejects_nested_junction_escape() {
+        use std::process::Command;
+
+        let layout = temp_layout("tree-junction");
+        let tree = layout.staging().join("tree");
+        let outside = layout.root().join("outside");
+        let junction = tree.join("escaped");
+        fs::create_dir_all(&tree).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("secret.aru"), b"secret").unwrap();
+        let output = Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&outside)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "could not create test junction: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        assert!(matches!(
+            hash_tree(&tree, TreeLimits::default()),
+            Err(CacheStoreError::MalformedCache(message)) if message.contains("symlink")
+        ));
+        fs::remove_dir(&junction).unwrap();
         fs::remove_dir_all(layout.root()).unwrap();
     }
 

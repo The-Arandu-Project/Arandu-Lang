@@ -241,7 +241,7 @@ tests/ui/         UI diagnostic fixtures (.aru → .diag)
 
 ## Next Steps
 
-Select the next major phase and its prerequisites from the [master roadmap](docs/arandu-compiler-roadmap-v0.1.md). New campaign documents are temporary and must be consolidated back into that roadmap when completed.
+Select the next major phase and its prerequisites from the [master roadmap](docs/arandu-compiler-roadmap-v0.1.md). Completed campaigns become decisions or contracts; do not create a second roadmap.
 
 ## License
 

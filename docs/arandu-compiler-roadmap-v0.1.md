@@ -1,5 +1,34 @@
 # Arandu Compiler Architecture — Master Roadmap (v0.1 → v0.4)
 
+> **Fonte única de planejamento.** Itens marcados como concluídos abaixo são
+> decisões consolidadas, não tarefas pendentes. Os documentos técnicos ligados
+> aqui preservam apenas contratos necessários para implementar e validar essas
+> decisões.
+
+## Decisões consolidadas (Gold v0.1)
+
+- **Projeto e pacotes:** `arandu.toml` + `arandu.lock`, TOML versionado,
+  identidade por pacote/alvo/módulo, imports por alias explícito e grafo DAG
+  determinístico. Dependências remotas ficam presas a origem HTTPS/Git e
+  commit exato; não há branches flutuantes, registries ou scripts de build.
+- **Integridade:** lockfile canônico, hashes de conteúdo, cache imutável por
+  digest, publicação staging/rename e políticas `--locked`, `--offline` e
+  `--frozen`. Archives rejeitam traversal, links, duplicatas e bombas de
+  expansão; raízes são canonicalizadas em Windows, Linux e macOS.
+- **Reprodutibilidade:** manifests, grafos, lockfiles e metadados de artefatos
+  devem ser byte-estáveis entre sistemas suportados. A promoção Gold exige
+  E2E nativo fora do checkout e recuperação após interrupção.
+- **Tooling:** LSP incremental prioriza documentos abertos; snapshots stale
+  são descartados, filas são limitadas e diagnósticos permanecem estruturados.
+  O servidor classifica semantic tokens; cores e ícones pertencem à extensão
+  e ao tema do editor.
+- **Memória e execução:** GenRef é o fallback seguro e explícito; efeitos,
+  ownership, layout por alvo e invariantes SSA/AMIR permanecem contratos do
+  compilador. RC/ARC e tracing GC não são requisitos da Gold v0.1.
+
+Detalhes históricos de pesquisa, checklists já executados e evidências de CI
+vivem no Git e nos contratos técnicos; não são novas tarefas do roadmap.
+
 **Fonte única de verdade (checklist executivo).**
 Este documento consolida as decisões arquiteturais sobre Data-Oriented Design (Interning), Polimorfismo Híbrido, OSSA (Ownership SSA), Effects, Async Colorless, Arquitetura de Memória e Binários de Pegada Zero em uma especificação técnica unificada e acionável.
 

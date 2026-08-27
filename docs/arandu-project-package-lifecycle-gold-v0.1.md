@@ -1,5 +1,10 @@
 # Arandu — Project & Package Lifecycle Gold v0.1
 
+> **Registro de decisão concluído.** O planejamento desta campanha foi
+> consolidado em “Decisões consolidadas (Gold v0.1)” no roadmap mestre. Este
+> arquivo agora serve apenas como contrato detalhado e evidência técnica; os
+> checkboxes abaixo não representam trabalho aberto.
+
 **Status:** active campaign  
 **Owner:** `arandu_cli` orchestrates filesystem/network effects;
 `arandu_query` owns deterministic manifest, package-graph and directory inputs.  
@@ -755,15 +760,35 @@ the held native lock when the process exits. This is a process-crash contract,
 not a claim that arbitrary filesystems survive power loss without directory
 durability guarantees.
 
+P7-C treats reproducibility as a semantic contract, not merely two executions
+inside the same checkout. Equivalent projects are rebuilt in differently named
+directories with varied timezone, locale, clock input and TOML declaration
+order. Their graph output, canonical LF-only lockfile and `build-state.json`
+must be byte-identical. Package and dependency-edge inputs are sorted before
+fingerprinting/serialization. Capability and effect policy now participates in
+the manifest fingerprint so an authority change cannot hide behind an unchanged
+lock identity; set-like policy and workspace lists are sorted so presentation
+order alone creates no churn. Third-party `[metadata]` remains deliberately
+outside compiler semantics.
+
+P7-D applies fail-closed path policy at every trust boundary. Archive members
+must already be normalized, portable and unique under case-folding; Unix
+symlinks, Windows reparse points/junctions and other special entries are not
+accepted as package-tree content. Project entry roots are canonicalized and
+containment-checked before source discovery, while cache publication refuses
+link-like archive objects and revalidates trees before they become trusted.
+These checks follow the conservative extraction posture documented by Python's
+`tarfile` data filter and Windows' reparse-point guidance.
+
 ### P7 — Gold promotion
 
 - [x] Native lifecycle E2E on Windows, Linux and macOS outside the checkout.
 - [x] Concurrent build/cache tests and crash-interrupted atomic-write recovery.
-- [ ] Determinism campaign for manifests, graphs, lockfiles and artifact metadata.
-- [ ] Adversarial path, symlink/junction, malformed archive and cache-tamper tests.
-- [ ] Dependency-confusion, origin-substitution, rollback and graph/archive-bomb tests.
+- [x] Determinism campaign for manifests, graphs, lockfiles and artifact metadata.
+- [x] Adversarial path, symlink/junction, malformed archive and cache-tamper tests.
+- [x] Dependency-confusion, origin-substitution, rollback and graph/archive-bomb tests.
 - [x] Installed SDK smoke: `new → check → build → run → clean`.
-- [ ] Documentation and migration guide complete; no known P0/P1 defect.
+- [x] Documentation and migration guide complete; no known P0/P1 defect.
 
 ## Initial command surface
 
@@ -797,6 +822,11 @@ features without pretending they already exist.
   [locked/offline/frozen semantics](https://doc.rust-lang.org/cargo/commands/cargo-generate-lockfile.html)
 - [Go Modules reference](https://go.dev/ref/mod): module identity, workspaces,
   immutable cache, checksums, private-origin behavior and portable path rules
+- [Reproducible Builds variance guidance](https://reproducible-builds.org/docs/adding-build-variance/),
+  [timestamps](https://reproducible-builds.org/docs/timestamps/) and
+  [`SOURCE_DATE_EPOCH`](https://reproducible-builds.org/specs/source-date-epoch/):
+  vary path, locale, timezone and clock inputs instead of proving only repeated
+  execution in one ambient environment
 - [XDG Base Directory specification](https://specifications.freedesktop.org/basedir-spec/latest/),
   [Apple File System Programming Guide](https://developer.apple.com/library/archive/documentation/FileManagement/Conceptual/FileSystemProgrammingGuide/MacOSXDirectories/MacOSXDirectories.html)
   and [Windows Known Folders](https://learn.microsoft.com/windows/win32/shell/knownfolderid):
