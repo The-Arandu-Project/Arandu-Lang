@@ -6,6 +6,7 @@ mod project;
 mod watch;
 
 use arandu_package::cache;
+use arandu_query::ArandCompilerDb;
 use cli_error::{CliFailure, CliResult, CliSuccess};
 
 use std::{
@@ -237,6 +238,7 @@ fn usage_and_exit() -> ! {
         "  arandu_cli cache <dir|inspect|verify|verify-tree|prune> [--cache-dir=<absolute-dir>] [limits]\n",
         "  arandu_cli hash-file <path>          # BLAKE3 hex (packaging checksums)\n",
         "  arandu_cli watch [package-path]      # re-check on FS changes (package mode)\n",
+        "  arandu_cli test [package-path] --list # list compiler-validated tests\n",
         "  arandu_cli clean [package-path]      # remove owned project artifacts\n",
         "  arandu_cli tree [package-path]       # canonical resolved dependency graph\n",
         "  arandu_cli audit [package-path]      # locked provenance and policy audit\n",
@@ -583,6 +585,25 @@ fn main() {
                 env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
             };
             finish(cmd_project_build(&start, &project_flags, opt, debug));
+        }
+        "test" => {
+            let mut start = None;
+            let mut list = false;
+            for argument in &args[2..] {
+                if argument == "--list" {
+                    list = true;
+                } else if argument.starts_with('-') || start.is_some() {
+                    fail_usage("usage: arandu_cli test [package-path] --list");
+                } else {
+                    start = Some(PathBuf::from(argument));
+                }
+            }
+            if !list {
+                fail_usage("only 'arandu test --list' is available in SL_T.0");
+            }
+            let start =
+                start.unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+            finish(cmd_project_test_list(&start, &project_flags));
         }
         // Project-mode check/run when the path is a package (Arandu.toml) or omitted.
         "check" | "run"
@@ -1066,6 +1087,85 @@ fn cmd_project_check(
     let _ = pipeline_lower(&db, file, &filepath);
     eprintln!("{}", rebuild_log.status_line());
     println!("ok {} ({}/{})", filepath, ctx.name, ctx.version);
+    Ok(CliSuccess::Done)
+}
+
+fn project_test_sources(ctx: &project::ProjectContext) -> Result<Vec<(PathBuf, String)>, String> {
+    let mut sources = std::collections::BTreeMap::new();
+    let source_root = ctx
+        .entry_path
+        .parent()
+        .ok_or_else(|| format!("entry {} has no source directory", ctx.entry_path.display()))?;
+    for (directory, target) in [
+        (source_root.to_path_buf(), ctx.target_kind),
+        (ctx.root.join("tests"), "test"),
+    ] {
+        if !directory.is_dir() {
+            continue;
+        }
+        for relative in arandu_query::scan_aru_entries(&directory) {
+            let candidate = directory.join(&relative);
+            let physical = fs::canonicalize(&candidate).map_err(|error| {
+                format!(
+                    "cannot canonicalize test source {}: {error}",
+                    candidate.display()
+                )
+            })?;
+            if !physical.starts_with(&ctx.root) || !physical.is_file() {
+                return Err(format!(
+                    "test source {} escapes the project root or is not a file",
+                    candidate.display()
+                ));
+            }
+            let module = relative
+                .strip_suffix(".aru")
+                .unwrap_or(&relative)
+                .replace('\\', "/");
+            sources.insert(physical, format!("{target}::{module}"));
+        }
+    }
+    Ok(sources.into_iter().collect())
+}
+
+fn cmd_project_test_list(start: &Path, flags: &project::ProjectFlags) -> CliResult {
+    let mut db = arandu_query::DatabaseImpl::new();
+    let ctx = project::load_project(&mut db, start, flags).map_err(|error| {
+        CliFailure::operational("load test project", Some(start.to_path_buf()), error)
+    })?;
+    let sources = project_test_sources(&ctx).map_err(|error| {
+        CliFailure::operational("discover test sources", Some(ctx.root.clone()), error)
+    })?;
+    let mut cases = Vec::new();
+    for (path, module) in sources {
+        let key = path.to_string_lossy().into_owned();
+        let file = if let Some(existing) = db.as_source_db().resolve_module_path(&key) {
+            existing
+        } else {
+            let text = fs::read_to_string(&path).map_err(|error| {
+                CliFailure::operational("read test source", Some(path.clone()), error.to_string())
+            })?;
+            db.new_file(key, text)
+        };
+        let checked = arandu_query::passes::type_check(&db, file);
+        if checked
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == arandu_middle::Severity::Error)
+        {
+            return Err(CliFailure::diagnostics(
+                checked.diagnostics.clone(),
+                Some(path),
+            ));
+        }
+        for case in arandu_query::file_test_manifest(&db, file).iter() {
+            cases.push(format!("{}::{module}::{}", ctx.name, case.name));
+        }
+    }
+    cases.sort();
+    cases.dedup();
+    for case in cases {
+        println!("{case}");
+    }
     Ok(CliSuccess::Done)
 }
 

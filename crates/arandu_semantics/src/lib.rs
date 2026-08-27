@@ -24,6 +24,7 @@ pub use arandu_middle::ops::{BinaryOp, SetOp, UnaryOp};
 
 pub mod attributes;
 pub mod passes;
+pub mod testing;
 
 pub use arandu_mir::{
     check_borrows, check_moves, lower_to_amir, optimize_amir, optimize_amir_checked,

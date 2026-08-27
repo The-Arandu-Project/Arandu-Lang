@@ -165,6 +165,9 @@ func parseSmallFile(bench: mut testing.Benchmark): void {
 
 ### SL_T.0 — Contratos e cortes incrementais
 
+**Estado:** `done` no escopo de descoberta e listagem; o protocolo de eventos
+entra com o primeiro executável de harness em `SL_T.1`.
+
 - Promover `@Test` e registrar `@Benchmark` como anotações planejadas com
   assinaturas e diagnósticos definidos.
 - Introduzir caso/ID/manifesto semântico determinístico por item e testes de

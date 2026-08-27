@@ -11,6 +11,7 @@ use arandu_parser::{Attribute, ExprKind, FuncName, TopLevelDecl};
 pub enum AnnotationId {
     Link,
     Test,
+    Benchmark,
     Suppress,
     Deny,
     Forbid,
@@ -94,6 +95,7 @@ pub struct AnnotationSpec {
 }
 
 const FUNCTION: &[AnnotationTarget] = &[AnnotationTarget::Function, AnnotationTarget::Method];
+const FREE_FUNCTION: &[AnnotationTarget] = &[AnnotationTarget::Function];
 const EXTERN_BLOCK: &[AnnotationTarget] = &[AnnotationTarget::ExternBlock];
 const DECLARATIONS: &[AnnotationTarget] = &[
     AnnotationTarget::Const,
@@ -126,11 +128,21 @@ pub static BUILTIN_ANNOTATIONS: &[AnnotationSpec] = &[
         id: AnnotationId::Test,
         canonical_name: "Test",
         legacy_aliases: &[],
-        targets: FUNCTION,
+        targets: FREE_FUNCTION,
+        arguments: AnnotationArguments::None,
+        repeatable: false,
+        availability: AnnotationAvailability::Implemented,
+        summary: "Marks a function as a test.",
+    },
+    AnnotationSpec {
+        id: AnnotationId::Benchmark,
+        canonical_name: "Benchmark",
+        legacy_aliases: &[],
+        targets: FREE_FUNCTION,
         arguments: AnnotationArguments::None,
         repeatable: false,
         availability: AnnotationAvailability::Planned,
-        summary: "Marks a function as a test.",
+        summary: "Marks a function as a benchmark.",
     },
     AnnotationSpec {
         id: AnnotationId::Suppress,
@@ -224,6 +236,13 @@ impl ValidatedAnnotations {
     #[must_use]
     pub fn contains(&self, id: AnnotationId) -> bool {
         self.ids.contains(&id)
+    }
+
+    #[must_use]
+    pub fn has_errors(&self) -> bool {
+        self.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == arandu_diagnostics::Severity::Error)
     }
 }
 

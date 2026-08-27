@@ -14,6 +14,7 @@ pub mod passes;
 pub mod rename;
 pub mod stable_hash;
 pub mod stdlib;
+pub mod testing;
 pub mod vfs;
 pub mod watch_buf;
 
@@ -63,6 +64,7 @@ pub use stdlib::{
     import_path_on_disk, is_stdlib_root, resolve_exe_path, resolve_stdlib_root, StdlibNotFound,
     StdlibResolveOpts, StdlibRoot, StdlibSource, INSTALL_RELATIVE, STDLIB_ENV,
 };
+pub use testing::{file_test_manifest, item_test_case};
 pub use vfs::{
     listing_contains, map_import_key, package_module, scan_aru_entries, validate_package_name,
     DirectoryListing, ModuleBinding, ModuleRoots, PackageModuleMap, ReservedNameError,
