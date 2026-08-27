@@ -197,7 +197,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), CliFailure> {
 
 pub(crate) fn atomic_replace(path: &Path, bytes: &[u8]) -> Result<(), CliFailure> {
     let staging = write_staging(path, bytes)?;
-    if !path.exists() {
+    if fs::symlink_metadata(path).is_err() {
         return fs::rename(&staging, path)
             .map_err(|error| failure("publish build state", path, error));
     }

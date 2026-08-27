@@ -31,8 +31,18 @@ fn check_rejects_source_directory_symlink_escape() {
         error.contains("escapes the project root") || error.contains("outside"),
         "unexpected escape diagnostic: {error}"
     );
-    fs::remove_dir(project.join("src")).unwrap();
+    remove_link_dir(&project.join("src"));
     fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+fn remove_link_dir(path: &std::path::Path) {
+    fs::remove_file(path).unwrap();
+}
+
+#[cfg(windows)]
+fn remove_link_dir(path: &std::path::Path) {
+    fs::remove_dir(path).unwrap();
 }
 
 #[cfg(unix)]

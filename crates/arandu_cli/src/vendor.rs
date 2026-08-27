@@ -15,7 +15,7 @@ pub fn materialize(
         .ok_or("vendor destination has no parent")?;
     fs::create_dir_all(parent).map_err(|e| format!("create vendor parent: {e}"))?;
     let staging = parent.join(format!(".arandu-staging-{}", std::process::id()));
-    if staging.exists() {
+    if fs::symlink_metadata(&staging).is_ok() {
         fs::remove_dir_all(&staging).map_err(|e| format!("remove stale vendor staging: {e}"))?;
     }
     fs::create_dir_all(&staging).map_err(|e| format!("create vendor staging: {e}"))?;
@@ -50,9 +50,9 @@ pub fn materialize(
         }
         fs::write(staging.join("arandu-vendor.toml"), metadata)
             .map_err(|e| format!("write vendor manifest: {e}"))?;
-        if destination.exists() {
+        if fs::symlink_metadata(&destination).is_ok() {
             let backup = parent.join(format!(".arandu-backup-{}", std::process::id()));
-            if backup.exists() {
+            if fs::symlink_metadata(&backup).is_ok() {
                 fs::remove_dir_all(&backup)
                     .map_err(|e| format!("remove old vendor backup: {e}"))?;
             }
