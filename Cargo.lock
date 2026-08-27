@@ -93,6 +93,7 @@ dependencies = [
  "arandu_middle",
  "arandu_parser",
  "arandu_query",
+ "arandu_runtime",
  "arandu_semantics",
  "blake3",
  "miette",
@@ -257,6 +258,7 @@ dependencies = [
 name = "arandu_runtime"
 version = "0.1.0-rc.4"
 dependencies = [
+ "arandu_codegen",
  "io-uring",
  "libc",
  "windows-sys 0.60.2",

@@ -26,22 +26,64 @@ pub struct CapturedOutput {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TestFailure {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expression: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actual: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<String>,
 }
 
 impl TestFailure {
     #[must_use]
     pub fn simple(message: impl Into<String>) -> Self {
         Self {
+            operation: None,
             message: message.into(),
             location: None,
             expression: None,
             expected: None,
             actual: None,
+            type_name: None,
+            cause: None,
+        }
+    }
+
+    #[must_use]
+    pub fn expectation(
+        operation: impl Into<String>,
+        expression: Option<String>,
+        expected: Option<String>,
+        actual: Option<String>,
+        type_name: Option<String>,
+        message: Option<String>,
+        location: Option<String>,
+    ) -> Self {
+        let op_str = operation.into();
+        let default_msg = match (&expected, &actual) {
+            (Some(exp), Some(act)) => {
+                format!("expectation `{op_str}` failed: expected `{exp}`, got `{act}`")
+            }
+            _ => format!("expectation `{op_str}` failed"),
+        };
+        Self {
+            operation: Some(op_str),
+            message: message.unwrap_or(default_msg),
+            location,
+            expression,
+            expected,
+            actual,
+            type_name,
+            cause: None,
         }
     }
 }

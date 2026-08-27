@@ -577,6 +577,18 @@ fn report(events: &[TestEventV1], options: &RunnerOptions) -> Result<(), String>
                 event.id,
                 event.duration
             );
+            if let Some(failure) = &event.failure {
+                if let Some(loc) = &failure.location {
+                    eprintln!("    location: {loc}");
+                }
+                if let (Some(exp), Some(act)) = (&failure.expected, &failure.actual) {
+                    eprintln!("    expected: `{exp}`");
+                    eprintln!("    actual:   `{act}`");
+                }
+                if !failure.message.is_empty() {
+                    eprintln!("    message:  {}", failure.message);
+                }
+            }
         }
         eprintln!(
             "test result: {}. {passed} passed; {failed} failed; {skipped} skipped; {timed_out} timed out; {crashed} crashed",

@@ -283,6 +283,8 @@ protocolo ou dependência do texto apresentado.
 
 ### SL_T.3 — `std.testing` e diagnósticos de expectativa
 
+Plano executável detalhado: [`arandu-testing-slt3-plan.md`](arandu-testing-slt3-plan.md).
+
 - Entregar contexto de caso, expect/expectEqual/fail/skip/log, cleanup LIFO e
   diretórios temporários com containment e remoção segura.
 - Implementar lowering de expectativas com avaliação única, valores e spans.

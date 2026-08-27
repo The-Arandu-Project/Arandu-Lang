@@ -1266,20 +1266,33 @@ fn cmd_project_test_list(
             println!("{exact}");
         } else if harness_child {
             let start = std::time::Instant::now();
-            let result = run_exact_test(&ctx, exact);
             let sequence: u64 = std::env::var("ARANDU_TEST_SEQUENCE")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0);
-            let status = if result.is_ok() {
-                arandu_codegen::testing::TestStatus::Passed
-            } else {
-                arandu_codegen::testing::TestStatus::Failed
-            };
-            let failure = result
-                .as_ref()
-                .err()
-                .map(|error| arandu_codegen::testing::TestFailure::simple(format!("{error:?}")));
+            arandu_runtime::testing_runtime::init_test_context(exact, sequence, None);
+            let result = run_exact_test(&ctx, exact);
+            let outcome = arandu_runtime::testing_runtime::finish_test_context();
+
+            let (status, failure) =
+                if outcome.status == arandu_codegen::testing::TestStatus::Skipped {
+                    (
+                        arandu_codegen::testing::TestStatus::Skipped,
+                        outcome.failure,
+                    )
+                } else if outcome.status == arandu_codegen::testing::TestStatus::Failed {
+                    (arandu_codegen::testing::TestStatus::Failed, outcome.failure)
+                } else if let Err(err) = &result {
+                    (
+                        arandu_codegen::testing::TestStatus::Failed,
+                        Some(arandu_codegen::testing::TestFailure::simple(format!(
+                            "{err:?}"
+                        ))),
+                    )
+                } else {
+                    (arandu_codegen::testing::TestStatus::Passed, None)
+                };
+
             let event = arandu_codegen::testing::TestEventV1 {
                 sequence,
                 id: exact.to_string(),
@@ -1296,7 +1309,14 @@ fn cmd_project_test_list(
                 failure,
             };
             let _ = test_runner::send_child_event(sequence, &event);
-            return result;
+            if status == arandu_codegen::testing::TestStatus::Failed {
+                return Err(CliFailure::operational(
+                    "run test case",
+                    None,
+                    "test failed",
+                ));
+            }
+            return Ok(CliSuccess::Done);
         } else {
             let passed = test_runner::run_cases(&ctx.root, vec![exact.to_string()], runner)
                 .map_err(|error| CliFailure::operational("run tests", None, error))?;

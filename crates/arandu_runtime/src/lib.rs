@@ -26,6 +26,7 @@ pub mod reactor_runtime;
 pub mod rt_runtime;
 pub mod socket_runtime;
 pub mod supervisor_runtime;
+pub mod testing_runtime;
 pub mod to_str_runtime;
 pub mod vec_runtime;
 pub mod waker_runtime;

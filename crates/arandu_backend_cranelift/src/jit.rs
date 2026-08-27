@@ -214,6 +214,43 @@ impl AranduModule<JITModule> {
             "ar_env_var_is_set",
             crate::os_runtime::ar_env_var_is_set as *const u8,
         );
+        // SL_T.3: std.testing expectation and runner symbols
+        builder.symbol(
+            "ar_test_expect",
+            crate::testing_runtime::ar_test_expect as *const u8,
+        );
+        builder.symbol(
+            "ar_test_expect_equal_i64",
+            crate::testing_runtime::ar_test_expect_equal_i64 as *const u8,
+        );
+        builder.symbol(
+            "ar_test_expect_equal_f64",
+            crate::testing_runtime::ar_test_expect_equal_f64 as *const u8,
+        );
+        builder.symbol(
+            "ar_test_expect_equal_bool",
+            crate::testing_runtime::ar_test_expect_equal_bool as *const u8,
+        );
+        builder.symbol(
+            "ar_test_expect_equal_str",
+            crate::testing_runtime::ar_test_expect_equal_str as *const u8,
+        );
+        builder.symbol(
+            "ar_test_fail",
+            crate::testing_runtime::ar_test_fail as *const u8,
+        );
+        builder.symbol(
+            "ar_test_skip",
+            crate::testing_runtime::ar_test_skip as *const u8,
+        );
+        builder.symbol(
+            "ar_test_log",
+            crate::testing_runtime::ar_test_log as *const u8,
+        );
+        builder.symbol(
+            "ar_test_temp_dir",
+            crate::testing_runtime::ar_test_temp_dir as *const u8,
+        );
         // std.alloc.vec:
         // - Product path (pure-buffer): malloc / realloc / buf_free only.
         // - Handle API (new/push/get/…): unit-test / legacy GenArena-style table.

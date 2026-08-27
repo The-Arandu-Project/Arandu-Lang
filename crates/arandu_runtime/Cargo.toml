@@ -11,6 +11,7 @@ fuzzing = []
 [dependencies]
 # SL_R.2 reactor (epoll + timerfd on Linux); portable fallback elsewhere
 libc = "0.2.189"
+arandu_codegen = { path = "../arandu_codegen" }
 
 # SL_R.3 io_uring is Linux-only (MAP_POPULATE / SYS_io_uring_*). Do not pull
 # this crate on macOS/Windows or install-smoke matrix builds fail to compile.

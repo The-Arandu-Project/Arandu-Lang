@@ -20,7 +20,7 @@ pub mod types;
 // symbol table (`crate::<module>_runtime::*`) and external paths keep working.
 pub use arandu_runtime::{
     gen_runtime, os_runtime, poll_runtime, reactor_runtime, rt_runtime, socket_runtime,
-    supervisor_runtime, to_str_runtime, vec_runtime, waker_runtime,
+    supervisor_runtime, testing_runtime, to_str_runtime, vec_runtime, waker_runtime,
 };
 
 pub use crate::aot::{CraneliftObjectBackend, ObjectArtifact};
