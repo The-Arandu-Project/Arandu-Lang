@@ -252,7 +252,8 @@ Fase 3 — OSSA Avançado, Semântica e OS Runtime (v0.3) · [PARCIAL; vários m
 [→] SL_T   [Testing & Benchmark Harness](./arandu-testing-benchmark-harness-v0.1.md):
            SL_T.0–SL_T.4 implementados (descoberta, harness, runner confiável,
            std.testing estruturado e benchmark engine auditável); próximo gate
-           é SL_T.5, comparação e integração de produto
+           SL_T.5 concluído localmente (comparação, JUnit, CI e VS Code); a
+           promoção final permanece em SL_T.6
 
 Fase 4 — Expressividade de Linguagem e Tipagem (v0.35) · [PARCIAL; superfície inicial integrada]
 [x] SYN.1  Retorno implícito: última `Expr` do body → valor de retorno (typeck + AMIR; async wrap A3)

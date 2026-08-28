@@ -1,0 +1,12 @@
+module slt5_product
+
+import std.testing as testing
+
+@Test
+func smoke(): void {
+    testing.expect(true, "SL_T product smoke")
+}
+
+func main(): int {
+    return 0
+}

@@ -26,10 +26,17 @@ pub struct RunnerOptions {
     pub timeout: Duration,
     pub fail_fast: bool,
     pub seed: u64,
-    pub format_json: bool,
+    pub format: TestOutputFormat,
     pub output: Option<PathBuf>,
     pub target: Option<String>,
     pub backend: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TestOutputFormat {
+    Human,
+    Json,
+    Junit,
 }
 
 #[derive(Debug, Clone)]
@@ -40,26 +47,90 @@ pub struct BenchmarkRunnerOptions {
     pub output: Option<PathBuf>,
     pub target: Option<String>,
     pub backend: Option<String>,
+    pub baseline: Option<BenchmarkBaselineMode>,
 }
 
-#[derive(Debug, Serialize)]
-struct BenchmarkJsonReport<'a> {
-    schema: &'static str,
-    arandu_version: &'static str,
+#[derive(Debug, Clone)]
+pub enum BenchmarkBaselineMode {
+    Save {
+        name: String,
+    },
+    Compare {
+        name: String,
+        strict: bool,
+        dry_run: bool,
+        max_regression_percent: f64,
+        noise_threshold_percent: f64,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BenchmarkRunOutcome {
+    Passed,
+    BenchmarkFailed,
+    Regression,
+    MissingBaseline,
+    IncompatibleBaseline,
+}
+
+impl BenchmarkRunOutcome {
+    #[must_use]
+    pub const fn exit_code(self) -> i32 {
+        match self {
+            Self::Passed => 0,
+            Self::BenchmarkFailed | Self::Regression => 1,
+            Self::MissingBaseline => 3,
+            Self::IncompatibleBaseline => 4,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkJsonReport {
+    schema: String,
+    arandu_version: String,
     target: String,
     backend: String,
-    profile: &'static str,
-    clock: &'static str,
-    os: &'static str,
-    arch: &'static str,
-    cases: Vec<BenchmarkJsonCase<'a>>,
+    profile: String,
+    clock: String,
+    os: String,
+    arch: String,
+    cpu: String,
+    cases: Vec<BenchmarkJsonCase>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    comparison: Option<BenchmarkComparisonReport>,
 }
 
-#[derive(Debug, Serialize)]
-struct BenchmarkJsonCase<'a> {
-    id: &'a str,
-    config: &'a BenchmarkConfigV1,
-    samples: &'a [arandu_codegen::testing::BenchmarkSampleV1],
+impl BenchmarkJsonReport {
+    fn environment(&self) -> BenchmarkEnvironment {
+        BenchmarkEnvironment {
+            target: self.target.clone(),
+            backend: self.backend.clone(),
+            profile: self.profile.clone(),
+            clock: self.clock.clone(),
+            os: self.os.clone(),
+            arch: self.arch.clone(),
+            cpu: self.cpu.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct BenchmarkEnvironment {
+    target: String,
+    backend: String,
+    profile: String,
+    clock: String,
+    os: String,
+    arch: String,
+    cpu: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkJsonCase {
+    id: String,
+    config: BenchmarkConfigV1,
+    samples: Vec<arandu_codegen::testing::BenchmarkSampleV1>,
     median_ns_per_op: Option<f64>,
     mad_ns_per_op: Option<f64>,
     p50_ns_per_op: Option<f64>,
@@ -69,7 +140,53 @@ struct BenchmarkJsonCase<'a> {
     stderr: String,
     stdout_truncated: bool,
     stderr_truncated: bool,
-    failure: &'a Option<String>,
+    failure: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkBaselineFile {
+    schema: String,
+    name: String,
+    report: BenchmarkJsonReport,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkComparisonReport {
+    baseline: String,
+    status: BenchmarkComparisonStatus,
+    strict: bool,
+    dry_run: bool,
+    max_regression_percent: f64,
+    noise_threshold_percent: f64,
+    cases: Vec<BenchmarkComparisonCase>,
+    regressions: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum BenchmarkComparisonStatus {
+    Compared,
+    MissingBaseline,
+    IncompatibleEnvironment,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkComparisonCase {
+    id: String,
+    baseline_median_ns_per_op: f64,
+    current_median_ns_per_op: f64,
+    delta_percent: f64,
+    uncertainty_percent: f64,
+    effective_threshold_percent: f64,
+    classification: BenchmarkClassification,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum BenchmarkClassification {
+    Improved,
+    Unchanged,
+    Regressed,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -147,15 +264,20 @@ pub fn run_benchmarks(
     project: &Path,
     cases: Vec<String>,
     options: &BenchmarkRunnerOptions,
-) -> Result<bool, String> {
+) -> Result<BenchmarkRunOutcome, String> {
     let mut events = Vec::with_capacity(cases.len());
     for (index, id) in cases.iter().enumerate() {
         let sequence = u64::try_from(index).map_err(|_| "benchmark sequence overflow")?;
         events.push(run_benchmark_case(project, id, sequence, options));
     }
     events.sort_by(|left, right| left.id.cmp(&right.id));
-    report_benchmarks(&events, options)?;
-    Ok(events.iter().all(|event| event.failure.is_none()))
+    if events.iter().any(|event| event.failure.is_some()) {
+        let mut reporting_options = options.clone();
+        reporting_options.baseline = None;
+        report_benchmarks(project, &events, &reporting_options)?;
+        return Ok(BenchmarkRunOutcome::BenchmarkFailed);
+    }
+    report_benchmarks(project, &events, options)
 }
 
 fn run_benchmark_case(
@@ -346,53 +468,14 @@ fn format_ns_per_op(value: f64) -> String {
 }
 
 fn report_benchmarks(
+    project: &Path,
     events: &[BenchmarkEventV1],
     options: &BenchmarkRunnerOptions,
-) -> Result<(), String> {
+) -> Result<BenchmarkRunOutcome, String> {
+    let mut report = benchmark_json_report(events, options);
+    let outcome = apply_baseline(project, &mut report, options)?;
+
     if options.format_json {
-        let cases = events
-            .iter()
-            .map(|event| {
-                let values = sample_values(event);
-                let (median, mad, p95) = benchmark_stats(event);
-                BenchmarkJsonCase {
-                    id: &event.id,
-                    config: &event.config,
-                    samples: &event.samples,
-                    median_ns_per_op: median,
-                    mad_ns_per_op: mad,
-                    p50_ns_per_op: percentile(&values, 50),
-                    p95_ns_per_op: p95,
-                    min_ns_per_op: values.first().copied(),
-                    stdout: String::from_utf8_lossy(&event.stdout.bytes).into_owned(),
-                    stderr: String::from_utf8_lossy(&event.stderr.bytes).into_owned(),
-                    stdout_truncated: event.stdout.truncated,
-                    stderr_truncated: event.stderr.truncated,
-                    failure: &event.failure,
-                }
-            })
-            .collect();
-        let report = BenchmarkJsonReport {
-            schema: BENCH_PROTOCOL_V1,
-            arandu_version: env!("CARGO_PKG_VERSION"),
-            target: options
-                .target
-                .clone()
-                .unwrap_or_else(|| std::env::consts::ARCH.to_string()),
-            backend: options
-                .backend
-                .clone()
-                .unwrap_or_else(|| "cranelift".to_string()),
-            profile: if cfg!(debug_assertions) {
-                "debug"
-            } else {
-                "release"
-            },
-            clock: "monotonic_instant",
-            os: std::env::consts::OS,
-            arch: std::env::consts::ARCH,
-            cases,
-        };
         let bytes = serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?;
         if let Some(output) = &options.output {
             atomic_write_file(output, &bytes)?;
@@ -423,8 +506,513 @@ fn report_benchmarks(
                 );
             }
         }
+        if let Some(comparison) = &report.comparison {
+            if comparison.status == BenchmarkComparisonStatus::Compared {
+                for case in &comparison.cases {
+                    eprintln!(
+                        "compare {}: {:+.2}% ({:?}, threshold {:.2}%, uncertainty {:.2}%)",
+                        case.id,
+                        case.delta_percent,
+                        case.classification,
+                        case.effective_threshold_percent,
+                        case.uncertainty_percent
+                    );
+                }
+                eprintln!(
+                    "benchmark comparison: {} regression(s) against baseline `{}`{}",
+                    comparison.regressions,
+                    comparison.baseline,
+                    if comparison.dry_run { " (dry-run)" } else { "" }
+                );
+            } else {
+                eprintln!(
+                    "benchmark comparison: {:?} for baseline `{}`",
+                    comparison.status, comparison.baseline
+                );
+            }
+        }
+    }
+    Ok(outcome)
+}
+
+fn junit_report(events: &[TestEventV1], total_duration_ms: u128) -> String {
+    let failures = events
+        .iter()
+        .filter(|event| event.status == TestStatus::Failed)
+        .count();
+    let errors = events
+        .iter()
+        .filter(|event| matches!(event.status, TestStatus::TimedOut | TestStatus::Crashed))
+        .count();
+    let skipped = events
+        .iter()
+        .filter(|event| event.status == TestStatus::Skipped)
+        .count();
+    let mut xml = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<testsuites tests=\"{}\" failures=\"{failures}\" errors=\"{errors}\" skipped=\"{skipped}\" time=\"{}\">\n  <testsuite name=\"Arandu\" tests=\"{}\" failures=\"{failures}\" errors=\"{errors}\" skipped=\"{skipped}\" time=\"{}\">\n",
+        events.len(),
+        duration_seconds(total_duration_ms),
+        events.len(),
+        duration_seconds(total_duration_ms)
+    );
+    for event in events {
+        let (classname, name) = event
+            .id
+            .rsplit_once("::")
+            .unwrap_or(("arandu", event.id.as_str()));
+        xml.push_str(&format!(
+            "    <testcase classname=\"{}\" name=\"{}\" time=\"{}\">\n",
+            xml_escape(classname),
+            xml_escape(name),
+            duration_seconds(event.duration.as_millis())
+        ));
+        match event.status {
+            TestStatus::Passed => {}
+            TestStatus::Skipped => xml.push_str("      <skipped/>\n"),
+            TestStatus::Failed => {
+                let message = event
+                    .failure
+                    .as_ref()
+                    .map(|failure| failure.message.as_str())
+                    .unwrap_or("test failed");
+                xml.push_str(&format!(
+                    "      <failure type=\"assertion\" message=\"{}\">{}</failure>\n",
+                    xml_escape(message),
+                    xml_escape(&format_test_failures(event))
+                ));
+            }
+            TestStatus::TimedOut | TestStatus::Crashed => {
+                let kind = if event.status == TestStatus::TimedOut {
+                    "timeout"
+                } else {
+                    "crash"
+                };
+                let message = event
+                    .failure
+                    .as_ref()
+                    .map(|failure| failure.message.as_str())
+                    .unwrap_or(kind);
+                xml.push_str(&format!(
+                    "      <error type=\"{kind}\" message=\"{}\">{}</error>\n",
+                    xml_escape(message),
+                    xml_escape(&format_test_failures(event))
+                ));
+            }
+        }
+        let stdout = String::from_utf8_lossy(&event.stdout.bytes);
+        if !stdout.is_empty() || event.stdout.truncated {
+            let suffix = if event.stdout.truncated {
+                "\n<arandu: output truncated>"
+            } else {
+                ""
+            };
+            xml.push_str(&format!(
+                "      <system-out>{}{}</system-out>\n",
+                xml_escape(&stdout),
+                xml_escape(suffix)
+            ));
+        }
+        let stderr = String::from_utf8_lossy(&event.stderr.bytes);
+        if !stderr.is_empty() || event.stderr.truncated {
+            let suffix = if event.stderr.truncated {
+                "\n<arandu: output truncated>"
+            } else {
+                ""
+            };
+            xml.push_str(&format!(
+                "      <system-err>{}{}</system-err>\n",
+                xml_escape(&stderr),
+                xml_escape(suffix)
+            ));
+        }
+        xml.push_str("    </testcase>\n");
+    }
+    xml.push_str("  </testsuite>\n</testsuites>\n");
+    xml
+}
+
+fn format_test_failures(event: &TestEventV1) -> String {
+    let mut lines = Vec::new();
+    if let Some(failure) = &event.failure {
+        lines.push(failure.message.clone());
+        if let Some(location) = &failure.location {
+            lines.push(format!("location: {location}"));
+        }
+        if let Some(expected) = &failure.expected {
+            lines.push(format!("expected: {expected}"));
+        }
+        if let Some(actual) = &failure.actual {
+            lines.push(format!("actual: {actual}"));
+        }
+    }
+    lines.extend(
+        event
+            .secondary_failures
+            .iter()
+            .map(|failure| format!("secondary: {}", failure.message)),
+    );
+    lines.extend(event.logs.iter().map(|line| format!("log: {line}")));
+    if event.logs_truncated {
+        lines.push("log: <truncated>".to_string());
+    }
+    lines.join("\n")
+}
+
+fn duration_seconds(milliseconds: u128) -> String {
+    format!("{}.{:03}", milliseconds / 1_000, milliseconds % 1_000)
+}
+
+fn xml_escape(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            '\t' | '\n' | '\r' => escaped.push(character),
+            character if character >= '\u{20}' => escaped.push(character),
+            _ => escaped.push('\u{fffd}'),
+        }
+    }
+    escaped
+}
+
+fn benchmark_json_report(
+    events: &[BenchmarkEventV1],
+    options: &BenchmarkRunnerOptions,
+) -> BenchmarkJsonReport {
+    let cases = events
+        .iter()
+        .map(|event| {
+            let values = sample_values(event);
+            let (median, mad, p95) = benchmark_stats(event);
+            BenchmarkJsonCase {
+                id: event.id.clone(),
+                config: event.config.clone(),
+                samples: event.samples.clone(),
+                median_ns_per_op: median,
+                mad_ns_per_op: mad,
+                p50_ns_per_op: percentile(&values, 50),
+                p95_ns_per_op: p95,
+                min_ns_per_op: values.first().copied(),
+                stdout: String::from_utf8_lossy(&event.stdout.bytes).into_owned(),
+                stderr: String::from_utf8_lossy(&event.stderr.bytes).into_owned(),
+                stdout_truncated: event.stdout.truncated,
+                stderr_truncated: event.stderr.truncated,
+                failure: event.failure.clone(),
+            }
+        })
+        .collect();
+    BenchmarkJsonReport {
+        schema: BENCH_PROTOCOL_V1.to_string(),
+        arandu_version: env!("CARGO_PKG_VERSION").to_string(),
+        target: options
+            .target
+            .clone()
+            .unwrap_or_else(|| std::env::consts::ARCH.to_string()),
+        backend: options
+            .backend
+            .clone()
+            .unwrap_or_else(|| "cranelift".to_string()),
+        profile: if cfg!(debug_assertions) {
+            "debug".to_string()
+        } else {
+            "release".to_string()
+        },
+        clock: "monotonic_instant".to_string(),
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+        cpu: benchmark_cpu_identity(),
+        cases,
+        comparison: None,
+    }
+}
+
+fn apply_baseline(
+    project: &Path,
+    current: &mut BenchmarkJsonReport,
+    options: &BenchmarkRunnerOptions,
+) -> Result<BenchmarkRunOutcome, String> {
+    let Some(mode) = &options.baseline else {
+        return Ok(BenchmarkRunOutcome::Passed);
+    };
+    match mode {
+        BenchmarkBaselineMode::Save { name } => {
+            validate_baseline_name(name)?;
+            let path = baseline_path(project, name);
+            let parent = path
+                .parent()
+                .ok_or_else(|| "baseline path has no parent directory".to_string())?;
+            fs::create_dir_all(parent).map_err(|error| {
+                format!(
+                    "create benchmark baseline directory {}: {error}",
+                    parent.display()
+                )
+            })?;
+            let document = BenchmarkBaselineFile {
+                schema: "arandu.bench-baseline/v1".to_string(),
+                name: name.clone(),
+                report: current.clone(),
+            };
+            let bytes = serde_json::to_vec_pretty(&document).map_err(|error| error.to_string())?;
+            atomic_write_file(&path, &bytes)?;
+            if !options.format_json {
+                eprintln!("saved benchmark baseline `{name}` at {}", path.display());
+            }
+            Ok(BenchmarkRunOutcome::Passed)
+        }
+        BenchmarkBaselineMode::Compare {
+            name,
+            strict,
+            dry_run,
+            max_regression_percent,
+            noise_threshold_percent,
+        } => {
+            validate_baseline_name(name)?;
+            let path = baseline_path(project, name);
+            let bytes = match fs::read(&path) {
+                Ok(bytes) => bytes,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound && !strict => {
+                    current.comparison = Some(empty_comparison(
+                        name,
+                        BenchmarkComparisonStatus::MissingBaseline,
+                        *strict,
+                        *dry_run,
+                        *max_regression_percent,
+                        *noise_threshold_percent,
+                    ));
+                    if !options.format_json {
+                        eprintln!("benchmark baseline `{name}` does not exist; comparison skipped");
+                    }
+                    return Ok(BenchmarkRunOutcome::Passed);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    current.comparison = Some(empty_comparison(
+                        name,
+                        BenchmarkComparisonStatus::MissingBaseline,
+                        *strict,
+                        *dry_run,
+                        *max_regression_percent,
+                        *noise_threshold_percent,
+                    ));
+                    if !options.format_json {
+                        eprintln!("benchmark baseline `{name}` is required but missing");
+                    }
+                    return Ok(BenchmarkRunOutcome::MissingBaseline);
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "read benchmark baseline {}: {error}",
+                        path.display()
+                    ));
+                }
+            };
+            let baseline: BenchmarkBaselineFile =
+                serde_json::from_slice(&bytes).map_err(|error| {
+                    format!("invalid benchmark baseline {}: {error}", path.display())
+                })?;
+            if baseline.schema != "arandu.bench-baseline/v1" || baseline.name != *name {
+                return Err(format!(
+                    "benchmark baseline {} has an invalid contract",
+                    path.display()
+                ));
+            }
+            if baseline.report.environment() != current.environment() {
+                current.comparison = Some(empty_comparison(
+                    name,
+                    BenchmarkComparisonStatus::IncompatibleEnvironment,
+                    *strict,
+                    *dry_run,
+                    *max_regression_percent,
+                    *noise_threshold_percent,
+                ));
+                if !options.format_json {
+                    eprintln!(
+                        "benchmark baseline `{name}` is incompatible: baseline={:?}, current={:?}",
+                        baseline.report.environment(),
+                        current.environment()
+                    );
+                }
+                return Ok(BenchmarkRunOutcome::IncompatibleBaseline);
+            }
+            let comparison = compare_benchmark_reports(
+                name,
+                *strict,
+                *dry_run,
+                *max_regression_percent,
+                *noise_threshold_percent,
+                &baseline.report,
+                current,
+            )?;
+            let regressions = comparison.regressions;
+            current.comparison = Some(comparison);
+            if regressions != 0 && !dry_run {
+                Ok(BenchmarkRunOutcome::Regression)
+            } else {
+                Ok(BenchmarkRunOutcome::Passed)
+            }
+        }
+    }
+}
+
+fn compare_benchmark_reports(
+    name: &str,
+    strict: bool,
+    dry_run: bool,
+    max_regression_percent: f64,
+    noise_threshold_percent: f64,
+    baseline: &BenchmarkJsonReport,
+    current: &BenchmarkJsonReport,
+) -> Result<BenchmarkComparisonReport, String> {
+    let baseline_cases = baseline
+        .cases
+        .iter()
+        .map(|case| (case.id.as_str(), case))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut cases = Vec::with_capacity(current.cases.len());
+    for case in &current.cases {
+        let Some(previous) = baseline_cases.get(case.id.as_str()) else {
+            if strict {
+                return Err(format!(
+                    "benchmark `{}` is absent from strict baseline `{name}`",
+                    case.id
+                ));
+            }
+            continue;
+        };
+        if previous.config != case.config {
+            return Err(format!(
+                "benchmark `{}` uses different measurement configuration than baseline `{name}`",
+                case.id
+            ));
+        }
+        let baseline_median = previous
+            .median_ns_per_op
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .ok_or_else(|| format!("baseline benchmark `{}` has no valid median", case.id))?;
+        let current_median = case
+            .median_ns_per_op
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .ok_or_else(|| format!("current benchmark `{}` has no valid median", case.id))?;
+        let baseline_noise = previous.mad_ns_per_op.unwrap_or(0.0) / baseline_median * 100.0;
+        let current_noise = case.mad_ns_per_op.unwrap_or(0.0) / current_median * 100.0;
+        let uncertainty = (baseline_noise + current_noise).max(noise_threshold_percent);
+        let effective_threshold = max_regression_percent.max(uncertainty);
+        let delta = (current_median - baseline_median) / baseline_median * 100.0;
+        let classification = if delta > effective_threshold {
+            BenchmarkClassification::Regressed
+        } else if delta < -uncertainty {
+            BenchmarkClassification::Improved
+        } else {
+            BenchmarkClassification::Unchanged
+        };
+        cases.push(BenchmarkComparisonCase {
+            id: case.id.clone(),
+            baseline_median_ns_per_op: baseline_median,
+            current_median_ns_per_op: current_median,
+            delta_percent: delta,
+            uncertainty_percent: uncertainty,
+            effective_threshold_percent: effective_threshold,
+            classification,
+        });
+    }
+    if strict {
+        for id in baseline_cases.keys() {
+            if !current.cases.iter().any(|case| case.id == *id) {
+                return Err(format!(
+                    "strict baseline `{name}` contains benchmark `{id}` missing from the current run"
+                ));
+            }
+        }
+    }
+    let regressions = cases
+        .iter()
+        .filter(|case| case.classification == BenchmarkClassification::Regressed)
+        .count();
+    Ok(BenchmarkComparisonReport {
+        baseline: name.to_string(),
+        status: BenchmarkComparisonStatus::Compared,
+        strict,
+        dry_run,
+        max_regression_percent,
+        noise_threshold_percent,
+        cases,
+        regressions,
+    })
+}
+
+fn empty_comparison(
+    name: &str,
+    status: BenchmarkComparisonStatus,
+    strict: bool,
+    dry_run: bool,
+    max_regression_percent: f64,
+    noise_threshold_percent: f64,
+) -> BenchmarkComparisonReport {
+    BenchmarkComparisonReport {
+        baseline: name.to_string(),
+        status,
+        strict,
+        dry_run,
+        max_regression_percent,
+        noise_threshold_percent,
+        cases: Vec::new(),
+        regressions: 0,
+    }
+}
+
+fn validate_baseline_name(name: &str) -> Result<(), String> {
+    if name.is_empty()
+        || name.len() > 64
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        || matches!(name, "." | "..")
+    {
+        return Err(
+            "baseline name must contain 1-64 ASCII letters, digits, '.', '-' or '_'".to_string(),
+        );
     }
     Ok(())
+}
+
+fn baseline_path(project: &Path, name: &str) -> PathBuf {
+    project
+        .join("target")
+        .join("arandu")
+        .join("benchmarks")
+        .join(format!("{name}.json"))
+}
+
+fn benchmark_cpu_identity() -> String {
+    if let Ok(identity) = std::env::var("ARANDU_BENCH_MACHINE") {
+        let identity = identity.trim();
+        if !identity.is_empty() {
+            return format!("explicit:{identity}");
+        }
+    }
+    #[cfg(target_os = "linux")]
+    if let Ok(cpuinfo) = fs::read_to_string("/proc/cpuinfo") {
+        if let Some(model) = cpuinfo.lines().find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            (key.trim() == "model name").then(|| value.trim().to_string())
+        }) {
+            return model;
+        }
+    }
+    #[cfg(target_os = "macos")]
+    if let Ok(output) = Command::new("sysctl")
+        .args(["-n", "machdep.cpu.brand_string"])
+        .output()
+    {
+        let model = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !model.is_empty() {
+            return model;
+        }
+    }
+    std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_else(|_| "unknown".to_string())
 }
 
 #[cfg(unix)]
@@ -492,7 +1080,7 @@ pub fn run_cases(
                 let sequence = u64::try_from(index).unwrap_or(u64::MAX);
 
                 let event = run_case(&project, id, timeout, sequence);
-                if event.status != TestStatus::Passed {
+                if !matches!(event.status, TestStatus::Passed | TestStatus::Skipped) {
                     stop.store(true, Ordering::Release);
                 }
                 if sender.send(event).is_err() {
@@ -513,7 +1101,7 @@ pub fn run_cases(
 
     Ok(events
         .iter()
-        .all(|event| event.status == TestStatus::Passed))
+        .all(|event| matches!(event.status, TestStatus::Passed | TestStatus::Skipped)))
 }
 
 fn run_case(project: &Path, id: &str, timeout: Duration, sequence: u64) -> TestEventV1 {
@@ -834,6 +1422,13 @@ pub fn deterministic_shuffle(cases: &mut [String], mut state: u64) {
 }
 
 pub fn atomic_write_file(path: &Path, content: &[u8]) -> Result<(), String> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("create report directory {}: {error}", parent.display()))?;
+    }
     let staging = path.with_extension("arandu-test-staging");
     fs::write(&staging, content).map_err(|error| error.to_string())?;
 
@@ -896,7 +1491,7 @@ fn report(events: &[TestEventV1], options: &RunnerOptions) -> Result<(), String>
         }
     }
 
-    if options.format_json {
+    if options.format == TestOutputFormat::Json {
         let cases = events
             .iter()
             .map(|event| JsonCase {
@@ -947,6 +1542,13 @@ fn report(events: &[TestEventV1], options: &RunnerOptions) -> Result<(), String>
         } else {
             println!("{}", String::from_utf8_lossy(&encoded));
         }
+    } else if options.format == TestOutputFormat::Junit {
+        let encoded = junit_report(events, total_duration_ms);
+        if let Some(output) = &options.output {
+            atomic_write_file(output, encoded.as_bytes())?;
+        } else {
+            println!("{encoded}");
+        }
     } else {
         for event in events {
             eprintln!(
@@ -979,7 +1581,11 @@ fn report(events: &[TestEventV1], options: &RunnerOptions) -> Result<(), String>
         }
         eprintln!(
             "test result: {}. {passed} passed; {failed} failed; {skipped} skipped; {timed_out} timed out; {crashed} crashed",
-            if passed == total { "ok" } else { "FAILED" }
+            if failed == 0 && timed_out == 0 && crashed == 0 {
+                "ok"
+            } else {
+                "FAILED"
+            }
         );
     }
     Ok(())
@@ -1037,5 +1643,80 @@ mod benchmark_tests {
         assert_eq!(format_ns_per_op(42.0), "42.000 ns/op");
         assert_eq!(format_ns_per_op(2_500.0), "2.500 us/op");
         assert_eq!(format_ns_per_op(3_000_000.0), "3.000 ms/op");
+    }
+
+    #[test]
+    fn comparison_uses_noise_as_a_regression_floor() {
+        let options = BenchmarkRunnerOptions {
+            timeout: Duration::from_secs(1),
+            config: BenchmarkConfigV1 {
+                warmup_ns: 1,
+                measurement_ns: 1,
+                samples: 3,
+            },
+            format_json: true,
+            output: None,
+            target: Some("test-target".to_string()),
+            backend: Some("test-backend".to_string()),
+            baseline: None,
+        };
+        let baseline = benchmark_json_report(&[event(&[(1, 95), (1, 100), (1, 105)])], &options);
+        let current = benchmark_json_report(&[event(&[(1, 100), (1, 106), (1, 112)])], &options);
+        let comparison =
+            compare_benchmark_reports("main", false, false, 5.0, 1.0, &baseline, &current)
+                .expect("comparison");
+        assert_eq!(comparison.regressions, 0);
+        assert_eq!(
+            comparison.cases[0].classification,
+            BenchmarkClassification::Unchanged
+        );
+        assert!(comparison.cases[0].uncertainty_percent > 5.0);
+    }
+
+    #[test]
+    fn junit_distinguishes_assertion_infrastructure_and_xml_escapes() {
+        let events = vec![
+            TestEventV1 {
+                sequence: 0,
+                id: "pkg::suite::assert<&>".to_string(),
+                status: TestStatus::Failed,
+                duration: Duration::from_millis(5),
+                stdout: CapturedOutput {
+                    bytes: b"left < right & safe".to_vec(),
+                    truncated: false,
+                },
+                stderr: CapturedOutput::default(),
+                failure: Some(TestFailure::simple("expected <actual> & value")),
+                secondary_failures: Vec::new(),
+                logs: Vec::new(),
+                logs_truncated: false,
+            },
+            TestEventV1 {
+                sequence: 1,
+                id: "pkg::suite::timeout".to_string(),
+                status: TestStatus::TimedOut,
+                duration: Duration::from_millis(10),
+                stdout: CapturedOutput::default(),
+                stderr: CapturedOutput::default(),
+                failure: Some(TestFailure::simple("deadline")),
+                secondary_failures: Vec::new(),
+                logs: Vec::new(),
+                logs_truncated: false,
+            },
+        ];
+        let xml = junit_report(&events, 15);
+        assert!(xml.contains("failures=\"1\" errors=\"1\""));
+        assert!(xml.contains("<failure type=\"assertion\""));
+        assert!(xml.contains("<error type=\"timeout\""));
+        assert!(xml.contains("assert&lt;&amp;&gt;"));
+        assert!(xml.contains("left &lt; right &amp; safe"));
+    }
+
+    #[test]
+    fn baseline_names_cannot_escape_the_project_target() {
+        assert!(validate_baseline_name("main-linux-x64").is_ok());
+        assert!(validate_baseline_name("../main").is_err());
+        assert!(validate_baseline_name("a/b").is_err());
+        assert!(validate_baseline_name("..").is_err());
     }
 }

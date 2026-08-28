@@ -38,6 +38,13 @@ fn manifest_discovers_tests_in_stable_name_order() {
         .map(|case| case.name.as_str())
         .collect::<Vec<_>>();
     assert_eq!(names, ["zeta", "árvore"]);
+    for case in manifest.iter() {
+        assert!(case.span.start < case.span.end);
+        let source = file.text(&db);
+        let start = usize::try_from(case.span.start).unwrap();
+        let end = usize::try_from(case.span.end).unwrap();
+        assert!(source[start..end].contains(case.name.as_str()));
+    }
 }
 
 #[test]
@@ -76,6 +83,7 @@ fn benchmark_contract_is_validated_and_discovered() {
     let manifest = file_benchmark_manifest(&db, file);
     assert_eq!(manifest.len(), 1);
     assert_eq!(manifest[0].name, "measure");
+    assert!(manifest[0].span.start < manifest[0].span.end);
 }
 
 #[test]

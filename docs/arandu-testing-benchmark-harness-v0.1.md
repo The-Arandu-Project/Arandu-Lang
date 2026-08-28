@@ -316,6 +316,11 @@ matriz nativa de artefatos públicos definida em SL_T.4E.
 
 ### SL_T.5 — Comparação e integração de produto
 
+Plano executável detalhado: [`arandu-testing-slt5-plan.md`](arandu-testing-slt5-plan.md).
+
+**Estado:** `done` na implementação local; promoção Gold depende da matriz
+SL_T.6 com o SDK público.
+
 - Adicionar baseline/compare, limiares explícitos, dry-run e exportação JUnit
   para testes; preservar formato de benchmark independente do console.
 - Integrar comandos à extensão somente depois da CLI Gold, com descoberta em

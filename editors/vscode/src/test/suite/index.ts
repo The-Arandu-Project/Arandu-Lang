@@ -6,6 +6,7 @@ const TIMEOUT_MS = 10_000;
 
 interface AranduExtensionApi {
     getRuntimeState(): { state: string; observedCrashCount: number };
+    getDiscoveredTestCount(): number;
     testCrashServer(): Promise<void>;
 }
 
@@ -39,6 +40,9 @@ export async function run(): Promise<void> {
         const commands = await vscode.commands.getCommands(true);
         assert.ok(commands.includes('arandu.restartServer'));
         assert.ok(commands.includes('arandu.showServerLogs'));
+        assert.ok(commands.includes('arandu.refreshTests'));
+        assert.ok(commands.includes('arandu.runBenchmark'));
+        await poll(() => api.getDiscoveredTestCount() > 0 ? true : undefined);
 
         const diagnostics = await poll(() => {
             const current = vscode.languages.getDiagnostics(uri);

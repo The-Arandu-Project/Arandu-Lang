@@ -5,6 +5,7 @@
 
 use crate::attributes::{AnnotationId, ValidatedAnnotations, annotation_spec};
 use crate::{DiagCode, Diagnostic, SmolStr, SymbolId, TypeInfo, types::ArType};
+use arandu_middle::Span;
 use arandu_parser::{FuncName, TopLevelDecl};
 
 /// One semantically valid test function in a source module.
@@ -12,6 +13,7 @@ use arandu_parser::{FuncName, TopLevelDecl};
 pub struct TestCase {
     pub symbol: SymbolId,
     pub name: SmolStr,
+    pub span: Span,
 }
 
 /// One semantically valid benchmark function in a source module.
@@ -19,6 +21,7 @@ pub struct TestCase {
 pub struct BenchmarkCase {
     pub symbol: SymbolId,
     pub name: SmolStr,
+    pub span: Span,
 }
 
 /// Result of applying the `@Test` contract to one declaration.
@@ -105,7 +108,11 @@ pub fn validate_benchmark_case(
 
     if valid && !annotations.has_errors() {
         return BenchmarkValidation {
-            case: Some(BenchmarkCase { symbol, name }),
+            case: Some(BenchmarkCase {
+                symbol,
+                name,
+                span: function.span,
+            }),
             diagnostics: Vec::new(),
         };
     }
@@ -182,7 +189,11 @@ pub fn validate_test_case(
 
     if valid && !annotations.has_errors() {
         return TestValidation {
-            case: Some(TestCase { symbol, name }),
+            case: Some(TestCase {
+                symbol,
+                name,
+                span: function.span,
+            }),
             diagnostics: Vec::new(),
         };
     }

@@ -11,6 +11,7 @@ import {
 } from 'vscode-languageclient/node';
 import { discoverServer } from './serverDiscovery';
 import { CrashRestartPolicy } from './serverLifecycle';
+import { TestingIntegration, createTestingIntegration } from './testing';
 
 const STOP_TIMEOUT_MS = 2_000;
 
@@ -22,6 +23,7 @@ let lifecycle = Promise.resolve();
 let deactivating = false;
 let runtimeState: ServerUiState = 'stopped';
 let observedCrashCount = 0;
+let testingIntegration: TestingIntegration | undefined;
 
 type ServerUiState = 'starting' | 'indexing' | 'ready' | 'restarting' | 'missing' | 'stopped';
 
@@ -32,11 +34,16 @@ interface RuntimeState {
 
 interface AranduExtensionApi {
     getRuntimeState(): RuntimeState;
+    getDiscoveredTestCount(): number;
     testCrashServer(): Promise<void>;
 }
 
 function getRuntimeState(): RuntimeState {
     return { state: runtimeState, observedCrashCount };
+}
+
+function getDiscoveredTestCount(): number {
+    return testingIntegration?.getDiscoveredCount() ?? 0;
 }
 
 async function testCrashServer(): Promise<void> {
@@ -65,9 +72,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<Arandu
         vscode.commands.registerCommand('arandu.restartServer', () => restartLanguageServer(context, fileWatcher))
     );
 
+    testingIntegration = createTestingIntegration(context, fileWatcher, traceOutputChannel);
+    context.subscriptions.push(testingIntegration);
+
     await restartLanguageServer(context, fileWatcher);
     return process.env.ARANDU_LSP_TEST_ALLOW_CRASH === '1'
-        ? { getRuntimeState, testCrashServer }
+        ? { getRuntimeState, getDiscoveredTestCount, testCrashServer }
         : undefined;
 }
 

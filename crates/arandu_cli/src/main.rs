@@ -239,8 +239,8 @@ fn usage_and_exit() -> ! {
         "  arandu_cli cache <dir|inspect|verify|verify-tree|prune> [--cache-dir=<absolute-dir>] [limits]\n",
         "  arandu_cli hash-file <path>          # BLAKE3 hex (packaging checksums)\n",
         "  arandu_cli watch [package-path]      # re-check on FS changes (package mode)\n",
-        "  arandu_cli test [package-path] --list [--exact <id>] # list compiler-validated tests\n",
-        "  arandu_cli bench [package-path] [--list|--exact <id>] # calibrated project benchmarks\n",
+        "  arandu_cli test [package-path] [--list|--exact <id>] [--format human|json|junit]\n",
+        "  arandu_cli bench [package-path] [--list|--exact <id>] [--save-baseline <name>|--compare <name>]\n",
         "  arandu_cli clean [package-path]      # remove owned project artifacts\n",
         "  arandu_cli tree [package-path]       # canonical resolved dependency graph\n",
         "  arandu_cli audit [package-path]      # locked provenance and policy audit\n",
@@ -600,7 +600,7 @@ fn main() {
                 timeout: std::time::Duration::from_secs(300),
                 fail_fast: false,
                 seed: 0,
-                format_json: false,
+                format: test_runner::TestOutputFormat::Human,
                 output: None,
                 target: None,
                 backend: None,
@@ -641,10 +641,11 @@ fn main() {
                         .and_then(|value| value.parse().ok())
                         .unwrap_or_else(|| fail_usage("--seed requires an unsigned integer"));
                 } else if argument == "--format" {
-                    runner.format_json = match arguments.next().map(String::as_str) {
-                        Some("json") => true,
-                        Some("human") => false,
-                        _ => fail_usage("--format requires 'human' or 'json'"),
+                    runner.format = match arguments.next().map(String::as_str) {
+                        Some("json") => test_runner::TestOutputFormat::Json,
+                        Some("human") => test_runner::TestOutputFormat::Human,
+                        Some("junit") => test_runner::TestOutputFormat::Junit,
+                        _ => fail_usage("--format requires 'human', 'json' or 'junit'"),
                     };
                 } else if argument == "--filter" {
                     filter = arguments.next().cloned();
@@ -691,7 +692,15 @@ fn main() {
                 output: None,
                 target: None,
                 backend: None,
+                baseline: None,
             };
+            let mut save_baseline = None;
+            let mut compare_baseline = None;
+            let mut strict_baseline = false;
+            let mut dry_run = false;
+            let mut max_regression_percent = 5.0;
+            let mut noise_threshold_percent = 1.0;
+            let mut comparison_policy_set = false;
             let mut arguments = args[2..].iter();
             while let Some(argument) = arguments.next() {
                 match argument.as_str() {
@@ -751,12 +760,59 @@ fn main() {
                             fail_usage("--output requires a file path");
                         }
                     }
+                    "--save-baseline" => {
+                        save_baseline = arguments.next().cloned();
+                        if save_baseline.is_none() {
+                            fail_usage("--save-baseline requires a baseline name");
+                        }
+                    }
+                    "--compare" | "--baseline" => {
+                        compare_baseline = arguments.next().cloned();
+                        if compare_baseline.is_none() {
+                            fail_usage("--compare requires a baseline name");
+                        }
+                    }
+                    "--strict" => strict_baseline = true,
+                    "--dry-run" => dry_run = true,
+                    "--max-regression" => {
+                        comparison_policy_set = true;
+                        max_regression_percent = parse_benchmark_percentage(
+                            arguments.next(),
+                            "--max-regression requires a percentage from 0 to 100",
+                        );
+                    }
+                    "--noise-threshold" => {
+                        comparison_policy_set = true;
+                        noise_threshold_percent = parse_benchmark_percentage(
+                            arguments.next(),
+                            "--noise-threshold requires a percentage from 0 to 100",
+                        );
+                    }
                     _ if argument.starts_with('-') || start.is_some() => {
                         fail_usage("usage: arandu_cli bench [package-path] [flags]");
                     }
                     _ => start = Some(PathBuf::from(argument)),
                 }
             }
+            if save_baseline.is_some() && compare_baseline.is_some() {
+                fail_usage("--save-baseline and --compare are mutually exclusive");
+            }
+            if (strict_baseline || dry_run || comparison_policy_set) && compare_baseline.is_none() {
+                fail_usage(
+                    "--strict, --dry-run, --max-regression and --noise-threshold require --compare",
+                );
+            }
+            runner.baseline = if let Some(name) = save_baseline {
+                Some(test_runner::BenchmarkBaselineMode::Save { name })
+            } else {
+                compare_baseline.map(|name| test_runner::BenchmarkBaselineMode::Compare {
+                    name,
+                    strict: strict_baseline,
+                    dry_run,
+                    max_regression_percent,
+                    noise_threshold_percent,
+                })
+            };
             let start =
                 start.unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
             finish(cmd_project_bench(
@@ -1185,6 +1241,13 @@ fn parse_benchmark_seconds(value: Option<&String>, usage: &str) -> u64 {
     u64::try_from(nanos).unwrap_or_else(|_| fail_usage(usage))
 }
 
+fn parse_benchmark_percentage(value: Option<&String>, usage: &str) -> f64 {
+    value
+        .and_then(|value| value.trim_end_matches('%').parse::<f64>().ok())
+        .filter(|value| value.is_finite() && (0.0..=100.0).contains(value))
+        .unwrap_or_else(|| fail_usage(usage))
+}
+
 /// Print BLAKE3-256 hex of a file (packaging / install integrity).
 fn cmd_hash_file(path: &Path) -> CliResult {
     match fs::read(path) {
@@ -1300,6 +1363,40 @@ fn project_test_sources(ctx: &project::ProjectContext) -> Result<Vec<(PathBuf, S
     Ok(sources.into_iter().collect())
 }
 
+#[derive(serde::Serialize)]
+struct DiscoveryReport {
+    schema: &'static str,
+    cases: Vec<DiscoveryCase>,
+}
+
+#[derive(serde::Serialize)]
+struct DiscoveryCase {
+    id: String,
+    path: String,
+    line: u32,
+    column_utf16: u32,
+}
+
+fn discovery_position(text: &str, byte_offset: u32) -> (u32, u32) {
+    let offset = usize::try_from(byte_offset)
+        .unwrap_or(text.len())
+        .min(text.len());
+    let prefix = text.get(..offset).unwrap_or(text);
+    let line =
+        u32::try_from(prefix.bytes().filter(|byte| *byte == b'\n').count()).unwrap_or(u32::MAX);
+    let line_start = prefix.rfind('\n').map_or(0, |index| index + 1);
+    let column_utf16 =
+        u32::try_from(prefix[line_start..].encode_utf16().count()).unwrap_or(u32::MAX);
+    (line, column_utf16)
+}
+
+fn discovery_path(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
 fn cmd_project_test_list(
     start: &Path,
     flags: &project::ProjectFlags,
@@ -1317,6 +1414,7 @@ fn cmd_project_test_list(
         CliFailure::operational("discover test sources", Some(ctx.root.clone()), error)
     })?;
     let mut registry = arandu_codegen::testing::TestRegistry::default();
+    let mut discovered = Vec::new();
     for (path, module) in sources {
         let key = path.to_string_lossy().into_owned();
         let file = if let Some(existing) = db.as_source_db().resolve_module_path(&key) {
@@ -1338,8 +1436,16 @@ fn cmd_project_test_list(
                 Some(path),
             ));
         }
+        let text = file.text(&db);
         for case in arandu_query::file_test_manifest(&db, file).iter() {
             let id = format!("{}::{module}::{}", ctx.name, case.name);
+            let (line, column_utf16) = discovery_position(text, case.span.start);
+            discovered.push(DiscoveryCase {
+                id: id.clone(),
+                path: discovery_path(&ctx.root, &path),
+                line,
+                column_utf16,
+            });
             registry.insert(arandu_codegen::testing::TestEntry {
                 id,
                 function: case.name.to_string(),
@@ -1438,11 +1544,26 @@ fn cmd_project_test_list(
             }
         }
     } else if list_only {
-        for case in cases {
-            println!("{case}");
+        if runner.format == test_runner::TestOutputFormat::Json {
+            discovered.retain(|case| cases.iter().any(|id| id == &case.id));
+            discovered.sort_by(|left, right| left.id.cmp(&right.id));
+            let report = DiscoveryReport {
+                schema: "arandu.test-list/v1",
+                cases: discovered,
+            };
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).map_err(|error| {
+                    CliFailure::operational("serialize test discovery", None, error.to_string())
+                })?
+            );
+        } else {
+            for case in cases {
+                println!("{case}");
+            }
         }
     } else {
-        if !runner.format_json {
+        if runner.format == test_runner::TestOutputFormat::Human {
             let (harness_manifest, harness_c) = harness.as_ref().ok_or_else(|| {
                 CliFailure::operational("run tests", None, "missing published harness")
             })?;
@@ -1483,6 +1604,7 @@ fn cmd_project_bench(
         CliFailure::operational("discover benchmark sources", Some(ctx.root.clone()), error)
     })?;
     let mut registry = arandu_codegen::testing::BenchmarkRegistry::default();
+    let mut discovered = Vec::new();
     for (path, module) in sources {
         let key = path.to_string_lossy().into_owned();
         let file = if let Some(existing) = db.as_source_db().resolve_module_path(&key) {
@@ -1508,9 +1630,18 @@ fn cmd_project_bench(
                 Some(path),
             ));
         }
+        let text = file.text(&db);
         for case in arandu_query::file_benchmark_manifest(&db, file).iter() {
+            let id = format!("{}::{module}::{}", ctx.name, case.name);
+            let (line, column_utf16) = discovery_position(text, case.span.start);
+            discovered.push(DiscoveryCase {
+                id: id.clone(),
+                path: discovery_path(&ctx.root, &path),
+                line,
+                column_utf16,
+            });
             registry.insert(arandu_codegen::testing::BenchmarkEntry {
-                id: format!("{}::{module}::{}", ctx.name, case.name),
+                id,
                 function: case.name.to_string(),
             });
         }
@@ -1533,8 +1664,27 @@ fn cmd_project_bench(
         cases.retain(|case| case == exact);
     }
     if list_only {
-        for case in cases {
-            println!("{case}");
+        if runner.format_json {
+            discovered.retain(|case| cases.iter().any(|id| id == &case.id));
+            discovered.sort_by(|left, right| left.id.cmp(&right.id));
+            let report = DiscoveryReport {
+                schema: "arandu.bench-list/v1",
+                cases: discovered,
+            };
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).map_err(|error| {
+                    CliFailure::operational(
+                        "serialize benchmark discovery",
+                        None,
+                        error.to_string(),
+                    )
+                })?
+            );
+        } else {
+            for case in cases {
+                println!("{case}");
+            }
         }
         return Ok(CliSuccess::Done);
     }
@@ -1597,16 +1747,9 @@ fn cmd_project_bench(
             c_source.display()
         );
     }
-    let passed = test_runner::run_benchmarks(&ctx.root, cases, runner)
+    let outcome = test_runner::run_benchmarks(&ctx.root, cases, runner)
         .map_err(|error| CliFailure::operational("run benchmarks", None, error))?;
-    if !passed {
-        return Err(CliFailure::operational(
-            "run benchmarks",
-            None,
-            "one or more benchmarks failed",
-        ));
-    }
-    Ok(CliSuccess::Done)
+    Ok(CliSuccess::ProgramExit(outcome.exit_code()))
 }
 
 fn run_exact_benchmark(ctx: &project::ProjectContext, exact: &str) -> CliResult {
