@@ -137,7 +137,7 @@ func sumTwoValues(): void {
 import std.testing as testing
 
 @Benchmark
-func parseSmallFile(bench: mut testing.Benchmark): void {
+func parseSmallFile(mut bench: testing.Benchmark): void {
     input = loadFixture()
     while bench.loop() {
         testing.blackBox(parse(input))
@@ -299,6 +299,12 @@ pelo mesmo protocolo humano/JSON. Integração de editor permanece em SL_T.5.
 **Saída:** falhas explicam expressão, esperado e encontrado no local correto.
 
 ### SL_T.4 — Benchmark engine
+
+Plano executável detalhado: [`arandu-testing-slt4-plan.md`](arandu-testing-slt4-plan.md).
+
+**Estado:** `done` na implementação local; `@Benchmark`, contexto, barreira
+AMIR, C/Cranelift e protocolo v1 estão cobertos. A promoção Gold depende da
+matriz nativa de artefatos públicos definida em SL_T.4E.
 
 - Registrar `@Benchmark`, contexto e `loop`, relógio monotônico, warmup,
   calibração, batching, repetições e barreira IR `blackBox`.

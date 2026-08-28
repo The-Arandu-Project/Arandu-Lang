@@ -107,6 +107,49 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
 
         match rvalue {
             AmirRvalue::Use(op) => self.translate_operand(op, expected_ty),
+            AmirRvalue::BlackBox { value, .. } => {
+                let input = self.translate_operand(value, expected_ty);
+                let input_ty = self.builder.func.dfg.value_type(input);
+                let pointer_like = expected_ar_type.is_some_and(|ty| {
+                    matches!(
+                        ty,
+                        ArType::Ptr(_)
+                            | ArType::Ref(_)
+                            | ArType::RefMut(_)
+                            | ArType::Nullable(_)
+                            | ArType::Named(_, _)
+                            | ArType::Array(_, _)
+                            | ArType::Tuple(_)
+                            | ArType::Slice(_)
+                    )
+                });
+                let helper = if input_ty.is_float() {
+                    "ar_bench_black_box_f64"
+                } else if pointer_like {
+                    "ar_bench_black_box_ptr"
+                } else {
+                    "ar_bench_black_box_i64"
+                };
+                let Some(id) = self.func_ids.get(helper).copied() else {
+                    self.record_ice(format!("missing {helper} runtime import"), self.func_span());
+                    return self.poison_i32();
+                };
+                let function = self.module.declare_func_in_func(id, self.builder.func);
+                let call_input = if !pointer_like && input_ty.is_int() && input_ty.bits() < 64 {
+                    self.builder
+                        .ins()
+                        .uextend(cranelift_codegen::ir::types::I64, input)
+                } else {
+                    input
+                };
+                let call = self.builder.ins().call(function, &[call_input]);
+                let result = self.builder.inst_results(call)[0];
+                if !pointer_like && input_ty.is_int() && input_ty.bits() < 64 {
+                    self.builder.ins().ireduce(input_ty, result)
+                } else {
+                    result
+                }
+            }
             AmirRvalue::Binary { op, left, right } => {
                 // `str` equality uses fat pointers + memcmp (not scalar icmp).
                 let left_is_str = matches!(

@@ -195,6 +195,49 @@ pub fn publish_test_harness(
     Ok((manifest, c_source))
 }
 
+/// Publish the compiler-validated benchmark registry atomically. The registry
+/// shape is shared with tests, while filenames remain protocol-specific.
+pub fn publish_benchmark_harness(
+    project_root: &Path,
+    registry: &arandu_codegen::testing::BenchmarkRegistry,
+) -> Result<(PathBuf, PathBuf), CliFailure> {
+    let layout = layout(project_root, "dev");
+    fs::create_dir_all(&layout.profile_root).map_err(|error| {
+        failure(
+            "create benchmark harness layout",
+            &layout.profile_root,
+            error,
+        )
+    })?;
+    let ids = registry
+        .iter()
+        .map(|entry| format!("{}\n{}\n", entry.id, entry.function))
+        .collect::<String>();
+    let digest = blake3::hash(ids.as_bytes()).to_hex().to_string();
+    let manifest = layout
+        .profile_root
+        .join(format!("bench-harness-{digest}.json"));
+    let c_source = layout
+        .profile_root
+        .join(format!("bench-harness-{digest}.c"));
+    let manifest_bytes = serde_json::to_vec_pretty(
+        &registry
+            .iter()
+            .map(|entry| (&entry.id, &entry.function))
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|error| {
+        CliFailure::operational("serialize benchmark harness", None, error.to_string())
+    })?;
+    atomic_write(&manifest, &manifest_bytes)?;
+    atomic_write(&c_source, registry.emit_c_entrypoint().as_bytes())?;
+    atomic_replace(
+        &layout.profile_root.join("bench-harness.json"),
+        manifest.to_string_lossy().as_bytes(),
+    )?;
+    Ok((manifest, c_source))
+}
+
 pub fn clean(project_root: &Path) -> Result<bool, CliFailure> {
     let canonical_root = fs::canonicalize(project_root)
         .map_err(|error| failure("resolve project root", project_root, error))?;

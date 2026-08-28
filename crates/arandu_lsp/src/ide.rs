@@ -1403,8 +1403,8 @@ mod tests {
         let items = completions(&snap, file, text, Position::new(0, 1));
         assert!(items.iter().any(|item| item.label == "NoFallback"));
         assert!(items.iter().any(|item| item.label == "Test"));
+        assert!(items.iter().any(|item| item.label == "Benchmark"));
         assert!(items.iter().all(|item| item.label != "Link"));
-        assert!(items.iter().all(|item| item.label != "Benchmark"));
         assert!(items.iter().all(|item| item.label != "Specialize"));
     }
 

@@ -250,9 +250,9 @@ Fase 3 — OSSA Avançado, Semântica e OS Runtime (v0.3) · [PARCIAL; vários m
 [→] SL_S   Stdlib de Sistema: multi-file HIR link + `std.path` runnable; host path/rt helpers; more OS API later
 [→] SL_R   Async Runtime: SL_R.0 typed spawn/join/block_on Coroutine + SyncExecutor; SL_R.2 EpollReactor (epoll+timerfd); SL_R.1/3 open
 [→] SL_T   [Testing & Benchmark Harness](./arandu-testing-benchmark-harness-v0.1.md):
-           SL_T.0–SL_T.3 concluídos (descoberta, harness, runner confiável e
-           std.testing estruturado); próximo gate é SL_T.4, benchmark engine
-           sem medição ingênua
+           SL_T.0–SL_T.4 implementados (descoberta, harness, runner confiável,
+           std.testing estruturado e benchmark engine auditável); próximo gate
+           é SL_T.5, comparação e integração de produto
 
 Fase 4 — Expressividade de Linguagem e Tipagem (v0.35) · [PARCIAL; superfície inicial integrada]
 [x] SYN.1  Retorno implícito: última `Expr` do body → valor de retorno (typeck + AMIR; async wrap A3)

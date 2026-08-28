@@ -141,7 +141,7 @@ pub static BUILTIN_ANNOTATIONS: &[AnnotationSpec] = &[
         targets: FREE_FUNCTION,
         arguments: AnnotationArguments::None,
         repeatable: false,
-        availability: AnnotationAvailability::Planned,
+        availability: AnnotationAvailability::Implemented,
         summary: "Marks a function as a benchmark.",
     },
     AnnotationSpec {

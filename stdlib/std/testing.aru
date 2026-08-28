@@ -18,6 +18,25 @@ extern "C" {
     func ar_test_skip(reason: str, loc: str): void
     func ar_test_log(msg: str): void
     func ar_test_temp_dir(nonce: int): str
+    func ar_bench_loop(handle: int): int
+}
+
+/// Opaque benchmark context constructed by the harness.
+public struct Benchmark {
+    handle: int
+}
+
+/// Continue the calibrated benchmark loop while the current sample needs work.
+public func Benchmark.loop(mut self): bool {
+    unsafe {
+        return ar_bench_loop(self.handle) != 0
+    }
+}
+
+/// Best-effort optimization barrier for benchmark inputs and outputs.
+/// It is an identity operation and is not a correctness or cryptographic fence.
+public func blackBox<T>(value: T): T {
+    return value
 }
 
 /// Asserts that a boolean condition is true.

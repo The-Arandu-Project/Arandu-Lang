@@ -189,6 +189,8 @@ pub enum DiagCode {
     T035InvalidDestructor,
     /// Invalid signature for a function marked with `@Test`.
     T036InvalidTestContract,
+    /// Invalid signature for a function marked with `@Benchmark`.
+    T037InvalidBenchmarkContract,
 
     // ── Lowering (L) ──
     L001LoweringUnresolvedSymbol,
@@ -311,6 +313,7 @@ impl DiagCode {
             T034CannotFormat,
             T035InvalidDestructor,
             T036InvalidTestContract,
+            T037InvalidBenchmarkContract,
             L001LoweringUnresolvedSymbol,
             G001GenericInstantiationCycle,
             G002GenericInstantiationLimit,
@@ -434,6 +437,7 @@ impl DiagCode {
             DiagCode::T034CannotFormat => "T034",
             DiagCode::T035InvalidDestructor => "T035",
             DiagCode::T036InvalidTestContract => "T036",
+            DiagCode::T037InvalidBenchmarkContract => "T037",
             DiagCode::L001LoweringUnresolvedSymbol => "L001",
             DiagCode::G001GenericInstantiationCycle => "G001",
             DiagCode::G002GenericInstantiationLimit => "G002",

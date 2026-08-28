@@ -79,6 +79,28 @@ fn c_backend_genref_runtime_has_monotonic_type_erased_storage() {
 }
 
 #[test]
+fn c_backend_emits_opaque_black_box_barrier() {
+    let (amir, tc) = compile_src(
+        r#"
+        func blackBox<T>(value: T): T { return value }
+        func main(): int {
+            return blackBox<int>(42)
+        }
+        "#,
+    );
+    let emitted = emit_c(&amir, &tc);
+    assert!(emitted.contains("AR_BENCH_NOINLINE"));
+    assert!(emitted.contains("ar_bench_black_box_i64((int64_t)("));
+    test_execution_parity(
+        "black_box_barrier",
+        r#"
+        func blackBox<T>(value: T): T { return value }
+        func main(): int { return blackBox<int>(42) }
+        "#,
+    );
+}
+
+#[test]
 fn explicit_destructor_runs_through_both_backend_pipelines() {
     test_execution_parity(
         "destructor_epilogue",

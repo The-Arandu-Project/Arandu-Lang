@@ -5,6 +5,7 @@ use std::io::{Read, Write};
 use std::time::Duration;
 
 pub const TEST_PROTOCOL_V1: &str = "arandu.test/v1";
+pub const BENCH_PROTOCOL_V1: &str = "arandu.bench/v1";
 pub const FRAME_MAGIC: &[u8; 4] = b"ARND";
 pub const MAX_FRAME_PAYLOAD_SIZE: usize = 2 * 1024 * 1024; // 2MB
 
@@ -18,7 +19,7 @@ pub enum TestStatus {
     Crashed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CapturedOutput {
     pub bytes: Vec<u8>,
     pub truncated: bool,
@@ -94,7 +95,9 @@ pub struct TestEventV1 {
     pub id: String,
     pub status: TestStatus,
     pub duration: Duration,
+    #[serde(default)]
     pub stdout: CapturedOutput,
+    #[serde(default)]
     pub stderr: CapturedOutput,
     pub failure: Option<TestFailure>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -110,6 +113,115 @@ pub struct TestFramePayload {
     pub schema: String,
     pub sequence: u64,
     pub event: TestEventV1,
+}
+
+/// Effective benchmark configuration recorded with every result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BenchmarkConfigV1 {
+    pub warmup_ns: u64,
+    pub measurement_ns: u64,
+    pub samples: u32,
+}
+
+/// One measured batch. Raw integer values are preserved for auditing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BenchmarkSampleV1 {
+    pub iterations: u64,
+    pub elapsed_ns: u64,
+}
+
+/// Terminal benchmark result emitted by a harness child.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BenchmarkEventV1 {
+    pub sequence: u64,
+    pub id: String,
+    pub config: BenchmarkConfigV1,
+    pub samples: Vec<BenchmarkSampleV1>,
+    #[serde(default)]
+    pub stdout: CapturedOutput,
+    #[serde(default)]
+    pub stderr: CapturedOutput,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct BenchmarkFramePayload {
+    schema: String,
+    sequence: u64,
+    event: BenchmarkEventV1,
+}
+
+/// Write one versioned benchmark event using the SL_T framing contract.
+pub fn write_benchmark_frame<W: Write>(
+    writer: &mut W,
+    sequence: u64,
+    event: &BenchmarkEventV1,
+) -> Result<(), String> {
+    if event.sequence != sequence {
+        return Err("benchmark frame sequence mismatch".to_string());
+    }
+    let bytes = serde_json::to_vec(&BenchmarkFramePayload {
+        schema: BENCH_PROTOCOL_V1.to_string(),
+        sequence,
+        event: event.clone(),
+    })
+    .map_err(|error| format!("serialize benchmark frame: {error}"))?;
+    if bytes.len() > MAX_FRAME_PAYLOAD_SIZE {
+        return Err("benchmark frame exceeds maximum payload size".to_string());
+    }
+    let length = u32::try_from(bytes.len())
+        .map_err(|_| "benchmark frame payload size overflow".to_string())?;
+    writer
+        .write_all(FRAME_MAGIC)
+        .map_err(|error| error.to_string())?;
+    writer
+        .write_all(&length.to_be_bytes())
+        .map_err(|error| error.to_string())?;
+    writer
+        .write_all(&bytes)
+        .map_err(|error| error.to_string())?;
+    writer.flush().map_err(|error| error.to_string())
+}
+
+/// Read and validate one versioned benchmark event.
+pub fn read_benchmark_frame<R: Read>(
+    reader: &mut R,
+    expected_sequence: u64,
+    expected_id: &str,
+) -> Result<BenchmarkEventV1, String> {
+    let mut magic = [0_u8; 4];
+    reader
+        .read_exact(&mut magic)
+        .map_err(|error| error.to_string())?;
+    if &magic != FRAME_MAGIC {
+        return Err("invalid benchmark frame magic".to_string());
+    }
+    let mut length = [0_u8; 4];
+    reader
+        .read_exact(&mut length)
+        .map_err(|error| error.to_string())?;
+    let length = usize::try_from(u32::from_be_bytes(length))
+        .map_err(|_| "invalid benchmark frame length".to_string())?;
+    if length > MAX_FRAME_PAYLOAD_SIZE {
+        return Err("benchmark frame exceeds maximum payload size".to_string());
+    }
+    let mut bytes = vec![0; length];
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    let payload: BenchmarkFramePayload =
+        serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+    if payload.schema != BENCH_PROTOCOL_V1 {
+        return Err(format!("unsupported benchmark schema `{}`", payload.schema));
+    }
+    if payload.sequence != expected_sequence || payload.event.sequence != expected_sequence {
+        return Err("benchmark frame sequence mismatch".to_string());
+    }
+    if payload.event.id != expected_id {
+        return Err("benchmark frame id mismatch".to_string());
+    }
+    Ok(payload.event)
 }
 
 /// Encodes a framed protocol event to an IO writer.
@@ -244,6 +356,61 @@ pub struct TestRegistry {
     entries: BTreeMap<String, TestEntry>,
 }
 
+/// Compiler-validated benchmark entry. Separate from [`TestEntry`] because its
+/// callable ABI requires a mutable benchmark context.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BenchmarkEntry {
+    pub id: String,
+    pub function: String,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct BenchmarkRegistry {
+    entries: BTreeMap<String, BenchmarkEntry>,
+}
+
+impl BenchmarkRegistry {
+    pub fn insert(&mut self, entry: BenchmarkEntry) {
+        self.entries.insert(entry.id.clone(), entry);
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &BenchmarkEntry> {
+        self.entries.values()
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Emit a portable launcher ABI. The engine initializes the process-local
+    /// handle before invoking this launcher in a complete AOT harness.
+    #[must_use]
+    pub fn emit_c_entrypoint(&self) -> String {
+        let mut output = String::from(
+            "/* generated by arandu benchmark harness */\n#include <stdint.h>\n\ntypedef struct { int64_t handle; } ArBenchmarkContext;\n",
+        );
+        for entry in self.iter() {
+            output.push_str("extern void ");
+            output.push_str(&sanitize_identifier(&entry.function));
+            output.push_str("(void *);\n");
+        }
+        output.push_str("\nint main(void) {\n    ArBenchmarkContext context = { 1 };\n");
+        for entry in self.iter() {
+            output.push_str("    ");
+            output.push_str(&sanitize_identifier(&entry.function));
+            output.push_str("(&context);\n");
+        }
+        output.push_str("    return 0;\n}\n");
+        output
+    }
+}
+
 impl TestRegistry {
     pub fn insert(&mut self, entry: TestEntry) {
         self.entries.insert(entry.id.clone(), entry);
@@ -334,6 +501,19 @@ mod tests {
             Some("updated")
         );
         assert!(registry.emit_c_entrypoint().contains("updated"));
+    }
+
+    #[test]
+    fn benchmark_registry_emits_context_aware_c_abi() {
+        let mut registry = BenchmarkRegistry::default();
+        registry.insert(BenchmarkEntry {
+            id: "pkg::bench::work".to_string(),
+            function: "work".to_string(),
+        });
+        let c = registry.emit_c_entrypoint();
+        assert!(c.contains("ArBenchmarkContext context = { 1 }"));
+        assert!(c.contains("work(&context);"));
+        assert!(!c.contains("work();"));
     }
 
     #[test]
@@ -428,5 +608,35 @@ mod tests {
         let mut cursor = Cursor::new(&raw_bad_status);
         let err = read_frame(&mut cursor, None, None).unwrap_err();
         assert!(err.contains("invalid frame json payload") || err.contains("unknown variant"));
+    }
+
+    #[test]
+    fn benchmark_frame_round_trip_preserves_raw_samples() {
+        let event = BenchmarkEventV1 {
+            sequence: 7,
+            id: "pkg::bin::bench".to_string(),
+            config: BenchmarkConfigV1 {
+                warmup_ns: 1_000,
+                measurement_ns: 10_000,
+                samples: 2,
+            },
+            samples: vec![
+                BenchmarkSampleV1 {
+                    iterations: 100,
+                    elapsed_ns: 2_000,
+                },
+                BenchmarkSampleV1 {
+                    iterations: 100,
+                    elapsed_ns: 2_100,
+                },
+            ],
+            stdout: CapturedOutput::default(),
+            stderr: CapturedOutput::default(),
+            failure: None,
+        };
+        let mut bytes = Vec::new();
+        write_benchmark_frame(&mut bytes, 7, &event).unwrap();
+        let decoded = read_benchmark_frame(&mut Cursor::new(bytes), 7, "pkg::bin::bench").unwrap();
+        assert_eq!(decoded, event);
     }
 }

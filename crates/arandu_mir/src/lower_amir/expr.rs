@@ -378,6 +378,35 @@ impl LowerCtx<'_> {
             HirExprKind::Call { callee, args, .. } => {
                 let callee_expr = self.hir.pool.expr(*callee);
 
+                // `std.testing.blackBox<T>(value)` is a compiler-recognized
+                // identity barrier. Lower it before generic call expansion so
+                // DCE and both backends see the explicit AMIR contract.
+                let black_box_symbol = match &callee_expr.kind {
+                    HirExprKind::Path { symbol } => Some(*symbol),
+                    HirExprKind::Generic { callee, .. } => {
+                        match &self.hir.pool.expr(*callee).kind {
+                            HirExprKind::Path { symbol } => Some(*symbol),
+                            HirExprKind::TypePath { member_symbol, .. } => Some(*member_symbol),
+                            _ => None,
+                        }
+                    }
+                    HirExprKind::TypePath { member_symbol, .. } => Some(*member_symbol),
+                    _ => None,
+                };
+                if black_box_symbol.is_some_and(|symbol| {
+                    let name = symbols.get(symbol).name.as_str();
+                    name == "blackBox" || name.ends_with(".blackBox")
+                }) {
+                    let args_slice = self.hir.pool.expr_list(*args);
+                    if let Some(&argument) = args_slice.first() {
+                        let value = self.lower_expr(argument, None, symbols)?;
+                        let value_ty = self.hir.pool.expr(argument).ty;
+                        let dest = target.unwrap_or_else(|| self.new_temp_id(expr.ty));
+                        self.emit_assign_temp(dest, AmirRvalue::BlackBox { value, value_ty });
+                        return Ok(AmirOperand::Copy(dest));
+                    }
+                }
+
                 // `mem.sizeOf<T>()` is Call(Generic(sizeOf, [T]), []) — fold before
                 // treating Generic as a callable value (L6.1).
                 if let HirExprKind::Generic {

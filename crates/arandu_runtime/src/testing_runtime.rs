@@ -13,8 +13,243 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Opaque scalar barrier used by benchmark lowering. This is best-effort and
+/// must never be used as a correctness or constant-time guarantee.
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub extern "C" fn ar_bench_black_box_i64(value: i64) -> i64 {
+    std::hint::black_box(value)
+}
+
+/// Floating-point counterpart of [`ar_bench_black_box_i64`].
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub extern "C" fn ar_bench_black_box_f64(value: f64) -> f64 {
+    std::hint::black_box(value)
+}
+
+/// Pointer counterpart of [`ar_bench_black_box_i64`].
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub extern "C" fn ar_bench_black_box_ptr(value: *mut u8) -> *mut u8 {
+    std::hint::black_box(value)
+}
+
 const MAX_LOG_ENTRIES: usize = 1000;
 const MAX_LOG_TOTAL_BYTES: usize = 64 * 1024; // 64 KB
+const MAX_BENCH_ITERATIONS: u64 = 1 << 50;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BenchmarkPhase {
+    Created,
+    Warmup {
+        started_ns: u64,
+        iterations: u64,
+    },
+    Measuring {
+        started_ns: u64,
+        iterations: u64,
+        batch_iterations: u64,
+    },
+    Finished,
+}
+
+/// Deterministic benchmark state machine. Time is injected as monotonic
+/// nanoseconds so rollback, resolution and overflow paths are unit-testable.
+#[derive(Debug)]
+pub struct BenchmarkEngine {
+    config: arandu_codegen::testing::BenchmarkConfigV1,
+    phase: BenchmarkPhase,
+    samples: Vec<arandu_codegen::testing::BenchmarkSampleV1>,
+    failure: Option<String>,
+}
+
+impl BenchmarkEngine {
+    #[must_use]
+    pub fn new(config: arandu_codegen::testing::BenchmarkConfigV1) -> Self {
+        let failure = if config.warmup_ns == 0 {
+            Some("benchmark warmup must be greater than zero".to_string())
+        } else if config.measurement_ns == 0 {
+            Some("benchmark measurement time must be greater than zero".to_string())
+        } else if config.samples == 0 || config.samples > 10_000 {
+            Some("benchmark sample count must be between 1 and 10000".to_string())
+        } else {
+            None
+        };
+        let phase = if failure.is_some() {
+            BenchmarkPhase::Finished
+        } else {
+            BenchmarkPhase::Created
+        };
+        Self {
+            config,
+            phase,
+            samples: Vec::new(),
+            failure,
+        }
+    }
+
+    /// Complete the preceding iteration and decide whether another should run.
+    pub fn advance(&mut self, now_ns: u64) -> bool {
+        match self.phase {
+            BenchmarkPhase::Created => {
+                self.phase = BenchmarkPhase::Warmup {
+                    started_ns: now_ns,
+                    iterations: 0,
+                };
+                true
+            }
+            BenchmarkPhase::Warmup {
+                started_ns,
+                iterations,
+            } => {
+                let Some(elapsed) = now_ns.checked_sub(started_ns) else {
+                    self.fail("monotonic benchmark clock moved backwards");
+                    return false;
+                };
+                let iterations = iterations.saturating_add(1).min(MAX_BENCH_ITERATIONS);
+                if elapsed < self.config.warmup_ns || elapsed == 0 {
+                    if iterations >= MAX_BENCH_ITERATIONS {
+                        self.fail("benchmark calibration exceeded the iteration limit");
+                        return false;
+                    }
+                    self.phase = BenchmarkPhase::Warmup {
+                        started_ns,
+                        iterations,
+                    };
+                    return true;
+                }
+                let per_iteration = elapsed.div_ceil(iterations).max(1);
+                let per_sample_target = self
+                    .config
+                    .measurement_ns
+                    .div_ceil(u64::from(self.config.samples.max(1)));
+                let batch_iterations = per_sample_target
+                    .div_ceil(per_iteration)
+                    .clamp(1, MAX_BENCH_ITERATIONS);
+                self.phase = BenchmarkPhase::Measuring {
+                    started_ns: now_ns,
+                    iterations: 0,
+                    batch_iterations,
+                };
+                true
+            }
+            BenchmarkPhase::Measuring {
+                started_ns,
+                iterations,
+                batch_iterations,
+            } => {
+                let iterations = iterations.saturating_add(1);
+                if iterations < batch_iterations {
+                    self.phase = BenchmarkPhase::Measuring {
+                        started_ns,
+                        iterations,
+                        batch_iterations,
+                    };
+                    return true;
+                }
+                let Some(elapsed_ns) = now_ns.checked_sub(started_ns) else {
+                    self.fail("monotonic benchmark clock moved backwards");
+                    return false;
+                };
+                if elapsed_ns == 0 {
+                    let Some(larger_batch) = batch_iterations
+                        .checked_mul(2)
+                        .filter(|value| *value <= MAX_BENCH_ITERATIONS)
+                    else {
+                        self.fail("benchmark remained below the monotonic clock resolution");
+                        return false;
+                    };
+                    self.phase = BenchmarkPhase::Measuring {
+                        started_ns: now_ns,
+                        iterations: 0,
+                        batch_iterations: larger_batch,
+                    };
+                    return true;
+                }
+                self.samples
+                    .push(arandu_codegen::testing::BenchmarkSampleV1 {
+                        iterations,
+                        elapsed_ns,
+                    });
+                if self.samples.len() >= self.config.samples as usize {
+                    self.phase = BenchmarkPhase::Finished;
+                    false
+                } else {
+                    self.phase = BenchmarkPhase::Measuring {
+                        started_ns: now_ns,
+                        iterations: 0,
+                        batch_iterations,
+                    };
+                    true
+                }
+            }
+            BenchmarkPhase::Finished => false,
+        }
+    }
+
+    fn fail(&mut self, message: &str) {
+        self.failure = Some(message.to_string());
+        self.phase = BenchmarkPhase::Finished;
+    }
+}
+
+struct ActiveBenchmark {
+    id: String,
+    sequence: u64,
+    origin: std::time::Instant,
+    engine: BenchmarkEngine,
+}
+
+thread_local! {
+    static ACTIVE_BENCHMARK: RefCell<Option<ActiveBenchmark>> = const { RefCell::new(None) };
+}
+
+pub fn init_benchmark_context(
+    id: &str,
+    sequence: u64,
+    config: arandu_codegen::testing::BenchmarkConfigV1,
+) {
+    ACTIVE_BENCHMARK.with(|cell| {
+        *cell.borrow_mut() = Some(ActiveBenchmark {
+            id: id.to_string(),
+            sequence,
+            origin: std::time::Instant::now(),
+            engine: BenchmarkEngine::new(config),
+        });
+    });
+}
+
+#[must_use]
+pub fn finish_benchmark_context() -> Option<arandu_codegen::testing::BenchmarkEventV1> {
+    ACTIVE_BENCHMARK.with(|cell| {
+        cell.borrow_mut()
+            .take()
+            .map(|active| arandu_codegen::testing::BenchmarkEventV1 {
+                sequence: active.sequence,
+                id: active.id,
+                config: active.engine.config,
+                samples: active.engine.samples,
+                stdout: arandu_codegen::testing::CapturedOutput::default(),
+                stderr: arandu_codegen::testing::CapturedOutput::default(),
+                failure: active.engine.failure,
+            })
+    })
+}
+
+/// Benchmark loop control called from `std.testing.Benchmark.loop`.
+#[unsafe(no_mangle)]
+pub extern "C" fn ar_bench_loop(_handle: i64) -> i64 {
+    ACTIVE_BENCHMARK.with(|cell| {
+        let mut active = cell.borrow_mut();
+        let Some(active) = active.as_mut() else {
+            return 0;
+        };
+        let elapsed = active.origin.elapsed().as_nanos();
+        let now_ns = u64::try_from(elapsed).unwrap_or(u64::MAX);
+        i64::from(active.engine.advance(now_ns))
+    })
+}
 
 type CleanupFn = Box<dyn FnOnce() + Send>;
 
@@ -528,6 +763,80 @@ pub unsafe extern "sysv64" fn ar_test_temp_dir(nonce_val: i64) -> crate::rt_runt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn bench_config() -> arandu_codegen::testing::BenchmarkConfigV1 {
+        arandu_codegen::testing::BenchmarkConfigV1 {
+            warmup_ns: 10,
+            measurement_ns: 60,
+            samples: 3,
+        }
+    }
+
+    #[test]
+    fn benchmark_engine_discards_warmup_and_records_complete_batches() {
+        let mut engine = BenchmarkEngine::new(bench_config());
+        assert!(engine.advance(0));
+        assert!(engine.advance(5));
+        assert!(engine.advance(10));
+        // Warmup estimated 5ns/op, hence 4 iterations per 20ns sample.
+        for now in [15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70] {
+            let keep_running = engine.advance(now);
+            if now < 70 {
+                assert!(keep_running);
+            } else {
+                assert!(!keep_running);
+            }
+        }
+        assert_eq!(engine.samples.len(), 3);
+        assert!(engine.samples.iter().all(|sample| sample.iterations == 4));
+        assert_eq!(engine.samples[0].elapsed_ns, 20);
+    }
+
+    #[test]
+    fn benchmark_engine_rejects_clock_rollback() {
+        let mut engine = BenchmarkEngine::new(bench_config());
+        assert!(engine.advance(100));
+        assert!(!engine.advance(99));
+        assert_eq!(
+            engine.failure.as_deref(),
+            Some("monotonic benchmark clock moved backwards")
+        );
+        assert!(!engine.advance(101));
+    }
+
+    #[test]
+    fn benchmark_engine_retries_samples_below_clock_resolution() {
+        let mut engine = BenchmarkEngine::new(arandu_codegen::testing::BenchmarkConfigV1 {
+            warmup_ns: 1,
+            measurement_ns: 1,
+            samples: 1,
+        });
+        assert!(engine.advance(0));
+        assert!(engine.advance(1));
+        // First one-iteration sample reports no clock progress and is retried
+        // with a larger batch rather than published as 0 ns/op.
+        assert!(engine.advance(1));
+        assert!(engine.samples.is_empty());
+        assert!(engine.advance(2));
+        assert!(!engine.advance(3));
+        assert_eq!(engine.samples.len(), 1);
+        assert_eq!(engine.samples[0].iterations, 2);
+        assert_eq!(engine.samples[0].elapsed_ns, 2);
+    }
+
+    #[test]
+    fn benchmark_engine_rejects_invalid_internal_configuration() {
+        let mut engine = BenchmarkEngine::new(arandu_codegen::testing::BenchmarkConfigV1 {
+            warmup_ns: 0,
+            measurement_ns: 1,
+            samples: 1,
+        });
+        assert!(!engine.advance(0));
+        assert_eq!(
+            engine.failure.as_deref(),
+            Some("benchmark warmup must be greater than zero")
+        );
+    }
 
     #[test]
     fn expect_passes_and_fails_structurally() {

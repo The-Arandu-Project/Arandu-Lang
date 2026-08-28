@@ -1,7 +1,10 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use arandu_query::passes::{module_signatures, parse, type_check};
-use arandu_query::testing::{file_test_manifest, item_test_case, ITEM_TEST_CASE_EXEC_COUNT};
+use arandu_query::testing::{
+    file_benchmark_manifest, file_test_manifest, item_benchmark_case, item_test_case,
+    ITEM_BENCHMARK_CASE_EXEC_COUNT, ITEM_TEST_CASE_EXEC_COUNT,
+};
 use arandu_query::{DatabaseImpl, SourceFile};
 use salsa::Setter;
 use std::sync::atomic::Ordering;
@@ -57,21 +60,64 @@ fn invalid_signature_is_diagnosed_and_not_discovered() {
 }
 
 #[test]
-fn benchmark_name_is_reserved_until_its_runtime_contract_exists() {
+fn benchmark_contract_is_validated_and_discovered() {
     let _guard = COUNTER_LOCK
         .lock()
         .unwrap_or_else(|error| error.into_inner());
     let mut db = DatabaseImpl::new();
     let file = db.new_file(
-        "planned-benchmark.aru".into(),
-        "@Benchmark\nfunc measure(): void {}\n".into(),
+        "benchmark.aru".into(),
+        "struct Benchmark { handle: int }\n@Benchmark\nfunc measure(mut bench: Benchmark): void {}\n"
+            .into(),
     );
 
     let checked = type_check(&db, file);
-    assert!(checked.diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == arandu_middle::DiagCode::N012UnknownAnnotation
-            && diagnostic.message.contains("planned but not available")
-    }));
+    assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+    let manifest = file_benchmark_manifest(&db, file);
+    assert_eq!(manifest.len(), 1);
+    assert_eq!(manifest[0].name, "measure");
+}
+
+#[test]
+fn invalid_benchmark_signature_reports_t037() {
+    let _guard = COUNTER_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let mut db = DatabaseImpl::new();
+    let file = db.new_file(
+        "bad-benchmark.aru".into(),
+        "@Benchmark\nfunc measure(): void {}\n".into(),
+    );
+    let checked = type_check(&db, file);
+    assert!(
+        checked.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == arandu_middle::DiagCode::T037InvalidBenchmarkContract
+        }),
+        "{:?}",
+        checked.diagnostics
+    );
+    assert!(file_benchmark_manifest(&db, file).is_empty());
+}
+
+#[test]
+fn benchmark_context_with_wrong_abi_reports_t037() {
+    let _guard = COUNTER_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let mut db = DatabaseImpl::new();
+    let file = db.new_file(
+        "bad-benchmark-context.aru".into(),
+        "struct Benchmark {\n    handle: int\n    extra: int\n}\n@Benchmark\nfunc measure(mut bench: Benchmark): void {}\n"
+            .into(),
+    );
+    let checked = type_check(&db, file);
+    assert!(
+        checked.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == arandu_middle::DiagCode::T037InvalidBenchmarkContract
+        }),
+        "{:?}",
+        checked.diagnostics
+    );
 }
 
 #[test]
@@ -103,4 +149,33 @@ fn item_discovery_preserves_sibling_early_cutoff() {
         unchanged_executions == 0 && total_executions <= 1,
         "editing a sibling body must not rediscover the unchanged test: unchanged={unchanged_executions}, total={total_executions}"
     );
+}
+
+#[test]
+fn benchmark_discovery_preserves_sibling_early_cutoff() {
+    let _guard = COUNTER_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let mut db = DatabaseImpl::new();
+    let file = db.new_file(
+        "benchmark-cutoff.aru".into(),
+        "struct Benchmark { handle: int }\n@Benchmark\nfunc alpha(mut bench: Benchmark): void {}\nfunc beta(): int { return 1 }\n"
+            .into(),
+    );
+    let initial = items(&db, file);
+    for &symbol in &initial {
+        let _ = item_benchmark_case(&db, file, symbol);
+    }
+    ITEM_BENCHMARK_CASE_EXEC_COUNT.store(0, Ordering::SeqCst);
+    file.set_text(&mut db).to(Arc::from(
+        "struct Benchmark { handle: int }\n@Benchmark\nfunc alpha(mut bench: Benchmark): void {}\nfunc beta(): int { return 2 }\n",
+    ));
+    let changed = items(&db, file);
+    let alpha = changed
+        .iter()
+        .copied()
+        .find(|symbol| module_signatures(&db, file).symbols.get(*symbol).name == "alpha")
+        .expect("alpha symbol");
+    let _ = item_benchmark_case(&db, file, alpha);
+    assert_eq!(ITEM_BENCHMARK_CASE_EXEC_COUNT.load(Ordering::SeqCst), 0);
 }

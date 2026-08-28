@@ -141,6 +141,34 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
             }
             AmirRvalue::StringInterp { parts } => self.translate_string_interp(parts),
             AmirRvalue::ToStr { value, src_ty } => self.translate_to_str(value, *src_ty),
+            AmirRvalue::BlackBox { value, .. } => {
+                let (ptr, len) = self.translate_str_operand(value);
+                let Some(ptr_id) = self.func_ids.get("ar_bench_black_box_ptr").copied() else {
+                    self.record_ice("missing pointer black-box runtime import", self.func_span());
+                    return (self.poison_i32(), self.poison_i32());
+                };
+                let Some(len_id) = self.func_ids.get("ar_bench_black_box_i64").copied() else {
+                    self.record_ice("missing integer black-box runtime import", self.func_span());
+                    return (self.poison_i32(), self.poison_i32());
+                };
+                let ptr_ref = self.module.declare_func_in_func(ptr_id, self.builder.func);
+                let len_ref = self.module.declare_func_in_func(len_id, self.builder.func);
+                let ptr_call = self.builder.ins().call(ptr_ref, &[ptr]);
+                let len_arg = if self.ptr_type.bits() < 64 {
+                    self.builder
+                        .ins()
+                        .uextend(cranelift_codegen::ir::types::I64, len)
+                } else {
+                    len
+                };
+                let len_call = self.builder.ins().call(len_ref, &[len_arg]);
+                let ptr_result = self.builder.inst_results(ptr_call)[0];
+                let mut len_result = self.builder.inst_results(len_call)[0];
+                if self.ptr_type.bits() < 64 {
+                    len_result = self.builder.ins().ireduce(self.ptr_type, len_result);
+                }
+                (ptr_result, len_result)
+            }
             _ => {
                 self.record_ice(
                     "unsupported rvalue kind returning str in codegen",

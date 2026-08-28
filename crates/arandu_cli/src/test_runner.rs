@@ -2,7 +2,9 @@
 //! and deterministic reporting.
 
 use arandu_codegen::testing::{
-    CapturedOutput, TEST_PROTOCOL_V1, TestEventV1, TestFailure, TestStatus, read_frame, write_frame,
+    BENCH_PROTOCOL_V1, BenchmarkConfigV1, BenchmarkEventV1, CapturedOutput, TEST_PROTOCOL_V1,
+    TestEventV1, TestFailure, TestStatus, read_benchmark_frame, read_frame, write_benchmark_frame,
+    write_frame,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -28,6 +30,46 @@ pub struct RunnerOptions {
     pub output: Option<PathBuf>,
     pub target: Option<String>,
     pub backend: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BenchmarkRunnerOptions {
+    pub timeout: Duration,
+    pub config: BenchmarkConfigV1,
+    pub format_json: bool,
+    pub output: Option<PathBuf>,
+    pub target: Option<String>,
+    pub backend: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct BenchmarkJsonReport<'a> {
+    schema: &'static str,
+    arandu_version: &'static str,
+    target: String,
+    backend: String,
+    profile: &'static str,
+    clock: &'static str,
+    os: &'static str,
+    arch: &'static str,
+    cases: Vec<BenchmarkJsonCase<'a>>,
+}
+
+#[derive(Debug, Serialize)]
+struct BenchmarkJsonCase<'a> {
+    id: &'a str,
+    config: &'a BenchmarkConfigV1,
+    samples: &'a [arandu_codegen::testing::BenchmarkSampleV1],
+    median_ns_per_op: Option<f64>,
+    mad_ns_per_op: Option<f64>,
+    p50_ns_per_op: Option<f64>,
+    p95_ns_per_op: Option<f64>,
+    min_ns_per_op: Option<f64>,
+    stdout: String,
+    stderr: String,
+    stdout_truncated: bool,
+    stderr_truncated: bool,
+    failure: &'a Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -94,6 +136,295 @@ pub fn install_ctrlc_handler() {
 pub fn send_child_event(sequence: u64, event: &TestEventV1) -> Result<(), String> {
     let mut writer = get_child_ipc_writer()?;
     write_frame(&mut writer, sequence, event)
+}
+
+pub fn send_benchmark_child_event(sequence: u64, event: &BenchmarkEventV1) -> Result<(), String> {
+    let mut writer = get_child_ipc_writer()?;
+    write_benchmark_frame(&mut writer, sequence, event)
+}
+
+pub fn run_benchmarks(
+    project: &Path,
+    cases: Vec<String>,
+    options: &BenchmarkRunnerOptions,
+) -> Result<bool, String> {
+    let mut events = Vec::with_capacity(cases.len());
+    for (index, id) in cases.iter().enumerate() {
+        let sequence = u64::try_from(index).map_err(|_| "benchmark sequence overflow")?;
+        events.push(run_benchmark_case(project, id, sequence, options));
+    }
+    events.sort_by(|left, right| left.id.cmp(&right.id));
+    report_benchmarks(&events, options)?;
+    Ok(events.iter().all(|event| event.failure.is_none()))
+}
+
+fn run_benchmark_case(
+    project: &Path,
+    id: &str,
+    sequence: u64,
+    options: &BenchmarkRunnerOptions,
+) -> BenchmarkEventV1 {
+    let (parent_reader, child_stdio) = match create_ipc_pipe_pair() {
+        Ok(pair) => pair,
+        Err(error) => return failed_benchmark(sequence, id, &options.config, error),
+    };
+    let executable = match std::env::current_exe() {
+        Ok(executable) => executable,
+        Err(error) => {
+            return failed_benchmark(sequence, id, &options.config, error.to_string());
+        }
+    };
+    let mut command = Command::new(executable);
+    command
+        .args([
+            "bench",
+            project.to_string_lossy().as_ref(),
+            "--exact",
+            id,
+            "--harness-child",
+        ])
+        .env("ARANDU_BENCH_SEQUENCE", sequence.to_string())
+        .env(
+            "ARANDU_BENCH_WARMUP_NS",
+            options.config.warmup_ns.to_string(),
+        )
+        .env(
+            "ARANDU_BENCH_MEASUREMENT_NS",
+            options.config.measurement_ns.to_string(),
+        )
+        .env("ARANDU_BENCH_SAMPLES", options.config.samples.to_string())
+        .stdin(child_stdio)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            return failed_benchmark(sequence, id, &options.config, error.to_string());
+        }
+    };
+    let stdout_handle = drain(child.stdout.take());
+    let stderr_handle = drain(child.stderr.take());
+    let (sender, receiver) = mpsc::channel();
+    let id_owned = id.to_string();
+    thread::spawn(move || {
+        let mut reader = parent_reader;
+        let result = read_benchmark_frame(&mut reader, sequence, &id_owned);
+        let _ = sender.send(result);
+    });
+    let deadline = Instant::now() + options.timeout;
+    let exit = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+            _ => {
+                kill_process_tree(&mut child);
+                break None;
+            }
+        }
+    };
+    let stdout = join_capture(stdout_handle);
+    let stderr = join_capture(stderr_handle);
+    let mut event = if exit.is_none() {
+        failed_benchmark(sequence, id, &options.config, "benchmark timed out".into())
+    } else {
+        match receiver.recv_timeout(Duration::from_secs(2)) {
+            Ok(Ok(event)) if exit.is_some_and(|status| status.success()) => event,
+            Ok(Ok(mut event)) => {
+                event
+                    .failure
+                    .get_or_insert_with(|| "benchmark child failed".to_string());
+                event
+            }
+            Ok(Err(error)) => failed_benchmark(
+                sequence,
+                id,
+                &options.config,
+                format!(
+                    "benchmark protocol failure: {error}; stdout={}; stderr={}",
+                    String::from_utf8_lossy(&stdout.bytes),
+                    String::from_utf8_lossy(&stderr.bytes)
+                ),
+            ),
+            Err(mpsc::RecvTimeoutError::Disconnected) => failed_benchmark(
+                sequence,
+                id,
+                &options.config,
+                format!(
+                    "benchmark IPC disconnected; stdout={}; stderr={}",
+                    String::from_utf8_lossy(&stdout.bytes),
+                    String::from_utf8_lossy(&stderr.bytes)
+                ),
+            ),
+            Err(mpsc::RecvTimeoutError::Timeout) => failed_benchmark(
+                sequence,
+                id,
+                &options.config,
+                "benchmark child exited without a control frame".into(),
+            ),
+        }
+    };
+    event.stdout = stdout;
+    event.stderr = stderr;
+    event
+}
+
+fn failed_benchmark(
+    sequence: u64,
+    id: &str,
+    config: &BenchmarkConfigV1,
+    failure: String,
+) -> BenchmarkEventV1 {
+    BenchmarkEventV1 {
+        sequence,
+        id: id.to_string(),
+        config: config.clone(),
+        samples: Vec::new(),
+        stdout: CapturedOutput::default(),
+        stderr: CapturedOutput::default(),
+        failure: Some(failure),
+    }
+}
+
+fn sample_values(event: &BenchmarkEventV1) -> Vec<f64> {
+    let mut values = event
+        .samples
+        .iter()
+        .filter(|sample| sample.iterations != 0)
+        .map(|sample| sample.elapsed_ns as f64 / sample.iterations as f64)
+        .filter(|value| value.is_finite())
+        .collect::<Vec<_>>();
+    values.sort_by(f64::total_cmp);
+    values
+}
+
+fn percentile(sorted: &[f64], percentile: usize) -> Option<f64> {
+    if sorted.is_empty() {
+        return None;
+    }
+    let numerator = (sorted.len() - 1).checked_mul(percentile)?;
+    sorted.get(numerator.div_ceil(100)).copied()
+}
+
+fn median(sorted: &[f64]) -> Option<f64> {
+    let middle = sorted.len().checked_div(2)?;
+    if sorted.len().is_multiple_of(2) {
+        let left = *sorted.get(middle.checked_sub(1)?)?;
+        let right = *sorted.get(middle)?;
+        Some((left + right) / 2.0)
+    } else {
+        sorted.get(middle).copied()
+    }
+}
+
+fn benchmark_stats(event: &BenchmarkEventV1) -> (Option<f64>, Option<f64>, Option<f64>) {
+    let values = sample_values(event);
+    let center_median = median(&values);
+    let mad = center_median.and_then(|center| {
+        let mut deviations = values
+            .iter()
+            .map(|value| (value - center).abs())
+            .collect::<Vec<_>>();
+        deviations.sort_by(f64::total_cmp);
+        median(&deviations)
+    });
+    (center_median, mad, percentile(&values, 95))
+}
+
+fn format_ns_per_op(value: f64) -> String {
+    if value >= 1_000_000.0 {
+        format!("{:.3} ms/op", value / 1_000_000.0)
+    } else if value >= 1_000.0 {
+        format!("{:.3} us/op", value / 1_000.0)
+    } else {
+        format!("{value:.3} ns/op")
+    }
+}
+
+fn report_benchmarks(
+    events: &[BenchmarkEventV1],
+    options: &BenchmarkRunnerOptions,
+) -> Result<(), String> {
+    if options.format_json {
+        let cases = events
+            .iter()
+            .map(|event| {
+                let values = sample_values(event);
+                let (median, mad, p95) = benchmark_stats(event);
+                BenchmarkJsonCase {
+                    id: &event.id,
+                    config: &event.config,
+                    samples: &event.samples,
+                    median_ns_per_op: median,
+                    mad_ns_per_op: mad,
+                    p50_ns_per_op: percentile(&values, 50),
+                    p95_ns_per_op: p95,
+                    min_ns_per_op: values.first().copied(),
+                    stdout: String::from_utf8_lossy(&event.stdout.bytes).into_owned(),
+                    stderr: String::from_utf8_lossy(&event.stderr.bytes).into_owned(),
+                    stdout_truncated: event.stdout.truncated,
+                    stderr_truncated: event.stderr.truncated,
+                    failure: &event.failure,
+                }
+            })
+            .collect();
+        let report = BenchmarkJsonReport {
+            schema: BENCH_PROTOCOL_V1,
+            arandu_version: env!("CARGO_PKG_VERSION"),
+            target: options
+                .target
+                .clone()
+                .unwrap_or_else(|| std::env::consts::ARCH.to_string()),
+            backend: options
+                .backend
+                .clone()
+                .unwrap_or_else(|| "cranelift".to_string()),
+            profile: if cfg!(debug_assertions) {
+                "debug"
+            } else {
+                "release"
+            },
+            clock: "monotonic_instant",
+            os: std::env::consts::OS,
+            arch: std::env::consts::ARCH,
+            cases,
+        };
+        let bytes = serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?;
+        if let Some(output) = &options.output {
+            atomic_write_file(output, &bytes)?;
+        } else {
+            println!("{}", String::from_utf8_lossy(&bytes));
+        }
+    } else {
+        for event in events {
+            if let Some(failure) = &event.failure {
+                eprintln!("FAILED {}: {failure}", event.id);
+                continue;
+            }
+            let (median, mad, p95) = benchmark_stats(event);
+            let median = median.unwrap_or(0.0);
+            let mad = mad.unwrap_or(0.0);
+            eprintln!(
+                "bench {}: median {}; MAD {}; p95 {}; {} samples",
+                event.id,
+                format_ns_per_op(median),
+                format_ns_per_op(mad),
+                format_ns_per_op(p95.unwrap_or(0.0)),
+                event.samples.len()
+            );
+            if median > 0.0 && mad / median > 0.10 {
+                eprintln!(
+                    "warning: benchmark {} is noisy (MAD exceeds 10% of median)",
+                    event.id
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -661,5 +992,50 @@ fn status_name(status: TestStatus) -> &'static str {
         TestStatus::Skipped => "skipped",
         TestStatus::TimedOut => "timed_out",
         TestStatus::Crashed => "crashed",
+    }
+}
+
+#[cfg(test)]
+mod benchmark_tests {
+    use super::*;
+
+    fn event(values: &[(u64, u64)]) -> BenchmarkEventV1 {
+        BenchmarkEventV1 {
+            sequence: 0,
+            id: "pkg::bin::bench".to_string(),
+            config: BenchmarkConfigV1 {
+                warmup_ns: 1,
+                measurement_ns: 1,
+                samples: u32::try_from(values.len()).unwrap(),
+            },
+            samples: values
+                .iter()
+                .map(
+                    |(iterations, elapsed_ns)| arandu_codegen::testing::BenchmarkSampleV1 {
+                        iterations: *iterations,
+                        elapsed_ns: *elapsed_ns,
+                    },
+                )
+                .collect(),
+            stdout: CapturedOutput::default(),
+            stderr: CapturedOutput::default(),
+            failure: None,
+        }
+    }
+
+    #[test]
+    fn benchmark_statistics_use_true_median_and_mad() {
+        let event = event(&[(1, 1), (1, 2), (1, 100), (1, 200)]);
+        let (median, mad, p95) = benchmark_stats(&event);
+        assert_eq!(median, Some(51.0));
+        assert_eq!(mad, Some(49.5));
+        assert_eq!(p95, Some(200.0));
+    }
+
+    #[test]
+    fn benchmark_human_units_scale_without_locale_state() {
+        assert_eq!(format_ns_per_op(42.0), "42.000 ns/op");
+        assert_eq!(format_ns_per_op(2_500.0), "2.500 us/op");
+        assert_eq!(format_ns_per_op(3_000_000.0), "3.000 ms/op");
     }
 }

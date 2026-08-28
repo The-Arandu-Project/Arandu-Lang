@@ -275,6 +275,7 @@ Abaixo estão listados todos os diagnósticos mapeados para o compilador Arandu.
 | **T034** | `cannot format value as str` | Error | `0.1.0` | O tipo não participa do contrato atual de apresentação textual. |
 | **T035** | `invalid @Destructor contract` | Error | `0.1.0` | O método anotado não é um destrutor consumidor válido ou o tipo já possui outro destrutor. |
 | **T036** | `invalid @Test contract` | Error | `0.1.0` | A função de teste não satisfaz o contrato síncrono, não genérico, sem parâmetros e com retorno `void` ou `Result<void, E>`. |
+| **T037** | `invalid @Benchmark contract` | Error | `0.1.0` | A função de benchmark não satisfaz o contrato síncrono, não genérico, com um contexto `mut testing.Benchmark` e retorno `void`. |
 
 ---
 

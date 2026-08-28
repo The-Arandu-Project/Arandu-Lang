@@ -512,7 +512,7 @@ impl LowerCtx<'_> {
                     *op = Self::resolve_operand(redirected_temps, *op);
                 }
             }
-            AmirRvalue::ToStr { value, .. } => {
+            AmirRvalue::ToStr { value, .. } | AmirRvalue::BlackBox { value, .. } => {
                 *value = Self::resolve_operand(redirected_temps, *value);
             }
         }

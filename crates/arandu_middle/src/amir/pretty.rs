@@ -409,6 +409,13 @@ impl AmirRvalue {
                     value.to_pretty_string(symbols, pool)
                 ));
             }
+            AmirRvalue::BlackBox { value, value_ty } => {
+                out.push_str(&format!(
+                    "black_box(ty#{}, {})",
+                    value_ty.as_usize(),
+                    value.to_pretty_string(symbols, pool)
+                ));
+            }
         }
     }
 }

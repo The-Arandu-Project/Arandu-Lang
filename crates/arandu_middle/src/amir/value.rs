@@ -154,6 +154,13 @@ pub enum AmirRvalue {
         value: AmirOperand,
         src_ty: TypeId,
     },
+    /// Benchmark-only optimization barrier. It is an identity operation at
+    /// runtime, but remains observable to AMIR optimizations and is lowered to
+    /// an opaque runtime call by every backend.
+    BlackBox {
+        value: AmirOperand,
+        value_ty: TypeId,
+    },
 }
 
 /// Logical arena selected by a Gen operation.

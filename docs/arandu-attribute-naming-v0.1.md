@@ -52,7 +52,7 @@ da categoria correspondente.
 | --- | --- | --- |
 | `@Link` | implementada | `@link` |
 | `@Test` | implementada para descoberta SL_T.0 | função livre síncrona, não genérica, sem parâmetros; `void` ou `Result<void, E>` |
-| `@Benchmark` | reservada | aguarda contexto e engine de medição SL_T.4 |
+| `@Benchmark` | implementada em SL_T.4 | função livre síncrona, não genérica, `func name(mut bench: testing.Benchmark): void` |
 | `@Suppress` | contrato de diagnóstico | — |
 | `@Deny` | contrato de diagnóstico | — |
 | `@Forbid` | contrato de diagnóstico | — |
