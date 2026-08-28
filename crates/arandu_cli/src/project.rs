@@ -58,6 +58,8 @@ pub struct ProjectContext {
     pub name: String,
     pub version: String,
     pub entry_rel: String,
+    /// Canonical root target kind used in stable tooling identities.
+    pub target_kind: &'static str,
 }
 
 /// Shared flags for project / doctor commands.
@@ -480,7 +482,7 @@ deny = ["UnknownCapability"]
     })?;
     fs::write(
         root.join("tests/smoke.aru"),
-        format!("module {name}_tests\n\nfunc smoke(): int {{ return 0 }}\n"),
+        format!("module {name}_tests\n\n@Test\nfunc smoke(): void {{}}\n"),
     )
     .map_err(|e| {
         CliFailure::operational(
@@ -1006,6 +1008,11 @@ pub fn load_project(
     let name = data.name.clone();
     let version = data.version.clone();
     let entry_rel = data.entry.clone();
+    let target_kind = if data.binary_target.is_some() {
+        "bin"
+    } else {
+        "lib"
+    };
 
     let manifest = register_manifest(db, manifest_path.clone(), data, hash);
     // Touch tracked fingerprint so the input is live in the Salsa graph.
@@ -1023,6 +1030,7 @@ pub fn load_project(
         name,
         version,
         entry_rel,
+        target_kind,
     })
 }
 

@@ -606,6 +606,22 @@ static inline void* ar_co_await_ptr(uint8_t* aw) {{
         let _ = writeln!(&mut self.output, "#ifndef AR_UNREACHABLE");
         let _ = writeln!(&mut self.output, "#define AR_UNREACHABLE() abort()");
         let _ = writeln!(&mut self.output, "#endif");
+        let _ = writeln!(
+            &mut self.output,
+            "#if defined(__GNUC__) || defined(__clang__)\n#define AR_BENCH_NOINLINE __attribute__((noinline))\n#elif defined(_MSC_VER)\n#define AR_BENCH_NOINLINE __declspec(noinline)\n#else\n#define AR_BENCH_NOINLINE\n#endif"
+        );
+        let _ = writeln!(
+            &mut self.output,
+            "static AR_BENCH_NOINLINE int64_t ar_bench_black_box_i64(int64_t value) {{ volatile int64_t opaque = value; return opaque; }}"
+        );
+        let _ = writeln!(
+            &mut self.output,
+            "static AR_BENCH_NOINLINE double ar_bench_black_box_f64(double value) {{ volatile double opaque = value; return opaque; }}"
+        );
+        let _ = writeln!(
+            &mut self.output,
+            "static AR_BENCH_NOINLINE void *ar_bench_black_box_ptr(void *value) {{ void * volatile opaque = value; return opaque; }}"
+        );
         // F2.3.runtime: process-lifetime gen arena (i64 payload MVP; mirrors JIT host).
         self.emit_gen_arena_runtime();
         // Pure-buffer host used by std.alloc.vec / gen_arena product surface.
@@ -975,6 +991,7 @@ static inline void* ar_co_await_ptr(uint8_t* aw) {{
                         | AmirRvalue::Len(op)
                         | AmirRvalue::Alloc(op)
                         | AmirRvalue::ToStr { value: op, .. }
+                        | AmirRvalue::BlackBox { value: op, .. }
                         | AmirRvalue::CoroutineReady { value: op, .. } => {
                             if let AmirOperand::Copy(t) | AmirOperand::Move(t) = op {
                                 used_temps.insert(t.as_usize());

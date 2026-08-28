@@ -357,9 +357,28 @@ pub fn item_attribute_validation(
         if !matches {
             continue;
         }
-        diagnostics.extend(
-            arandu_semantics::attributes::validate_decl_attributes(decl, &program.pool).diagnostics,
+        let annotations =
+            arandu_semantics::attributes::validate_decl_attributes(decl, &program.pool);
+        let test_validation = arandu_semantics::testing::validate_test_case(
+            decl,
+            &annotations,
+            item_sym,
+            crate::passes::module_signatures(db, file)
+                .type_info
+                .as_ref(),
         );
+        let benchmark_validation = arandu_semantics::testing::validate_benchmark_case(
+            decl,
+            &annotations,
+            item_sym,
+            crate::passes::module_signatures(db, file)
+                .type_info
+                .as_ref(),
+            crate::passes::module_signatures(db, file).symbols.as_ref(),
+        );
+        diagnostics.extend(annotations.diagnostics);
+        diagnostics.extend(test_validation.diagnostics);
+        diagnostics.extend(benchmark_validation.diagnostics);
         break;
     }
 

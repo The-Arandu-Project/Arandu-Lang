@@ -1,0 +1,117 @@
+module std.testing
+
+/// SL_T.3 — `std.testing` and expectation diagnostics.
+///
+/// Provides test assertions that record structured failures without relying
+/// on runtime panic or human string parsing.
+/// Failures are recorded in the test context; the test continues running
+/// after a failed assertion (non-panic semantics).
+
+extern "C" {
+    func ar_test_set_span(file_id: int, start: int, end: int): void
+    func ar_test_expect(cond: int, expr: str, msg: str, loc: str): int
+    func ar_test_expect_equal_i64(expected: int, actual: int, expr: str, msg: str, loc: str): int
+    func ar_test_expect_equal_f64(expected: float, actual: float, expr: str, msg: str, loc: str): int
+    func ar_test_expect_equal_bool(expected: int, actual: int, expr: str, msg: str, loc: str): int
+    func ar_test_expect_equal_str(expected: str, actual: str, expr: str, msg: str, loc: str): int
+    func ar_test_fail(msg: str, loc: str): void
+    func ar_test_skip(reason: str, loc: str): void
+    func ar_test_log(msg: str): void
+    func ar_test_temp_dir(nonce: int): str
+    func ar_bench_loop(handle: int): int
+}
+
+/// Opaque benchmark context constructed by the harness.
+public struct Benchmark {
+    handle: int
+}
+
+/// Continue the calibrated benchmark loop while the current sample needs work.
+public func Benchmark.loop(mut self): bool {
+    unsafe {
+        return ar_bench_loop(self.handle) != 0
+    }
+}
+
+/// Best-effort optimization barrier for benchmark inputs and outputs.
+/// It is an identity operation and is not a correctness or cryptographic fence.
+public func blackBox<T>(value: T): T {
+    return value
+}
+
+/// Asserts that a boolean condition is true.
+/// Records a structured failure in the test context if it fails.
+public func expect(condition: bool, message: str): void {
+    unsafe {
+        if condition {
+            let _ = ar_test_expect(1, "condition", message, "")
+        } else {
+            let _ = ar_test_expect(0, "condition", message, "")
+        }
+    }
+}
+
+/// Asserts that two integer values are equal.
+public func expectEqualInt(expected: int, actual: int, message: str): void {
+    unsafe {
+        let _ = ar_test_expect_equal_i64(expected, actual, "expected == actual", message, "")
+    }
+}
+
+/// Asserts that two floating-point values are equal.
+public func expectEqualFloat(expected: float, actual: float, message: str): void {
+    unsafe {
+        let _ = ar_test_expect_equal_f64(expected, actual, "expected == actual", message, "")
+    }
+}
+
+/// Asserts that two boolean values are equal.
+public func expectEqualBool(expected: bool, actual: bool, message: str): void {
+    unsafe {
+        if expected == actual {
+            let _ = ar_test_expect_equal_bool(1, 1, "expected == actual", message, "")
+        } else {
+            if expected {
+                let _ = ar_test_expect_equal_bool(1, 0, "expected == actual", message, "")
+            } else {
+                let _ = ar_test_expect_equal_bool(0, 1, "expected == actual", message, "")
+            }
+        }
+    }
+}
+
+/// Asserts that two string values are equal.
+public func expectEqualStr(expected: str, actual: str, message: str): void {
+    unsafe {
+        let _ = ar_test_expect_equal_str(expected, actual, "expected == actual", message, "")
+    }
+}
+
+/// Fails the current test explicitly with a descriptive message.
+public func fail(message: str): void {
+    unsafe {
+        ar_test_fail(message, "")
+    }
+}
+
+/// Skips the current test explicitly with a reason.
+public func skip(reason: str): void {
+    unsafe {
+        ar_test_skip(reason, "")
+    }
+}
+
+/// Appends an informational message to the test logs.
+public func log(message: str): void {
+    unsafe {
+        ar_test_log(message)
+    }
+}
+
+/// Allocates a safe sandboxed temporary directory for the test.
+/// Returns its absolute path, or an empty string when creation fails.
+public func tempDir(nonce: int): str {
+    unsafe {
+        return ar_test_temp_dir(nonce)
+    }
+}

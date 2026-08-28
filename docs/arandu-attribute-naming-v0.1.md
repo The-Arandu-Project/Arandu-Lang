@@ -51,7 +51,8 @@ da categoria correspondente.
 | Anotação | Situação | Grafias não canônicas conhecidas |
 | --- | --- | --- |
 | `@Link` | implementada | `@link` |
-| `@Test` | reconhecida em fixtures | — |
+| `@Test` | implementada para descoberta SL_T.0 | função livre síncrona, não genérica, sem parâmetros; `void` ou `Result<void, E>` |
+| `@Benchmark` | implementada em SL_T.4 | função livre síncrona, não genérica, `func name(mut bench: testing.Benchmark): void` |
 | `@Suppress` | contrato de diagnóstico | — |
 | `@Deny` | contrato de diagnóstico | — |
 | `@Forbid` | contrato de diagnóstico | — |

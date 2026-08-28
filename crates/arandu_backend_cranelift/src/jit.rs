@@ -214,6 +214,63 @@ impl AranduModule<JITModule> {
             "ar_env_var_is_set",
             crate::os_runtime::ar_env_var_is_set as *const u8,
         );
+        // SL_T.3: std.testing expectation and runner symbols
+        builder.symbol(
+            "ar_test_set_span",
+            crate::testing_runtime::ar_test_set_span as *const u8,
+        );
+        builder.symbol(
+            "ar_bench_black_box_i64",
+            crate::testing_runtime::ar_bench_black_box_i64 as *const u8,
+        );
+        builder.symbol(
+            "ar_bench_black_box_f64",
+            crate::testing_runtime::ar_bench_black_box_f64 as *const u8,
+        );
+        builder.symbol(
+            "ar_bench_black_box_ptr",
+            crate::testing_runtime::ar_bench_black_box_ptr as *const u8,
+        );
+        builder.symbol(
+            "ar_bench_loop",
+            crate::testing_runtime::ar_bench_loop as *const u8,
+        );
+        builder.symbol(
+            "ar_test_expect",
+            crate::testing_runtime::ar_test_expect as *const u8,
+        );
+        builder.symbol(
+            "ar_test_expect_equal_i64",
+            crate::testing_runtime::ar_test_expect_equal_i64 as *const u8,
+        );
+        builder.symbol(
+            "ar_test_expect_equal_f64",
+            crate::testing_runtime::ar_test_expect_equal_f64 as *const u8,
+        );
+        builder.symbol(
+            "ar_test_expect_equal_bool",
+            crate::testing_runtime::ar_test_expect_equal_bool as *const u8,
+        );
+        builder.symbol(
+            "ar_test_expect_equal_str",
+            crate::testing_runtime::ar_test_expect_equal_str as *const u8,
+        );
+        builder.symbol(
+            "ar_test_fail",
+            crate::testing_runtime::ar_test_fail as *const u8,
+        );
+        builder.symbol(
+            "ar_test_skip",
+            crate::testing_runtime::ar_test_skip as *const u8,
+        );
+        builder.symbol(
+            "ar_test_log",
+            crate::testing_runtime::ar_test_log as *const u8,
+        );
+        builder.symbol(
+            "ar_test_temp_dir",
+            crate::testing_runtime::ar_test_temp_dir as *const u8,
+        );
         // std.alloc.vec:
         // - Product path (pure-buffer): malloc / realloc / buf_free only.
         // - Handle API (new/push/get/…): unit-test / legacy GenArena-style table.
@@ -441,6 +498,27 @@ impl<M: Module> AranduModule<M> {
             .declare_function("free", Linkage::Import, &free_sig)
             .map_err(|err| codegen_ice(format!("failed to declare free: {err:?}")))?;
         func_ids.insert("free".to_string(), free_id);
+
+        // SL_T.4 opaque optimization barriers. Signatures deliberately match
+        // the machine representation selected by lowering.
+        for (name, ty) in [
+            ("ar_bench_black_box_i64", cranelift_codegen::ir::types::I64),
+            ("ar_bench_black_box_f64", cranelift_codegen::ir::types::F64),
+            ("ar_bench_black_box_ptr", ptr_type),
+        ] {
+            let mut signature = cranelift_codegen::ir::Signature::new(default_call_conv);
+            signature
+                .params
+                .push(cranelift_codegen::ir::AbiParam::new(ty));
+            signature
+                .returns
+                .push(cranelift_codegen::ir::AbiParam::new(ty));
+            let id = self
+                .module
+                .declare_function(name, Linkage::Import, &signature)
+                .map_err(|error| codegen_ice(format!("failed to declare {name}: {error:?}")))?;
+            func_ids.insert(name.to_string(), id);
+        }
 
         // G4 raw ABI: pointers and layout widths follow the JIT target.
         let usize_ty = ptr_type;

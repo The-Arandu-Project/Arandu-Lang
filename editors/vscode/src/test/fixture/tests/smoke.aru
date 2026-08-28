@@ -1,0 +1,4 @@
+module smoke_tests
+
+@Test
+func editorDiscoversThisTest(): void {}

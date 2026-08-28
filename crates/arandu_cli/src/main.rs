@@ -3,9 +3,11 @@ mod artifact;
 mod cli_error;
 mod linker;
 mod project;
+mod test_runner;
 mod watch;
 
 use arandu_package::cache;
+use arandu_query::ArandCompilerDb;
 use cli_error::{CliFailure, CliResult, CliSuccess};
 
 use std::{
@@ -237,6 +239,8 @@ fn usage_and_exit() -> ! {
         "  arandu_cli cache <dir|inspect|verify|verify-tree|prune> [--cache-dir=<absolute-dir>] [limits]\n",
         "  arandu_cli hash-file <path>          # BLAKE3 hex (packaging checksums)\n",
         "  arandu_cli watch [package-path]      # re-check on FS changes (package mode)\n",
+        "  arandu_cli test [package-path] [--list|--exact <id>] [--format human|json|junit]\n",
+        "  arandu_cli bench [package-path] [--list|--exact <id>] [--save-baseline <name>|--compare <name>]\n",
         "  arandu_cli clean [package-path]      # remove owned project artifacts\n",
         "  arandu_cli tree [package-path]       # canonical resolved dependency graph\n",
         "  arandu_cli audit [package-path]      # locked provenance and policy audit\n",
@@ -583,6 +587,243 @@ fn main() {
                 env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
             };
             finish(cmd_project_build(&start, &project_flags, opt, debug));
+        }
+        "test" => {
+            test_runner::install_ctrlc_handler();
+            let mut start = None;
+            let mut list = false;
+            let mut exact = None;
+            let mut filter = None;
+            let mut harness_child = false;
+            let mut runner = test_runner::RunnerOptions {
+                jobs: 1,
+                timeout: std::time::Duration::from_secs(300),
+                fail_fast: false,
+                seed: 0,
+                format: test_runner::TestOutputFormat::Human,
+                output: None,
+                target: None,
+                backend: None,
+            };
+            let mut arguments = args[2..].iter();
+            while let Some(argument) = arguments.next() {
+                if argument == "--list" {
+                    list = true;
+                } else if argument == "--harness-child" {
+                    harness_child = true;
+                } else if argument == "--exact" {
+                    exact = arguments.next().cloned();
+                    if exact.is_none() {
+                        fail_usage("usage: arandu_cli test [package-path] --list [--exact <id>]");
+                    }
+                } else if argument == "--fail-fast" {
+                    runner.fail_fast = true;
+                } else if argument == "--jobs" {
+                    runner.jobs = arguments
+                        .next()
+                        .and_then(|value| value.parse().ok())
+                        .filter(|jobs| *jobs > 0)
+                        .unwrap_or_else(|| {
+                            fail_usage("--jobs requires an integer greater than zero")
+                        });
+                } else if argument == "--timeout" {
+                    let seconds = arguments
+                        .next()
+                        .and_then(|value| value.parse::<u64>().ok())
+                        .filter(|seconds| *seconds > 0)
+                        .unwrap_or_else(|| {
+                            fail_usage("--timeout requires seconds greater than zero")
+                        });
+                    runner.timeout = std::time::Duration::from_secs(seconds);
+                } else if argument == "--seed" {
+                    runner.seed = arguments
+                        .next()
+                        .and_then(|value| value.parse().ok())
+                        .unwrap_or_else(|| fail_usage("--seed requires an unsigned integer"));
+                } else if argument == "--format" {
+                    runner.format = match arguments.next().map(String::as_str) {
+                        Some("json") => test_runner::TestOutputFormat::Json,
+                        Some("human") => test_runner::TestOutputFormat::Human,
+                        Some("junit") => test_runner::TestOutputFormat::Junit,
+                        _ => fail_usage("--format requires 'human', 'json' or 'junit'"),
+                    };
+                } else if argument == "--filter" {
+                    filter = arguments.next().cloned();
+                    if filter.is_none() {
+                        fail_usage("--filter requires a literal substring");
+                    }
+                } else if argument == "--output" {
+                    runner.output = arguments.next().map(PathBuf::from);
+                    if runner.output.is_none() {
+                        fail_usage("--output requires a file path");
+                    }
+                } else if argument.starts_with('-') || start.is_some() {
+                    fail_usage("usage: arandu_cli test [package-path] --list [--exact <id>]");
+                } else {
+                    start = Some(PathBuf::from(argument));
+                }
+            }
+            let start =
+                start.unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+            finish(cmd_project_test_list(
+                &start,
+                &project_flags,
+                list,
+                exact.as_deref(),
+                filter.as_deref(),
+                harness_child,
+                &runner,
+            ));
+        }
+        "bench" => {
+            let mut start = None;
+            let mut list = false;
+            let mut exact = None;
+            let mut filter = None;
+            let mut harness_child = false;
+            let mut runner = test_runner::BenchmarkRunnerOptions {
+                timeout: std::time::Duration::from_secs(300),
+                config: arandu_codegen::testing::BenchmarkConfigV1 {
+                    warmup_ns: 500_000_000,
+                    measurement_ns: 3_000_000_000,
+                    samples: 30,
+                },
+                format_json: false,
+                output: None,
+                target: None,
+                backend: None,
+                baseline: None,
+            };
+            let mut save_baseline = None;
+            let mut compare_baseline = None;
+            let mut strict_baseline = false;
+            let mut dry_run = false;
+            let mut max_regression_percent = 5.0;
+            let mut noise_threshold_percent = 1.0;
+            let mut comparison_policy_set = false;
+            let mut arguments = args[2..].iter();
+            while let Some(argument) = arguments.next() {
+                match argument.as_str() {
+                    "--list" => list = true,
+                    "--harness-child" => harness_child = true,
+                    "--exact" => {
+                        exact = arguments.next().cloned();
+                        if exact.is_none() {
+                            fail_usage("--exact requires a canonical benchmark id");
+                        }
+                    }
+                    "--filter" => {
+                        filter = arguments.next().cloned();
+                        if filter.is_none() {
+                            fail_usage("--filter requires a literal substring");
+                        }
+                    }
+                    "--warmup" => {
+                        runner.config.warmup_ns = parse_benchmark_seconds(
+                            arguments.next(),
+                            "--warmup requires positive seconds",
+                        );
+                    }
+                    "--measurement-time" => {
+                        runner.config.measurement_ns = parse_benchmark_seconds(
+                            arguments.next(),
+                            "--measurement-time requires positive seconds",
+                        );
+                    }
+                    "--samples" => {
+                        runner.config.samples = arguments
+                            .next()
+                            .and_then(|value| value.parse::<u32>().ok())
+                            .filter(|samples| (10..=10_000).contains(samples))
+                            .unwrap_or_else(|| {
+                                fail_usage("--samples requires an integer from 10 to 10000")
+                            });
+                    }
+                    "--timeout" => {
+                        let seconds = arguments
+                            .next()
+                            .and_then(|value| value.parse::<u64>().ok())
+                            .filter(|seconds| *seconds > 0)
+                            .unwrap_or_else(|| fail_usage("--timeout requires positive seconds"));
+                        runner.timeout = std::time::Duration::from_secs(seconds);
+                    }
+                    "--format" => {
+                        runner.format_json = match arguments.next().map(String::as_str) {
+                            Some("json") => true,
+                            Some("human") => false,
+                            _ => fail_usage("--format requires 'human' or 'json'"),
+                        };
+                    }
+                    "--output" => {
+                        runner.output = arguments.next().map(PathBuf::from);
+                        if runner.output.is_none() {
+                            fail_usage("--output requires a file path");
+                        }
+                    }
+                    "--save-baseline" => {
+                        save_baseline = arguments.next().cloned();
+                        if save_baseline.is_none() {
+                            fail_usage("--save-baseline requires a baseline name");
+                        }
+                    }
+                    "--compare" | "--baseline" => {
+                        compare_baseline = arguments.next().cloned();
+                        if compare_baseline.is_none() {
+                            fail_usage("--compare requires a baseline name");
+                        }
+                    }
+                    "--strict" => strict_baseline = true,
+                    "--dry-run" => dry_run = true,
+                    "--max-regression" => {
+                        comparison_policy_set = true;
+                        max_regression_percent = parse_benchmark_percentage(
+                            arguments.next(),
+                            "--max-regression requires a percentage from 0 to 100",
+                        );
+                    }
+                    "--noise-threshold" => {
+                        comparison_policy_set = true;
+                        noise_threshold_percent = parse_benchmark_percentage(
+                            arguments.next(),
+                            "--noise-threshold requires a percentage from 0 to 100",
+                        );
+                    }
+                    _ if argument.starts_with('-') || start.is_some() => {
+                        fail_usage("usage: arandu_cli bench [package-path] [flags]");
+                    }
+                    _ => start = Some(PathBuf::from(argument)),
+                }
+            }
+            if save_baseline.is_some() && compare_baseline.is_some() {
+                fail_usage("--save-baseline and --compare are mutually exclusive");
+            }
+            if (strict_baseline || dry_run || comparison_policy_set) && compare_baseline.is_none() {
+                fail_usage(
+                    "--strict, --dry-run, --max-regression and --noise-threshold require --compare",
+                );
+            }
+            runner.baseline = if let Some(name) = save_baseline {
+                Some(test_runner::BenchmarkBaselineMode::Save { name })
+            } else {
+                compare_baseline.map(|name| test_runner::BenchmarkBaselineMode::Compare {
+                    name,
+                    strict: strict_baseline,
+                    dry_run,
+                    max_regression_percent,
+                    noise_threshold_percent,
+                })
+            };
+            let start =
+                start.unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+            finish(cmd_project_bench(
+                &start,
+                &project_flags,
+                list,
+                exact.as_deref(),
+                filter.as_deref(),
+                harness_child,
+                &runner,
+            ));
         }
         // Project-mode check/run when the path is a package (Arandu.toml) or omitted.
         "check" | "run"
@@ -991,6 +1232,22 @@ fn main() {
     arandu_base::finalize_self_profile();
 }
 
+fn parse_benchmark_seconds(value: Option<&String>, usage: &str) -> u64 {
+    let seconds = value
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value > 0.0 && *value <= 3600.0)
+        .unwrap_or_else(|| fail_usage(usage));
+    let nanos = std::time::Duration::from_secs_f64(seconds).as_nanos();
+    u64::try_from(nanos).unwrap_or_else(|_| fail_usage(usage))
+}
+
+fn parse_benchmark_percentage(value: Option<&String>, usage: &str) -> f64 {
+    value
+        .and_then(|value| value.trim_end_matches('%').parse::<f64>().ok())
+        .filter(|value| value.is_finite() && (0.0..=100.0).contains(value))
+        .unwrap_or_else(|| fail_usage(usage))
+}
+
 /// Print BLAKE3-256 hex of a file (packaging / install integrity).
 fn cmd_hash_file(path: &Path) -> CliResult {
     match fs::read(path) {
@@ -1067,6 +1324,568 @@ fn cmd_project_check(
     eprintln!("{}", rebuild_log.status_line());
     println!("ok {} ({}/{})", filepath, ctx.name, ctx.version);
     Ok(CliSuccess::Done)
+}
+
+fn project_test_sources(ctx: &project::ProjectContext) -> Result<Vec<(PathBuf, String)>, String> {
+    let mut sources = std::collections::BTreeMap::new();
+    let source_root = ctx
+        .entry_path
+        .parent()
+        .ok_or_else(|| format!("entry {} has no source directory", ctx.entry_path.display()))?;
+    for (directory, target) in [
+        (source_root.to_path_buf(), ctx.target_kind),
+        (ctx.root.join("tests"), "test"),
+    ] {
+        if !directory.is_dir() {
+            continue;
+        }
+        for relative in arandu_query::scan_aru_entries(&directory) {
+            let candidate = directory.join(&relative);
+            let physical = fs::canonicalize(&candidate).map_err(|error| {
+                format!(
+                    "cannot canonicalize test source {}: {error}",
+                    candidate.display()
+                )
+            })?;
+            if !physical.starts_with(&ctx.root) || !physical.is_file() {
+                return Err(format!(
+                    "test source {} escapes the project root or is not a file",
+                    candidate.display()
+                ));
+            }
+            let module = relative
+                .strip_suffix(".aru")
+                .unwrap_or(&relative)
+                .replace('\\', "/");
+            sources.insert(physical, format!("{target}::{module}"));
+        }
+    }
+    Ok(sources.into_iter().collect())
+}
+
+#[derive(serde::Serialize)]
+struct DiscoveryReport {
+    schema: &'static str,
+    cases: Vec<DiscoveryCase>,
+}
+
+#[derive(serde::Serialize)]
+struct DiscoveryCase {
+    id: String,
+    path: String,
+    line: u32,
+    column_utf16: u32,
+}
+
+fn discovery_position(text: &str, byte_offset: u32) -> (u32, u32) {
+    let offset = usize::try_from(byte_offset)
+        .unwrap_or(text.len())
+        .min(text.len());
+    let prefix = text.get(..offset).unwrap_or(text);
+    let line =
+        u32::try_from(prefix.bytes().filter(|byte| *byte == b'\n').count()).unwrap_or(u32::MAX);
+    let line_start = prefix.rfind('\n').map_or(0, |index| index + 1);
+    let column_utf16 =
+        u32::try_from(prefix[line_start..].encode_utf16().count()).unwrap_or(u32::MAX);
+    (line, column_utf16)
+}
+
+fn discovery_path(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn cmd_project_test_list(
+    start: &Path,
+    flags: &project::ProjectFlags,
+    list_only: bool,
+    exact: Option<&str>,
+    filter: Option<&str>,
+    harness_child: bool,
+    runner: &test_runner::RunnerOptions,
+) -> CliResult {
+    let mut db = arandu_query::DatabaseImpl::new();
+    let ctx = project::load_project(&mut db, start, flags).map_err(|error| {
+        CliFailure::operational("load test project", Some(start.to_path_buf()), error)
+    })?;
+    let sources = project_test_sources(&ctx).map_err(|error| {
+        CliFailure::operational("discover test sources", Some(ctx.root.clone()), error)
+    })?;
+    let mut registry = arandu_codegen::testing::TestRegistry::default();
+    let mut discovered = Vec::new();
+    for (path, module) in sources {
+        let key = path.to_string_lossy().into_owned();
+        let file = if let Some(existing) = db.as_source_db().resolve_module_path(&key) {
+            existing
+        } else {
+            let text = fs::read_to_string(&path).map_err(|error| {
+                CliFailure::operational("read test source", Some(path.clone()), error.to_string())
+            })?;
+            db.new_file(key, text)
+        };
+        let checked = arandu_query::passes::type_check(&db, file);
+        if checked
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == arandu_middle::Severity::Error)
+        {
+            return Err(CliFailure::diagnostics(
+                checked.diagnostics.clone(),
+                Some(path),
+            ));
+        }
+        let text = file.text(&db);
+        for case in arandu_query::file_test_manifest(&db, file).iter() {
+            let id = format!("{}::{module}::{}", ctx.name, case.name);
+            let (line, column_utf16) = discovery_position(text, case.span.start);
+            discovered.push(DiscoveryCase {
+                id: id.clone(),
+                path: discovery_path(&ctx.root, &path),
+                line,
+                column_utf16,
+            });
+            registry.insert(arandu_codegen::testing::TestEntry {
+                id,
+                function: case.name.to_string(),
+            });
+        }
+    }
+    let cases: Vec<String> = registry.iter().map(|entry| entry.id.clone()).collect();
+    let cases: Vec<String> = match filter {
+        Some(filter) => cases
+            .into_iter()
+            .filter(|case| case.contains(filter))
+            .collect(),
+        None => cases,
+    };
+    let harness = if harness_child {
+        None
+    } else {
+        Some(artifact::publish_test_harness(&ctx.root, &registry)?)
+    };
+    if let Some(exact) = exact {
+        if !cases.iter().any(|case| case == exact) {
+            return Err(CliFailure::operational(
+                "select test case",
+                Some(ctx.root),
+                format!("test case `{exact}` was not found"),
+            ));
+        }
+        if list_only {
+            println!("{exact}");
+        } else if harness_child {
+            let start = std::time::Instant::now();
+            let sequence: u64 = std::env::var("ARANDU_TEST_SEQUENCE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            let temp_root = std::env::var_os("ARANDU_TEST_TEMP_ROOT").map(PathBuf::from);
+            arandu_runtime::testing_runtime::init_test_context(exact, sequence, temp_root);
+            let result = run_exact_test(&ctx, exact);
+            let outcome = arandu_runtime::testing_runtime::finish_test_context();
+
+            let (status, failure) =
+                if outcome.status == arandu_codegen::testing::TestStatus::Skipped {
+                    (
+                        arandu_codegen::testing::TestStatus::Skipped,
+                        outcome.failure,
+                    )
+                } else if outcome.status == arandu_codegen::testing::TestStatus::Failed {
+                    (arandu_codegen::testing::TestStatus::Failed, outcome.failure)
+                } else if let Err(err) = &result {
+                    (
+                        arandu_codegen::testing::TestStatus::Failed,
+                        Some(arandu_codegen::testing::TestFailure::simple(format!(
+                            "{err:?}"
+                        ))),
+                    )
+                } else {
+                    (arandu_codegen::testing::TestStatus::Passed, None)
+                };
+
+            let event = arandu_codegen::testing::TestEventV1 {
+                sequence,
+                id: exact.to_string(),
+                status,
+                duration: start.elapsed(),
+                stdout: arandu_codegen::testing::CapturedOutput {
+                    bytes: Vec::new(),
+                    truncated: false,
+                },
+                stderr: arandu_codegen::testing::CapturedOutput {
+                    bytes: Vec::new(),
+                    truncated: false,
+                },
+                failure,
+                secondary_failures: outcome.secondary_failures,
+                logs: outcome.logs,
+                logs_truncated: outcome.logs_truncated,
+            };
+            let _ = test_runner::send_child_event(sequence, &event);
+            if status == arandu_codegen::testing::TestStatus::Failed {
+                return Err(CliFailure::operational(
+                    "run test case",
+                    None,
+                    "test failed",
+                ));
+            }
+            return Ok(CliSuccess::Done);
+        } else {
+            let passed = test_runner::run_cases(
+                &ctx.root,
+                &ctx.stdlib.path,
+                vec![exact.to_string()],
+                runner,
+            )
+            .map_err(|error| CliFailure::operational("run tests", None, error))?;
+            if !passed {
+                return Err(CliFailure::operational(
+                    "run tests",
+                    None,
+                    "one or more tests failed",
+                ));
+            }
+        }
+    } else if list_only {
+        if runner.format == test_runner::TestOutputFormat::Json {
+            discovered.retain(|case| cases.iter().any(|id| id == &case.id));
+            discovered.sort_by(|left, right| left.id.cmp(&right.id));
+            let report = DiscoveryReport {
+                schema: arandu_codegen::testing::TEST_LIST_PROTOCOL_V1,
+                cases: discovered,
+            };
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).map_err(|error| {
+                    CliFailure::operational("serialize test discovery", None, error.to_string())
+                })?
+            );
+        } else {
+            for case in cases {
+                println!("{case}");
+            }
+        }
+    } else {
+        if runner.format == test_runner::TestOutputFormat::Human {
+            let (harness_manifest, harness_c) = harness.as_ref().ok_or_else(|| {
+                CliFailure::operational("run tests", None, "missing published harness")
+            })?;
+            eprintln!(
+                "test harness: {} cases (manifest={}, c={})",
+                cases.len(),
+                harness_manifest.display(),
+                harness_c.display()
+            );
+        }
+        let passed = test_runner::run_cases(&ctx.root, &ctx.stdlib.path, cases, runner)
+            .map_err(|error| CliFailure::operational("run tests", None, error))?;
+        if !passed {
+            return Err(CliFailure::operational(
+                "run tests",
+                None,
+                "one or more tests failed",
+            ));
+        }
+    }
+    Ok(CliSuccess::Done)
+}
+
+fn cmd_project_bench(
+    start: &Path,
+    flags: &project::ProjectFlags,
+    list_only: bool,
+    exact: Option<&str>,
+    filter: Option<&str>,
+    harness_child: bool,
+    runner: &test_runner::BenchmarkRunnerOptions,
+) -> CliResult {
+    let mut db = arandu_query::DatabaseImpl::new();
+    let ctx = project::load_project(&mut db, start, flags).map_err(|error| {
+        CliFailure::operational("load benchmark project", Some(start.to_path_buf()), error)
+    })?;
+    let sources = project_test_sources(&ctx).map_err(|error| {
+        CliFailure::operational("discover benchmark sources", Some(ctx.root.clone()), error)
+    })?;
+    let mut registry = arandu_codegen::testing::BenchmarkRegistry::default();
+    let mut discovered = Vec::new();
+    for (path, module) in sources {
+        let key = path.to_string_lossy().into_owned();
+        let file = if let Some(existing) = db.as_source_db().resolve_module_path(&key) {
+            existing
+        } else {
+            let text = fs::read_to_string(&path).map_err(|error| {
+                CliFailure::operational(
+                    "read benchmark source",
+                    Some(path.clone()),
+                    error.to_string(),
+                )
+            })?;
+            db.new_file(key, text)
+        };
+        let checked = arandu_query::passes::type_check(&db, file);
+        if checked
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == arandu_middle::Severity::Error)
+        {
+            return Err(CliFailure::diagnostics(
+                checked.diagnostics.clone(),
+                Some(path),
+            ));
+        }
+        let text = file.text(&db);
+        for case in arandu_query::file_benchmark_manifest(&db, file).iter() {
+            let id = format!("{}::{module}::{}", ctx.name, case.name);
+            let (line, column_utf16) = discovery_position(text, case.span.start);
+            discovered.push(DiscoveryCase {
+                id: id.clone(),
+                path: discovery_path(&ctx.root, &path),
+                line,
+                column_utf16,
+            });
+            registry.insert(arandu_codegen::testing::BenchmarkEntry {
+                id,
+                function: case.name.to_string(),
+            });
+        }
+    }
+    let mut cases = registry
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect::<Vec<_>>();
+    if let Some(filter) = filter {
+        cases.retain(|case| case.contains(filter));
+    }
+    if let Some(exact) = exact {
+        if !cases.iter().any(|case| case == exact) {
+            return Err(CliFailure::operational(
+                "select benchmark",
+                Some(ctx.root),
+                format!("benchmark `{exact}` was not found"),
+            ));
+        }
+        cases.retain(|case| case == exact);
+    }
+    if list_only {
+        if runner.format_json {
+            discovered.retain(|case| cases.iter().any(|id| id == &case.id));
+            discovered.sort_by(|left, right| left.id.cmp(&right.id));
+            let report = DiscoveryReport {
+                schema: arandu_codegen::testing::BENCH_LIST_PROTOCOL_V1,
+                cases: discovered,
+            };
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).map_err(|error| {
+                    CliFailure::operational(
+                        "serialize benchmark discovery",
+                        None,
+                        error.to_string(),
+                    )
+                })?
+            );
+        } else {
+            for case in cases {
+                println!("{case}");
+            }
+        }
+        return Ok(CliSuccess::Done);
+    }
+    if harness_child {
+        let exact = exact.ok_or_else(|| {
+            CliFailure::operational("run benchmark child", None, "missing exact benchmark id")
+        })?;
+        let sequence = std::env::var("ARANDU_BENCH_SEQUENCE")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0);
+        let config = arandu_codegen::testing::BenchmarkConfigV1 {
+            warmup_ns: std::env::var("ARANDU_BENCH_WARMUP_NS")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(runner.config.warmup_ns),
+            measurement_ns: std::env::var("ARANDU_BENCH_MEASUREMENT_NS")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(runner.config.measurement_ns),
+            samples: std::env::var("ARANDU_BENCH_SAMPLES")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(runner.config.samples),
+        };
+        arandu_runtime::testing_runtime::init_benchmark_context(exact, sequence, config.clone());
+        let execution = run_exact_benchmark(&ctx, exact);
+        let mut event = arandu_runtime::testing_runtime::finish_benchmark_context().unwrap_or(
+            arandu_codegen::testing::BenchmarkEventV1 {
+                sequence,
+                id: exact.to_string(),
+                config,
+                samples: Vec::new(),
+                stdout: arandu_codegen::testing::CapturedOutput::default(),
+                stderr: arandu_codegen::testing::CapturedOutput::default(),
+                failure: Some("benchmark context did not produce a result".to_string()),
+            },
+        );
+        if let Err(error) = execution {
+            event.failure = Some(format!("{error:?}"));
+        }
+        test_runner::send_benchmark_child_event(sequence, &event)
+            .map_err(|error| CliFailure::operational("send benchmark event", None, error))?;
+        if event.failure.is_some() {
+            return Err(CliFailure::operational(
+                "run benchmark",
+                None,
+                "benchmark failed",
+            ));
+        }
+        return Ok(CliSuccess::Done);
+    }
+
+    let (manifest, c_source) = artifact::publish_benchmark_harness(&ctx.root, &registry)?;
+    if !runner.format_json {
+        eprintln!(
+            "benchmark harness: {} cases (manifest={}, c={})",
+            cases.len(),
+            manifest.display(),
+            c_source.display()
+        );
+    }
+    let outcome = test_runner::run_benchmarks(&ctx.root, &ctx.stdlib.path, cases, runner)
+        .map_err(|error| CliFailure::operational("run benchmarks", None, error))?;
+    Ok(CliSuccess::ProgramExit(outcome.exit_code()))
+}
+
+fn run_exact_benchmark(ctx: &project::ProjectContext, exact: &str) -> CliResult {
+    let function = exact.rsplit("::").next().unwrap_or_default();
+    let sources = project_test_sources(ctx).map_err(|error| {
+        CliFailure::operational("discover benchmark sources", Some(ctx.root.clone()), error)
+    })?;
+    for (path, module) in sources {
+        let target = format!("{}::{}::{function}", ctx.name, module);
+        if exact != target {
+            continue;
+        }
+        let db = arandu_query::DatabaseImpl::new();
+        db.set_stdlib_root(ctx.stdlib.path.clone());
+        let (file, filepath) =
+            open_entry_file(&db, &mut arandu_base::SourceRegistry::default(), &path);
+        let artifacts = pipeline_lower(&db, file, &filepath);
+        let backend = arandu_backend_cranelift::CraneliftBackend::try_new()
+            .map_err(|diagnostic| CliFailure::diagnostics([diagnostic], Some(path.clone())))?;
+        let output = arandu_semantics::CodegenBackend::compile(
+            backend,
+            &artifacts.amir,
+            artifacts.type_check.symbols.as_ref(),
+            artifacts.type_check.type_info.as_ref(),
+        )
+        .map_err(|diagnostic| CliFailure::diagnostics([diagnostic], Some(path.clone())))?;
+        unsafe {
+            if let Some(benchmark_fn) =
+                arandu_semantics::CompiledCode::get_fn::<unsafe fn(*mut i64)>(&output, function)
+            {
+                let mut handle = 1_i64;
+                benchmark_fn(&raw mut handle);
+                return Ok(CliSuccess::Done);
+            }
+        }
+        return Err(CliFailure::operational(
+            "run benchmark",
+            Some(path),
+            format!("benchmark function `{function}` is not callable"),
+        ));
+    }
+    Err(CliFailure::operational(
+        "run benchmark",
+        Some(ctx.root.clone()),
+        format!("benchmark `{exact}` could not be compiled"),
+    ))
+}
+
+fn run_exact_test(ctx: &project::ProjectContext, exact: &str) -> CliResult {
+    let function = exact.rsplit("::").next().unwrap_or_default();
+    let sources = project_test_sources(ctx).map_err(|error| {
+        CliFailure::operational("discover test sources", Some(ctx.root.clone()), error)
+    })?;
+    for (path, module) in sources {
+        let target = format!("{}::{}::{}", ctx.name, module, function);
+        if !exact.eq(&target) {
+            continue;
+        }
+        let db = arandu_query::DatabaseImpl::new();
+        db.set_stdlib_root(ctx.stdlib.path.clone());
+        let (file, filepath) =
+            open_entry_file(&db, &mut arandu_base::SourceRegistry::default(), &path);
+        let artifacts = pipeline_lower(&db, file, &filepath);
+        let backend = arandu_backend_cranelift::CraneliftBackend::try_new()
+            .map_err(|diag| CliFailure::diagnostics([diag], Some(path.clone())))?;
+        let output = arandu_semantics::CodegenBackend::compile(
+            backend,
+            &artifacts.amir,
+            artifacts.type_check.symbols.as_ref(),
+            artifacts.type_check.type_info.as_ref(),
+        )
+        .map_err(|diag| CliFailure::diagnostics([diag], Some(path.clone())))?;
+        let return_type = artifacts
+            .amir
+            .funcs
+            .iter()
+            .find(|func_def| {
+                artifacts
+                    .type_check
+                    .symbols
+                    .get(func_def.symbol)
+                    .name
+                    .as_str()
+                    == function
+            })
+            .map(|func_def| {
+                artifacts
+                    .type_check
+                    .type_info
+                    .type_interner
+                    .resolve(func_def.return_type)
+            });
+        unsafe {
+            if matches!(return_type, Some(arandu_semantics::types::ArType::Void)) {
+                if let Some(test_fn) =
+                    arandu_semantics::CompiledCode::get_fn::<unsafe fn()>(&output, function)
+                {
+                    test_fn();
+                    return Ok(CliSuccess::Done);
+                }
+            } else if let Some(arandu_semantics::types::ArType::Result(ok, _)) = return_type
+                && matches!(
+                    artifacts.type_check.type_info.type_interner.resolve(ok),
+                    arandu_semantics::types::ArType::Void
+                )
+                && let Some(test_fn) = arandu_semantics::CompiledCode::get_fn::<
+                    unsafe fn() -> *mut u8,
+                >(&output, function)
+            {
+                let result = test_fn();
+                if result.is_null() || *(result.cast::<usize>()) == 0 {
+                    return Ok(CliSuccess::Done);
+                }
+                return Err(CliFailure::operational(
+                    "run test case",
+                    Some(path),
+                    "test returned Result::Err",
+                ));
+            }
+        }
+        return Err(CliFailure::operational(
+            "run test case",
+            Some(path),
+            format!("test function `{function}` is not callable as `fn() -> void`"),
+        ));
+    }
+    Err(CliFailure::operational(
+        "run test case",
+        Some(ctx.root.clone()),
+        format!("test case `{exact}` could not be compiled"),
+    ))
 }
 
 fn cmd_project_audit(start: &Path, flags: &project::ProjectFlags) -> CliResult {

@@ -250,6 +250,7 @@ jobs:
         shell: bash
         env:
           ARANDU_LSP_TEST_PATH: ${{ runner.temp }}/arandu-sdk/current/bin/arandu-lsp
+          ARANDU_CLI_TEST_PATH: ${{ runner.temp }}/arandu-sdk/current/bin/arandu
         run: xvfb-run -a npm run test:installed
 
       - name: L3 / installed VSIX + installed SDK (macOS)
@@ -257,6 +258,7 @@ jobs:
         working-directory: editors/vscode
         env:
           ARANDU_LSP_TEST_PATH: ${{ runner.temp }}/arandu-sdk/current/bin/arandu-lsp
+          ARANDU_CLI_TEST_PATH: ${{ runner.temp }}/arandu-sdk/current/bin/arandu
         run: npm run test:installed
 
       - name: L3 / installed VSIX + installed SDK (Windows)
@@ -265,6 +267,7 @@ jobs:
         shell: pwsh
         env:
           ARANDU_LSP_TEST_PATH: ${{ runner.temp }}/arandu-sdk/arandu-${{ env.VERSION }}/bin/arandu-lsp.exe
+          ARANDU_CLI_TEST_PATH: ${{ runner.temp }}/arandu-sdk/arandu-${{ env.VERSION }}/bin/arandu.exe
         run: npm run test:installed
 
       - name: S3 / reinstall and reject bad packages (Unix)

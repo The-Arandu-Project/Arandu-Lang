@@ -17,6 +17,38 @@ impl<'a> CEmitter<'a> {
                 let op_str = self.format_operand(op, func);
                 let _ = write!(&mut self.output, "{}", op_str);
             }
+            AmirRvalue::BlackBox { value, .. } => {
+                let operand = self.format_operand(value, func);
+                if matches!(expected_ar_type, ArType::Primitive(Primitive::Str)) {
+                    let _ = write!(
+                        &mut self.output,
+                        "({{ volatile {expected_c_type} opaque = ({operand}); opaque; }})"
+                    );
+                } else if expected_c_type == "double" || expected_c_type == "float" {
+                    let _ = write!(
+                        &mut self.output,
+                        "ar_bench_black_box_f64((double)({operand}))"
+                    );
+                } else if expected_c_type.ends_with('*') || expected_c_type == "void*" {
+                    let _ = write!(
+                        &mut self.output,
+                        "({expected_c_type})ar_bench_black_box_ptr((void*)({operand}))"
+                    );
+                } else if matches!(
+                    expected_ar_type,
+                    ArType::Primitive(_) | ArType::IntLiteral | ArType::FloatLiteral
+                ) {
+                    let _ = write!(
+                        &mut self.output,
+                        "({expected_c_type})ar_bench_black_box_i64((int64_t)({operand}))"
+                    );
+                } else {
+                    let _ = write!(
+                        &mut self.output,
+                        "({{ volatile {expected_c_type} opaque = ({operand}); opaque; }})"
+                    );
+                }
+            }
             AmirRvalue::Binary { op, left, right } => {
                 if matches!(op, BinaryOp::RangeExclusive | BinaryOp::RangeInclusive) {
                     let left_str = self.format_operand(left, func);

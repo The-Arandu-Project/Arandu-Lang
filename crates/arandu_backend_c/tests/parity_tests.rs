@@ -79,6 +79,28 @@ fn c_backend_genref_runtime_has_monotonic_type_erased_storage() {
 }
 
 #[test]
+fn c_backend_emits_opaque_black_box_barrier() {
+    let (amir, tc) = compile_src(
+        r#"
+        func blackBox<T>(value: T): T { return value }
+        func main(): int {
+            return blackBox<int>(42)
+        }
+        "#,
+    );
+    let emitted = emit_c(&amir, &tc);
+    assert!(emitted.contains("AR_BENCH_NOINLINE"));
+    assert!(emitted.contains("ar_bench_black_box_i64((int64_t)("));
+    test_execution_parity(
+        "black_box_barrier",
+        r#"
+        func blackBox<T>(value: T): T { return value }
+        func main(): int { return blackBox<int>(42) }
+        "#,
+    );
+}
+
+#[test]
 fn explicit_destructor_runs_through_both_backend_pipelines() {
     test_execution_parity(
         "destructor_epilogue",
@@ -271,6 +293,44 @@ int main() {
         expected, actual_result,
         "Execution mismatch for {}! Cranelift={}, C={}",
         name, expected, actual_result
+    );
+}
+
+#[test]
+fn generated_test_registry_entrypoint_compiles_and_executes() {
+    let (amir, tc) = compile_src("func smoke(): void {}");
+    let mut source = emit_c(&amir, &tc);
+    let mut registry = arandu_codegen::testing::TestRegistry::default();
+    registry.insert(arandu_codegen::testing::TestEntry {
+        id: "sample::test::smoke::smoke".into(),
+        function: "smoke".into(),
+    });
+    source.push_str(&registry.emit_c_entrypoint());
+
+    let out_dir = env::temp_dir().join("arandu_c_tests");
+    fs::create_dir_all(&out_dir).unwrap();
+    let c_file = out_dir.join("generated_test_harness.c");
+    let exe_file = out_dir.join("generated_test_harness.exe");
+    fs::write(&c_file, source).unwrap();
+
+    let cc = env::var("CC").unwrap_or_else(|_| "gcc".to_string());
+    let compiled = c_compiler(&cc)
+        .arg(&c_file)
+        .arg("-o")
+        .arg(&exe_file)
+        .arg("-lm")
+        .status()
+        .unwrap_or_else(|_| panic!("failed to invoke C compiler '{cc}'"));
+    assert!(
+        compiled.success(),
+        "generated C test harness did not compile"
+    );
+    let status = Command::new(&exe_file)
+        .status()
+        .expect("failed to execute generated C test harness");
+    assert!(
+        status.success(),
+        "generated C test harness failed: {status}"
     );
 }
 

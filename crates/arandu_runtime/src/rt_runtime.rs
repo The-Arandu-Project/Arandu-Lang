@@ -152,7 +152,7 @@ pub struct ArFatStr {
     pub len: i64,
 }
 
-fn fat_str_from_string(s: String) -> ArFatStr {
+pub(crate) fn fat_str_from_string(s: String) -> ArFatStr {
     let len = s.len() as i64;
     // Process-lifetime leak (same policy as ToStr / string interp).
     let boxed = s.into_boxed_str();

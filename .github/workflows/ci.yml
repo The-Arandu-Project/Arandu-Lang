@@ -54,6 +54,15 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: 4. Test
         run: cargo test --workspace --locked
+      - name: SL_T portable test report
+        run: cargo run --locked -p arandu_cli -- test tests/projects/slt5_product --format junit --output target/sl-t/test-results.xml
+      - name: Publish SL_T JUnit evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sl-t-junit-${{ github.sha }}
+          path: target/sl-t/test-results.xml
+          if-no-files-found: error
+          retention-days: 14
       - name: 5. Diagnostic docs
         run: cargo run --locked -p xtask -- check-diag-docs
       - name: 6. Rustdoc

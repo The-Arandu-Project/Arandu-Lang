@@ -160,7 +160,7 @@ arandu_std
  ├─ json         # Parser e serializador JSON ultra rápido, stream-based, cache-friendly
  ├─ xml          # Parser XML minimalista focado em conformidade e velocidade
  ├─ crypto       # Criptografia modular (hashes, cifras, TLS/X.509)
- ├─ testing      # Módulo integrado para testes de unidade, testes integrados e benchmarks nativos
+ ├─ testing      # Testes e benchmarks nativos; ver arandu-testing-benchmark-harness-v0.1.md
  ├─ os           # Módulos específicos de sistema operacional (Linux, Windows, macOS)
  │   ├─ descriptors # Handles puros, file descriptors, pipe descriptors
  │   ├─ memory      # Controle avançado de memória virtual (mmap, VirtualAlloc, commit/reserve)

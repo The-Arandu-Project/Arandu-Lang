@@ -87,13 +87,16 @@ dependencies = [
  "arandu_backend_c",
  "arandu_backend_cranelift",
  "arandu_base",
+ "arandu_codegen",
  "arandu_fmt",
  "arandu_lexer",
  "arandu_middle",
  "arandu_parser",
  "arandu_query",
+ "arandu_runtime",
  "arandu_semantics",
  "blake3",
+ "libc",
  "miette",
  "notify",
  "notify-debouncer-full",
@@ -112,6 +115,8 @@ name = "arandu_codegen"
 version = "0.1.0-rc.4"
 dependencies = [
  "arandu_middle",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -254,6 +259,8 @@ dependencies = [
 name = "arandu_runtime"
 version = "0.1.0-rc.4"
 dependencies = [
+ "arandu_codegen",
+ "blake3",
  "io-uring",
  "libc",
  "windows-sys 0.60.2",
@@ -2080,6 +2087,7 @@ dependencies = [
  "arandu_middle",
  "arandu_query",
  "salsa",
+ "serde_json",
 ]
 
 [[package]]

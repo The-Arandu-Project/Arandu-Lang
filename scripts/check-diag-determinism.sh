@@ -18,7 +18,7 @@ normalize() {
   # CARGO_TERM_COLOR=always (CI) injects CSI sequences around "ok"/"FAILED".
   # Collapse suite summaries to fixed tokens so "finished in Xs" never diffs.
   sed -E 's/\x1B\[[0-9;]*[A-Za-z]//g' \
-    | grep -E '^(test result:|error\[|error:)' \
+    | { grep -E '^(test result:|error\[|error:)' || true; } \
     | sed -E \
       -e 's/test result: ok\..*/test result: ok./' \
       -e 's/test result: FAILED\..*/test result: FAILED./' \

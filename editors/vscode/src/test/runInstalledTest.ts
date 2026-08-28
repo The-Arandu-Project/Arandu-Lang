@@ -20,6 +20,10 @@ async function main(): Promise<void> {
     const serverPath = process.env.ARANDU_LSP_TEST_PATH
         ? path.resolve(process.env.ARANDU_LSP_TEST_PATH)
         : path.join(repositoryRoot, 'target', 'debug', serverName);
+    const cliName = process.platform === 'win32' ? 'arandu_cli.exe' : 'arandu_cli';
+    const aranduCliPath = process.env.ARANDU_CLI_TEST_PATH
+        ? path.resolve(process.env.ARANDU_CLI_TEST_PATH)
+        : path.join(repositoryRoot, 'target', 'debug', cliName);
     const userDataPath = path.join(extensionRoot, '.vscode-test', `installed-user-${process.pid}`);
     const extensionsPath = path.join(extensionRoot, '.vscode-test', `installed-extensions-${process.pid}`);
 
@@ -28,6 +32,9 @@ async function main(): Promise<void> {
     }
     if (!fs.existsSync(serverPath)) {
         throw new Error(`Arandu LSP test binary missing: ${serverPath}`);
+    }
+    if (!fs.existsSync(aranduCliPath)) {
+        throw new Error(`Arandu CLI test binary missing: ${aranduCliPath}`);
     }
 
     const vscodeExecutablePath = await downloadAndUnzipVSCode(VSCODE_VERSION);
@@ -73,6 +80,7 @@ async function main(): Promise<void> {
             ],
             extensionTestsEnv: {
                 ARANDU_LSP_TEST_PATH: serverPath,
+                ARANDU_CLI_TEST_PATH: aranduCliPath,
                 ARANDU_LSP_TEST_ALLOW_CRASH: '1',
                 ARANDU_EXPECT_INSTALLED_EXTENSION: '1'
             }

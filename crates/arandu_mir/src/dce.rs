@@ -194,6 +194,7 @@ fn has_side_effect(stmt: &AmirStmt) -> bool {
                 | AmirRvalue::GenSet { .. }
                 | AmirRvalue::GenUpsert { .. }
                 | AmirRvalue::GenRemove { .. }
+                | AmirRvalue::BlackBox { .. }
         ),
         AmirStmt::Nop => false,
     }
@@ -451,6 +452,29 @@ mod tests {
         );
         assert!(!mark_sweep_dce(&mut f).unwrap());
         assert_eq!(f.blocks[0].statements.len, 1);
+    }
+
+    #[test]
+    fn black_box_is_an_observable_root_and_keeps_its_input_definition() {
+        let int_ty = intern_ty(ArType::Primitive(Primitive::Int));
+        let mut f = func(
+            vec![
+                AmirStmt::Assign {
+                    lhs: TempId::from_usize(1),
+                    rhs: AmirRvalue::Use(AmirOperand::Constant(AmirConstant::Bool(true))),
+                },
+                AmirStmt::Assign {
+                    lhs: TempId::from_usize(2),
+                    rhs: AmirRvalue::BlackBox {
+                        value: AmirOperand::Copy(TempId::from_usize(1)),
+                        value_ty: int_ty,
+                    },
+                },
+            ],
+            vec![int_temp(0), int_temp(1), int_temp(2)],
+        );
+        assert!(!mark_sweep_dce(&mut f).unwrap());
+        assert_eq!(f.blocks[0].statements.len, 2);
     }
 
     /// Return slot `_0` is assigned on multiple paths (not SSA). All defs must
