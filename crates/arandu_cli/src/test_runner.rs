@@ -1314,9 +1314,10 @@ fn kill_process_tree(child: &mut Child) {
     #[cfg(unix)]
     {
         if let Ok(pid_i32) = i32::try_from(pid) {
-            unsafe {
-                libc::kill(-pid_i32, libc::SIGKILL);
-            }
+            // SAFETY: `pid_i32` is the checked process id returned by `Child`.
+            // The child is spawned as the leader of its own process group, so
+            // `killpg` targets only that test and its descendants.
+            let _ = unsafe { libc::killpg(pid_i32, libc::SIGKILL) };
         }
     }
     #[cfg(windows)]
@@ -1333,10 +1334,12 @@ fn kill_process_tree(child: &mut Child) {
 
 #[cfg(unix)]
 fn create_ipc_pipe_pair() -> Result<(impl Read + Send + 'static, Stdio), String> {
+    use std::os::fd::OwnedFd;
     use std::os::unix::net::UnixStream;
     let (parent_stream, child_stream) =
         UnixStream::pair().map_err(|e| format!("unix socketpair failed: {e}"))?;
-    Ok((parent_stream, Stdio::from(child_stream)))
+    let child_fd = OwnedFd::from(child_stream);
+    Ok((parent_stream, Stdio::from(child_fd)))
 }
 
 #[cfg(windows)]

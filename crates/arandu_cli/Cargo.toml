@@ -37,6 +37,9 @@ petgraph = { workspace = true }
 notify = "8.2.0"
 notify-debouncer-full = "0.7.0"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.189"
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.60.2", features = [
     "Win32_Storage_FileSystem",

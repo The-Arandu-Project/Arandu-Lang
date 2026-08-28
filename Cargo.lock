@@ -96,6 +96,7 @@ dependencies = [
  "arandu_runtime",
  "arandu_semantics",
  "blake3",
+ "libc",
  "miette",
  "notify",
  "notify-debouncer-full",

@@ -186,6 +186,7 @@
         "test:extension": "node ./out/test/runTest.js",
         "test:installed": "npm run package:vsix && node ./out/test/runInstalledTest.js",
         "package:check": "vsce ls",
+        "prepackage:vsix": "node -e \"require('node:fs').mkdirSync('.vscode-test', { recursive: true })\"",
         "package:vsix": "vsce package --no-dependencies --out .vscode-test/arandu-lang.vsix"
     },
     "dependencies": {
