@@ -2,40 +2,22 @@ import * as childProcess from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-
-interface TestJsonReport {
-    readonly schema: string;
-    readonly cases: readonly TestJsonCase[];
-}
-
-interface TestJsonCase {
-    readonly id: string;
-    readonly status: 'passed' | 'failed' | 'skipped' | 'timed_out' | 'crashed';
-    readonly duration_ms: number;
-    readonly stdout: string;
-    readonly stderr: string;
-    readonly failure?: { readonly message?: string; readonly location?: string };
-}
+import {
+    BENCH_LIST_PROTOCOL_V1,
+    TEST_LIST_PROTOCOL_V1,
+    TestJsonCase,
+    parseDiscoveryReport,
+    parseTestReport
+} from './testingProtocol';
 
 interface DiscoveredCase {
     readonly canonicalId: string;
     readonly root: string;
 }
 
-interface DiscoveryReport {
-    readonly schema: string;
-    readonly cases: readonly DiscoveryJsonCase[];
-}
-
-interface DiscoveryJsonCase {
-    readonly id: string;
-    readonly path: string;
-    readonly line: number;
-    readonly column_utf16: number;
-}
-
 export interface TestingIntegration extends vscode.Disposable {
     getDiscoveredCount(): number;
+    runFirstForTest(): Promise<string>;
 }
 
 export function createTestingIntegration(
@@ -66,7 +48,7 @@ export function createTestingIntegration(
                 output.warn(`Test discovery failed for ${folder.name}: ${listed.stderr.trim()}`);
                 continue;
             }
-            const discovery = parseDiscoveryReport(listed.stdout, 'arandu.test-list/v1');
+            const discovery = parseDiscoveryReport(listed.stdout, TEST_LIST_PROTOCOL_V1);
             if (!discovery) {
                 output.warn(`Test discovery returned an invalid report for ${folder.name}`);
                 continue;
@@ -136,7 +118,26 @@ export function createTestingIntegration(
         dispose: (): void => {
             disposable.dispose();
         },
-        getDiscoveredCount: (): number => cases.size
+        getDiscoveredCount: (): number => cases.size,
+        runFirstForTest: async (): Promise<string> => {
+            const discovered = cases.values().next().value;
+            if (!discovered) {
+                throw new Error('No discovered Arandu test is available');
+            }
+            const cli = discoverCli(context, discovered.root);
+            if (!cli) {
+                throw new Error('Could not find the Arandu CLI');
+            }
+            const result = await runCli(cli, [
+                'test', discovered.root, '--exact', discovered.canonicalId, '--format', 'json'
+            ]);
+            const report = parseTestReport(result.stdout);
+            const testCase = report?.cases.find(entry => entry.id === discovered.canonicalId);
+            if (!testCase) {
+                throw new Error(result.stderr.trim() || 'Invalid Arandu test report');
+            }
+            return testCase.status;
+        }
     };
 }
 
@@ -250,7 +251,7 @@ async function runBenchmark(
         output.show(true);
         return;
     }
-    const discovery = parseDiscoveryReport(listed.stdout, 'arandu.bench-list/v1');
+    const discovery = parseDiscoveryReport(listed.stdout, BENCH_LIST_PROTOCOL_V1);
     if (!discovery) {
         output.error('Benchmark discovery returned an invalid report.');
         output.show(true);
@@ -364,30 +365,6 @@ function runCli(
             });
         });
     });
-}
-
-function parseTestReport(stdout: string): TestJsonReport | undefined {
-    try {
-        const parsed = JSON.parse(stdout) as Partial<TestJsonReport>;
-        if (parsed.schema !== 'arandu.test/v1' || !Array.isArray(parsed.cases)) {
-            return undefined;
-        }
-        return parsed as TestJsonReport;
-    } catch {
-        return undefined;
-    }
-}
-
-function parseDiscoveryReport(stdout: string, schema: string): DiscoveryReport | undefined {
-    try {
-        const parsed = JSON.parse(stdout) as Partial<DiscoveryReport>;
-        if (parsed.schema !== schema || !Array.isArray(parsed.cases)) {
-            return undefined;
-        }
-        return parsed as DiscoveryReport;
-    } catch {
-        return undefined;
-    }
 }
 
 function testMessage(testCase: TestJsonCase): vscode.TestMessage {

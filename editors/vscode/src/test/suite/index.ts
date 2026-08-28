@@ -7,6 +7,7 @@ const TIMEOUT_MS = 10_000;
 interface AranduExtensionApi {
     getRuntimeState(): { state: string; observedCrashCount: number };
     getDiscoveredTestCount(): number;
+    testRunFirstDiscovered(): Promise<string>;
     testCrashServer(): Promise<void>;
 }
 
@@ -17,6 +18,11 @@ export async function run(): Promise<void> {
 
     const configuration = vscode.workspace.getConfiguration('arandu');
     await configuration.update('server.path', serverPath, vscode.ConfigurationTarget.Global);
+    const cliPath = process.env.ARANDU_CLI_TEST_PATH;
+    if (cliPath) {
+        assert.ok(fs.existsSync(cliPath), `arandu CLI test binary missing: ${cliPath}`);
+        await configuration.update('cli.path', cliPath, vscode.ConfigurationTarget.Global);
+    }
     try {
         const workspace = vscode.workspace.workspaceFolders?.[0];
         assert.ok(workspace, 'Extension Host test requires a workspace');
@@ -43,6 +49,7 @@ export async function run(): Promise<void> {
         assert.ok(commands.includes('arandu.refreshTests'));
         assert.ok(commands.includes('arandu.runBenchmark'));
         await poll(() => api.getDiscoveredTestCount() > 0 ? true : undefined);
+        assert.equal(await api.testRunFirstDiscovered(), 'passed');
 
         const diagnostics = await poll(() => {
             const current = vscode.languages.getDiagnostics(uri);
@@ -117,6 +124,7 @@ export async function run(): Promise<void> {
         assert.ok(afterCrashRecovery.items.length > 0, 'completion must recover after a real server crash');
     } finally {
         await configuration.update('server.path', undefined, vscode.ConfigurationTarget.Global);
+        await configuration.update('cli.path', undefined, vscode.ConfigurationTarget.Global);
         await vscode.commands.executeCommand('workbench.action.closeAllEditors');
     }
 }

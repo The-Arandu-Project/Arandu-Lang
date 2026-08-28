@@ -2,9 +2,9 @@
 //! and deterministic reporting.
 
 use arandu_codegen::testing::{
-    BENCH_PROTOCOL_V1, BenchmarkConfigV1, BenchmarkEventV1, CapturedOutput, TEST_PROTOCOL_V1,
-    TestEventV1, TestFailure, TestStatus, read_benchmark_frame, read_frame, write_benchmark_frame,
-    write_frame,
+    BENCH_BASELINE_PROTOCOL_V1, BENCH_PROTOCOL_V1, BenchmarkConfigV1, BenchmarkEventV1,
+    CapturedOutput, TEST_PROTOCOL_V1, TestEventV1, TestFailure, TestStatus, read_benchmark_frame,
+    read_frame, write_benchmark_frame, write_frame,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -262,13 +262,20 @@ pub fn send_benchmark_child_event(sequence: u64, event: &BenchmarkEventV1) -> Re
 
 pub fn run_benchmarks(
     project: &Path,
+    stdlib_root: &Path,
     cases: Vec<String>,
     options: &BenchmarkRunnerOptions,
 ) -> Result<BenchmarkRunOutcome, String> {
     let mut events = Vec::with_capacity(cases.len());
     for (index, id) in cases.iter().enumerate() {
         let sequence = u64::try_from(index).map_err(|_| "benchmark sequence overflow")?;
-        events.push(run_benchmark_case(project, id, sequence, options));
+        events.push(run_benchmark_case(
+            project,
+            stdlib_root,
+            id,
+            sequence,
+            options,
+        ));
     }
     events.sort_by(|left, right| left.id.cmp(&right.id));
     if events.iter().any(|event| event.failure.is_some()) {
@@ -282,6 +289,7 @@ pub fn run_benchmarks(
 
 fn run_benchmark_case(
     project: &Path,
+    stdlib_root: &Path,
     id: &str,
     sequence: u64,
     options: &BenchmarkRunnerOptions,
@@ -315,6 +323,7 @@ fn run_benchmark_case(
             options.config.measurement_ns.to_string(),
         )
         .env("ARANDU_BENCH_SAMPLES", options.config.samples.to_string())
+        .env("ARANDU_STDLIB", stdlib_root)
         .stdin(child_stdio)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -752,7 +761,7 @@ fn apply_baseline(
                 )
             })?;
             let document = BenchmarkBaselineFile {
-                schema: "arandu.bench-baseline/v1".to_string(),
+                schema: BENCH_BASELINE_PROTOCOL_V1.to_string(),
                 name: name.clone(),
                 report: current.clone(),
             };
@@ -813,7 +822,7 @@ fn apply_baseline(
                 serde_json::from_slice(&bytes).map_err(|error| {
                     format!("invalid benchmark baseline {}: {error}", path.display())
                 })?;
-            if baseline.schema != "arandu.bench-baseline/v1" || baseline.name != *name {
+            if baseline.schema != BENCH_BASELINE_PROTOCOL_V1 || baseline.name != *name {
                 return Err(format!(
                     "benchmark baseline {} has an invalid contract",
                     path.display()
@@ -1043,6 +1052,7 @@ fn get_child_ipc_writer() -> Result<impl Write, String> {
 
 pub fn run_cases(
     project: &Path,
+    stdlib_root: &Path,
     mut cases: Vec<String>,
     options: &RunnerOptions,
 ) -> Result<bool, String> {
@@ -1066,6 +1076,7 @@ pub fn run_cases(
         let stop = Arc::clone(&stop);
         let sender = sender.clone();
         let project = project.to_path_buf();
+        let stdlib_root = stdlib_root.to_path_buf();
         let timeout = options.timeout;
         let fail_fast = options.fail_fast;
 
@@ -1079,7 +1090,7 @@ pub fn run_cases(
                 let Some(id) = cases.get(index) else { break };
                 let sequence = u64::try_from(index).unwrap_or(u64::MAX);
 
-                let event = run_case(&project, id, timeout, sequence);
+                let event = run_case(&project, &stdlib_root, id, timeout, sequence);
                 if !matches!(event.status, TestStatus::Passed | TestStatus::Skipped) {
                     stop.store(true, Ordering::Release);
                 }
@@ -1104,7 +1115,13 @@ pub fn run_cases(
         .all(|event| matches!(event.status, TestStatus::Passed | TestStatus::Skipped)))
 }
 
-fn run_case(project: &Path, id: &str, timeout: Duration, sequence: u64) -> TestEventV1 {
+fn run_case(
+    project: &Path,
+    stdlib_root: &Path,
+    id: &str,
+    timeout: Duration,
+    sequence: u64,
+) -> TestEventV1 {
     let started = Instant::now();
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1161,6 +1178,7 @@ fn run_case(project: &Path, id: &str, timeout: Duration, sequence: u64) -> TestE
         ])
         .env("ARANDU_TEST_SEQUENCE", sequence.to_string())
         .env("ARANDU_TEST_TEMP_ROOT", &temp_root)
+        .env("ARANDU_STDLIB", stdlib_root)
         .stdin(child_stdio)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

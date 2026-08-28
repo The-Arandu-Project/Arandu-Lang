@@ -35,6 +35,7 @@ interface RuntimeState {
 interface AranduExtensionApi {
     getRuntimeState(): RuntimeState;
     getDiscoveredTestCount(): number;
+    testRunFirstDiscovered(): Promise<string>;
     testCrashServer(): Promise<void>;
 }
 
@@ -51,6 +52,13 @@ async function testCrashServer(): Promise<void> {
         throw new Error('The crash hook is available only in the Extension Host recovery test');
     }
     await client.sendNotification('arandu/testCrash');
+}
+
+async function testRunFirstDiscovered(): Promise<string> {
+    if (process.env.ARANDU_LSP_TEST_ALLOW_CRASH !== '1' || !testingIntegration) {
+        throw new Error('The execution hook is available only in Extension Host tests');
+    }
+    return testingIntegration.runFirstForTest();
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<AranduExtensionApi | undefined> {
@@ -77,7 +85,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Arandu
 
     await restartLanguageServer(context, fileWatcher);
     return process.env.ARANDU_LSP_TEST_ALLOW_CRASH === '1'
-        ? { getRuntimeState, getDiscoveredTestCount, testCrashServer }
+        ? { getRuntimeState, getDiscoveredTestCount, testRunFirstDiscovered, testCrashServer }
         : undefined;
 }
 

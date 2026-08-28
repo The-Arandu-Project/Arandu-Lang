@@ -332,6 +332,10 @@ SL_T.6 com o SDK público.
 
 ### SL_T.6 — Campanha Gold
 
+Plano executável detalhado: [`arandu-testing-slt6-plan.md`](arandu-testing-slt6-plan.md).
+
+**Estado:** implementado localmente; promoção aguarda matriz nativa e soak.
+
 - E2E nativo de package → test/bench em Windows, Linux e macOS, fora do repo e
   usando o SDK público.
 - Campanhas adversariais de protocolo, filesystem, concorrência, recovery,

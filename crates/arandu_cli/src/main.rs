@@ -1533,8 +1533,13 @@ fn cmd_project_test_list(
             }
             return Ok(CliSuccess::Done);
         } else {
-            let passed = test_runner::run_cases(&ctx.root, vec![exact.to_string()], runner)
-                .map_err(|error| CliFailure::operational("run tests", None, error))?;
+            let passed = test_runner::run_cases(
+                &ctx.root,
+                &ctx.stdlib.path,
+                vec![exact.to_string()],
+                runner,
+            )
+            .map_err(|error| CliFailure::operational("run tests", None, error))?;
             if !passed {
                 return Err(CliFailure::operational(
                     "run tests",
@@ -1548,7 +1553,7 @@ fn cmd_project_test_list(
             discovered.retain(|case| cases.iter().any(|id| id == &case.id));
             discovered.sort_by(|left, right| left.id.cmp(&right.id));
             let report = DiscoveryReport {
-                schema: "arandu.test-list/v1",
+                schema: arandu_codegen::testing::TEST_LIST_PROTOCOL_V1,
                 cases: discovered,
             };
             println!(
@@ -1574,7 +1579,7 @@ fn cmd_project_test_list(
                 harness_c.display()
             );
         }
-        let passed = test_runner::run_cases(&ctx.root, cases, runner)
+        let passed = test_runner::run_cases(&ctx.root, &ctx.stdlib.path, cases, runner)
             .map_err(|error| CliFailure::operational("run tests", None, error))?;
         if !passed {
             return Err(CliFailure::operational(
@@ -1668,7 +1673,7 @@ fn cmd_project_bench(
             discovered.retain(|case| cases.iter().any(|id| id == &case.id));
             discovered.sort_by(|left, right| left.id.cmp(&right.id));
             let report = DiscoveryReport {
-                schema: "arandu.bench-list/v1",
+                schema: arandu_codegen::testing::BENCH_LIST_PROTOCOL_V1,
                 cases: discovered,
             };
             println!(
@@ -1747,7 +1752,7 @@ fn cmd_project_bench(
             c_source.display()
         );
     }
-    let outcome = test_runner::run_benchmarks(&ctx.root, cases, runner)
+    let outcome = test_runner::run_benchmarks(&ctx.root, &ctx.stdlib.path, cases, runner)
         .map_err(|error| CliFailure::operational("run benchmarks", None, error))?;
     Ok(CliSuccess::ProgramExit(outcome.exit_code()))
 }
@@ -1763,6 +1768,7 @@ fn run_exact_benchmark(ctx: &project::ProjectContext, exact: &str) -> CliResult 
             continue;
         }
         let db = arandu_query::DatabaseImpl::new();
+        db.set_stdlib_root(ctx.stdlib.path.clone());
         let (file, filepath) =
             open_entry_file(&db, &mut arandu_base::SourceRegistry::default(), &path);
         let artifacts = pipeline_lower(&db, file, &filepath);
@@ -1803,14 +1809,15 @@ fn run_exact_test(ctx: &project::ProjectContext, exact: &str) -> CliResult {
         CliFailure::operational("discover test sources", Some(ctx.root.clone()), error)
     })?;
     for (path, module) in sources {
-        let db = arandu_query::DatabaseImpl::new();
-        let (file, filepath) =
-            open_entry_file(&db, &mut arandu_base::SourceRegistry::default(), &path);
-        let artifacts = pipeline_lower(&db, file, &filepath);
         let target = format!("{}::{}::{}", ctx.name, module, function);
         if !exact.eq(&target) {
             continue;
         }
+        let db = arandu_query::DatabaseImpl::new();
+        db.set_stdlib_root(ctx.stdlib.path.clone());
+        let (file, filepath) =
+            open_entry_file(&db, &mut arandu_base::SourceRegistry::default(), &path);
+        let artifacts = pipeline_lower(&db, file, &filepath);
         let backend = arandu_backend_cranelift::CraneliftBackend::try_new()
             .map_err(|diag| CliFailure::diagnostics([diag], Some(path.clone())))?;
         let output = arandu_semantics::CodegenBackend::compile(

@@ -208,3 +208,48 @@ fn benchmark_baseline_save_compare_and_strict_missing_are_explicit() {
     assert_eq!(missing.status.code(), Some(3));
     let _ = fs::remove_dir_all(tmp);
 }
+
+#[test]
+fn isolated_harness_children_keep_the_coordinator_stdlib_identity() {
+    let tmp = temp_dir();
+    let project = create_project(&tmp);
+    let test = common::cli_command()
+        .args(["test", ".", "--format", "json"])
+        .current_dir(&project)
+        .env_remove("ARANDU_STDLIB")
+        .output()
+        .expect("run isolated test child outside the repository");
+    assert!(
+        test.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&test.stdout),
+        String::from_utf8_lossy(&test.stderr)
+    );
+
+    let benchmark = common::cli_command()
+        .args([
+            "bench",
+            ".",
+            "--exact",
+            "product_gold::bin::main::integerBarrier",
+            "--format",
+            "json",
+            "--warmup",
+            "0.001",
+            "--measurement-time",
+            "0.005",
+            "--samples",
+            "10",
+        ])
+        .current_dir(&project)
+        .env_remove("ARANDU_STDLIB")
+        .output()
+        .expect("run isolated benchmark child outside the repository");
+    assert!(
+        benchmark.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&benchmark.stdout),
+        String::from_utf8_lossy(&benchmark.stderr)
+    );
+    let _ = fs::remove_dir_all(tmp);
+}

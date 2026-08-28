@@ -13,6 +13,7 @@ mod corpus;
 mod fuzz_regressions;
 mod performance;
 mod release_contract;
+mod slt6;
 
 use std::env;
 use std::path::PathBuf;
@@ -32,6 +33,7 @@ fn main() {
         "run-fuzz-seed" => fuzz_regressions::run_one(args),
         "check-release-contract" => release_contract::check(&workspace_root(), args.next()),
         "prepare-release" => release_contract::prepare(&workspace_root(), args.next()),
+        "check-slt6-sdk" => slt6::check(&workspace_root(), args),
         "help" | "-h" | "--help" => {
             print_help();
             0
@@ -58,6 +60,7 @@ Commands:
   check-fuzz-regressions  Run the versioned adversarial corpus with isolation
   check-release-contract  Validate component versions and an optional v* tag
   prepare-release    Update every Arandu component to one version atomically
+  check-slt6-sdk     Exercise an installed SDK outside the repository
   help              This message
 
 Examples:
@@ -68,6 +71,7 @@ Examples:
   cargo run -p xtask -- check-fuzz-regressions
   cargo run -p xtask -- check-release-contract [vX.Y.Z[-rc.N]]
   cargo run -p xtask -- prepare-release X.Y.Z[-rc.N]
+  cargo run -p xtask -- check-slt6-sdk --arandu PATH --work-dir DIR --evidence-dir DIR
   ./scripts/check-diag-docs.sh
 "
     );

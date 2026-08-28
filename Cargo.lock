@@ -2086,6 +2086,7 @@ dependencies = [
  "arandu_middle",
  "arandu_query",
  "salsa",
+ "serde_json",
 ]
 
 [[package]]

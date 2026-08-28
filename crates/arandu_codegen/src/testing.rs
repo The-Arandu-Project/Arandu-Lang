@@ -6,6 +6,9 @@ use std::time::Duration;
 
 pub const TEST_PROTOCOL_V1: &str = "arandu.test/v1";
 pub const BENCH_PROTOCOL_V1: &str = "arandu.bench/v1";
+pub const TEST_LIST_PROTOCOL_V1: &str = "arandu.test-list/v1";
+pub const BENCH_LIST_PROTOCOL_V1: &str = "arandu.bench-list/v1";
+pub const BENCH_BASELINE_PROTOCOL_V1: &str = "arandu.bench-baseline/v1";
 pub const FRAME_MAGIC: &[u8; 4] = b"ARND";
 pub const MAX_FRAME_PAYLOAD_SIZE: usize = 2 * 1024 * 1024; // 2MB
 
@@ -570,6 +573,26 @@ mod tests {
     }
 
     #[test]
+    fn framed_protocols_reject_truncated_headers_and_payloads() {
+        let test_header = FRAME_MAGIC.to_vec();
+        let error = read_frame(&mut Cursor::new(test_header), None, None).unwrap_err();
+        assert!(error.contains("read frame length"));
+
+        let mut test_payload = FRAME_MAGIC.to_vec();
+        test_payload.extend_from_slice(&16_u32.to_be_bytes());
+        test_payload.extend_from_slice(b"short");
+        let error = read_frame(&mut Cursor::new(test_payload), None, None).unwrap_err();
+        assert!(error.contains("read frame payload"));
+
+        let benchmark_header = FRAME_MAGIC.to_vec();
+        assert!(read_benchmark_frame(&mut Cursor::new(benchmark_header), 0, "id").is_err());
+        let mut benchmark_payload = FRAME_MAGIC.to_vec();
+        benchmark_payload.extend_from_slice(&16_u32.to_be_bytes());
+        benchmark_payload.extend_from_slice(b"short");
+        assert!(read_benchmark_frame(&mut Cursor::new(benchmark_payload), 0, "id").is_err());
+    }
+
+    #[test]
     fn read_frame_rejects_sequence_mismatch_and_unknown_status() {
         let event = TestEventV1 {
             sequence: 10,
@@ -638,5 +661,55 @@ mod tests {
         write_benchmark_frame(&mut bytes, 7, &event).unwrap();
         let decoded = read_benchmark_frame(&mut Cursor::new(bytes), 7, "pkg::bin::bench").unwrap();
         assert_eq!(decoded, event);
+    }
+
+    #[test]
+    fn benchmark_frame_rejects_size_schema_sequence_and_id_confusion() {
+        let mut oversized = FRAME_MAGIC.to_vec();
+        let length = u32::try_from(MAX_FRAME_PAYLOAD_SIZE + 1).unwrap();
+        oversized.extend_from_slice(&length.to_be_bytes());
+        let error = read_benchmark_frame(&mut Cursor::new(oversized), 0, "id").unwrap_err();
+        assert!(error.contains("maximum payload size"));
+
+        let event = BenchmarkEventV1 {
+            sequence: 7,
+            id: "pkg::bench".to_string(),
+            config: BenchmarkConfigV1 {
+                warmup_ns: 1,
+                measurement_ns: 2,
+                samples: 10,
+            },
+            samples: Vec::new(),
+            stdout: CapturedOutput::default(),
+            stderr: CapturedOutput::default(),
+            failure: None,
+        };
+        let mut valid = Vec::new();
+        write_benchmark_frame(&mut valid, 7, &event).unwrap();
+        assert!(
+            read_benchmark_frame(&mut Cursor::new(&valid), 8, "pkg::bench")
+                .unwrap_err()
+                .contains("sequence")
+        );
+        assert!(
+            read_benchmark_frame(&mut Cursor::new(&valid), 7, "pkg::other")
+                .unwrap_err()
+                .contains("id mismatch")
+        );
+
+        let payload = BenchmarkFramePayload {
+            schema: "arandu.bench/v2".to_string(),
+            sequence: 7,
+            event,
+        };
+        let encoded = serde_json::to_vec(&payload).unwrap();
+        let mut unknown = FRAME_MAGIC.to_vec();
+        unknown.extend_from_slice(&u32::try_from(encoded.len()).unwrap().to_be_bytes());
+        unknown.extend_from_slice(&encoded);
+        assert!(
+            read_benchmark_frame(&mut Cursor::new(unknown), 7, "pkg::bench")
+                .unwrap_err()
+                .contains("unsupported benchmark schema")
+        );
     }
 }
