@@ -80,11 +80,18 @@ fn test_list_uses_package_qualified_deterministic_ids() {
         String::from_utf8_lossy(&executed.stderr)
     );
     assert!(String::from_utf8_lossy(&executed.stderr).contains("passed sample::"));
-    let harness_pointer = project.join("target/dev/x86_64-pc-windows-msvc/test-harness.json");
+    let profile_root = project.join("target/dev");
+    let harness_pointers = fs::read_dir(&profile_root)
+        .expect("read target profile")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path().join("test-harness.json"))
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
     assert!(
-        harness_pointer.is_file(),
-        "test harness manifest was not published at {}",
-        harness_pointer.display()
+        harness_pointers.len() == 1,
+        "expected one host-specific test harness manifest below {}, found {:?}",
+        profile_root.display(),
+        harness_pointers
     );
     for policy in ["--locked", "--offline", "--frozen"] {
         let checked = common::cli_command()

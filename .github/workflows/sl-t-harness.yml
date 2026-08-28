@@ -76,7 +76,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' crates/arandu_cli/Cargo.toml | head -1)"
+          version="$(sed -n 's/^version = "\([^"]*\)".*/\1/p' crates/arandu_cli/Cargo.toml | head -1)"
           host="$(rustc -vV | sed -n 's/^host: //p')"
           test -n "$version"
           if [[ "$host" != "${{ matrix.target }}" ]]; then
