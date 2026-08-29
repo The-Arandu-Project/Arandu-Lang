@@ -25,6 +25,16 @@
 - **Memória e execução:** GenRef é o fallback seguro e explícito; efeitos,
   ownership, layout por alvo e invariantes SSA/AMIR permanecem contratos do
   compilador. RC/ARC e tracing GC não são requisitos da Gold v0.1.
+- **Tipos de produto:** um pacote Arandu pode publicar um target binário (`bin`),
+  um target de biblioteca (`lib`) ou, futuramente, ambos (`mixed`). Binários
+  exigem uma função `main` para `run`/`build`; bibliotecas não. O manifesto é a
+  unidade de projeto e pacote, no mesmo sentido em que Cargo combina pacote e
+  targets, enquanto a extensão do editor apenas expõe ações compatíveis com o
+  tipo de target.
+- **Templates de ecossistema:** `arandu new --bin` e `arandu new --lib` são a
+  superfície Gold atual. Templates de plugin multiplataforma, FFI e workspace
+  são extensões futuras, não requisitos da stdlib mínima. Eles só entram após
+  contratos de ABI, efeitos, runtime e distribuição estarem definidos.
 
 Detalhes históricos de pesquisa, checklists já executados e evidências de CI
 vivem no Git e nos contratos técnicos; não são novas tarefas do roadmap.
@@ -68,7 +78,7 @@ quando cumprir seu contrato atual.
 | S2 — projetos reais/endurance | `gold` | corpus versionado, churn, budgets, fuzz regressivo e `S2 / Endurance` |
 | S3 — distribuição beta | `gold` no canal RC publicado | pacotes nativos Linux x86-64, macOS ARM64 e Windows x86-64; [contrato de distribuição](./arandu-distribution-contract-v0.1.md) e [verificação](./release-verification.md) |
 | L0–L3 — LSP/editor | `gold` no escopo publicado | VFS/snapshots, Unicode, cancelamento, multi-file, UX e Extension Host; [arquitetura](./arandu-salsa-lsp-architecture-v0.1.md) e [matriz pública](./arandu-lsp-capabilities-v0.1.md) |
-| Decomposição arquitetural | `gold` | LSP handlers, pass manager, `arandu_runtime` e `arandu_codegen`; separação futura de geração/resolução de constraints permanece backlog do type checker |
+| Decomposição arquitetural | `gold` | LSP handlers e IDE (`arandu_lsp/src/ide/`), pass manager, `arandu_runtime`, `arandu_codegen`, CLI (`main.rs`, `args.rs`, `pipeline.rs`, `commands/`, `project/`, `test_runner/`) e manifesto modularizados; separação de constraints permanece backlog futuro do type checker |
 | Minimal 0.1 e CLI de projeto | `gold` | superfície exercitada por `examples/minimal/` e comandos `new/check/run/build/doctor` |
 | Project & Package Lifecycle | `gold` | [manifesto, lockfile, grafo, cache e dependências remotas](./arandu-project-package-lifecycle-gold-v0.1.md) com recovery e E2E multiplataforma |
 | Anotações públicas | `gold` | contrato [PascalCase](./arandu-attribute-naming-v0.1.md), aliases legados apenas na janela de migração |
@@ -77,11 +87,12 @@ quando cumprir seu contrato atual.
 
 ### Fila de execução
 
-1. Auditoria de arquitetura, documentação, modularização e portabilidade.
+1. Concluir a campanha de auditoria, documentação, modularização e portabilidade.
 2. Concluir o soak e promover [SL_T](./arandu-testing-benchmark-harness-v0.1.md) a `gold`.
-3. Stdlib mínima necessária a aplicações e experimentos.
-4. Compiler service com sandbox e site/editor com compilação remota.
-5. SL_R e SL_S Gold para runtime assíncrono e sistema completos.
+3. Entregar a `SL_S` mínima: targets `bin`/`lib`, link multi-file e `std.path` executável.
+4. Implementar `A2` (Effect System) antes de ampliar APIs de sistema, plugins ou dependências externas.
+5. Implementar `SL_R` (runtime async) e só então o compiler service com sandbox e site/editor remoto.
+6. Avaliar templates `mixed`, `ffi`, `plugin` e `workspace` conforme ABI, efeitos e distribuição amadureçam.
 
 ### Resíduos que continuam abertos
 
@@ -92,6 +103,28 @@ quando cumprir seu contrato atual.
   arquitetura planejada, não bloqueador das garantias atuais.
 - Runtime async completo, effect system, ABI pública geral, LLVM, cache estável,
   ecossistema e self-hosting continuam nos marcos futuros abaixo.
+
+### Linhas de pesquisa avaliadas
+
+Estas linhas foram confrontadas com papers e especificações primárias. Elas não
+autorizam implementação imediata: só viram marco executável quando houver
+contrato, benchmark ou prova de segurança que justifique o custo.
+
+| Linha | Estado | Aplicação possível no Arandu | Referência primária |
+| --- | --- | --- | --- |
+| Typed holes e sintaxe total | `planned` | LSP mantém tipos, completion e hover durante código incompleto; execução continua bloqueada enquanto houver holes | [Hazelnut Live](https://arxiv.org/abs/1805.00155), [Live Pattern Matching with Typed Holes](https://doi.org/10.1145/3586048) |
+| Effects + capabilities | `planned` | A2 evolui de rótulos de efeito para autoridade explícita sobre rede, filesystem, processos e FFI | [Effect Capabilities for Haskell](https://doi.org/10.1016/j.scico.2015.12.002), [Object-Capability Model](https://arxiv.org/abs/1907.07154) |
+| Teste diferencial/metamórfico | `planned` | SL_T compara C/Cranelift e transformações semanticamente equivalentes para encontrar bugs sem oracle manual | [Csmith](https://users.cs.utah.edu/~regehr/papers/pldi11-preprint.pdf), [Metamorphic Testing de compiladores](https://onlinelibrary.wiley.com/doi/10.1002/stvr.1812) |
+| Equality saturation/e-graphs | `research` | Otimizações AMIR para expressões puras depois de benchmark de custo e limite de crescimento do e-graph | [egg](https://arxiv.org/abs/2004.03082) |
+| WebAssembly Component Model/WIT | `planned` | target WASM, plugins e compiler service com interfaces tipadas e ABI portável; substitui a ideia de usar Protobuf como ABI | [WIT](https://component-model.bytecodealliance.org/design/wit.html), [Component Model](https://component-model.bytecodealliance.org/design/component-model-concepts.html) |
+| Refinement types leves | `research` | Contratos opcionais para índices, paths, handles e estados de recursos sem introduzir tipos dependentes completos | [Refinement Types: A Tutorial](https://arxiv.org/abs/2010.07763) |
+| Núcleo formal OSSA/GenRef | `research` | Provar em um microcálculo as regras de ownership, promoção e ausência de use-after-free antes de tentar provar o compilador inteiro | [RustBelt](https://plv.mpi-sws.org/rustbelt/popl18/paper.pdf) |
+| Incrementalidade orientada à demanda | `research` | Estudar reutilização de resultados não observados sem substituir Salsa antes de medir workloads reais | [Adapton](https://matthewhammer.org/adapton/adapton-pldi2014.pdf) |
+
+As quatro linhas com maior retorno provável são typed holes, capabilities,
+teste diferencial/metamórfico e WebAssembly Component Model. E-graphs,
+refinement types, prova formal e incrementalidade orientada à demanda ficam
+como pesquisa até que a linguagem tenha workloads e contratos suficientes.
 
 ---
 
@@ -1049,6 +1082,7 @@ Analisador estático avançado de uso de memória e desempenho.
 | 2026-05 | Antigravity | **Semantics, DX & Tooling**: Inclusão formal das especificações de Semântica e Sintaxe da Linguagem (closures, async canônico), Filosofia de Runtime, ABI/Layout Stability, Abort/Panic Model, Fase DX (Rich Diagnostics Engine, Recovery, JSON output), Fase PERF (Compiler instrumentation), Hot/Cold separation e Stable Serialization. |
 | 2026-07 | Antigravity | **Auditoria de Honestidade A10/A11/VM**: Removidos `vm.rs`, `arena.rs`, `stable_id.rs` e `string_pool.rs` (~1.080 LOC, 16 blocos `unsafe`) — código morto nunca integrado ao compilador. A10 corrigido para `[~]` parcial: IDs inteiros estáveis em uso, Generational IDs aguardam LSP (Fase 3) com `slotmap`. VM Reservation substituída por plano `bumpalo` para arenas de scratch nos passes de otimização. A11 permanece `[x]` via `smol_str`. |
 | 2026-07 | Antigravity | **Evolução do Ecossistema (E1–E5)**: Documentadas as propostas de evolução de ferramentas integradas (REPL, Gerador de Docs, FFI Bindgen, Package Manager e Linter de Alocação). |
+| 2026-08 | Codex | **Linhas de pesquisa avaliadas**: typed holes, effects/capabilities, teste diferencial/metamórfico, e-graphs, WebAssembly Component Model/WIT, refinement types, prova formal OSSA/GenRef e incrementalidade orientada à demanda; somente as linhas com contrato e evidência futura poderão virar implementação. |
 
 ---
 
