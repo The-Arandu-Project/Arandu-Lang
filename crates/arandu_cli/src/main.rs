@@ -10,6 +10,7 @@ mod artifact;
 mod cli_error;
 mod commands;
 mod linker;
+mod manifest_io;
 mod pipeline;
 mod project;
 mod test_runner;

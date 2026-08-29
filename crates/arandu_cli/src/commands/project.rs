@@ -32,7 +32,7 @@ pub fn cmd_init(args: &[String]) -> CliResult {
 }
 
 pub fn cmd_clean(start: &Path) -> CliResult {
-    let discovery = arandu_query::find_manifest(start)
+    let discovery = crate::manifest_io::find_manifest(start)
         .unwrap_or_else(|error| {
             fail_operational(
                 "discover project",
@@ -47,7 +47,7 @@ pub fn cmd_clean(start: &Path) -> CliResult {
                 "no arandu.toml found",
             )
         });
-    arandu_query::load_manifest(&discovery.path).unwrap_or_else(|error| {
+    crate::manifest_io::load_manifest(&discovery.path).unwrap_or_else(|error| {
         fail_operational(
             "load project manifest",
             Some(discovery.path.clone()),

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use arandu_middle::Severity;
 use arandu_query::{
-    load_manifest, scan_aru_entries, DatabaseImpl, DirectoryListing, ModuleRoots, SourceFile,
+    parse_manifest_bytes, scan_aru_entries, DatabaseImpl, DirectoryListing, ModuleRoots, SourceFile,
 };
 use salsa::Setter;
 
@@ -291,7 +291,9 @@ fn normalize_newlines(text: String, crlf: bool) -> String {
 impl CorpusSession {
     fn new(project_root: &Path, state: &BTreeMap<String, String>) -> Result<Self, String> {
         let manifest_path = project_root.join("Arandu.toml");
-        let (manifest, _, _) = load_manifest(&manifest_path).map_err(|error| error.to_string())?;
+        let manifest_bytes = fs::read(&manifest_path).map_err(|error| error.to_string())?;
+        let manifest = parse_manifest_bytes(&manifest_path, &manifest_bytes)
+            .map_err(|error| error.to_string())?;
         let entry_rel = manifest
             .entry
             .strip_prefix("src/")
@@ -347,7 +349,9 @@ fn analyze_clean(
     reverse: bool,
 ) -> Result<Observation, String> {
     let manifest_path = project_root.join("Arandu.toml");
-    let (manifest, _, _) = load_manifest(&manifest_path).map_err(|error| error.to_string())?;
+    let manifest_bytes = fs::read(&manifest_path).map_err(|error| error.to_string())?;
+    let manifest =
+        parse_manifest_bytes(&manifest_path, &manifest_bytes).map_err(|error| error.to_string())?;
     let entry_rel = manifest
         .entry
         .strip_prefix("src/")

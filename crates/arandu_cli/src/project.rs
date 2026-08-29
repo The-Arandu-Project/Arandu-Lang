@@ -14,11 +14,11 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::cli_error::{CliFailure, CliResult, CliSuccess};
+use crate::manifest_io::{find_manifest, load_manifest};
 use arandu_query::{
     DirectoryListing, LocalPackageGraph, MANIFEST_FILENAME, ManifestError, ManifestSpelling,
     ModuleRoots, ProjectManifest, STDLIB_ENV, StdlibResolveOpts, StdlibRoot,
-    ensure_toolchain_compatible, find_manifest, load_manifest, register_manifest,
-    resolve_stdlib_root, scan_aru_entries,
+    ensure_toolchain_compatible, register_manifest, resolve_stdlib_root, scan_aru_entries,
 };
 
 /// Official default entry path for `arandu new`.

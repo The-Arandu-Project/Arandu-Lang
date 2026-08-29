@@ -285,6 +285,6 @@ pub fn is_project_target(arg: Option<&str>) -> bool {
     }
     // Explicit: if a parent walk finds a manifest and the path is not a .aru file,
     // still allow package mode when the user points at the package root.
-    matches!(arandu_query::find_manifest(p), Ok(Some(_)))
+    matches!(crate::manifest_io::find_manifest(p), Ok(Some(_)))
         && p.extension().and_then(|e| e.to_str()) != Some("aru")
 }

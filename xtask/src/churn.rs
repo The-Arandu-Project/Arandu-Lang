@@ -5,9 +5,10 @@ use std::sync::Arc;
 
 use arandu_middle::{Severity, SymbolId};
 use arandu_query::{
-    load_manifest, register_manifest, scan_aru_entries, AnalysisRevision, AnalysisSnapshot,
-    ArandCompilerDb, DatabaseImpl, DirectoryListing, DocumentStore, FsChange, LspSymbolId,
-    ModuleRoots, PackageWatchConfig, PackageWatchSession, MANIFEST_FILENAME,
+    hash_manifest_bytes, parse_manifest_bytes, register_manifest, scan_aru_entries,
+    AnalysisRevision, AnalysisSnapshot, ArandCompilerDb, DatabaseImpl, DirectoryListing,
+    DocumentStore, FsChange, LspSymbolId, ModuleRoots, PackageWatchConfig, PackageWatchSession,
+    MANIFEST_FILENAME,
 };
 
 const OPERATIONS: usize = 10_000;
@@ -285,7 +286,10 @@ impl ProjectSession {
 
 fn open_watch_session(db: &mut DatabaseImpl, root: &Path) -> Result<PackageWatchSession, String> {
     let manifest_path = root.join(MANIFEST_FILENAME);
-    let (data, hash, _) = load_manifest(&manifest_path).map_err(|error| error.to_string())?;
+    let manifest_bytes = fs::read(&manifest_path).map_err(|error| error.to_string())?;
+    let data =
+        parse_manifest_bytes(&manifest_path, &manifest_bytes).map_err(|error| error.to_string())?;
+    let hash = hash_manifest_bytes(&manifest_bytes);
     let entry_abs = root.join(&data.entry);
     let package_src = entry_abs
         .parent()

@@ -7,9 +7,10 @@
 use crate::pool::{Priority, WorkerPool};
 use crate::state::{discover_aru_files, ServerState};
 use crate::uri_util::uri_from_path;
+use arandu_package::{find_manifest, load_manifest};
 use arandu_query::{
-    ensure_toolchain_compatible, find_manifest, load_manifest, resolve_stdlib_root,
-    scan_aru_entries, LocalPackageGraph, ManifestData, PackageModulePlan, StdlibResolveOpts,
+    ensure_toolchain_compatible, resolve_stdlib_root, scan_aru_entries, LocalPackageGraph,
+    ManifestData, PackageModulePlan, StdlibResolveOpts,
 };
 use crossbeam_channel::{bounded, Receiver};
 use std::path::PathBuf;

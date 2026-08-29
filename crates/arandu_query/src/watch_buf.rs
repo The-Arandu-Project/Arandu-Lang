@@ -8,8 +8,8 @@
 use crate::db::{DatabaseImpl, SourceFile};
 use crate::debounce::{DebouncedMap, DEFAULT_DEBOUNCE};
 use crate::manifest::{
-    load_manifest, register_manifest, ManifestError, ProjectManifest, LEGACY_MANIFEST_FILENAME,
-    MANIFEST_FILENAME,
+    hash_manifest_bytes, parse_manifest_bytes, register_manifest, ManifestError, ProjectManifest,
+    LEGACY_MANIFEST_FILENAME, MANIFEST_FILENAME,
 };
 use crate::vfs::{scan_aru_entries, DirectoryListing, ModuleRoots};
 use salsa::Setter;
@@ -361,7 +361,12 @@ impl PackageWatchSession {
 
     /// Re-read Arandu.toml; if `name` changes, rebuild ModuleRoots (full local invalidation).
     pub fn reload_manifest(&mut self, db: &mut DatabaseImpl) -> Result<(), ManifestError> {
-        let (data, hash, _) = load_manifest(&self.manifest_path)?;
+        let bytes = std::fs::read(&self.manifest_path).map_err(|e| ManifestError::Io {
+            path: self.manifest_path.clone(),
+            message: e.to_string(),
+        })?;
+        let data = parse_manifest_bytes(&self.manifest_path, &bytes)?;
+        let hash = hash_manifest_bytes(&bytes);
         let old_name = self.package_name.clone();
         self.package_name = data.name.clone();
         self.entry_rel = data.entry.clone();

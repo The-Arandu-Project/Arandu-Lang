@@ -5,6 +5,9 @@
 //! `arandu_query`.
 
 pub mod cache;
+pub mod manifest_io;
 pub mod remote_git;
 pub mod resolver;
 pub mod vendor;
+
+pub use manifest_io::{find_manifest, load_manifest};

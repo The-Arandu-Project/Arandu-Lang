@@ -44,11 +44,11 @@ pub use lockfile::{
     LOCK_VERSION,
 };
 pub use manifest::{
-    ensure_toolchain_compatible, find_manifest, hash_manifest_bytes, load_manifest,
-    manifest_fingerprint, parse_manifest_str, register_manifest, CapabilityPolicy, EffectPolicy,
-    ManifestData, ManifestDependency, ManifestDiscovery, ManifestEdition, ManifestError,
-    ManifestSpelling, ManifestTarget, ManifestWorkspace, PackageKind, ProjectManifest,
-    LEGACY_MANIFEST_FILENAME, MANIFEST_FILENAME,
+    ensure_toolchain_compatible, hash_manifest_bytes, manifest_fingerprint, parse_manifest_bytes,
+    parse_manifest_str, register_manifest, validate_git_dependency_identity, validate_git_origin,
+    CapabilityPolicy, EffectPolicy, ManifestData, ManifestDependency, ManifestDiscovery,
+    ManifestEdition, ManifestError, ManifestSpelling, ManifestTarget, ManifestWorkspace,
+    PackageKind, ProjectManifest, LEGACY_MANIFEST_FILENAME, MANIFEST_FILENAME,
 };
 pub use package_graph::{
     LocalPackage, LocalPackageGraph, MaterializedGitPackage, PackageGraphLimits, PackageModulePlan,

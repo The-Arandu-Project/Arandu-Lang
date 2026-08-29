@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use crate::MANIFEST_FILENAME;
 use crate::{
-    load_manifest, semantic_manifest_fingerprint, LockedPackage, Lockfile, ManifestData,
+    parse_manifest_bytes, semantic_manifest_fingerprint, LockedPackage, Lockfile, ManifestData,
     ManifestDependency,
 };
 use arandu_middle::{ModuleId, PackageId, TargetId};
@@ -516,7 +516,9 @@ fn discover_package(
             }
         };
         let dependency_manifest = dependency_root.join(MANIFEST_FILENAME);
-        let (dependency_data, _, _) = load_manifest(&dependency_manifest)
+        let dependency_bytes = fs::read(&dependency_manifest)
+            .map_err(|error| format!("dependency `{alias}`: {error}"))?;
+        let dependency_data = parse_manifest_bytes(&dependency_manifest, &dependency_bytes)
             .map_err(|error| format!("dependency `{alias}`: {error}"))?;
         let dependency_source = discover_package(
             workspace_root,
@@ -606,7 +608,8 @@ mod tests {
     fn discovery_rejects_package_count_depth_and_edge_budgets() {
         let root = fixture_root("limits");
         let manifest = root.join(MANIFEST_FILENAME);
-        let (data, _, _) = load_manifest(&manifest).expect("fixture manifest");
+        let bytes = fs::read(&manifest).expect("fixture manifest");
+        let data = parse_manifest_bytes(&manifest, &bytes).expect("fixture manifest");
 
         let limits = PackageGraphLimits {
             max_packages: 1,
@@ -671,7 +674,8 @@ mod tests {
         .unwrap();
 
         let manifest = root.join(MANIFEST_FILENAME);
-        let (data, _, _) = load_manifest(&manifest).unwrap();
+        let bytes = fs::read(&manifest).unwrap();
+        let data = parse_manifest_bytes(&manifest, &bytes).unwrap();
         let source = "git+https://example.com/math.git#0123456789abcdef0123456789abcdef01234567";
         let remotes = BTreeMap::from([(
             source.to_string(),

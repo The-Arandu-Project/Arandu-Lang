@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use arandu_middle::db::SourceDatabase;
 use arandu_query::{
-    load_manifest, register_manifest, scan_aru_entries, DatabaseImpl, DirectoryListing, FsChange,
-    ModuleRoots, PackageWatchSession, WatchBuffer, MANIFEST_FILENAME,
+    hash_manifest_bytes, parse_manifest_bytes, register_manifest, scan_aru_entries, DatabaseImpl,
+    DirectoryListing, FsChange, ModuleRoots, PackageWatchSession, WatchBuffer, MANIFEST_FILENAME,
 };
 
 fn temp_pkg(tag: &str) -> PathBuf {
@@ -47,7 +47,9 @@ fn seed_session(
 ) -> (PackageWatchSession, arandu_query::SourceFile) {
     write_manifest(&root, name);
     let manifest_path = root.join(MANIFEST_FILENAME);
-    let (data, hash, _) = load_manifest(&manifest_path).unwrap();
+    let bytes = fs::read(&manifest_path).unwrap();
+    let data = parse_manifest_bytes(&manifest_path, &bytes).unwrap();
+    let hash = hash_manifest_bytes(&bytes);
     let entry_abs = root.join(&data.entry);
     let package_src = entry_abs.parent().unwrap().to_path_buf();
 
