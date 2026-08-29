@@ -14,7 +14,7 @@ camadas é uma regressão arquitetural.
 | `arandu_base` | Utilitários e dados fundamentais. Mantenha-o deliberadamente leve; não adicione dependências sem justificativa arquitetural. |
 | `arandu_lexer` / `arandu_parser` | Lexer e CST-first com Rowan; `syntax_tree(file)` é canônico e `parse(file)` apenas baixa CST para AST. |
 | `arandu_diagnostics` | `DiagCode`, diagnósticos e documentação longa em `docs/errors/`. |
-| `arandu_middle` | Contratos entre fases, HIR/AMIR, `SourceDatabase`, IDs e layout. |
+| `arandu_middle` | Contratos entre fases, HIR/AMIR, `SourceDatabase`, IDs e layout. `src/db.rs` declara apenas os tipos Salsa compartilhados; não executa queries. |
 | `arandu_resolve` / `arandu_typeck` / `arandu_mir` | Lógica pura de resolução, tipos, ownership/dataflow e AMIR. Não são donos de Salsa. |
 | `arandu_query` | Único dono de Salsa: DB, inputs, queries tracked, `AnalysisHost` e reparse incremental. |
 | `arandu_backend_cranelift` / `arandu_backend_c` | Backends. |
@@ -27,8 +27,10 @@ camadas é uma regressão arquitetural.
 - Pipeline: CST (`syntax_tree`) → AST (`parse`) → `resolve` → `type_check` →
   `lower_amir` → backend. Não coloque resolução ou tipagem no parser, nem
   faça re-lex/parse paralelo a partir de texto quando o CST já for disponível.
-- Apenas `arandu_query` conhece Salsa. `arandu_resolve`, `arandu_typeck`,
-  `arandu_mir`, lexer, parser, base e backends devem permanecer puros.
+- `arandu_query` é o único dono da execução Salsa. A exceção estreita é
+  `arandu_middle/src/db.rs`, que declara inputs/accumulators e o trait
+  `SourceDatabase` compartilhado sem possuir providers. `arandu_resolve`,
+  `arandu_typeck`, `arandu_mir`, lexer, parser e backends permanecem puros.
 - Queries tracked são puras, determinísticas e sem efeitos observáveis:
   proibidos `println!`, `eprintln!`, I/O, polling de FS, mutação global e
   telemetria com efeito colateral. Instrumente com `#[tracing::instrument]`.
@@ -135,6 +137,23 @@ camadas é uma regressão arquitetural.
   Linux e macOS, fora do checkout e usando exatamente os artefatos públicos.
 
 ## Regra de edição e validação
+
+- Texto versionado usa UTF-8 sem BOM e LF. `.gitattributes` é a autoridade
+  independente de `core.autocrlf`; `.editorconfig` configura editores. Nunca
+  normalize fixtures douradas fora dessas regras. Execute
+  `cargo run --locked -p xtask -- check-line-endings` e, ao introduzir as
+  regras em um clone antigo, `git add --renormalize .` antes de revisar o diff.
+- A documentação usa a taxonomia de `docs/README.md`. Só
+  `docs/arandu-compiler-roadmap-v0.1.md` mantém a fila permanente. Planos de
+  campanha são temporários: no encerramento, remova o checklist e consolide
+  contexto, implementação, pontos de melhoria e futuro no documento técnico.
+- Uma contagem de `.clone()`, `String` ou linhas é sinal de inspeção, não
+  evidência de regressão. Durante desenvolvimento, remova somente cópias
+  obviamente redundantes e cubra semântica com testes. Mudanças de estrutura
+  de dados, internamento, `Cow`, `SmallVec` ou alocador exigem workload
+  representativo e perfil/benchmark antes e depois.
+- Execute `cargo run --locked -p xtask -- check-architecture` ao alterar
+  dependências, ownership de crates ou efeitos de filesystem.
 
 - Antes de editar, identifique a fase e o crate proprietário. Faça a menor
   mudança que preserve as APIs estreitas de query e acrescente regressões para

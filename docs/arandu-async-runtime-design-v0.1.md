@@ -10,7 +10,14 @@
 
 ---
 
-## Shipped surfaces
+## Visão Geral e Contexto
+
+O contrato separa semântica `async` do compilador, tipos fundamentais e runtime
+de host, evitando que scheduler ou I/O vazem para a linguagem/IR.
+
+## Detalhes Técnicos da Implementação
+
+### Shipped surfaces
 
 ### SL_R.0 — SyncExecutor + Coroutine
 
@@ -43,7 +50,7 @@ ABI: `Coroutine[T]` is a state-blob pointer; `job as ptr[u8]` is the host bridge
 
 ---
 
-## Gold decisions (unchanged)
+### Gold decisions (unchanged)
 
 1. **No global executor** — all handles are explicit values.
 2. **Runtime backend select** — io_uring when kernel allows, else epoll.
@@ -51,7 +58,7 @@ ABI: `Coroutine[T]` is a state-blob pointer; `job as ptr[u8]` is the host bridge
 
 ---
 
-## Honesty
+### Honesty
 
 | Item | Status |
 |------|--------|
@@ -60,3 +67,13 @@ ABI: `Coroutine[T]` is a state-blob pointer; `job as ptr[u8]` is the host bridge
 | TCP nonblocking + `tcp_wait` / `tcp_wait_wake` | Done |
 | io_uring read/write when backend=2 | Done (`tcp_read_async` / `tcp_write_async`) |
 | Full Future trait on Coroutine | Open (Waker/Context handles exist) |
+
+## PONTOS DE MELHORIA (O que não está no roadmap)
+
+O Future trait completo permanece aberto e as superfícies de host não implicam
+paridade em todos os targets. Esse limite deve continuar explícito.
+
+## Futuro e Próximos Passos
+
+Ordenar a ampliação pelo roadmap SL_R/SL_S e validar scheduler, cancelamento,
+I/O e shutdown por sistema operacional antes de promoção Gold.

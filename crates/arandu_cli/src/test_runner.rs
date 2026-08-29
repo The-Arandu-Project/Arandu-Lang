@@ -1,6 +1,9 @@
 //! SL_T.2 process-isolated test coordinator with framed IPC, process-tree termination,
 //! and deterministic reporting.
 
+mod junit;
+mod statistics;
+
 use arandu_codegen::testing::{
     BENCH_BASELINE_PROTOCOL_V1, BENCH_PROTOCOL_V1, BenchmarkConfigV1, BenchmarkEventV1,
     CapturedOutput, TEST_PROTOCOL_V1, TestEventV1, TestFailure, TestStatus, read_benchmark_frame,
@@ -15,6 +18,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use junit::junit_report;
+use statistics::{benchmark_stats, format_ns_per_op, percentile, sample_values};
 
 const CAPTURE_LIMIT: usize = 1024 * 1024; // 1MB
 
@@ -421,61 +427,6 @@ fn failed_benchmark(
     }
 }
 
-fn sample_values(event: &BenchmarkEventV1) -> Vec<f64> {
-    let mut values = event
-        .samples
-        .iter()
-        .filter(|sample| sample.iterations != 0)
-        .map(|sample| sample.elapsed_ns as f64 / sample.iterations as f64)
-        .filter(|value| value.is_finite())
-        .collect::<Vec<_>>();
-    values.sort_by(f64::total_cmp);
-    values
-}
-
-fn percentile(sorted: &[f64], percentile: usize) -> Option<f64> {
-    if sorted.is_empty() {
-        return None;
-    }
-    let numerator = (sorted.len() - 1).checked_mul(percentile)?;
-    sorted.get(numerator.div_ceil(100)).copied()
-}
-
-fn median(sorted: &[f64]) -> Option<f64> {
-    let middle = sorted.len().checked_div(2)?;
-    if sorted.len().is_multiple_of(2) {
-        let left = *sorted.get(middle.checked_sub(1)?)?;
-        let right = *sorted.get(middle)?;
-        Some((left + right) / 2.0)
-    } else {
-        sorted.get(middle).copied()
-    }
-}
-
-fn benchmark_stats(event: &BenchmarkEventV1) -> (Option<f64>, Option<f64>, Option<f64>) {
-    let values = sample_values(event);
-    let center_median = median(&values);
-    let mad = center_median.and_then(|center| {
-        let mut deviations = values
-            .iter()
-            .map(|value| (value - center).abs())
-            .collect::<Vec<_>>();
-        deviations.sort_by(f64::total_cmp);
-        median(&deviations)
-    });
-    (center_median, mad, percentile(&values, 95))
-}
-
-fn format_ns_per_op(value: f64) -> String {
-    if value >= 1_000_000.0 {
-        format!("{:.3} ms/op", value / 1_000_000.0)
-    } else if value >= 1_000.0 {
-        format!("{:.3} us/op", value / 1_000.0)
-    } else {
-        format!("{value:.3} ns/op")
-    }
-}
-
 fn report_benchmarks(
     project: &Path,
     events: &[BenchmarkEventV1],
@@ -542,150 +493,6 @@ fn report_benchmarks(
         }
     }
     Ok(outcome)
-}
-
-fn junit_report(events: &[TestEventV1], total_duration_ms: u128) -> String {
-    let failures = events
-        .iter()
-        .filter(|event| event.status == TestStatus::Failed)
-        .count();
-    let errors = events
-        .iter()
-        .filter(|event| matches!(event.status, TestStatus::TimedOut | TestStatus::Crashed))
-        .count();
-    let skipped = events
-        .iter()
-        .filter(|event| event.status == TestStatus::Skipped)
-        .count();
-    let mut xml = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<testsuites tests=\"{}\" failures=\"{failures}\" errors=\"{errors}\" skipped=\"{skipped}\" time=\"{}\">\n  <testsuite name=\"Arandu\" tests=\"{}\" failures=\"{failures}\" errors=\"{errors}\" skipped=\"{skipped}\" time=\"{}\">\n",
-        events.len(),
-        duration_seconds(total_duration_ms),
-        events.len(),
-        duration_seconds(total_duration_ms)
-    );
-    for event in events {
-        let (classname, name) = event
-            .id
-            .rsplit_once("::")
-            .unwrap_or(("arandu", event.id.as_str()));
-        xml.push_str(&format!(
-            "    <testcase classname=\"{}\" name=\"{}\" time=\"{}\">\n",
-            xml_escape(classname),
-            xml_escape(name),
-            duration_seconds(event.duration.as_millis())
-        ));
-        match event.status {
-            TestStatus::Passed => {}
-            TestStatus::Skipped => xml.push_str("      <skipped/>\n"),
-            TestStatus::Failed => {
-                let message = event
-                    .failure
-                    .as_ref()
-                    .map(|failure| failure.message.as_str())
-                    .unwrap_or("test failed");
-                xml.push_str(&format!(
-                    "      <failure type=\"assertion\" message=\"{}\">{}</failure>\n",
-                    xml_escape(message),
-                    xml_escape(&format_test_failures(event))
-                ));
-            }
-            TestStatus::TimedOut | TestStatus::Crashed => {
-                let kind = if event.status == TestStatus::TimedOut {
-                    "timeout"
-                } else {
-                    "crash"
-                };
-                let message = event
-                    .failure
-                    .as_ref()
-                    .map(|failure| failure.message.as_str())
-                    .unwrap_or(kind);
-                xml.push_str(&format!(
-                    "      <error type=\"{kind}\" message=\"{}\">{}</error>\n",
-                    xml_escape(message),
-                    xml_escape(&format_test_failures(event))
-                ));
-            }
-        }
-        let stdout = String::from_utf8_lossy(&event.stdout.bytes);
-        if !stdout.is_empty() || event.stdout.truncated {
-            let suffix = if event.stdout.truncated {
-                "\n<arandu: output truncated>"
-            } else {
-                ""
-            };
-            xml.push_str(&format!(
-                "      <system-out>{}{}</system-out>\n",
-                xml_escape(&stdout),
-                xml_escape(suffix)
-            ));
-        }
-        let stderr = String::from_utf8_lossy(&event.stderr.bytes);
-        if !stderr.is_empty() || event.stderr.truncated {
-            let suffix = if event.stderr.truncated {
-                "\n<arandu: output truncated>"
-            } else {
-                ""
-            };
-            xml.push_str(&format!(
-                "      <system-err>{}{}</system-err>\n",
-                xml_escape(&stderr),
-                xml_escape(suffix)
-            ));
-        }
-        xml.push_str("    </testcase>\n");
-    }
-    xml.push_str("  </testsuite>\n</testsuites>\n");
-    xml
-}
-
-fn format_test_failures(event: &TestEventV1) -> String {
-    let mut lines = Vec::new();
-    if let Some(failure) = &event.failure {
-        lines.push(failure.message.clone());
-        if let Some(location) = &failure.location {
-            lines.push(format!("location: {location}"));
-        }
-        if let Some(expected) = &failure.expected {
-            lines.push(format!("expected: {expected}"));
-        }
-        if let Some(actual) = &failure.actual {
-            lines.push(format!("actual: {actual}"));
-        }
-    }
-    lines.extend(
-        event
-            .secondary_failures
-            .iter()
-            .map(|failure| format!("secondary: {}", failure.message)),
-    );
-    lines.extend(event.logs.iter().map(|line| format!("log: {line}")));
-    if event.logs_truncated {
-        lines.push("log: <truncated>".to_string());
-    }
-    lines.join("\n")
-}
-
-fn duration_seconds(milliseconds: u128) -> String {
-    format!("{}.{:03}", milliseconds / 1_000, milliseconds % 1_000)
-}
-
-fn xml_escape(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    for character in value.chars() {
-        match character {
-            '&' => escaped.push_str("&amp;"),
-            '<' => escaped.push_str("&lt;"),
-            '>' => escaped.push_str("&gt;"),
-            '"' => escaped.push_str("&quot;"),
-            '\'' => escaped.push_str("&apos;"),
-            '\t' | '\n' | '\r' => escaped.push(character),
-            character if character >= '\u{20}' => escaped.push(character),
-            _ => escaped.push('\u{fffd}'),
-        }
-    }
-    escaped
 }
 
 fn benchmark_json_report(

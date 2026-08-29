@@ -40,6 +40,12 @@ jobs:
           key: s0-rust-1.97.1
       - name: Fetch locked dependency graph
         run: cargo fetch --locked
+      - name: Canonical UTF-8/LF repository text
+        run: cargo run --locked -p xtask -- check-line-endings
+      - name: Compiler architecture boundaries
+        run: cargo run --locked -p xtask -- check-architecture
+      - name: Documentation taxonomy
+        run: cargo run --locked -p xtask -- check-docs-taxonomy
       - name: P3 deterministic lockfile contract
         run: cargo test --locked -p arandu_query lockfile
       - name: P4 logical package namespaces

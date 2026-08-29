@@ -22,7 +22,6 @@ lsp-types = { workspace = true }
 crossbeam-channel = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-salsa = { workspace = true }
 rustc-hash = { workspace = true }
 
 [dev-dependencies]

@@ -8,9 +8,12 @@
 //! cargo run -p xtask -- help
 //! ```
 
+mod architecture;
 mod churn;
 mod corpus;
+mod docs_taxonomy;
 mod fuzz_regressions;
+mod line_endings;
 mod performance;
 mod release_contract;
 mod slt6;
@@ -24,12 +27,15 @@ fn main() {
     let cmd = args.next().unwrap_or_else(|| "help".into());
     let code = match cmd.as_str() {
         "check-diag-docs" => cmd_check_diag_docs(),
+        "check-docs-taxonomy" => docs_taxonomy::check(&workspace_root()),
         "check-project-corpus" => corpus::cmd_check_project_corpus(&workspace_root()),
         "check-project-churn" => churn::cmd_check_project_churn(&workspace_root()),
         "check-project-performance" => {
             performance::cmd_check_project_performance(&workspace_root())
         }
         "check-fuzz-regressions" => fuzz_regressions::check(&workspace_root()),
+        "check-architecture" => architecture::check(&workspace_root()),
+        "check-line-endings" => line_endings::check(&workspace_root()),
         "run-fuzz-seed" => fuzz_regressions::run_one(args),
         "check-release-contract" => release_contract::check(&workspace_root(), args.next()),
         "prepare-release" => release_contract::prepare(&workspace_root(), args.next()),
@@ -54,10 +60,13 @@ xtask — Arandu workspace tasks
 
 Commands:
   check-diag-docs   Bijection: DiagCode (user-facing) ↔ docs/errors/*.md
+  check-docs-taxonomy  Validate permanent docs and the single-roadmap rule
   check-project-corpus  Validate S2 projects and incremental ↔ clean equivalence
   check-project-churn   Run deterministic S2 module and identity churn
   check-project-performance  Measure S2 cold/noop/edit and retention budgets
   check-fuzz-regressions  Run the versioned adversarial corpus with isolation
+  check-architecture  Enforce compiler crate and effect boundaries
+  check-line-endings  Reject CRLF or mixed text stored in the Git index
   check-release-contract  Validate component versions and an optional v* tag
   prepare-release    Update every Arandu component to one version atomically
   check-slt6-sdk     Exercise an installed SDK outside the repository
@@ -65,10 +74,13 @@ Commands:
 
 Examples:
   cargo run -p xtask -- check-diag-docs
+  cargo run -p xtask -- check-docs-taxonomy
   cargo run -p xtask -- check-project-corpus
   cargo run -p xtask -- check-project-churn
   cargo run -p xtask -- check-project-performance
   cargo run -p xtask -- check-fuzz-regressions
+  cargo run -p xtask -- check-architecture
+  cargo run -p xtask -- check-line-endings
   cargo run -p xtask -- check-release-contract [vX.Y.Z[-rc.N]]
   cargo run -p xtask -- prepare-release X.Y.Z[-rc.N]
   cargo run -p xtask -- check-slt6-sdk --arandu PATH --work-dir DIR --evidence-dir DIR

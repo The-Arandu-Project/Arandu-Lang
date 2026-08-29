@@ -37,10 +37,9 @@ Este documento consolida as decisões arquiteturais sobre Data-Oriented Design (
 > Este é o único roadmap executivo; contratos técnicos vivos permanecem em
 > documentos próprios e campanhas concluídas permanecem recuperáveis no Git.
 
-> **Campanha ativa:** [SL_T — Testing & Benchmark Harness](./arandu-testing-benchmark-harness-v0.1.md)
-> entrega descoberta por anotação, executável de testes, protocolo estruturado,
-> `std.testing` e benchmarks estatisticamente honestos sobre o ciclo de projeto
-> já consolidado.
+> **Campanha de estabilização ativa:** auditoria de arquitetura, documentação e
+> portabilidade. Nenhuma nova superfície de linguagem entra antes de concluir a
+> consolidação dos contratos implementados e classificar as dívidas encontradas.
 
 ### Semântica de status
 
@@ -74,13 +73,15 @@ quando cumprir seu contrato atual.
 | Project & Package Lifecycle | `gold` | [manifesto, lockfile, grafo, cache e dependências remotas](./arandu-project-package-lifecycle-gold-v0.1.md) com recovery e E2E multiplataforma |
 | Anotações públicas | `gold` | contrato [PascalCase](./arandu-attribute-naming-v0.1.md), aliases legados apenas na janela de migração |
 | GenRef | `gold` no escopo seguro publicado | [RFC Gold](./arandu-genref-gold-rfc-v0.1.md), AMIR tipada, payload/drop, C/Cranelift, O004/LSP, fuzz, Miri e sanitizers |
+| SL_T — testes e benchmarks | `done`; soak para `gold` | [contrato consolidado](./arandu-testing-benchmark-harness-v0.1.md), SDK/VSIX e matriz nativa `SL_T / Harness` |
 
 ### Fila de execução
 
-1. [SL_T — Testing & Benchmark Harness](./arandu-testing-benchmark-harness-v0.1.md).
-2. Stdlib mínima necessária a aplicações e experimentos.
-3. Compiler service com sandbox e site/editor com compilação remota.
-4. SL_R e SL_S Gold para runtime assíncrono e sistema completos.
+1. Auditoria de arquitetura, documentação, modularização e portabilidade.
+2. Concluir o soak e promover [SL_T](./arandu-testing-benchmark-harness-v0.1.md) a `gold`.
+3. Stdlib mínima necessária a aplicações e experimentos.
+4. Compiler service com sandbox e site/editor com compilação remota.
+5. SL_R e SL_S Gold para runtime assíncrono e sistema completos.
 
 ### Resíduos que continuam abertos
 
@@ -249,11 +250,9 @@ Fase 3 — OSSA Avançado, Semântica e OS Runtime (v0.3) · [PARCIAL; vários m
    └─ [x] T3.6   LSP complete em path tokens `import std.▮` + members `alias.▮` (W4)
 [→] SL_S   Stdlib de Sistema: multi-file HIR link + `std.path` runnable; host path/rt helpers; more OS API later
 [→] SL_R   Async Runtime: SL_R.0 typed spawn/join/block_on Coroutine + SyncExecutor; SL_R.2 EpollReactor (epoll+timerfd); SL_R.1/3 open
-[→] SL_T   [Testing & Benchmark Harness](./arandu-testing-benchmark-harness-v0.1.md):
-           SL_T.0–SL_T.4 implementados (descoberta, harness, runner confiável,
-           std.testing estruturado e benchmark engine auditável); SL_T.5
-           concluído localmente (comparação, JUnit, CI e VS Code); SL_T.6
-           implementado localmente e aguardando matriz nativa + soak para Gold
+[x] SL_T   [Testing & Benchmark Harness](./arandu-testing-benchmark-harness-v0.1.md):
+           implementação, SDK/VSIX e matriz nativa concluídos; soak operacional
+           permanece como único requisito para promoção formal a Gold
 
 Fase 4 — Expressividade de Linguagem e Tipagem (v0.35) · [PARCIAL; superfície inicial integrada]
 [x] SYN.1  Retorno implícito: última `Expr` do body → valor de retorno (typeck + AMIR; async wrap A3)

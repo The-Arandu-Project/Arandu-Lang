@@ -5,7 +5,14 @@ resíduos vivem no [roadmap mestre](./arandu-compiler-roadmap-v0.1.md), e a
 superfície pública na [matriz de capacidades](./arandu-lsp-capabilities-v0.1.md).
 **Dono do grafo de queries:** `arandu_query` apenas.
 
-## Salsa toca / não toca
+## Visão Geral e Contexto
+
+O documento registra o ownership da incrementalidade e as identidades que
+impedem o LSP de publicar resultados de buffers/revisões obsoletos.
+
+## Detalhes Técnicos da Implementação
+
+### Salsa toca / não toca
 
 | Crate | Papel | Salsa? |
 |-------|--------|--------|
@@ -32,7 +39,7 @@ superfície pública na [matriz de capacidades](./arandu-lsp-capabilities-v0.1.m
 - Registro: CLI / LSP / `DatabaseImpl::resolve_module_path` (fallback disco **só** na DB).
 - Workers LSP **não** registram arquivos; só a main.
 
-## Três identidades
+### Três identidades
 
 | ID | Geracional? | Função |
 |----|-------------|--------|
@@ -44,7 +51,7 @@ superfície pública na [matriz de capacidades](./arandu-lsp-capabilities-v0.1.m
 
 **Deadlock Salsa:** nunca segurar `AnalysisSnapshot` / clone de `DatabaseImpl` na **mesma** thread que chama `set_text` (Storage espera clones == 1).
 
-## Legado
+### Legado
 
 | Item | Status |
 |------|--------|
@@ -52,7 +59,7 @@ superfície pública na [matriz de capacidades](./arandu-lsp-capabilities-v0.1.m
 | `symbol_span` dummy | **Span real** + `try_get` safe |
 | tower-lsp / tokio no path de query | **Removidos** do `arandu_lsp` |
 
-## LSP gold (implementado)
+### LSP gold (implementado)
 
 1. Main síncrona (`lsp-server`) + `Vfs` debounce 100 ms.  
 2. Workers: `AnalysisSnapshot` (clone Storage) → diags/goto; publish só se DocumentId vivo e revision match.  
@@ -125,7 +132,7 @@ superfície pública na [matriz de capacidades](./arandu-lsp-capabilities-v0.1.m
     uma revisão-oráculo válida. Nenhum diagnóstico de revisão anterior pode ser
     publicado depois do oráculo; completion e shutdown devem continuar vivos.
 
-## F4 / P3 — delta on-type
+### F4 / P3 — delta on-type
 
 - `block_dataflow_facts`: live/init/moved/stmt por bloco.  
 - **`item_ide_diagnostics`**: diags de typeck **por item** (`item_body_typeck`) + AMIR se func.  
@@ -133,7 +140,7 @@ superfície pública na [matriz de capacidades](./arandu-lsp-capabilities-v0.1.m
 - Early cutoff entre itens (testes `item_body_cutoff`, `ide_diag_delta`).  
 - Typeck monólito substituído por compose P1/P2; wire LSP ainda manda lista full (protocolo).
 
-## P5 — CST-first (rowan)
+### P5 — CST-first (rowan)
 
 - **Canônico:** `syntax_tree(file)` a partir do texto (ITEM por heurística de keywords).  
 - **`parse(file)`** = `lower_syntax_to_program(syntax_tree)` — AST só como lower do CST.  
@@ -144,6 +151,17 @@ superfície pública na [matriz de capacidades](./arandu-lsp-capabilities-v0.1.m
 - Fingerprint de item (`item_source_input`) usa texto do ITEM CST.  
 - Typeck/resolve consomem AST **somente** via lower do CST (`parse` ← `syntax_tree`).
 
-## Guardrails / testes
+### Guardrails / testes
 
 - `architecture_invariants`, `doc_store` stale, `analysis` revision stale, `vfs` debounce, `block_delta`.
+
+## PONTOS DE MELHORIA (O que não está no roadmap)
+
+`arandu_middle/src/db.rs` declara inputs e o trait compartilhado por necessidade
+de tipos, embora `arandu_query` continue único owner de providers/execução. O
+guardrail atual é lexical e deliberadamente estreito.
+
+## Futuro e Próximos Passos
+
+Medir latência p50/p95 e recomputações por workload antes de mudar granularidade;
+manter filas limitadas, cancelamento e early-cutoff por item.

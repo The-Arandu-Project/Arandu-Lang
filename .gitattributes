@@ -1,4 +1,11 @@
-# Golden diagnostic fixtures must remain UTF-8 text with LF line endings.
+# Canonical repository format: every detected text file is UTF-8/LF on every
+# host. Binary formats must be declared explicitly below before renormalizing.
+* text=auto eol=lf
+
+# Binary assets are never passed through text or diff conversion.
+*.png binary
+
+# Golden diagnostic fixtures must remain text with LF line endings.
 *.aru text eol=lf
 *.diag text eol=lf
 *.hir text eol=lf

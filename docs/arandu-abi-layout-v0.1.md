@@ -4,7 +4,14 @@ This document defines the physical memory layouts, alignment rules, and canonica
 
 ---
 
-## 1. Type Layout Calculation Algorithm
+## Visão Geral e Contexto
+
+Este contrato define layout físico e representações ABI dependentes do alvo
+para que middle, runtime e backends concordem byte a byte.
+
+## Detalhes Técnicos da Implementação
+
+### 1. Type Layout Calculation Algorithm
 
 Memory layout in Arandu follows the standard C ABI layout rules (`#[repr(C)]`). Each type is represented by a `TypeLayout` structure:
 
@@ -28,7 +35,7 @@ $$\text{aligned\_size} = (\text{total\_size} + \text{align}_{\text{composite}} -
 
 ---
 
-## 2. Primitive Type Layouts
+### 2. Primitive Type Layouts
 
 The size and alignment of primitive types are defined below (under a target pointer width of $W$ bytes, where $W = 4$ or $W = 8$):
 
@@ -54,7 +61,7 @@ For compilation backends (such as the C backend and Cranelift JIT), platform-dep
 
 ---
 
-## 3. Canonical Fat Pointer Layouts (`str` and `[]T`)
+### 3. Canonical Fat Pointer Layouts (`str` and `[]T`)
 
 Strings and Slices in Arandu are not raw pointers; they are represented using a **Fat Pointer ABI**.
 
@@ -68,6 +75,16 @@ struct StrLayout {
     len: usize,    // Number of bytes in buffer (target pointer width)
 }
 ```
+
+## PONTOS DE MELHORIA (O que não está no roadmap)
+
+O suporte de um layout não promove automaticamente o target na distribuição.
+ABI de FFI e targets adicionais precisam de runners/artefatos nativos.
+
+## Futuro e Próximos Passos
+
+Ampliar matrizes de layout e chamada junto da matriz de release; nunca inferir
+ponteiro, float ou alinhamento a partir do host do compilador.
 
 - **64-bit Target**: `size = 16`, `align = 8`, field offsets: `ptr` at offset `0`, `len` at offset `8`.
 - **32-bit Target**: `size = 8`, `align = 4`, field offsets: `ptr` at offset `0`, `len` at offset `4`.
@@ -106,7 +123,7 @@ Mismatch on use → `std.core.intrinsics.abort_generational_mismatch` (trap, not
 
 ---
 
-## 4. Enums and Sum Types (`Result<T, E>` and `Option<T>`)
+### 4. Enums and Sum Types (`Result<T, E>` and `Option<T>`)
 
 ### `Result<T, E>` Layout
 
