@@ -2,7 +2,7 @@
 
 use arandu_codegen::testing::{TestEventV1, TestStatus};
 
-pub(super) fn junit_report(events: &[TestEventV1], total_duration_ms: u128) -> String {
+pub fn junit_report(events: &[TestEventV1], total_duration_ms: u128) -> String {
     let failures = events
         .iter()
         .filter(|event| event.status == TestStatus::Failed)

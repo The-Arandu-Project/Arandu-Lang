@@ -2,7 +2,7 @@
 
 use arandu_codegen::testing::BenchmarkEventV1;
 
-pub(super) fn sample_values(event: &BenchmarkEventV1) -> Vec<f64> {
+pub fn sample_values(event: &BenchmarkEventV1) -> Vec<f64> {
     let mut values = event
         .samples
         .iter()
@@ -14,7 +14,7 @@ pub(super) fn sample_values(event: &BenchmarkEventV1) -> Vec<f64> {
     values
 }
 
-pub(super) fn percentile(sorted: &[f64], percentile: usize) -> Option<f64> {
+pub fn percentile(sorted: &[f64], percentile: usize) -> Option<f64> {
     if sorted.is_empty() {
         return None;
     }
@@ -22,7 +22,7 @@ pub(super) fn percentile(sorted: &[f64], percentile: usize) -> Option<f64> {
     sorted.get(numerator.div_ceil(100)).copied()
 }
 
-fn median(sorted: &[f64]) -> Option<f64> {
+pub fn median(sorted: &[f64]) -> Option<f64> {
     let middle = sorted.len().checked_div(2)?;
     if sorted.len().is_multiple_of(2) {
         let left = *sorted.get(middle.checked_sub(1)?)?;
@@ -33,7 +33,7 @@ fn median(sorted: &[f64]) -> Option<f64> {
     }
 }
 
-pub(super) fn benchmark_stats(event: &BenchmarkEventV1) -> (Option<f64>, Option<f64>, Option<f64>) {
+pub fn benchmark_stats(event: &BenchmarkEventV1) -> (Option<f64>, Option<f64>, Option<f64>) {
     let values = sample_values(event);
     let center_median = median(&values);
     let mad = center_median.and_then(|center| {
@@ -47,7 +47,7 @@ pub(super) fn benchmark_stats(event: &BenchmarkEventV1) -> (Option<f64>, Option<
     (center_median, mad, percentile(&values, 95))
 }
 
-pub(super) fn format_ns_per_op(value: f64) -> String {
+pub fn format_ns_per_op(value: f64) -> String {
     if value >= 1_000_000.0 {
         format!("{:.3} ms/op", value / 1_000_000.0)
     } else if value >= 1_000.0 {
