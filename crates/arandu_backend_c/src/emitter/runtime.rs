@@ -265,6 +265,22 @@ static int64_t ar_str_ends_with(ArStr s, ArStr p) {{
     if (s.len < p.len || !s.ptr || !p.ptr) return 0;
     return memcmp(s.ptr + (s.len - p.len), p.ptr, (size_t)p.len) == 0 ? 1 : 0;
 }}
+static int64_t ar_str_contains(ArStr s, ArStr needle) {{
+    if (needle.len <= 0) return 1;
+    if (s.len < needle.len || !s.ptr || !needle.ptr) return 0;
+    for (int64_t i = 0; i + needle.len <= s.len; i++) {{
+        if (memcmp(s.ptr + i, needle.ptr, (size_t)needle.len) == 0) return 1;
+    }}
+    return 0;
+}}
+static int64_t ar_str_find(ArStr s, ArStr needle) {{
+    if (needle.len <= 0) return 0;
+    if (s.len < needle.len || !s.ptr || !needle.ptr) return -1;
+    for (int64_t i = 0; i + needle.len <= s.len; i++) {{
+        if (memcmp(s.ptr + i, needle.ptr, (size_t)needle.len) == 0) return i;
+    }}
+    return -1;
+}}
 static ArStr ar_str_split_last(ArStr s, ArStr sep) {{
     if (s.len <= 0 || !s.ptr) return ar_str_pack((const uint8_t*)"", 0);
     if (sep.len <= 0 || !sep.ptr) {{

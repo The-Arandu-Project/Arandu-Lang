@@ -187,11 +187,19 @@ const STD_CHILDREN: &[(&str, &[&str])] = &[
             "prelude",
             "intrinsics",
             "future",
-            "ptr",
             "pointer",
+            "str",
+            "cmp",
+            "char",
+            "ascii",
+            "num",
+            "slice",
         ],
     ),
-    ("std.alloc", &["vec", "allocator_api", "gen_arena"]),
+    (
+        "std.alloc",
+        &["vec", "allocator_api", "gen_arena", "string"],
+    ),
 ];
 
 /// If the cursor is inside an `import …` path (not after `as`), suggest next segments.

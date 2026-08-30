@@ -712,11 +712,17 @@ fn parse_type_led(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>, start: u32) -> Op
         ));
     }
     // Type.member
-    if let TypeExpr::Named { name, args, .. } = ctx.pool.type_expr(ty)
-        && args.is_empty()
+    let named_info = match ctx.pool.type_expr(ty) {
+        TypeExpr::Named { name, args, .. } if args.is_empty() => Some(name.clone()),
+        TypeExpr::Primitive { span, name } => Some(TypeName {
+            span: *span,
+            path: smallvec::smallvec![name.clone()],
+        }),
+        _ => None,
+    };
+    if let Some(type_name) = named_info
         && cur.eat(TokenKind::Dot)
     {
-        let type_name = name.clone();
         let mem = cur.peek()?;
         if !matches!(mem.kind, TokenKind::IdentValue | TokenKind::IdentType) {
             return None;

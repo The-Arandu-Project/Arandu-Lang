@@ -410,6 +410,11 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Ok(name)
             }
+            kind if is_contextual_module_segment(kind) => {
+                let name = SmolStr::new(self.current_text());
+                self.advance();
+                Ok(name)
+            }
             _ => Err(ParseError::expected(
                 ParseErrorCode::ExpectedToken,
                 "expected identifier",
@@ -795,6 +800,10 @@ pub(super) fn merge_text_parts(parts: Vec<StringPart>) -> Vec<StringPart> {
 
 pub(super) fn is_contextual_module_segment(kind: &TokenKind) -> bool {
     TOKEN_INFO_TABLE[kind.index()].is_contextual_module_segment
+}
+
+pub(crate) fn is_primitive_type_token(kind: &TokenKind) -> bool {
+    TOKEN_INFO_TABLE[kind.index()].primitive_type_name.is_some()
 }
 
 pub(super) fn span_between(start: Span, end: Span) -> Span {

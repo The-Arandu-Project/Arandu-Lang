@@ -270,6 +270,48 @@ pub unsafe extern "C" fn ar_str_ends_with(
     i64::from(s.ends_with(p))
 }
 
+/// Contains check (byte-wise).
+///
+/// # Safety
+/// Fat string ABI.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ar_str_contains(
+    s_ptr: *const u8,
+    s_len: i64,
+    needle_ptr: *const u8,
+    needle_len: i64,
+) -> i64 {
+    let s = slice_from_fat(s_ptr, s_len);
+    let needle = slice_from_fat(needle_ptr, needle_len);
+    if needle.is_empty() {
+        return 1;
+    }
+    i64::from(s.windows(needle.len()).any(|w| w == needle))
+}
+
+/// Find index of needle (byte-wise); returns -1 if not found.
+///
+/// # Safety
+/// Fat string ABI.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ar_str_find(
+    s_ptr: *const u8,
+    s_len: i64,
+    needle_ptr: *const u8,
+    needle_len: i64,
+) -> i64 {
+    let s = slice_from_fat(s_ptr, s_len);
+    let needle = slice_from_fat(needle_ptr, needle_len);
+    if needle.is_empty() {
+        return 0;
+    }
+    if let Some(pos) = s.windows(needle.len()).position(|w| w == needle) {
+        pos as i64
+    } else {
+        -1
+    }
+}
+
 /// Bytes after the last occurrence of `sep` (byte-wise). Empty sep → full `s`.
 ///
 /// # Safety

@@ -1,23 +1,159 @@
 module std.core.result
 
-extern "C" {
-    func abort(): void
-}
+import std.core.intrinsics as intrinsics
+import std.core.option as option
 
+/// Algebraic data type representing either success (`Ok`) or failure (`Err`).
+///
+/// Enables typed, deterministic error handling without runtime exceptions.
+///
+/// # Examples
+/// ```arandu
+/// let success: Result<int, str> = Result.Ok(100)
+/// let failure: Result<int, str> = Result.Err("validation failed")
+///
+/// if success.isOk() {
+///     let value = success.unwrapOr(0) // 100
+/// }
+/// ```
 public enum Result<T, E> {
+    /// Contains the success value `T`.
     Ok(T),
+    /// Contains the error value `E`.
     Err(E),
 }
 
-/// Unwrap Ok or abort. Method form for ergonomics (`r.expectOrAbort("msg")`).
-public func Result.expectOrAbort<T, E>(shared self, reason: str): T {
+/// Returns `true` if the result is the `Ok` variant.
+///
+/// # Examples
+/// ```arandu
+/// Result.Ok(10).isOk() // true
+/// Result.Err("error").isOk() // false
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func Result.isOk<T, E>(shared self): bool {
+    match self {
+        Ok(_) => {
+            return true
+        }
+        Err(_) => {
+            return false
+        }
+    }
+}
+
+/// Returns `true` if the result is the `Err` variant.
+///
+/// # Examples
+/// ```arandu
+/// Result.Err("error").isErr() // true
+/// Result.Ok(10).isErr()      // false
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func Result.isErr<T, E>(shared self): bool {
+    match self {
+        Ok(_) => {
+            return false
+        }
+        Err(_) => {
+            return true
+        }
+    }
+}
+
+/// Converts `Result<T, E>` into `Option<T>`, discarding the error value if `Err`.
+///
+/// Consumes `self` by move.
+///
+/// # Examples
+/// ```arandu
+/// Result.Ok(42).ok()          // Option.Some(42)
+/// Result.Err("error").ok()    // Option.None
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func Result.ok<T, E>(own self): Option<T> {
+    match self {
+        Ok(v) => {
+            return Option.Some(v)
+        }
+        Err(_) => {
+            return Option.None
+        }
+    }
+}
+
+/// Converts `Result<T, E>` into `Option<E>`, discarding the success value if `Ok`.
+///
+/// Consumes `self` by move.
+///
+/// # Examples
+/// ```arandu
+/// Result.Err("failed").err() // Option.Some("failed")
+/// Result.Ok(42).err()        // Option.None
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func Result.err<T, E>(own self): Option<E> {
+    match self {
+        Ok(_) => {
+            return Option.None
+        }
+        Err(e) => {
+            return Option.Some(e)
+        }
+    }
+}
+
+/// Unwraps the value contained in `Ok`, or returns the provided `defaultVal` if `Err`.
+///
+/// Consumes `self` by move.
+///
+/// # Examples
+/// ```arandu
+/// Result.Ok(42).unwrapOr(0)        // 42
+/// Result.Err("error").unwrapOr(100) // 100
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func Result.unwrapOr<T, E>(own self, defaultVal: T): T {
+    match self {
+        Ok(v) => {
+            return v
+        }
+        Err(_) => {
+            return defaultVal
+        }
+    }
+}
+
+/// Unwraps the value contained in `Ok`, or aborts the program with a fatal trap if `Err`.
+///
+/// # Traps / Abort
+/// If `self` is `Err`, execution is terminated immediately and deterministically (`intrinsics.abort`).
+///
+/// # Examples
+/// ```arandu
+/// let v = Result.Ok(42).expectOrAbort("must succeed") // 42
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func Result.expectOrAbort<T, E>(own self, reason: str): T {
     match self {
         Ok(v) => {
             return v
         }
         Err(_) => {
             unsafe {
-                abort()
+                intrinsics.abort()
             }
         }
     }

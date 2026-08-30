@@ -1,9 +1,38 @@
 module std.core.mem
 
 extern "arandu-intrinsic" {
+    /// Returns the size in bytes of type `T` according to the target's `DataLayout`.
+    ///
+    /// # Examples
+    /// ```arandu
+    /// mem.sizeOf<int>() // 8 on x64, 4 on x32
+    /// ```
     func sizeOf<T>() : u64
+
+    /// Returns the required ABI alignment in bytes for type `T`.
+    ///
+    /// # Examples
+    /// ```arandu
+    /// mem.alignOf<int>() // 8 on x64, 4 on x32
+    /// ```
     func alignOf<T>() : u64
+
+    /// Computes a pointer offset by `offset` elements of type `T` from `base`.
+    ///
+    /// # Safety
+    /// The resulting pointer must remain within the bounds of the allocated object
+    /// to prevent undefined behavior.
     func ptrOffset<T>(base: ptr[T], offset: i32) : ptr[T]
+
+    /// Directly reads and returns the value of type `T` pointed to by `p`.
+    ///
+    /// # Safety
+    /// `p` must be a valid, non-null, properly aligned pointer pointing to initialized memory.
     func ptrRead<T>(p: ptr[T]) : T
+
+    /// Directly writes `val` into the memory address pointed to by `p`.
+    ///
+    /// # Safety
+    /// `p` must be a valid, properly aligned pointer with write permissions.
     func ptrWrite<T>(p: ptr[T], val: T) : void
 }

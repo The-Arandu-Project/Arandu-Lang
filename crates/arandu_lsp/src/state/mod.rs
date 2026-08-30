@@ -143,7 +143,7 @@ mod tests {
             "import editor_gold.util as util\n",
             "import std.path as path\n",
             "func main(): int {\n",
-            "    if path.is_empty(\"\") { return util.answer() }\n",
+            "    if path.isEmpty(\"\") { return util.answer() }\n",
             "    return 0\n",
             "}\n",
         );

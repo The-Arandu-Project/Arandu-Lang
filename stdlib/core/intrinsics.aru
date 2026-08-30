@@ -1,16 +1,15 @@
-// arandu_core::intrinsics — zero-heap compiler-mapped traps and builtins.
+// std.core.intrinsics — zero-heap compiler-mapped traps and builtins.
 //
-// Layer rule: this module must never allocate. Fatal failures use native traps
-// (UD2 / BRK / abort) so the 5th invariant holds without heap.
+// Layer rule: this module must never allocate on the heap. Fatal failures use
+// native hardware traps (UD2 on x86, BRK on ARM, abort on C/Wasm).
 
 module std.core.intrinsics
 
 extern "arandu-intrinsic" {
-    /// Unconditional fatal trap (out-of-bounds, failed assert, etc.).
+    /// Unconditional fatal trap (out-of-bounds, failed assertions, etc.).
     func abort() : void
 
-    /// Generational ref mismatch: slot was recycled (use-after-free detected).
-    /// Same trap family as `abort()`; separate name for diagnostics / DX.5.
-    /// Called only from `std.alloc.gen_arena` get paths and compiler-lowered GenGet.
+    /// Generational ref mismatch trap: slot was recycled (use-after-free detected).
+    /// Used by `std.alloc.gen_arena` verification paths and compiler-lowered `GenGet` nodes.
     func abort_generational_mismatch() : void
 }

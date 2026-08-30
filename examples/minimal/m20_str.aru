@@ -1,35 +1,42 @@
 module examples.minimal.m20_str
 
-// Minimal 0.1 — std.core.str thin (concat / starts / ends / split_last).
+// Minimal 0.1 — std.core.str pure heapless (isEmpty / lenBytes / startsWith / endsWith / contains / find).
 import std.core.str as s
 
 func main(): int {
-    if !s.is_empty("") {
+    if !s.isEmpty("") {
         return 1
     }
-    if s.is_empty("x") {
+    if s.isEmpty("x") {
         return 2
     }
-    if s.len("hi") != 2 as u64 {
+    if s.lenBytes("hi") != 2 as u64 {
         return 3
     }
-    if s.concat("ab", "cd") != "abcd" {
+    if !s.startsWith("hello", "he") {
         return 4
     }
-    if !s.starts_with("hello", "he") {
+    if s.startsWith("hello", "x") {
         return 5
     }
-    if s.starts_with("hello", "x") {
+    if !s.endsWith("hello", "lo") {
         return 6
     }
-    if !s.ends_with("hello", "lo") {
+    if !s.contains("hello world", "world") {
         return 7
     }
-    if s.split_last("a/b/c", "/") != "c" {
+    if s.contains("hello world", "xyz") {
         return 8
     }
-    if s.split_last("leaf", "/") != "leaf" {
-        return 9
+    match s.find("hello world", "world") {
+        Some(idx) => {
+            if idx != 6 as u64 {
+                return 9
+            }
+        }
+        None => {
+            return 10
+        }
     }
     return 0
 }

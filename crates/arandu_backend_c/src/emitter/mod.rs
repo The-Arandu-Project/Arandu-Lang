@@ -168,6 +168,8 @@ impl<'a> CEmitter<'a> {
                     | "ar_str_concat"
                     | "ar_str_starts_with"
                     | "ar_str_ends_with"
+                    | "ar_str_contains"
+                    | "ar_str_find"
                     | "ar_str_split_last"
             ) {
                 continue;

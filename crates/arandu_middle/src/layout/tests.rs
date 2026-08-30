@@ -197,7 +197,7 @@ fn test_all_primitive_layouts() {
             (Primitive::U8, 1, 1),
             (Primitive::Byte, 1, 1),
             (Primitive::Bool, 1, 1),
-            (Primitive::Char, 1, 1),
+            (Primitive::Char, 4, 4),
             (Primitive::I16, 2, 2),
             (Primitive::U16, 2, 2),
             (Primitive::I32, 4, 4),

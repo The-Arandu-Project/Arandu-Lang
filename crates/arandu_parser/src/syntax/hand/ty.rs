@@ -259,7 +259,9 @@ pub fn parse_dotted_ident_path(
     let mut path = smallvec::SmallVec::new();
     loop {
         let t = cur.peek()?;
-        if !matches!(t.kind, TokenKind::IdentValue | TokenKind::IdentType) {
+        if !matches!(t.kind, TokenKind::IdentValue | TokenKind::IdentType)
+            && !crate::parser::is_contextual_module_segment(&t.kind)
+        {
             return None;
         }
         path.push(SmolStr::new(ctx.text(t)?));

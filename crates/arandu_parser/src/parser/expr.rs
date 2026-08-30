@@ -1,6 +1,7 @@
 use super::{
     BinaryOp, Block, CatchHandler, FieldInit, LambdaBody, LambdaParam, ParseError, ParseErrorCode,
-    Parser, Stmt, StringPart, TokenKind, TypeExpr, UnaryOp, merge_text_parts, span_between,
+    Parser, Stmt, StringPart, TokenKind, TypeExpr, TypeName, UnaryOp, is_primitive_type_token,
+    merge_text_parts, span_between,
 };
 use crate::ast::ast_pool::{ExprId, ExprKind};
 use smol_str::SmolStr;
@@ -357,7 +358,9 @@ impl<'a> Parser<'a> {
                     ))
                 }
             }
-            TokenKind::IdentType => self.parse_type_led_expr(),
+            kind if matches!(kind, TokenKind::IdentType) || is_primitive_type_token(kind) => {
+                self.parse_type_led_expr()
+            }
             TokenKind::IntDec | TokenKind::IntHex | TokenKind::IntBin | TokenKind::IntOct => {
                 let value = SmolStr::new(self.current_text());
                 self.advance();
@@ -656,6 +659,10 @@ impl<'a> Parser<'a> {
         }
         let named_info = match self.pool.type_expr(ty) {
             TypeExpr::Named { name, args, .. } if args.is_empty() => Some(name.clone()),
+            TypeExpr::Primitive { span, name } => Some(TypeName {
+                span: *span,
+                path: smallvec::smallvec![name.clone()],
+            }),
             _ => None,
         };
         if let Some(type_name) = named_info

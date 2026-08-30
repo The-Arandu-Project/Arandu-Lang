@@ -80,8 +80,8 @@ Esta camada é **estritamente livre de dependências externas**. Ela não assume
 ### Estrutura de Módulos
 ```text
 arandu_core
- ├─ mem          # Operações cruas de memória, alinhamento, layout de tipos
- ├─ ptr          # Ponteiros brutos, safe wrappers, manipulação direta
+ ├─ mem          # Operações unsafe de memória, alinhamento e layout de tipos
+ ├─ pointer      # Identidade segura de ponteiros (`null`/`isNull`)
  ├─ option       # Opcionalidade canônica (Option<T>)
  ├─ result       # Tratamento de erro monádico (Result<T, E>)
  ├─ iter         # Iteradores puros, adaptadores lazy combinatoriais
@@ -274,6 +274,25 @@ O marco definitivo de maturidade da linguagem Arandu é o **Self-Hosting**: a ca
 Grande parte deste documento ainda é design, não promessa implementada. Metas
 numéricas de self-hosting precisam de corpus, hardware e protocolo de benchmark
 definidos antes de se tornarem gate.
+
+O primeiro corte de `SL_S-Core` estabelece os seguintes contratos concretos:
+
+- nomes públicos de funções e métodos usam `camelCase`;
+- `char` representa um Unicode scalar em 32 bits em layout, C e Cranelift;
+- `Option`/`Result` consomem `self` ao retirar payloads possuídos;
+- `Slice.get` retorna `Option<ptr[T]>`, evitando copiar silenciosamente um `T`
+  possuído; a leitura continua explícita e `unsafe` em `std.core.mem`;
+- `std.core.pointer` expõe somente identidade segura. Aritmética, leitura e
+  escrita de ponteiros permanecem intrínsecos `unsafe`;
+- aritmética checked de `int` testa limites antes da operação e deriva os
+  limites da largura do target.
+
+Ainda impedem a promoção para Gold: allocator genérico real, API fallible para
+OOM, views emprestadas de slices/strings, `String.asStr`/`asBytes`/`pushStr`,
+drop de payloads não triviais e cobertura nativa publicada em 32 e 64 bits.
+O alias histórico `std.core.ptr` foi removido porque oferecia aritmética de
+ponteiro através de uma função aparentemente segura; uma compatibilidade futura
+só pode voltar junto de funções públicas `unsafe` no contrato da linguagem.
 
 ## Futuro e Próximos Passos
 

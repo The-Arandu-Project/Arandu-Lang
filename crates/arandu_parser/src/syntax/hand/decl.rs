@@ -415,6 +415,9 @@ fn parse_import_brace_list(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>) -> Optio
             let mut end = name_tok.start + name_tok.len;
             let alias = if cur.eat(TokenKind::KwAs) {
                 let a = cur.peek()?;
+                if !matches!(a.kind, TokenKind::IdentValue | TokenKind::IdentType) {
+                    return None;
+                }
                 let alias = SmolStr::new(ctx.text(a)?);
                 end = a.start + a.len;
                 cur.bump();

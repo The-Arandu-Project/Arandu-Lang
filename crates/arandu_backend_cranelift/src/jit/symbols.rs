@@ -32,6 +32,18 @@ pub(crate) fn declare_runtime_imports<M: Module>(
         .map_err(|err| codegen_ice(format!("failed to declare free: {err:?}")))?;
     func_ids.insert("free".to_string(), free_id);
 
+    // Declare abort as import
+    let abort_sig = Signature::new(default_call_conv);
+    let abort_id = module
+        .declare_function("abort", Linkage::Import, &abort_sig)
+        .map_err(|err| codegen_ice(format!("failed to declare abort: {err:?}")))?;
+    func_ids.insert("abort".to_string(), abort_id);
+    func_ids.insert("std.core.intrinsics.abort".to_string(), abort_id);
+    func_ids.insert(
+        "std.core.intrinsics.abort_generational_mismatch".to_string(),
+        abort_id,
+    );
+
     // SL_T.4 opaque optimization barriers. Signatures deliberately match
     // the machine representation selected by lowering.
     for (name, ty) in [
@@ -224,7 +236,12 @@ pub(crate) fn declare_runtime_imports<M: Module>(
             pref_sig.params.push(AbiParam::new(I64));
         }
         pref_sig.returns.push(AbiParam::new(I64));
-        for name in ["ar_str_starts_with", "ar_str_ends_with"] {
+        for name in [
+            "ar_str_starts_with",
+            "ar_str_ends_with",
+            "ar_str_contains",
+            "ar_str_find",
+        ] {
             let id = module
                 .declare_function(name, Linkage::Import, &pref_sig)
                 .map_err(|err| codegen_ice(format!("failed to declare {name}: {err:?}")))?;

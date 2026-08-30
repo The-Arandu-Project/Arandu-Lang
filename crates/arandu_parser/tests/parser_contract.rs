@@ -50,6 +50,21 @@ fn parse_error_reports_expected_tokens_and_found_token() {
 }
 
 #[test]
+fn import_aliases_reject_reserved_keywords() {
+    let alias = "module tests.alias\nimport std.core.char as if\nfunc main(): void {}\n";
+    assert!(
+        parse(alias).is_err(),
+        "reserved control-flow keyword became an alias"
+    );
+
+    let named = "module tests.alias\nfrom std.core.char import { lenUtf8 as return }\nfunc main(): void {}\n";
+    assert!(
+        parse(named).is_err(),
+        "reserved control-flow keyword became a named alias"
+    );
+}
+
+#[test]
 fn ast_program_span_covers_source_before_eof() {
     let source = "module tests.spans\nfunc main() {\n    let value = add(1, 2)\n}\n";
     let program = parse(source).expect("parser should succeed");

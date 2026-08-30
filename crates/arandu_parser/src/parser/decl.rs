@@ -802,6 +802,20 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn expect_import_name(&mut self) -> Result<SmolStr, ParseError> {
-        self.expect_name_like()
+        match &self.current().kind {
+            TokenKind::IdentValue | TokenKind::IdentType => {
+                let name = SmolStr::new(self.current_text());
+                self.advance();
+                Ok(name)
+            }
+            _ => Err(ParseError::expected(
+                ParseErrorCode::ExpectedToken,
+                "expected import identifier",
+                self.current(),
+                self.file_id,
+                self.source,
+                &["import identifier"],
+            )),
+        }
     }
 }

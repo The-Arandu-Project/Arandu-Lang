@@ -23,6 +23,14 @@ pub(super) fn cast_types_compatible(
     if found.is_numeric() && target.is_numeric() {
         return true;
     }
+    // `char` is a Unicode scalar value with a canonical u32 representation.
+    // This direction is lossless; the inverse requires scalar validation and
+    // therefore remains outside the general cast operator.
+    if matches!(found, ArType::Primitive(Primitive::Char))
+        && matches!(target, ArType::Primitive(Primitive::U32))
+    {
+        return true;
+    }
     if matches!(found, ArType::Ptr(_)) && matches!(target, ArType::Ptr(_)) {
         return true;
     }

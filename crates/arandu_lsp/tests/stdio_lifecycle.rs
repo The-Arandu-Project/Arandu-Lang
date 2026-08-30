@@ -1199,7 +1199,7 @@ fn stdio_package_imports_refresh_completion_goto_and_diagnostics() {
         "import editor_gold.util as util\n",
         "import std.path as path\n",
         "func main(): int {\n",
-        "    if path.is_empty(\"\") { return util.answer() }\n",
+        "    if path.isEmpty(\"\") { return util.answer() }\n",
         "    return 0\n",
         "}\n",
     );
@@ -1294,7 +1294,7 @@ fn stdio_package_imports_refresh_completion_goto_and_diagnostics() {
         "goto must target the newly created module: {goto}"
     );
 
-    let std_call = missing_source.find("path.is_empty").expect("stdlib call");
+    let std_call = missing_source.find("path.isEmpty").expect("stdlib call");
     lsp.send(&json!({
         "jsonrpc": "2.0", "id": 6, "method": "textDocument/definition",
         "params": {

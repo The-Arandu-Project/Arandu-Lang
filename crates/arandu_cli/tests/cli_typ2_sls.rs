@@ -41,7 +41,7 @@ fn import_std_runtime_scaffold_checks() {
 module tests.cli.std_runtime
 import std.runtime as rt
 func main(): int {
-    let ex = rt.new_sync_executor()
+    let ex = rt.newSyncExecutor()
     return ex.flags
 }
 "#,
@@ -67,13 +67,13 @@ fn run_path_absolute_and_empty() {
 module tests.cli.path_abs
 import std.path as path
 func main(): int {
-    if !path.is_empty("") {
+    if !path.isEmpty("") {
         return 1
     }
-    if !path.is_absolute("__ABSOLUTE_PATH__") {
+    if !path.isAbsolute("__ABSOLUTE_PATH__") {
         return 2
     }
-    if path.is_absolute("rel") {
+    if path.isAbsolute("rel") {
         return 3
     }
     return 0
@@ -102,7 +102,7 @@ fn run_sync_executor_new() {
 module tests.cli.sync_ex
 import std.runtime as rt
 func main(): int {
-    let ex = rt.new_sync_executor()
+    let ex = rt.newSyncExecutor()
     return ex.flags
 }
 "#,
@@ -143,10 +143,10 @@ func make_ready(payload: int): ptr[u8] {
 }
 
 func main(): int {
-    let ex = rt.new_sync_executor()
+    let ex = rt.newSyncExecutor()
     let state = make_ready(42)
-    let h = rt.spawn_i64(ex, state)
-    return rt.join_i64(ex, h)
+    let h = rt.spawnI64(ex, state)
+    return rt.joinI64(ex, h)
 }
 "#,
     )
@@ -177,9 +177,9 @@ async func answer(): int {
 }
 
 func main(): int {
-    let ex = rt.new_sync_executor()
-    let h = rt.spawn(ex, answer())
-    return rt.join(ex, h)
+    let ex = rt.newSyncExecutor()
+    let h = rt.spawnInt(ex, answer())
+    return rt.joinInt(ex, h)
 }
 "#,
     )
@@ -212,14 +212,14 @@ extern "C" {
 struct SyncExecutor { flags: int }
 struct TaskHandle { id: int }
 
-func spawn_g<T>(shared ex: SyncExecutor, job: Coroutine<T>): TaskHandle {
+func spawn<T>(shared ex: SyncExecutor, job: Coroutine<T>): TaskHandle {
     unsafe {
         let id = ar_rt_spawn_i64(job as ptr[u8])
         return TaskHandle { id: id }
     }
 }
 
-func join_g<T>(shared ex: SyncExecutor, handle: TaskHandle): T {
+func join<T>(shared ex: SyncExecutor, handle: TaskHandle): T {
     unsafe {
         let v = ar_rt_join_i64(handle.id)
         return v as T
@@ -232,8 +232,8 @@ async func answer(): int {
 
 func main(): int {
     let ex = SyncExecutor { flags: 0 }
-    let h = spawn_g(ex, answer())
-    return join_g(ex, h)
+    let h = spawn<int>(ex, answer())
+    return join<int>(ex, h)
 }
 "#,
     )
@@ -264,9 +264,9 @@ async func answer(): int {
 }
 
 func main(): int {
-    let ex = rt.new_sync_executor()
-    let h = rt.spawn_int(ex, answer())
-    return rt.join_int(ex, h)
+    let ex = rt.newSyncExecutor()
+    let h = rt.spawnInt(ex, answer())
+    return rt.joinInt(ex, h)
 }
 "#,
     )
@@ -299,14 +299,14 @@ extern "C" {
 struct SyncExecutor { flags: int }
 struct TaskHandle { id: int }
 
-func spawn_g<T>(shared ex: SyncExecutor, job: Coroutine<T>): TaskHandle {
+func spawn<T>(shared ex: SyncExecutor, job: Coroutine<T>): TaskHandle {
     unsafe {
         let id = ar_rt_spawn_i64(job as ptr[u8])
         return TaskHandle { id: id }
     }
 }
 
-func join_g<T>(shared ex: SyncExecutor, handle: TaskHandle): T {
+func join<T>(shared ex: SyncExecutor, handle: TaskHandle): T {
     unsafe {
         let v = ar_rt_join_i64(handle.id)
         return v as T
@@ -319,8 +319,8 @@ async func answer(): int {
 
 func main(): int {
     let ex = SyncExecutor { flags: 0 }
-    let h = spawn_g(ex, answer())
-    return join_g<int>(ex, h)
+    let h = spawn<int>(ex, answer())
+    return join<int>(ex, h)
 }
 "#,
     )
@@ -336,7 +336,7 @@ func main(): int {
 }
 
 #[test]
-fn run_waker_wake_wait() {
+fn run_waker_wake_and_wait() {
     let dir = std::env::temp_dir();
     let file = dir.join("arandu_cli_waker.aru");
     fs::write(
@@ -346,10 +346,10 @@ module tests.cli.waker
 import std.runtime as rt
 
 func main(): int {
-    let w = rt.new_waker()
-    rt.waker_wake(w)
-    let rc = rt.waker_wait(w, 100)
-    rt.destroy_waker(w)
+    let w = rt.newWaker()
+    rt.wakerWake(w)
+    let rc = rt.wakerWait(w, 100)
+    rt.destroyWaker(w)
     if rc != 1 {
         return 1
     }
@@ -379,7 +379,7 @@ module tests.cli.backend
 import std.runtime as rt
 
 func main(): int {
-    let b = rt.reactor_backend()
+    let b = rt.reactorBackend()
     // Portable fallback: 0; Linux: 1 = epoll, 2 = io_uring.
     if b < 0 {
         return 1
@@ -413,25 +413,25 @@ module tests.cli.tcp_async
 import std.runtime as rt
 
 func main(): int {
-    let lis = rt.tcp_listen(18770)
+    let lis = rt.tcpListen(18770)
     if lis.id < 0 {
         return 1
     }
-    let client = rt.tcp_connect(18770)
+    let client = rt.tcpConnect(18770)
     if client.id < 0 {
         return 2
     }
-    let server = rt.tcp_accept(lis)
+    let server = rt.tcpAccept(lis)
     if server.id < 0 {
         return 3
     }
-    let nb = rt.tcp_set_nonblocking(server, 1)
+    let nb = rt.tcpSetNonblocking(server, 1)
     if nb != 0 {
         return 4
     }
-    let w = rt.new_waker()
+    let w = rt.newWaker()
     // Timeout with no data
-    let t0 = rt.tcp_wait_wake(server, rt.tcp_wait_read_flag(), 5, w)
+    let t0 = rt.tcpWaitWake(server, rt.tcpWaitReadFlag(), 5, w)
     if t0 != 0 {
         return 5
     }
@@ -439,14 +439,14 @@ func main(): int {
     // Use write_async (io_uring when available)
     // We cannot easily pass string buffers without alloc; skip payload e2e here.
     // Wait writable on client should succeed.
-    let wr = rt.tcp_wait(client, rt.tcp_wait_write_flag(), 100)
+    let wr = rt.tcpWait(client, rt.tcpWaitWriteFlag(), 100)
     if wr < 1 {
         return 6
     }
-    rt.destroy_waker(w)
-    rt.tcp_close_stream(client)
-    rt.tcp_close_stream(server)
-    rt.tcp_close_listener(lis)
+    rt.destroyWaker(w)
+    rt.tcpCloseStream(client)
+    rt.tcpCloseStream(server)
+    rt.tcpCloseListener(lis)
     return 0
 }
 "#,
@@ -481,16 +481,16 @@ module tests.cli.supervisor
 import std.runtime as rt
 
 func main(): int {
-    let s = rt.new_supervisor()
+    let s = rt.newSupervisor()
     if s.id < 0 {
         return 1
     }
-    let w = rt.supervisor_spawn(s, "__WORKER_PATH__", 0)
+    let w = rt.supervisorSpawn(s, "__WORKER_PATH__", 0)
     if w.id < 0 {
         return 2
     }
-    let code = rt.supervisor_wait(s, w)
-    rt.destroy_supervisor(s)
+    let code = rt.supervisorWait(s, w)
+    rt.destroySupervisor(s)
     return code
 }
 "#
@@ -523,8 +523,8 @@ async func answer(): int {
 }
 
 func main(): int {
-    let ex = rt.new_sync_executor()
-    return rt.block_on_int(ex, answer())
+    let ex = rt.newSyncExecutor()
+    return rt.blockOnInt(ex, answer())
 }
 "#,
     )
@@ -551,12 +551,12 @@ module tests.cli.reactor_sleep
 import std.runtime as rt
 
 func main(): int {
-    let r = rt.new_epoll_reactor()
+    let r = rt.newEpollReactor()
     if r.id < 0 {
         return 1
     }
-    let rc = rt.reactor_sleep_ms(r, 5)
-    rt.destroy_reactor(r)
+    let rc = rt.reactorSleepMs(r, 5)
+    rt.destroyReactor(r)
     if rc != 0 {
         return 2
     }
@@ -591,22 +591,22 @@ async func ready(): int {
 }
 
 func main(): int {
-    let r = rt.new_epoll_reactor()
-    let ex = rt.new_sync_executor()
+    let r = rt.newEpollReactor()
+    let ex = rt.newSyncExecutor()
     if r.id < 0 {
         return 1
     }
-    let h = rt.spawn_int(ex, ready())
-    let arm = rt.reactor_arm_timer_ms(r, 5)
+    let h = rt.spawnInt(ex, ready())
+    let arm = rt.reactorArmTimerMs(r, 5)
     if arm != 0 {
         return 2
     }
-    let fired = rt.reactor_poll_ms(r, 200)
+    let fired = rt.reactorPollMs(r, 200)
     if fired != 1 {
         return 3
     }
-    let v = rt.join_int(ex, h)
-    rt.destroy_reactor(r)
+    let v = rt.joinInt(ex, h)
+    rt.destroyReactor(r)
     return v
 }
 "#,

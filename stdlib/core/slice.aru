@@ -1,0 +1,109 @@
+module std.core.slice
+
+import std.core.mem as mem
+import std.core.option as option
+
+/// A non-owning raw view of a contiguous sequence of `T`.
+///
+/// `Slice` does not keep the backing allocation alive. Code constructing a `Slice`
+/// is responsible for ensuring that `data` remains valid for every access and is
+/// not invalidated by reallocation or destruction of the owning container.
+public struct Slice<T> {
+    data: ptr[T]
+    len: u64
+}
+
+/// Returns the number of elements in the slice.
+///
+/// # Examples
+/// ```arandu
+/// slice.len(my_slice) // Returns element count
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func len<T>(shared s: Slice<T>): u64 {
+    return s.len
+}
+
+/// Returns `true` if the slice contains no elements (`len == 0`).
+///
+/// # Examples
+/// ```arandu
+/// slice.isEmpty(my_slice) // true if len == 0
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func isEmpty<T>(shared s: Slice<T>): bool {
+    return s.len == 0 as u64
+}
+
+/// Returns a pointer to the element at `index`, or `Option.None` if out of bounds.
+///
+/// # Safety
+/// Dereferencing the returned pointer remains an explicit `unsafe` operation.
+///
+/// # Examples
+/// ```arandu
+/// match slice.get(my_slice, 0 as u64) {
+///     Some(p) => { /* valid pointer */ }
+///     None    => { /* out of bounds */ }
+/// }
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func get<T>(shared s: Slice<T>, index: u64): Option<ptr[T]> {
+    if index >= s.len {
+        return Option.None
+    }
+    unsafe {
+        let p = mem.ptrOffset<T>(s.data, index as i32)
+        return Option.Some(p)
+    }
+}
+
+/// Returns a pointer to the first element of the slice, or `Option.None` if empty.
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func first<T>(shared s: Slice<T>): Option<ptr[T]> {
+    return get<T>(s, 0 as u64)
+}
+
+/// Returns a pointer to the last element of the slice, or `Option.None` if empty.
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func last<T>(shared s: Slice<T>): Option<ptr[T]> {
+    if s.len == 0 as u64 {
+        return Option.None
+    }
+    return get<T>(s, s.len - 1 as u64)
+}
+
+/// Method form of [`len`].
+public func Slice.len<T>(shared self): u64 {
+    return len<T>(self)
+}
+
+/// Method form of [`isEmpty`].
+public func Slice.isEmpty<T>(shared self): bool {
+    return isEmpty<T>(self)
+}
+
+/// Method form of [`get`].
+public func Slice.get<T>(shared self, index: u64): Option<ptr[T]> {
+    return get<T>(self, index)
+}
+
+/// Method form of [`first`].
+public func Slice.first<T>(shared self): Option<ptr[T]> {
+    return first<T>(self)
+}
+
+/// Method form of [`last`].
+public func Slice.last<T>(shared self): Option<ptr[T]> {
+    return last<T>(self)
+}

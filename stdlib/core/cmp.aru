@@ -1,0 +1,72 @@
+module std.core.cmp
+
+/// Comparison ordering result between two values.
+public enum Ordering {
+    /// The first value is less than the second.
+    Less,
+    /// Both values are equal.
+    Equal,
+    /// The first value is greater than the second.
+    Greater,
+}
+
+/// Returns the minimum of two integer values.
+///
+/// # Examples
+/// ```arandu
+/// cmp.min(10, 20) // 10
+/// cmp.min(30, 15) // 15
+/// cmp.min(-5, -2) // -5
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func min(a: int, b: int): int {
+    if a < b {
+        return a
+    }
+    return b
+}
+
+/// Returns the maximum of two integer values.
+///
+/// # Examples
+/// ```arandu
+/// cmp.max(10, 20) // 20
+/// cmp.max(30, 15) // 30
+/// cmp.max(-5, -2) // -2
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func max(a: int, b: int): int {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+/// Restricts an integer value to the closed interval `[minVal, maxVal]`.
+///
+/// - If `val < minVal`, returns `minVal`.
+/// - If `val > maxVal`, returns `maxVal`.
+/// - Otherwise, returns `val` unchanged.
+///
+/// # Examples
+/// ```arandu
+/// cmp.clamp(5, 0, 10)   // 5  (within bounds)
+/// cmp.clamp(-3, 0, 10)  // 0  (below minimum)
+/// cmp.clamp(15, 0, 10)  // 10 (above maximum)
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func clamp(val: int, minVal: int, maxVal: int): int {
+    if val < minVal {
+        return minVal
+    }
+    if val > maxVal {
+        return maxVal
+    }
+    return val
+}

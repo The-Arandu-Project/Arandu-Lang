@@ -1,0 +1,101 @@
+module std.core.ascii
+
+/// Returns `true` if the byte represents an ASCII alphabetic character (`a-z` or `A-Z`).
+///
+/// # Examples
+/// ```arandu
+/// ascii.isAsciiAlpha('a' as u8) // true
+/// ascii.isAsciiAlpha('Z' as u8) // true
+/// ascii.isAsciiAlpha('9' as u8) // false
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func isAsciiAlpha(b: u8): bool {
+    let lower = (b >= 97 as u8) && (b <= 122 as u8)
+    let upper = (b >= 65 as u8) && (b <= 90 as u8)
+    return lower || upper
+}
+
+/// Returns `true` if the byte represents an ASCII decimal digit (`0-9`).
+///
+/// # Examples
+/// ```arandu
+/// ascii.isAsciiDigit('5' as u8) // true
+/// ascii.isAsciiDigit('a' as u8) // false
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func isAsciiDigit(b: u8): bool {
+    return (b >= 48 as u8) && (b <= 57 as u8)
+}
+
+/// Returns `true` if the byte represents an ASCII alphanumeric character (`a-z`, `A-Z`, or `0-9`).
+///
+/// # Examples
+/// ```arandu
+/// ascii.isAsciiAlphanumeric('A' as u8) // true
+/// ascii.isAsciiAlphanumeric('3' as u8) // true
+/// ascii.isAsciiAlphanumeric('$' as u8) // false
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func isAsciiAlphanumeric(b: u8): bool {
+    return isAsciiAlpha(b) || isAsciiDigit(b)
+}
+
+/// Returns `true` if the byte represents an ASCII whitespace character
+/// (space `' '`, tab `\t`, newline `\n`, or carriage return `\r`).
+///
+/// # Examples
+/// ```arandu
+/// ascii.isAsciiWhitespace(' ' as u8)  // true
+/// ascii.isAsciiWhitespace('\n' as u8) // true
+/// ascii.isAsciiWhitespace('a' as u8)  // false
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func isAsciiWhitespace(b: u8): bool {
+    return b == 32 as u8 || b == 9 as u8 || b == 10 as u8 || b == 13 as u8
+}
+
+/// Converts an ASCII uppercase byte (`A-Z`) to its corresponding lowercase form (`a-z`).
+/// Non-uppercase bytes are returned unchanged.
+///
+/// # Examples
+/// ```arandu
+/// ascii.toAsciiLower('A' as u8) // 'a' as u8 (97)
+/// ascii.toAsciiLower('a' as u8) // 'a' as u8 (97)
+/// ascii.toAsciiLower('1' as u8) // '1' as u8 (49)
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func toAsciiLower(b: u8): u8 {
+    if (b >= 65 as u8) && (b <= 90 as u8) {
+        return b + 32 as u8
+    }
+    return b
+}
+
+/// Converts an ASCII lowercase byte (`a-z`) to its corresponding uppercase form (`A-Z`).
+/// Non-lowercase bytes are returned unchanged.
+///
+/// # Examples
+/// ```arandu
+/// ascii.toAsciiUpper('a' as u8) // 'A' as u8 (65)
+/// ascii.toAsciiUpper('A' as u8) // 'A' as u8 (65)
+/// ascii.toAsciiUpper('!' as u8) // '!' as u8 (33)
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func toAsciiUpper(b: u8): u8 {
+    if (b >= 97 as u8) && (b <= 122 as u8) {
+        return b - 32 as u8
+    }
+    return b
+}

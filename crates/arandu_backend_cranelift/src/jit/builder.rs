@@ -32,6 +32,7 @@ pub(crate) fn create_jit_builder() -> Result<JITBuilder, Diagnostic> {
     );
 
     // Prelude `io.println` (fat-pointer ABI: ptr + i64 len).
+    builder.symbol("abort", std::process::abort as *const u8);
     builder.symbol(
         "io.println",
         crate::to_str_runtime::ar_jit_println as *const u8,
@@ -133,6 +134,11 @@ pub(crate) fn create_jit_builder() -> Result<JITBuilder, Diagnostic> {
         "ar_str_ends_with",
         crate::rt_runtime::ar_str_ends_with as *const u8,
     );
+    builder.symbol(
+        "ar_str_contains",
+        crate::rt_runtime::ar_str_contains as *const u8,
+    );
+    builder.symbol("ar_str_find", crate::rt_runtime::ar_str_find as *const u8);
     builder.symbol(
         "ar_str_split_last",
         crate::rt_runtime::ar_str_split_last as *const u8,

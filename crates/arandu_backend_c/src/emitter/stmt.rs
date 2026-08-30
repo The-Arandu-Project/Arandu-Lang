@@ -28,6 +28,14 @@ impl<'a> CEmitter<'a> {
         let is_offset = bare == "ptrOffset" || bare == "ptr_offset" || name.contains("ptrOffset");
         let is_size = bare == "sizeOf" || bare == "size_of" || name.contains("sizeOf");
         let is_align = bare == "alignOf" || bare == "align_of" || name.contains("alignOf");
+        let is_abort = bare == "abort"
+            || bare == "abort_generational_mismatch"
+            || name.contains("intrinsics.abort");
+
+        if is_abort {
+            let _ = writeln!(&mut self.output, "    abort();");
+            return true;
+        }
 
         if is_read {
             if args.is_empty() {

@@ -25,7 +25,10 @@ impl<'a> CEmitter<'a> {
                         // is handled in format_operand for pool constants.
                         "((ArStr){ .ptr = (const uint8_t*)\"\", .len = 0 })".to_string()
                     }
-                    AmirLiteralEntry::Char(v) => format!("'{}'", v),
+                    AmirLiteralEntry::Char(v) => {
+                        let scalar = v.chars().next().unwrap_or('\0') as u32;
+                        format!("UINT32_C({scalar})")
+                    }
                 },
                 AmirConstant::Bool(b) => {
                     if *b {
@@ -94,6 +97,7 @@ impl<'a> CEmitter<'a> {
                 }
             }
             ArType::Primitive(Primitive::Bool) => "bool".to_string(),
+            ArType::Primitive(Primitive::Char) => "uint32_t".to_string(),
             ArType::Primitive(Primitive::Str) => "ArStr".to_string(),
             ArType::Primitive(Primitive::Float) | ArType::FloatLiteral => "double".to_string(),
             ArType::Void => "void".to_string(),

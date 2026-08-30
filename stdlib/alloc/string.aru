@@ -1,0 +1,201 @@
+module std.alloc.string
+
+/// Owned, mutable UTF-8 string (`String`).
+///
+/// Heap-allocated buffer managed with pure allocators and mem intrinsics.
+
+import std.core.mem as mem
+import std.core.intrinsics as intrinsics
+import std.core.char as chars
+
+func maxBufferCapacity(): u64 {
+    return 2147483647 as u64
+}
+
+extern "C" {
+    func ar_vec_malloc(size: u64): ptr[u8]
+    func ar_vec_buf_free(p: ptr[u8], size: u64): void
+    func ar_vec_realloc(p: ptr[u8], oldSize: u64, newSize: u64): ptr[u8]
+}
+
+/// Owned UTF-8 string.
+public struct String {
+    data: ptr[u8]
+    len: u64
+    capacity: u64
+}
+
+/// Create a new empty String.
+public func new(): String {
+    return String {
+        data: nil,
+        len: 0 as u64,
+        capacity: 0 as u64,
+    }
+}
+
+/// Create a new String with preallocated capacity in bytes.
+public func withCapacity(cap: u64): String {
+    let mut s = new()
+    ensureCapacity(s, cap)
+    return s
+}
+
+/// Ensure capacity in bytes ≥ `minCap`.
+func ensureCapacity(mut s: String, minCap: u64): void {
+    let maxCap = maxBufferCapacity()
+    if minCap > maxCap {
+        unsafe {
+            intrinsics.abort()
+        }
+    }
+    if s.capacity >= minCap {
+        return
+    }
+    let mut newCap: u64 = s.capacity
+    if newCap == 0 {
+        newCap = 8 as u64
+    }
+    while newCap < minCap {
+        if newCap > maxCap / 2 as u64 {
+            newCap = maxCap
+        } else {
+            newCap = newCap * 2 as u64
+        }
+    }
+    unsafe {
+        let nullp: ptr[u8] = nil
+        let p = ar_vec_realloc(s.data, s.capacity, newCap)
+        if p == nullp {
+            intrinsics.abort()
+        }
+        s.data = p
+        s.capacity = newCap
+    }
+}
+
+/// Byte length.
+public func len(shared s: String): u64 {
+    return s.len
+}
+
+/// Allocated byte capacity.
+public func capacity(shared s: String): u64 {
+    return s.capacity
+}
+
+/// True if length is 0.
+public func isEmpty(shared s: String): bool {
+    return s.len == 0 as u64
+}
+
+/// Reserve additional bytes.
+public func reserve(mut s: String, additional: u64): void {
+    if additional > maxBufferCapacity() - s.len {
+        unsafe {
+            intrinsics.abort()
+        }
+    }
+    let need = s.len + additional
+    ensureCapacity(s, need)
+}
+
+/// Append an ASCII or Unicode scalar character.
+public func pushScalar(mut s: String, c: char): void {
+    let clen = chars.lenUtf8(c) as u64
+    if clen > maxBufferCapacity() - s.len {
+        unsafe {
+            intrinsics.abort()
+        }
+    }
+    let need = s.len + clen
+    if s.capacity < need {
+        ensureCapacity(s, need)
+    }
+    let val = c as u32
+    unsafe {
+        if clen == 1 as u64 {
+            let p = mem.ptrOffset<u8>(s.data, s.len as i32)
+            mem.ptrWrite<u8>(p, val as u8)
+        } else if clen == 2 as u64 {
+            let b0 = (192 as u32 | (val >> 6)) as u8
+            let b1 = (128 as u32 | (val & 63 as u32)) as u8
+            let p0 = mem.ptrOffset<u8>(s.data, s.len as i32)
+            let p1 = mem.ptrOffset<u8>(s.data, (s.len + 1 as u64) as i32)
+            mem.ptrWrite<u8>(p0, b0)
+            mem.ptrWrite<u8>(p1, b1)
+        } else if clen == 3 as u64 {
+            let b0 = (224 as u32 | (val >> 12)) as u8
+            let b1 = (128 as u32 | ((val >> 6) & 63 as u32)) as u8
+            let b2 = (128 as u32 | (val & 63 as u32)) as u8
+            let p0 = mem.ptrOffset<u8>(s.data, s.len as i32)
+            let p1 = mem.ptrOffset<u8>(s.data, (s.len + 1 as u64) as i32)
+            let p2 = mem.ptrOffset<u8>(s.data, (s.len + 2 as u64) as i32)
+            mem.ptrWrite<u8>(p0, b0)
+            mem.ptrWrite<u8>(p1, b1)
+            mem.ptrWrite<u8>(p2, b2)
+        } else {
+            let b0 = (240 as u32 | (val >> 18)) as u8
+            let b1 = (128 as u32 | ((val >> 12) & 63 as u32)) as u8
+            let b2 = (128 as u32 | ((val >> 6) & 63 as u32)) as u8
+            let b3 = (128 as u32 | (val & 63 as u32)) as u8
+            let p0 = mem.ptrOffset<u8>(s.data, s.len as i32)
+            let p1 = mem.ptrOffset<u8>(s.data, (s.len + 1 as u64) as i32)
+            let p2 = mem.ptrOffset<u8>(s.data, (s.len + 2 as u64) as i32)
+            let p3 = mem.ptrOffset<u8>(s.data, (s.len + 3 as u64) as i32)
+            mem.ptrWrite<u8>(p0, b0)
+            mem.ptrWrite<u8>(p1, b1)
+            mem.ptrWrite<u8>(p2, b2)
+            mem.ptrWrite<u8>(p3, b3)
+        }
+    }
+    s.len = s.len + clen
+}
+
+/// Reset length to 0 (capacity retained).
+public func clear(mut s: String): void {
+    s.len = 0 as u64
+}
+
+/// Deallocate buffer.
+public func destroy(mut s: String): void {
+    if s.capacity > 0 as u64 {
+        unsafe {
+            ar_vec_buf_free(s.data, s.capacity)
+        }
+        s.data = nil
+        s.capacity = 0 as u64
+        s.len = 0 as u64
+    }
+}
+
+// ── Method-style surface ───────────────────────────────────────────────────
+
+public func String.len(shared self): u64 {
+    return len(self)
+}
+
+public func String.capacity(shared self): u64 {
+    return capacity(self)
+}
+
+public func String.isEmpty(shared self): bool {
+    return isEmpty(self)
+}
+
+public func String.reserve(mut self, additional: u64): void {
+    reserve(self, additional)
+}
+
+public func String.pushScalar(mut self, c: char): void {
+    pushScalar(self, c)
+}
+
+public func String.clear(mut self): void {
+    clear(self)
+}
+
+@Destructor
+public func String.destroy(own self): void {
+    destroy(self)
+}

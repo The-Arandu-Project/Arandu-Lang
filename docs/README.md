@@ -14,6 +14,8 @@ Esta pasta tem uma única fila de planejamento: o [roadmap mestre](arandu-compil
 | release | evidência imutável de versão publicada | não |
 
 Uma campanha pode criar temporariamente um plano de pesquisa e implementação.
+Planos ativos vivem em `docs/campaigns/`, fora do catálogo permanente validado
+por taxonomia.
 Ao terminar, seu conteúdo útil é consolidado no contrato/arquitetura permanente,
 dívidas e futuro são classificados, e o plano paralelo é removido.
 
