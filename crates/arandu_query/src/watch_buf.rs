@@ -337,9 +337,21 @@ impl PackageWatchSession {
     }
 
     fn apply_remove(&mut self, db: &mut DatabaseImpl, path: &Path) -> Vec<String> {
+        let canonical = canonicalize_soft(path);
         let keys = self
             .path_keys
-            .remove(&canonicalize_soft(path))
+            .remove(&canonical)
+            .or_else(|| {
+                // A deleted/renamed path cannot be canonicalized anymore. Match
+                // the stable lexical identity used when the file was indexed.
+                let wanted = stable_path_identity(path);
+                let matched = self
+                    .path_keys
+                    .keys()
+                    .find(|candidate| stable_path_identity(candidate) == wanted)
+                    .cloned();
+                matched.and_then(|candidate| self.path_keys.remove(&candidate))
+            })
             .unwrap_or_else(|| self.infer_keys(path));
         for key in &keys {
             db.unregister_source_file(key);
@@ -444,6 +456,14 @@ enum FsOp {
 fn canonicalize_soft(p: &Path) -> PathBuf {
     let path = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     normalize_windows_verbatim(path)
+}
+
+fn stable_path_identity(path: &Path) -> String {
+    let value = path.to_string_lossy().replace('\\', "/");
+    value
+        .strip_prefix("//?/")
+        .unwrap_or(&value)
+        .to_ascii_lowercase()
 }
 
 #[cfg(windows)]
