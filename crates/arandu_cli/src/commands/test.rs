@@ -288,8 +288,9 @@ pub fn run_exact_test(ctx: &project::ProjectContext, exact: &str) -> CliResult {
         if !exact.eq(&target) {
             continue;
         }
-        let db = arandu_query::DatabaseImpl::new();
+        let mut db = arandu_query::DatabaseImpl::new();
         db.set_stdlib_root(ctx.stdlib.path.clone());
+        crate::pipeline::register_stdlib_sources(&mut db, &ctx.stdlib.path);
         let (file, filepath) =
             open_entry_file(&db, &mut arandu_base::SourceRegistry::default(), &path);
         let artifacts = pipeline_lower(&db, file, &filepath);

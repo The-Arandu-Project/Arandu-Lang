@@ -1,0 +1,23 @@
+name: Set up repository Rust
+description: Install the pinned repository toolchain context and restore Cargo artifacts.
+
+inputs:
+  cache-key:
+    description: Additional cache key for the job's compilation contract.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Repository toolchain
+      shell: bash
+      run: rustup show active-toolchain
+    - name: Toolchain versions
+      shell: bash
+      run: |
+        rustc -Vv
+        cargo -V
+    - name: Restore Cargo cache
+      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      with:
+        key: ${{ inputs.cache-key }}

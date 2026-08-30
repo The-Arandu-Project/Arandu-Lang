@@ -19,6 +19,9 @@ pub fn install_package_module_map(
     for planned in plan.bindings {
         let file = if let Some(file) = files.get(&planned.physical) {
             *file
+        } else if let Some(file) = db.source_file_by_path(&planned.physical.to_string_lossy()) {
+            files.insert(planned.physical.clone(), file);
+            file
         } else {
             let text = fs::read_to_string(&planned.physical).map_err(|error| {
                 format!("cannot read module {}: {error}", planned.physical.display())

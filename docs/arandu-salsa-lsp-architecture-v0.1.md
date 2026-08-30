@@ -36,7 +36,9 @@ impedem o LSP de publicar resultados de buffers/revisões obsoletos.
 ### I/O de fonte
 
 - typeck/resolve: proibido `fs::read` (guardrail `architecture_invariants`).
-- Registro: CLI / LSP / `DatabaseImpl::resolve_module_path` (fallback disco **só** na DB).
+- Registro: CLI/LSP carregam bytes na borda e registram `SourceFile` antes da
+  análise. `DatabaseImpl::resolve_module_path` apenas traduz identidades lógicas
+  por inputs Salsa e consulta o registro; nunca lê filesystem nem percorre o cwd.
 - Workers LSP **não** registram arquivos; só a main.
 
 ### Três identidades

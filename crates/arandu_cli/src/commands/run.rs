@@ -170,13 +170,13 @@ pub fn cmd_single_file_dispatch(
 
     let explain = arandu_base::EXPLAIN_REBUILD.load(std::sync::atomic::Ordering::Relaxed);
     let want_status = command == "run" || explain;
-    let (db, rebuild_log) = if want_status {
+    let (mut db, rebuild_log) = if want_status {
         let (db, log) = arandu_query::db::DatabaseImpl::with_rebuild_log();
         (db, Some(log))
     } else {
         (arandu_query::db::DatabaseImpl::new(), None)
     };
-    attach_stdlib(&db, project_flags.stdlib_path.clone());
+    attach_stdlib(&mut db, project_flags.stdlib_path.clone());
     let mut registry = arandu_base::SourceRegistry::default();
 
     let mut source_files = Vec::new();

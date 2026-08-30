@@ -26,6 +26,13 @@ fn temp_pkg(name: &str) -> PathBuf {
 
 fn install_roots(db: &mut DatabaseImpl, package_name: &str, src: PathBuf) -> ModuleRoots {
     let entries = scan_aru_entries(&src);
+    for relative in &entries {
+        let path = src.join(relative);
+        db.new_file(
+            path.to_string_lossy().into_owned(),
+            fs::read_to_string(&path).unwrap(),
+        );
+    }
     let listing = DirectoryListing::new(db, Arc::new(src.clone()), Arc::new(entries));
     let roots = ModuleRoots::new(
         db,
@@ -141,6 +148,11 @@ fn package_listing_miss_until_entries_updated() {
         "public func answer(): int { return 7 }\n",
     )
     .unwrap();
+    let util_path = src.join("util.aru");
+    db.new_file(
+        util_path.to_string_lossy().into_owned(),
+        fs::read_to_string(&util_path).unwrap(),
+    );
     listing
         .set_entries(&mut db)
         .to(Arc::new(vec!["main.aru".into(), "util.aru".into()]));
@@ -179,6 +191,11 @@ fn creating_missing_module_invalidates_composed_typecheck() {
         "public func answer(): int { return 42 }\n",
     )
     .unwrap();
+    let util_path = src.join("util.aru");
+    db.new_file(
+        util_path.to_string_lossy().into_owned(),
+        fs::read_to_string(&util_path).unwrap(),
+    );
     let listing = roots.package_listing(&db);
     listing
         .set_entries(&mut db)
@@ -265,6 +282,10 @@ public func is_empty(s: str): bool {
 }
 "#
         .into(),
+    );
+    db.new_file(
+        "stdlib/std/path.aru".into(),
+        "public func is_empty(s: str): bool { return true }\n".into(),
     );
 
     // ModuleAlias form: `import X as path` twice.

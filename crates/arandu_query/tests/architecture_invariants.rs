@@ -58,10 +58,30 @@ fn assert_no_source_fs_reads(crate_name: &str) {
     }
     assert!(
         offenders.is_empty(),
-        "source I/O must stay in arandu_query::DatabaseImpl (SourceFile / resolve_module_path).\n\
+        "source I/O must stay in explicit CLI/LSP/database loading orchestration, never semantic passes.\n\
          Offenders in {crate_name}:\n{}",
         offenders.join("\n")
     );
+}
+
+#[test]
+fn module_resolution_does_not_read_source_files() {
+    let path = crate_src("arandu_query").join("db.rs");
+    let text = fs::read_to_string(&path).expect("read query database source");
+    let start = text
+        .find("fn resolve_module_path(&self")
+        .expect("resolve_module_path implementation");
+    let end = text[start..]
+        .find("\n    fn package_mode")
+        .map(|offset| start + offset)
+        .expect("end of resolve_module_path implementation");
+    let implementation = &text[start..end];
+    for banned in ["std::fs", "fs::read", "current_dir", "is_file()"] {
+        assert!(
+            !implementation.contains(banned),
+            "resolve_module_path must consume registered inputs, found `{banned}`"
+        );
+    }
 }
 
 #[test]

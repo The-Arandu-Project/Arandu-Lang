@@ -147,6 +147,10 @@ mod tests {
         );
         std::fs::write(&main_path, main_text).expect("write entry");
         let mut state = ServerState::new();
+        let stdlib_root =
+            arandu_query::resolve_stdlib_root(arandu_query::StdlibResolveOpts::default())
+                .ok()
+                .map(|stdlib| stdlib.path);
         state
             .configure_package(crate::workspace::WorkspaceProject {
                 manifest_path: root.join("Arandu.toml"),
@@ -158,15 +162,17 @@ mod tests {
                 manifest_hash: "fixture".into(),
                 package_src: discovered_src,
                 entries: vec!["main.aru".into()],
-                stdlib_root: arandu_query::resolve_stdlib_root(
-                    arandu_query::StdlibResolveOpts::default(),
-                )
-                .ok()
-                .map(|stdlib| stdlib.path),
+                stdlib_root: stdlib_root.clone(),
                 module_plan: None,
                 module_files: Vec::new(),
             })
             .expect("configure package");
+        let stdlib_path = stdlib_root.expect("workspace stdlib").join("std/path.aru");
+        let stdlib_uri = uri_from_path(&stdlib_path).expect("stdlib URI");
+        let stdlib_document = state.open_or_commit(
+            &stdlib_uri,
+            std::fs::read_to_string(&stdlib_path).expect("read stdlib module"),
+        );
         let main_uri = uri_from_path(&main_path).expect("main URI");
         let _discovered_id = state.open_or_commit(&main_uri, main_text.into());
         let main_id = state.open_or_commit(&main_uri, main_text.into());
@@ -178,10 +184,10 @@ mod tests {
             .iter()
             .any(|diag| matches!(diag.code, arandu_middle::DiagCode::M001UnresolvedImport)));
         let stdlib_file = state
-            .host
-            .db()
-            .source_file_by_path("stdlib/std/path.aru")
-            .expect("stdlib module loaded by initial typecheck");
+            .docs
+            .get(stdlib_document)
+            .expect("stdlib module registered before initial typecheck")
+            .source;
         let stdlib_file_id = *stdlib_file.file_id(state.host.db());
 
         let util_path = src.join("util.aru");

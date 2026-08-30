@@ -224,6 +224,10 @@ fn test_circular_import_diagnostics_survive_repeated_body_revisions() {
 #[test]
 fn test_import_generic_spawn_infer_from_coroutine() {
     let mut db = arandu_query::DatabaseImpl::default();
+    db.new_file(
+        "stdlib/std/runtime.aru".to_string(),
+        include_str!("../../../stdlib/std/runtime.aru").to_string(),
+    );
     let src = r#"
         module tests.import_spawn_infer
         import std.runtime as rt

@@ -180,6 +180,7 @@ pub fn load_project(
     })
     .map_err(|e| e.to_string())?;
     db.set_stdlib_root(stdlib.path.clone());
+    crate::pipeline::register_stdlib_sources(db, &stdlib.path);
 
     // Package source root = directory containing the entry file (usually `src/`).
     let package_src = entry_path
@@ -187,6 +188,15 @@ pub fn load_project(
         .map(Path::to_path_buf)
         .unwrap_or_else(|| root.clone());
     let entries = scan_aru_entries(&package_src);
+    for relative in &entries {
+        let path = package_src.join(relative);
+        let key = path.to_string_lossy().into_owned();
+        if db.source_file_by_path(&key).is_none() {
+            let text = fs::read_to_string(&path)
+                .map_err(|error| format!("cannot read module {}: {error}", path.display()))?;
+            db.new_file(key, text);
+        }
+    }
     let listing = DirectoryListing::new(
         db,
         std::sync::Arc::new(package_src.clone()),
