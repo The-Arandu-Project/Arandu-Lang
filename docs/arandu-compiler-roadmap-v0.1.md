@@ -89,10 +89,24 @@ quando cumprir seu contrato atual.
 
 1. Concluir a campanha de auditoria, documentação, modularização e portabilidade.
 2. Concluir o soak e promover [SL_T](./arandu-testing-benchmark-harness-v0.1.md) a `gold`.
-3. Entregar a `SL_S` mínima: targets `bin`/`lib`, link multi-file e `std.path` executável.
-4. Implementar `A2` (Effect System) antes de ampliar APIs de sistema, plugins ou dependências externas.
-5. Implementar `SL_R` (runtime async) e só então o compiler service com sandbox e site/editor remoto.
-6. Avaliar templates `mixed`, `ffi`, `plugin` e `workspace` conforme ABI, efeitos e distribuição amadureçam.
+3. Entregar a `SL_S-Core`: targets `bin`/`lib`, link multi-file, módulos,
+   imports e `std.path` estrutural, sem efeitos de sistema.
+4. Estabilizar a API pública do GenRef e concluir a paridade semântica C/Cranelift
+   nos alvos publicados; ampliar o corpus de regressão a cada etapa da stdlib.
+5. Publicar `0.1.0-rc.5` como candidata estável: contratos congelados, testes
+   de segurança e harness reproduzível, sem prometer suporte a APIs de sistema
+   ainda não definidas.
+6. Implementar `A2` (Effect System) antes de APIs de filesystem, processos,
+   plugins ou dependências externas.
+7. Entregar `SL_S-Host`: `std.path` e APIs de sistema com efeitos explícitos,
+   testes nativos e limites por plataforma.
+8. Implementar `SL_R` (runtime async) e só então o compiler service com sandbox
+   e site/editor remoto.
+9. Publicar `0.1.0-rc.6` como candidata otimizada, preservando o comportamento
+   e os contratos de `rc.5`, com melhorias de custo validadas por benchmark
+   antes/depois.
+10. Avaliar templates `mixed`, `ffi`, `plugin` e `workspace` conforme ABI,
+    efeitos e distribuição amadureçam.
 
 ### Resíduos que continuam abertos
 
@@ -281,7 +295,10 @@ Fase 3 — OSSA Avançado, Semântica e OS Runtime (v0.3) · [PARCIAL; vários m
    ├─ [x] T3.4   Stdlib migrada (core/alloc usam path tokens; residual aspas só onde External)
    ├─ [x] T3.5   Contrato parser: import_module + import_module_alias_path
    └─ [x] T3.6   LSP complete em path tokens `import std.▮` + members `alias.▮` (W4)
-[→] SL_S   Stdlib de Sistema: multi-file HIR link + `std.path` runnable; host path/rt helpers; more OS API later
+[→] SL_S-Core   Stdlib fundamental: targets `bin`/`lib`, multi-file HIR link,
+                módulos/imports e `std.path` estrutural; sem filesystem implícito
+[ ] SL_S-Host   APIs de sistema: host path/rt helpers, filesystem e processos;
+                depende de A2 e de contratos nativos por plataforma
 [→] SL_R   Async Runtime: SL_R.0 typed spawn/join/block_on Coroutine + SyncExecutor; SL_R.2 EpollReactor (epoll+timerfd); SL_R.1/3 open
 [x] SL_T   [Testing & Benchmark Harness](./arandu-testing-benchmark-harness-v0.1.md):
            implementação, SDK/VSIX e matriz nativa concluídos; soak operacional

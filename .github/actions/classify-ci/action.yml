@@ -1,0 +1,72 @@
+name: Classify CI change scope
+description: Conservatively map changed repository paths to CI product contracts.
+
+inputs:
+  event-name:
+    description: GitHub event name.
+    required: true
+  base-sha:
+    description: Pull request base commit; empty for manual runs.
+    required: false
+    default: ""
+
+outputs:
+  code:
+    description: Rust or product code needs validation.
+    value: ${{ steps.classify.outputs.code }}
+  distribution:
+    description: Packaging and installation contracts need validation.
+    value: ${{ steps.classify.outputs.distribution }}
+  editor:
+    description: VS Code and LSP client contracts need validation.
+    value: ${{ steps.classify.outputs.editor }}
+
+runs:
+  using: composite
+  steps:
+    - name: Classify changed paths conservatively
+      id: classify
+      shell: bash
+      env:
+        EVENT_NAME: ${{ inputs.event-name }}
+        BASE_SHA: ${{ inputs.base-sha }}
+      run: |
+        set -euo pipefail
+        code=false
+        distribution=false
+        editor=false
+
+        if [[ "$EVENT_NAME" != "pull_request" ]]; then
+          code=true
+          distribution=true
+          editor=true
+        else
+          mapfile -t files < <(
+            git diff --name-only --diff-filter=ACMRD "$BASE_SHA" "$GITHUB_SHA"
+          )
+          printf 'changed: %s\n' "${files[@]}"
+          for file in "${files[@]}"; do
+            case "$file" in
+              Cargo.toml|Cargo.lock|rust-toolchain.toml|crates/*|xtask/*|tests/*|examples/*|stdlib/*|scripts/*|editors/vscode/*|.github/actions/*|.github/workflows/*)
+                code=true
+                ;;
+            esac
+            case "$file" in
+              editors/vscode/*|crates/arandu_lsp/*|crates/arandu_cli/*|crates/arandu_fmt/*|crates/arandu_diagnostics/*|.github/workflows/ci.yml|.github/workflows/sl-t-harness.yml)
+                editor=true
+                ;;
+            esac
+            case "$file" in
+              Cargo.toml|Cargo.lock|rust-toolchain.toml|crates/arandu_cli/*|crates/arandu_lsp/*|crates/arandu_runtime/*|editors/vscode/*|stdlib/*|scripts/package-release.*|scripts/install-from-*|scripts/smoke-install.*|scripts/smoke_distribution.py|scripts/check-package-reproducibility.sh|xtask/*|.github/actions/*|.github/workflows/ci.yml|.github/workflows/sl-t-harness.yml|.github/workflows/release.yml)
+                distribution=true
+                ;;
+            esac
+          done
+        fi
+
+        {
+          echo "code=$code"
+          echo "distribution=$distribution"
+          echo "editor=$editor"
+        } | tee -a "$GITHUB_OUTPUT" >>"$GITHUB_STEP_SUMMARY"
+

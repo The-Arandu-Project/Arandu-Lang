@@ -128,6 +128,38 @@ desenvolvimento e prova `new → check/build/run → test → JUnit → bench �
 baseline/compare`. A campanha cobre frames hostis, crash, timeout, concorrência,
 Unicode, CRLF, filesystem adversarial e recuperação após publicação interrompida.
 
+### Topologia de promoção no CI
+
+O check obrigatório `S0 / Gate` é um agregador estável, não um executor
+monolítico. Um classificador conservador roda dentro do workflow obrigatório e
+seleciona contratos por superfície; assim um workflow nunca desaparece por
+filtro de paths e deixa a proteção da `main` pendente.
+
+- política, arquitetura, documentação, LF e `rustfmt` rodam em todo PR;
+- mudanças de produto executam uma única suíte `cargo test --workspace` no
+  Linux e a mesma suíte em Windows nativo, em paralelo;
+- determinismo de diagnóstico permanece uma prova própria de 1 versus 8
+  threads;
+- extensão e distribuição rodam no PR somente quando suas superfícies são
+  afetadas;
+- testes individuais P3/P4, minimal Gold e integrações não ignoradas não são
+  repetidos depois da suíte completa;
+- endurance, budgets e LSP stress ignorado rodam semanalmente ou por despacho
+  manual;
+- a matriz `SL_T / Harness` roda semanalmente, manualmente e em PRs que alteram
+  SDK, VSIX ou distribuição; tags continuam usando a matriz pública de release.
+
+O ruleset existente da `main` ainda exige os nomes históricos S1 e S2 por
+sistema. Jobs agregadores preservam esses contextos sem recompilar: S1 promove
+a evidência nativa já produzida, e S2 confirma os regressions não ignorados da
+suíte do PR. A campanha longa correspondente tem nome próprio e frequência
+agendada. `S0 / Gate` também valida esses agregadores, portanto nenhum deles
+pode mascarar falha ou execução indevidamente pulada.
+
+Setup Rust e classificação de impacto vivem em ações compostas locais sob
+`.github/actions/`. Elas centralizam versões, cache e ownership de paths sem
+adicionar um serviço ou uma dependência de runtime ao SDK.
+
 ## PONTOS DE MELHORIA (O que não está no roadmap)
 
 - `arandu_cli/src/test_runner.rs` ainda concentra processo, protocolo,
@@ -143,6 +175,12 @@ Unicode, CRLF, filesystem adversarial e recuperação após publicação interro
 - Relatórios JUnit preservam menos dados que JSON por limitação do formato.
 - Ajuda da CLI ainda está concentrada no dispatcher principal e merece contrato
   de parsing modular e testável.
+- O mapa de impacto do CI é deliberadamente conservador e manual. Novos crates,
+  scripts de pacote ou consumidores do protocolo precisam atualizar a ação de
+  classificação no mesmo PR.
+- Os quatro contextos históricos S1/S2 podem sair do ruleset da `main` quando a
+  equipe decidir manter somente o agregador `S0 / Gate`; até lá são preservados
+  por compatibilidade explícita, não por repetição da suíte.
 
 ## Futuro e Próximos Passos
 
@@ -155,6 +193,9 @@ Unicode, CRLF, filesystem adversarial e recuperação após publicação interro
   anunciado como recurso.
 - Regressão de performance só vira gate obrigatório em runner dedicado,
   identificado e calibrado; baseline não será atualizado automaticamente por PR.
+- Avaliar `cargo-nextest` somente após nova medição mostrar que execução — e não
+  compilação ou duplicação entre jobs — voltou a dominar o caminho crítico;
+  doctests e diferenças de isolamento deverão permanecer explícitos.
 - Fuzzing geracional, perf counters portáveis, execução remota e plugins de
   runner permanecem fora do contrato v1.
 

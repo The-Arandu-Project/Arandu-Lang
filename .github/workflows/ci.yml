@@ -11,56 +11,78 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Required PR check. A release tag verifies this result through GitHub's API;
-  # the same commit is not rebuilt merely because the PR was merged.
-  s0-gate:
-    name: S0 / Gate
+  # Keep this classifier inside the required workflow. Workflow-level path
+  # filters can leave required checks pending when GitHub skips the workflow.
+  scope:
+    name: Change scope
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+      distribution: ${{ steps.classify.outputs.distribution }}
+      editor: ${{ steps.classify.outputs.editor }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/classify-ci
+        id: classify
+        with:
+          event-name: ${{ github.event_name }}
+          base-sha: ${{ github.event.pull_request.base.sha }}
+
+  preflight:
+    name: Policy and architecture
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install repository toolchain
-        run: rustup show active-toolchain
-      - name: Toolchain versions
-        run: |
-          rustc -Vv
-          cargo -V
-          rustfmt -V
-          clippy-driver -V
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: ./.github/actions/setup-rust
         with:
-          key: s0-rust-1.97.1
-      - name: Fetch locked dependency graph
-        run: cargo fetch --locked
+          cache-key: preflight-rust-1.97.1
       - name: Canonical UTF-8/LF repository text
         run: cargo run --locked -p xtask -- check-line-endings
       - name: Compiler architecture boundaries
         run: cargo run --locked -p xtask -- check-architecture
       - name: Documentation taxonomy
         run: cargo run --locked -p xtask -- check-docs-taxonomy
-      - name: P3 deterministic lockfile contract
-        run: cargo test --locked -p arandu_query lockfile
-      - name: P4 logical package namespaces
-        run: cargo test --locked -p arandu_query --test package_modules_p4
-      - name: P4 local workspace export boundary
-        run: cargo test --locked -p arandu_cli --test cli_project_gold local_workspace_dependency_resolves_only_declared_exports -- --exact
-      - name: 1. Format
+      - name: Diagnostic documentation bijection
+        run: cargo run --locked -p xtask -- check-diag-docs
+      - name: Rust formatting
         run: cargo fmt --all -- --check
-      - name: 2. Check
+      - name: Generated files and snapshots leave the tree clean
+        run: git diff --exit-code
+
+  rust-core:
+    name: Rust core
+    if: needs.scope.outputs.code == 'true'
+    needs: scope
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: core-rust-1.97.1
+      - name: Check workspace
         run: cargo check --workspace --locked
-      - name: 3. Clippy
+      - name: Clippy workspace
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      - name: 4. Test
+      # This single invocation already includes the P3/P4, minimal Gold, CLI,
+      # query, LSP and other non-ignored workspace integration tests.
+      - name: Test workspace once
         run: cargo test --workspace --locked
-      - name: SL_T portable test report
+      - name: SL_T portable JUnit contract
         run: cargo run --locked -p arandu_cli -- test tests/projects/slt5_product --format junit --output target/sl-t/test-results.xml
       - name: Publish SL_T JUnit evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -69,55 +91,36 @@ jobs:
           path: target/sl-t/test-results.xml
           if-no-files-found: error
           retention-days: 14
-      - name: 5. Diagnostic docs
-        run: cargo run --locked -p xtask -- check-diag-docs
-      - name: 6. Rustdoc
+      - name: Rustdoc
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: editors/vscode/package-lock.json
-      - name: VS Code client lint, unit and Extension Host tests
-        working-directory: editors/vscode
-        run: |
-          npm ci --ignore-scripts
-          xvfb-run -a npm test
-          npm run package:check
-          npm audit --audit-level=high
-      - name: Generated files and snapshots leave the tree clean
-        run: git diff --exit-code
 
-  minimal-gold:
-    name: Minimal gold (examples/minimal)
-    if: github.event_name != 'schedule'
-    needs: s0-gate
-    runs-on: ubuntu-latest
+  windows-portability:
+    name: Windows portability
+    if: needs.scope.outputs.code == 'true'
+    needs: scope
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install repository toolchain
-        run: rustup show active-toolchain
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: ./.github/actions/setup-rust
         with:
-          key: minimal-rust-1.97.1
-      - run: cargo test --locked -p arandu_cli --test cli_minimal_gold -- --nocapture
+          cache-key: windows-portability-rust-1.97.1
+      - name: Test the complete workspace on native Windows
+        run: cargo test --workspace --locked
 
   diag-determinism:
     name: Diagnostic determinism
-    if: github.event_name != 'schedule'
-    needs: s0-gate
+    if: needs.scope.outputs.code == 'true'
+    needs: scope
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install repository toolchain
-        run: rustup show active-toolchain
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: ./.github/actions/setup-rust
         with:
-          key: determinism-rust-1.97.1
+          cache-key: determinism-rust-1.97.1
       - name: Typeck library (1 vs 8 threads)
         run: bash scripts/check-diag-determinism.sh arandu_typeck 8
       - name: Semantics type checker (1 vs 8 threads)
@@ -148,96 +151,214 @@ jobs:
           diff -u <(norm "$TMP/a") <(norm "$TMP/b")
           echo "semantics type_checker: ok (threads 1 vs 8)"
 
-  s1-recovery:
-    name: S1 / Recovery (${{ matrix.os }})
-    if: github.event_name != 'schedule'
-    needs: s0-gate
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+  editor:
+    name: VS Code extension
+    if: needs.scope.outputs.editor == 'true'
+    needs: scope
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install repository toolchain
-        run: rustup show active-toolchain
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: ./.github/actions/setup-rust
         with:
-          key: s1-recovery-${{ matrix.os }}-rust-1.97.1
-      - name: Fetch locked dependency graph
-        run: cargo fetch --locked
-      - name: P3 deterministic lockfile contract
-        run: cargo test --locked -p arandu_query lockfile
-      - name: P4 logical package namespaces
-        run: cargo test --locked -p arandu_query --test package_modules_p4
-      - name: P4 local workspace export boundary
-        run: cargo test --locked -p arandu_cli --test cli_project_gold local_workspace_dependency_resolves_only_declared_exports -- --exact
-      - name: Import cycles and registration-order determinism
-        run: cargo test --locked -p arandu_query --test salsa_imports
-      - name: Query boundaries and incremental cutoffs
-        run: cargo test --locked -p arandu_query --test architecture_invariants --test item_body_cutoff --test ide_diag_delta --test block_delta
-      - name: Stale document IDs and analysis revisions
-        run: cargo test --locked -p arandu_lsp
-      - name: CFG, SSA and backend rejection parity
-        run: cargo test --locked -p arandu_backend_c --test parity_tests
-      - name: Host, i686 and pointer-width layouts
-        run: cargo test --locked -p arandu_middle layout
-      - name: Diagnostic parallelism (1 vs 8 threads)
-        shell: bash
-        run: bash scripts/check-diag-determinism.sh arandu_typeck 8
-      - name: Reproducible release archive
-        if: runner.os == 'Linux'
-        shell: bash
-        run: bash scripts/check-package-reproducibility.sh
-
-  install-smoke:
-    name: Install smoke (${{ matrix.os }})
-    if: github.event_name != 'schedule'
-    needs: s0-gate
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+          cache-key: editor-rust-1.97.1
+      - name: Build Extension Host server binary
+        run: cargo build --locked -p arandu_lsp -p arandu_cli
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          persist-credentials: false
-      - name: Install repository toolchain
-        run: rustup show active-toolchain
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: install-${{ matrix.os }}-rust-1.97.1
-      - name: P3 deterministic lockfile contract
-        run: cargo test --locked -p arandu_query lockfile
-      - name: Smoke versioned install + PATH symlink doctor
+          node-version: 22
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+      - name: Lint, unit, Extension Host and package contract
+        working-directory: editors/vscode
         run: |
-          unset ARANDU_STDLIB
-          bash scripts/smoke-install.sh
-      - name: Package tarball + checksums + reinstall from archive
+          npm ci --ignore-scripts
+          xvfb-run -a npm test
+          npm run package:check
+          npm audit --audit-level=high
+
+  distribution:
+    name: Distribution smoke
+    if: needs.scope.outputs.distribution == 'true'
+    needs: scope
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: distribution-rust-1.97.1
+      - name: Reproducible release archive
+        run: bash scripts/check-package-reproducibility.sh
+      - name: Install outside the checkout and reject tampering
         run: |
           set -euo pipefail
           unset ARANDU_STDLIB
           bash scripts/package-release.sh
-          TAR=$(find dist -maxdepth 1 -name 'arandu-*.tar.gz' -print -quit)
-          test -n "$TAR"
-          test -f "${TAR}.sha256"
-          PREFIX=$(mktemp -d)
-          PREFIX="$PREFIX" bash scripts/install-from-tarball.sh "$TAR"
-          env -u ARANDU_STDLIB PATH="$PREFIX/bin:/usr/bin:/bin" \
-            bash -c 'cd /tmp && exec "$0" doctor' "$PREFIX/bin/arandu"
-          echo deadbeef > "${TAR}.sha256"
-          if PREFIX=$(mktemp -d) bash scripts/install-from-tarball.sh "$TAR"; then
+          archive=$(find dist -maxdepth 1 -name 'arandu-*.tar.gz' -print -quit)
+          test -n "$archive"
+          test -f "${archive}.sha256"
+          prefix=$(mktemp -d)
+          ARANDU_NO_MODIFY_PATH=1 PREFIX="$prefix" \
+            bash scripts/install-from-tarball.sh "$archive"
+          env -u ARANDU_STDLIB PATH="$prefix/bin:/usr/bin:/bin" \
+            bash -c 'cd /tmp && exec "$0" doctor' "$prefix/bin/arandu"
+          echo deadbeef >"${archive}.sha256"
+          if ARANDU_NO_MODIFY_PATH=1 PREFIX=$(mktemp -d) \
+              bash scripts/install-from-tarball.sh "$archive"; then
             echo "expected SHA-256 mismatch to abort" >&2
             exit 1
           fi
 
-  s2-endurance:
+  # Compatibility contexts for the active GitHub ruleset. They summarize the
+  # native recovery evidence without recompiling the same workspace again.
+  s1-recovery-status:
+    name: S1 / Recovery (${{ matrix.os }})
+    if: always() && github.event_name != 'schedule'
+    needs: [scope, rust-core, windows-portability, diag-determinism]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            evidence: rust-core
+          - os: windows-latest
+            evidence: windows-portability
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require native recovery evidence when code changed
+        shell: bash
+        env:
+          CODE_SCOPE: ${{ needs.scope.outputs.code }}
+          RUST_RESULT: ${{ needs.rust-core.result }}
+          WINDOWS_RESULT: ${{ needs.windows-portability.result }}
+          DIAG_RESULT: ${{ needs.diag-determinism.result }}
+          EVIDENCE: ${{ matrix.evidence }}
+        run: |
+          set -euo pipefail
+          if [[ "$CODE_SCOPE" != "true" ]]; then
+            echo "No product code changed; native recovery is not applicable." >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [[ "$EVIDENCE" == "rust-core" ]]; then
+            test "$RUST_RESULT" = success
+            test "$DIAG_RESULT" = success
+          else
+            test "$WINDOWS_RESULT" = success
+          fi
+          echo "$EVIDENCE passed without rerunning covered tests." >>"$GITHUB_STEP_SUMMARY"
+
+  # The historical ruleset also requires these names. The PR contract proves
+  # that all non-ignored endurance regressions ran in the native workspace
+  # suites; long stress and noisy performance probes run in scheduled-endurance.
+  s2-pr-status:
     name: S2 / Endurance (${{ matrix.os }})
-    if: github.event_name != 'schedule'
-    needs: s1-recovery
+    if: always() && github.event_name == 'pull_request'
+    needs: [scope, rust-core, windows-portability]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            evidence: rust-core
+          - os: windows-latest
+            evidence: windows-portability
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require PR endurance regressions when code changed
+        shell: bash
+        env:
+          CODE_SCOPE: ${{ needs.scope.outputs.code }}
+          RUST_RESULT: ${{ needs.rust-core.result }}
+          WINDOWS_RESULT: ${{ needs.windows-portability.result }}
+          EVIDENCE: ${{ matrix.evidence }}
+        run: |
+          set -euo pipefail
+          if [[ "$CODE_SCOPE" != "true" ]]; then
+            echo "No product code changed; endurance regressions are not applicable." >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [[ "$EVIDENCE" == "rust-core" ]]; then
+            test "$RUST_RESULT" = success
+          else
+            test "$WINDOWS_RESULT" = success
+          fi
+          echo "Non-ignored $EVIDENCE endurance regressions passed; long probes remain scheduled." >>"$GITHUB_STEP_SUMMARY"
+
+  # The branch rule keeps requiring this stable name. It aggregates parallel
+  # contracts and accepts an intentionally skipped conditional job.
+  s0-gate:
+    name: S0 / Gate
+    if: always() && github.event_name != 'schedule'
+    needs:
+      - scope
+      - preflight
+      - rust-core
+      - windows-portability
+      - diag-determinism
+      - editor
+      - distribution
+      - s1-recovery-status
+      - s2-pr-status
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every applicable PR contract
+        shell: bash
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          RUST_RESULT: ${{ needs.rust-core.result }}
+          WINDOWS_RESULT: ${{ needs.windows-portability.result }}
+          DIAG_RESULT: ${{ needs.diag-determinism.result }}
+          EDITOR_RESULT: ${{ needs.editor.result }}
+          DISTRIBUTION_RESULT: ${{ needs.distribution.result }}
+          S1_RESULT: ${{ needs.s1-recovery-status.result }}
+          S2_RESULT: ${{ needs.s2-pr-status.result }}
+          CODE_SCOPE: ${{ needs.scope.outputs.code }}
+          EDITOR_SCOPE: ${{ needs.scope.outputs.editor }}
+          DISTRIBUTION_SCOPE: ${{ needs.scope.outputs.distribution }}
+        run: |
+          set -euo pipefail
+          failed=false
+          require_success() {
+            local name=$1 result=$2
+            if [[ "$result" != "success" ]]; then
+              echo "error: $name finished with $result" >&2
+              failed=true
+            fi
+          }
+          require_if_selected() {
+            local name=$1 selected=$2 result=$3
+            if [[ "$selected" == "true" ]]; then
+              require_success "$name" "$result"
+            elif [[ "$result" != "skipped" ]]; then
+              echo "error: unselected $name unexpectedly finished with $result" >&2
+              failed=true
+            fi
+          }
+          require_success scope "$SCOPE_RESULT"
+          require_success preflight "$PREFLIGHT_RESULT"
+          require_if_selected rust-core "$CODE_SCOPE" "$RUST_RESULT"
+          require_if_selected windows-portability "$CODE_SCOPE" "$WINDOWS_RESULT"
+          require_if_selected diagnostic-determinism "$CODE_SCOPE" "$DIAG_RESULT"
+          require_if_selected editor "$EDITOR_SCOPE" "$EDITOR_RESULT"
+          require_if_selected distribution "$DISTRIBUTION_SCOPE" "$DISTRIBUTION_RESULT"
+          require_success s1-recovery "$S1_RESULT"
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            require_success s2-endurance "$S2_RESULT"
+          fi
+          if [[ "$failed" == true ]]; then
+            exit 1
+          fi
+          echo "All applicable S0 contracts passed." >>"$GITHUB_STEP_SUMMARY"
+
+  # Endurance and performance are valuable, but shared runners are a noisy
+  # place to block every PR. Non-ignored regressions remain in rust-core.
+  scheduled-endurance:
+    name: Scheduled endurance (${{ matrix.os }})
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
@@ -247,11 +368,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install repository toolchain
-        run: rustup show active-toolchain
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: ./.github/actions/setup-rust
         with:
-          key: s2-endurance-${{ matrix.os }}-rust-1.97.1
+          cache-key: s2-endurance-${{ matrix.os }}-rust-1.97.1
       - name: Validate project corpus and clean-rebuild oracle
         run: cargo run --locked -p xtask -- check-project-corpus
       - name: Stress module churn, identities and stale workers
@@ -262,20 +381,20 @@ jobs:
         run: cargo run --locked -p xtask -- check-fuzz-regressions
       - name: Prepare native runtime for AOT integration tests
         run: cargo rustc --locked -p arandu_runtime --crate-type staticlib
-      - name: P7-B / Stress cross-process cache and build publication
+      - name: Stress cross-process cache and build publication
         run: cargo test --locked -p arandu_cli --test cache_process_concurrency --test cli_project_concurrency -- --nocapture
-      - name: P7-C / Prove package output determinism under environment variance
+      - name: Prove package output determinism under environment variance
         run: cargo test --locked -p arandu_cli --test cli_project_determinism -- --nocapture
-      - name: P7-D / Reject hostile paths and archive entries
+      - name: Reject hostile paths and archive entries
         run: cargo test --locked -p arandu_cli --test cli_project_adversarial -- --nocapture
-      - name: P7-D / Validate malformed release archives
+      - name: Validate malformed release archives
         shell: bash
         run: python3 scripts/test_release_archives.py
       - name: Stress LSP snapshots, debounce and stale document generations
         run: cargo test --locked -p arandu_lsp state::tests::s2_endurance_batches_edits_and_discards_stale_snapshots -- --exact
-      - name: Measure L2 LSP end-to-end latency budgets
+      - name: Measure LSP end-to-end latency budgets
         run: cargo test --locked -p arandu_lsp --test stdio_lifecycle stdio_l2_corpus_performance_p50_p95 -- --ignored --exact --nocapture
-      - name: L3 stress LSP crash, deadlock and stale-publication oracle
+      - name: Stress LSP crash, deadlock and stale-publication oracle
         run: cargo test --locked -p arandu_lsp --test stdio_lifecycle stdio_l3_stress_has_no_crash_deadlock_or_stale_publication -- --ignored --exact --nocapture
       - name: Publish performance and retention report
         if: runner.os == 'Linux'

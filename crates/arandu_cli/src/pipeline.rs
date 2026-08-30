@@ -222,16 +222,39 @@ pub fn print_genref_report(filepath: &str, artifacts: &arandu_query::LowerAmirAr
 }
 
 /// Attach resolved stdlib root to the DB (install cascade; never cwd-only).
-pub fn attach_stdlib(db: &arandu_query::DatabaseImpl, explicit: Option<PathBuf>) {
+pub fn attach_stdlib(db: &mut arandu_query::DatabaseImpl, explicit: Option<PathBuf>) {
     match arandu_query::resolve_stdlib_root(arandu_query::StdlibResolveOpts {
         explicit,
         ..Default::default()
     }) {
-        Ok(root) => db.set_stdlib_root(root.path),
+        Ok(root) => {
+            db.set_stdlib_root(root.path.clone());
+            register_stdlib_sources(db, &root.path);
+        }
         Err(e) => {
             // Soft for single-file tools that only need prelude; hard later on import.
             // Doctor / project mode surface the hard error. Log once at debug.
             tracing::debug!("stdlib resolve deferred: {e}");
+        }
+    }
+}
+
+/// Load the immutable installed stdlib at an explicit orchestration boundary.
+/// Semantic module resolution never performs filesystem I/O.
+pub fn register_stdlib_sources(db: &mut arandu_query::DatabaseImpl, root: &Path) {
+    for relative in arandu_query::scan_aru_entries(root) {
+        let path = root.join(&relative);
+        let key = path.to_string_lossy().into_owned();
+        if db.source_file_by_path(&key).is_some() {
+            continue;
+        }
+        match fs::read_to_string(&path) {
+            Ok(text) => {
+                db.new_file(key, text);
+            }
+            Err(error) => {
+                tracing::debug!(path = %path.display(), %error, "stdlib module load deferred");
+            }
         }
     }
 }
