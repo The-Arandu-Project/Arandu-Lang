@@ -6,7 +6,14 @@
 
 ---
 
-## 🧠 Filosofia Central do Projeto
+## Visão Geral e Contexto
+
+Este é o desenho arquitetural futuro das camadas oficiais `core`, `alloc`,
+`std` e extensões, com foco em previsibilidade, embedded e self-hosting.
+
+## Detalhes Técnicos da Implementação
+
+### 🧠 Filosofia Central do Projeto
 
 O Arandu prioriza acima de tudo:
 1. **Previsibilidade semântica**: Sem mágica implícita de compilador ou runtime;
@@ -27,7 +34,7 @@ Isso define a identidade e direção de engenharia inteira da linguagem.
 
 ---
 
-## 💎 Core Invariants (Bússola do Ecossistema)
+### 💎 Core Invariants (Bússola do Ecossistema)
 
 O design de todas as APIs oficiais da linguagem Arandu (desde o compilador até a stdlib) deve seguir estritamente estes 8 invariantes fundamentais para evitar degradação de performance e arquitetura:
 
@@ -42,7 +49,7 @@ O design de todas as APIs oficiais da linguagem Arandu (desde o compilador até 
 
 ---
 
-## 📐 Filosofia de Camadas (The Layered Stdlib)
+### 📐 Filosofia de Camadas (The Layered Stdlib)
 
 Para evitar os problemas comuns de linguagens de sistemas clássicas (como o acoplamento excessivo à alocação dinâmica no topo da stdlib ou a inclusão de frameworks mutáveis e pesados que envelhecem mal), a biblioteca oficial do Arandu é dividida em **quatro camadas estritas e isoladas**.
 
@@ -66,7 +73,7 @@ Para evitar os problemas comuns de linguagens de sistemas clássicas (como o aco
 
 ---
 
-## 1. `arandu_core` (A Camada Fundamental)
+### 1. `arandu_core` (A Camada Fundamental)
 
 Esta camada é **estritamente livre de dependências externas**. Ela não assume a existência de um sistema operacional, de memória dinâmica (heap) global, nem de suporte a threads de kernel. É o bloco básico de construção para qualquer ambiente, incluindo bootloaders, kernels e firmware de microcontroladores de baixíssimo consumo.
 
@@ -101,7 +108,7 @@ arandu_core
 
 ---
 
-## 2. `arandu_alloc` (Gerenciamento de Memória & Layouts)
+### 2. `arandu_alloc` (Gerenciamento de Memória & Layouts)
 
 Esta camada introduz o conceito de alocação de memória dinâmica. Ela depende do `arandu_core`, mas **não exige suporte a sistema operacional** (pode rodar no bare-metal se um alocador físico for fornecido à API).
 
@@ -140,7 +147,7 @@ list: Vec<i32, &BumpArena> = Vec::new_in(&local_arena)
 
 ---
 
-## 3. `arandu_std` (O Sistema Operacional & Rede)
+### 3. `arandu_std` (O Sistema Operacional & Rede)
 
 Esta camada expõe serviços clássicos fornecidos por sistemas operacionais modernos. Ela unifica as APIs assíncronas com as primitivas do OS.
 
@@ -191,7 +198,7 @@ arandu_std
 
 ---
 
-## 4. `arandu_ext` (Extensões Opcionais de Aplicação)
+### 4. `arandu_ext` (Extensões Opcionais de Aplicação)
 
 Para manter o núcleo da linguagem focado e evitar a obsolescência acelerada da API, frameworks de nicho que tradicionalmente são embutidos em stdlibs monolíticas são movidos para `arandu_ext`. Eles são distribuídos junto com a SDK do Arandu, mas importados separadamente e não poluem o binário final se não forem explicitamente referenciados.
 
@@ -210,7 +217,7 @@ arandu_ext
 
 ---
 
-## 🎯 Modularidade Criptográfica (`crypto`)
+### 🎯 Modularidade Criptográfica (`crypto`)
 
 Para mitigar o aumento do tempo de compilação e do tamanho do executável gerado, o módulo `arandu_std::crypto` é estruturado em sub-módulos independentes de forma estrita.
 
@@ -228,7 +235,7 @@ crypto
 
 ---
 
-## 🚫 O Que NÃO Pertence à Stdlib
+### 🚫 O Que NÃO Pertence à Stdlib
 
 Para preservar a estabilidade da API, o tempo de compilação, o tamanho de binários finais e a modularidade global, o Arandu ativamente evita incluir na stdlib básica os seguintes componentes:
 * **Game engines** e loops especializados de gameplay;
@@ -244,7 +251,7 @@ Todos estes componentes residem estritamente nas extensões de ecossistema (`ara
 
 ---
 
-## 🛠️ O Caminho para a Versão 1.0 (Self-Hosting)
+### 🛠️ O Caminho para a Versão 1.0 (Self-Hosting)
 
 O marco definitivo de maturidade da linguagem Arandu é o **Self-Hosting**: a capacidade de compilar o próprio compilador `arandu` escrito em Arandu.
 
@@ -261,3 +268,14 @@ O marco definitivo de maturidade da linguagem Arandu é o **Self-Hosting**: a ca
 
 4. **Desempenho Paritário ou Superior**:
    O tempo de compilação do compilador Arandu compilado por ele mesmo deve ser inferior a 3 segundos para cold-builds inteiros do próprio compilador, validando a arquitetura linear e orientada a dados (A5–A11).
+
+## PONTOS DE MELHORIA (O que não está no roadmap)
+
+Grande parte deste documento ainda é design, não promessa implementada. Metas
+numéricas de self-hosting precisam de corpus, hardware e protocolo de benchmark
+definidos antes de se tornarem gate.
+
+## Futuro e Próximos Passos
+
+Implementar a stdlib na ordem do roadmap mestre, publicando apenas módulos com
+contrato, tests/benchmarks e suporte coerente aos targets declarados.

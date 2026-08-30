@@ -5,7 +5,14 @@
 **Dono:** lexer/parser preservam a grafia, semântica reconhece anotações e o
 formatter apenas mantém a apresentação
 
-## Decisão
+## Visão Geral e Contexto
+
+Este registro concluído fixa PascalCase como grafia pública de anotações e
+define a janela de migração das grafias legadas.
+
+## Detalhes Técnicos da Implementação
+
+### Decisão
 
 Toda anotação pública do Arandu usa **PascalCase** e é sensível a maiúsculas e
 minúsculas:
@@ -29,7 +36,7 @@ mantém o contrato coerente com `@Test`, `@Link`, `@Suppress`, `@Deny` e
 Nomes compostos não usam `_` nem `-`. Siglas seguem a capitalização de uma
 palavra para evitar duas grafias equivalentes: `@FfiExport`, não `@FFIExport`.
 
-## Fronteiras de nomenclatura
+### Fronteiras de nomenclatura
 
 Cada camada segue a convenção natural de seu domínio. Elas não precisam ter a
 mesma grafia:
@@ -46,7 +53,7 @@ O conteúdo de uma string não participa da regra do identificador da anotação
 Argumentos que são tipos, valores ou símbolos continuam seguindo a convenção
 da categoria correspondente.
 
-## Registro canônico
+### Registro canônico
 
 | Anotação | Situação | Grafias não canônicas conhecidas |
 | --- | --- | --- |
@@ -66,7 +73,7 @@ Esta tabela registra nomes, não promove itens planejados a funcionalidades
 implementadas. A disponibilidade de cada anotação continua pertencendo ao
 roadmap da fase que implementa sua semântica.
 
-## Contrato do compilador
+### Contrato do compilador
 
 1. O lexer produz `@` e o identificador sem normalizar sua grafia.
 2. O parser preserva o nome original no CST e AST; não conhece a lista de
@@ -84,7 +91,7 @@ roadmap da fase que implementa sua semântica.
 7. Hover e completion exibem somente a grafia canônica e explicam alvos,
    argumentos e estabilidade da anotação.
 
-## Migração das grafias legadas
+### Migração das grafias legadas
 
 A migração ocorre antes de declarar o contrato estável:
 
@@ -102,7 +109,7 @@ de migração podem citar a forma antiga quando ela for necessária para explica
 o estado de uma versão. Os aliases permanecem na linha `0.1.x` e só podem ser
 removidos em `0.2.0`, com release notes e regressão de migração.
 
-## LSP e editor
+### LSP e editor
 
 - Anotações recebem classificação semântica consistente; o servidor não fixa
   cores e o tema continua responsável pela aparência.
@@ -113,7 +120,7 @@ removidos em `0.2.0`, com release notes e regressão de migração.
 - Rename de símbolos comuns não renomeia anotações embutidas.
 - Hover não expõe nomes internos como `no_fallback` nem detalhes de HIR.
 
-## Testes obrigatórios para a migração
+### Testes obrigatórios para a migração
 
 | Camada | Prova |
 | --- | --- |
@@ -126,7 +133,7 @@ removidos em `0.2.0`, com release notes e regressão de migração.
 | Extension Host | sugestão e correção funcionam no VS Code real |
 | Portabilidade | fixtures mantêm os mesmos bytes em Windows, Linux e macOS |
 
-## Referências de mercado
+### Referências de mercado
 
 - Java modela anotações como tipos e usa nomes como `@Override`,
   `@Deprecated` e `@SuppressWarnings`:
@@ -143,10 +150,20 @@ O Arandu segue a família Java/Kotlin: suas anotações são metadados nominais 
 compilador. A escolha não implica copiar retenção runtime, reflection ou o
 modelo extensível dessas linguagens.
 
-## Fora de escopo
+### Fora de escopo
 
 - macros e annotations definidas pelo usuário;
 - reflection ou retenção runtime;
 - alterar nomes Rust, campos de HIR ou flags CLI;
 - implementar a semântica de anotações apenas planejadas;
 - escolher cores específicas para o editor.
+
+## PONTOS DE MELHORIA (O que não está no roadmap)
+
+Aliases legados aumentam temporariamente a superfície de reconhecimento; sua
+remoção exige migração documentada e diagnóstico claro, não quebra silenciosa.
+
+## Futuro e Próximos Passos
+
+Remover aliases somente na edição/versionamento definidos pelo roadmap e
+manter lexer, semântica, formatter e semantic tokens sincronizados.

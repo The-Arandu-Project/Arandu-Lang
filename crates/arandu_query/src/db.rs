@@ -441,64 +441,28 @@ impl arandu_middle::db::SourceDatabase for DatabaseImpl {
             }
         }
 
-        let mut found_path = None;
-
-        // PROMOTE-L2: dual roots via ModuleRoots (package listing + stdlib).
-        // Same function for stdlib and package-local — not a second resolver.
-        if let Some(roots) = self.module_roots() {
-            if let Some(mapped) = crate::vfs::map_import_key(self, roots, path) {
-                found_path = Some(mapped);
-            }
-        }
-
-        // Stdlib without ModuleRoots (doctor / single-file CLI with set_stdlib_root only).
-        if found_path.is_none() && (path.starts_with("stdlib/") || path.starts_with("stdlib\\")) {
-            if let Some(root) = self.stdlib_root() {
-                let candidate = crate::stdlib::import_path_on_disk(&root, path);
-                if candidate.is_file() {
-                    found_path = Some(candidate);
-                }
-            }
-        }
-
-        // Legacy monorepo / pre-registered relative keys: walk parents of cwd.
-        // Skipped for package-qualified keys when ModuleRoots already answered None
-        // (avoid picking a stale cwd tree over an authoritative package listing miss).
-        if found_path.is_none() {
-            let skip_cwd = self.module_roots().is_some()
-                && !path.starts_with("stdlib/")
-                && !path.starts_with("stdlib\\");
-            if !skip_cwd {
-                let mut current = std::env::current_dir().ok()?;
-                loop {
-                    let candidate = current.join(path);
-                    if candidate.is_file() {
-                        found_path = Some(candidate);
-                        break;
-                    }
-                    if let Some(parent) = current.parent() {
-                        current = parent.to_path_buf();
-                    } else {
-                        break;
-                    }
-                }
-            }
-        }
-
-        let found_path = found_path?;
-        let text = std::fs::read_to_string(&found_path).ok()?;
-
-        let mut reg = self.files.write().unwrap_or_else(|e| e.into_inner());
-        // Double-check: another thread may have inserted it while we were reading.
-        if let Some(file) = reg.by_path.get(path) {
+        // Module roots translate logical imports into paths, but never load
+        // those paths. CLI/LSP discovery must register the corresponding
+        // SourceFile before semantic queries run.
+        let physical = self
+            .module_roots()
+            .and_then(|roots| crate::vfs::map_import_key(self, roots, path))
+            .or_else(|| {
+                (path.starts_with("stdlib/") || path.starts_with("stdlib\\"))
+                    .then(|| self.stdlib_root())
+                    .flatten()
+                    .map(|root| crate::stdlib::import_path_on_disk(&root, path))
+            })?;
+        let reg = self.files.read().unwrap_or_else(|e| e.into_inner());
+        let key = physical.to_string_lossy();
+        if let Some(file) = reg.by_path.get(key.as_ref()) {
             return Some(*file);
         }
-
-        let file_id = reg.next_id();
-        let file = SourceFile::new(self, file_id, Arc::from(text), Arc::new(found_path));
-        reg.insert(path.to_string(), file_id, file);
-
-        Some(file)
+        // LSP registry keys are URI-portable (`/` separators and no Windows
+        // verbatim prefix), while ModuleRoots retains an OS-native PathBuf.
+        let portable = key.replace('\\', "/");
+        let portable = portable.strip_prefix("//?/").unwrap_or(&portable);
+        reg.by_path.get(portable).copied()
     }
 
     fn package_mode(&self) -> bool {

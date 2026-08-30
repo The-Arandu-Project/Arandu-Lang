@@ -1,7 +1,25 @@
 name: SL_T Harness
 
 on:
+  # The native SDK/VSIX matrix is release-like evidence. Run it on PRs only
+  # when its own product or distribution contract changes.
   pull_request:
+    paths:
+      - ".github/actions/setup-rust/action.yml"
+      - ".github/workflows/sl-t-harness.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "rust-toolchain.toml"
+      - "crates/arandu_cli/**"
+      - "crates/arandu_lsp/**"
+      - "crates/arandu_runtime/**"
+      - "editors/vscode/**"
+      - "scripts/install-from-*"
+      - "scripts/package-release.*"
+      - "scripts/smoke_distribution.py"
+      - "stdlib/**"
+      - "tests/projects/slt6_*/**"
+      - "xtask/**"
   schedule:
     - cron: "41 6 * * 2"
   workflow_dispatch:
@@ -67,11 +85,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install repository toolchain
-        run: rustup show active-toolchain
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: ./.github/actions/setup-rust
         with:
-          key: sl-t6-${{ matrix.target }}-rust-1.97.1
+          cache-key: sl-t6-${{ matrix.target }}-rust-1.97.1
       - name: Resolve package identity
         shell: bash
         run: |

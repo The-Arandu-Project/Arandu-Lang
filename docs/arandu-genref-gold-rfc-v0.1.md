@@ -4,7 +4,18 @@
 
 **Supersedes:** the F2.3 i64 MVP contract preserved in Git history
 
-## Contract
+## Visão Geral e Contexto
+
+GenRef é o fallback geracional controlado para referências que precisam
+escapar, mas não podem ser provadas como empréstimos locais. Ele preserva a
+estratégia stack-first da linguagem: código comprovadamente local não paga por
+arena, geração ou contagem de referência escondida. Este RFC registra o
+contrato implementado; o planejamento temporário da campanha permanece apenas
+no histórico Git.
+
+## Detalhes Técnicos da Implementação
+
+### Contract
 
 Arandu remains stack-first. A reference proven local uses a direct borrow and
 emits no generational operation. A representable escaping root uses a typed
@@ -17,7 +28,7 @@ All zero is invalid. Counters never wrap: exhausted slots and arenas retire.
 Handles are opaque, process-local and non-serializable. They are not pointers,
 capabilities for FFI, persistent IDs or proof of spatial/alias/thread safety.
 
-## Payload and ownership
+### Payload and ownership
 
 Compiler-managed storage receives target-derived size/alignment and optional
 drop glue. `Copy` payloads need no glue; non-trivial payloads require one
@@ -30,7 +41,7 @@ Arandu rejects divergent move states with O007, so valid programs do not need
 runtime drop flags. Normal returns elaborate `Destroy` for initialized,
 available locals. The destructor's `own self` is not recursively destroyed.
 
-## Failure model
+### Failure model
 
 The safe arena distinguishes invalid handle, wrong arena, destroyed arena,
 stale generation, capacity overflow, allocation failure, invalid layout and
@@ -38,7 +49,7 @@ invalid payload pointer. Compiler-inserted dereference traps deterministically;
 explicit safe APIs return typed failure. No failure is encoded as a payload
 sentinel.
 
-## Observability
+### Observability
 
 O004 contains the source label, AMIR escape path, reason and stack-first
 alternatives. The LSP carries structured labels/notes/hints and can insert
@@ -46,7 +57,7 @@ alternatives. The LSP carries structured labels/notes/hints and can insert
 promotion/check counts to stderr after querying. `ArenaRegistry::metrics`
 provides allocation-free runtime state snapshots.
 
-## Safety boundary
+### Safety boundary
 
 `ArenaRegistry<T>` is safe Rust and deliberately `!Send + !Sync`. No concurrent
 surface is promised. Type-erased payload storage contains the narrow unsafe
@@ -59,7 +70,7 @@ tested with ASan+UBSan. Miri cannot validate C or arbitrary FFI. GenRef has no
 stable direct C representation: FFI must use opaque handles and validation
 functions or copy values across the boundary.
 
-## Reproducible campaigns
+### Reproducible campaigns
 
 ```text
 cargo test --locked -p arandu_runtime million_cycle_endurance_retires_without_aba
@@ -79,7 +90,7 @@ layouts, incremental cutoff, diagnostic determinism and zero GenRef operations
 for a proven-local borrow. Weekly workflows extend it with bounded libFuzzer,
 Miri, ASan and UBSan campaigns.
 
-## Published limits
+### Published limits
 
 - thread-confined only; no implicit Send/Sync;
 - no direct FFI, persistence or cross-process validity;
@@ -88,3 +99,25 @@ Miri, ASan and UBSan campaigns.
   are rejected rather than snapshotted;
 - target layout tests do not by themselves claim a published native package;
   release support is governed by the release matrix.
+
+## PONTOS DE MELHORIA (O que não está no roadmap)
+
+- O contrato publicado é restrito a uma thread. Uma superfície concorrente
+  exigiria uma decisão separada sobre sincronização, ordering e custo; ela não
+  deve surgir como `Send`/`Sync` implícito.
+- Projeções que escapam continuam rejeitadas quando não existe representação
+  de owner/path de primeira classe. Copiar silenciosamente o valor mudaria a
+  semântica e não é uma correção aceitável.
+- A implementação Rust e o runtime C são fronteiras unsafe independentes. A
+  paridade funcional não elimina a necessidade das campanhas Miri e sanitizer.
+- As métricas atuais descrevem estado do runtime, mas ainda não formam um
+  perfilador de lifetime/escape voltado ao usuário.
+
+## Futuro e Próximos Passos
+
+- Manter fuzzing, Miri e ASan/UBSan nas campanhas periódicas e promover novos
+  alvos somente pela matriz de release.
+- Integrar relatórios de escape ao tooling de performance quando o profiler da
+  linguagem existir, sem inserir telemetria observável em queries Salsa.
+- Reavaliar GenRef concorrente ou FFI somente por RFC próprio com modelo de
+  memória, ABI, testes de adversário e custo explicitamente definidos.

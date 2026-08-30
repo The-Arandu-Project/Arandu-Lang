@@ -6,7 +6,14 @@ the packaged VSIX is installed through the VS Code CLI, and the Extension Host
 exercises the installed `arandu-lsp`. A successful build on another target does
 not extend this matrix.
 
-## Supported desktop hosts
+## Visão Geral e Contexto
+
+Esta matriz é o contrato público do servidor de linguagem e da extensão VS
+Code nos hosts realmente exercitados pelo SDK.
+
+## Detalhes Técnicos da Implementação
+
+### Supported desktop hosts
 
 | Host | SDK artifact | VS Code | Evidence |
 |---|---|---|---|
@@ -21,7 +28,7 @@ of these environments, but they have no Gold claim until a native gate exists.
 There is no MSI, PKG, DEB or RPM installer in `0.1`; the versioned archive
 installers are the supported SDK delivery mechanism.
 
-## Advertised LSP capabilities
+### Advertised LSP capabilities
 
 | Area | Capability | Status and limitation |
 |---|---|---|
@@ -42,7 +49,7 @@ call hierarchy, type hierarchy, CodeLens, inlay hints, document links, document
 colors, linked editing, inline values, execute-command, notebooks and file
 operation “will” requests.
 
-## Verification
+### Verification
 
 - `cargo test -p arandu_lsp --locked` freezes the initialize response and stdio
   behavior, including Unicode, cancellation, progress and lifecycle.
@@ -57,3 +64,13 @@ References: [LSP 3.18 specification](https://microsoft.github.io/language-server
 [VS Code extension testing](https://code.visualstudio.com/api/working-with-extensions/testing-extension),
 [VS Code extension CI](https://code.visualstudio.com/api/working-with-extensions/continuous-integration),
 [installing a VSIX](https://code.visualstudio.com/docs/configure/extensions/extension-marketplace#_install-from-a-vsix).
+
+## PONTOS DE MELHORIA (O que não está no roadmap)
+
+Uma capability anunciada exige teste stdio/Extension Host; compilação isolada
+ou teste TypeScript unitário não basta para promovê-la.
+
+## Futuro e Próximos Passos
+
+Ampliar hosts/capabilities apenas quando a mesma cadeia instalada, incluindo
+VSIX e `arandu-lsp`, passar na matriz de release.

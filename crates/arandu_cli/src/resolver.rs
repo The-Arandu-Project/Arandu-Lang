@@ -5,12 +5,12 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
 
+use crate::cache::CacheStore;
+use crate::manifest_io::load_manifest;
 use arandu_query::{
     CacheDigest, CacheLayout, LOCK_FILENAME, Lockfile, MANIFEST_FILENAME, ManifestData,
-    ManifestDependency, MaterializedGitPackage, PackageGraphLimits, load_manifest,
+    ManifestDependency, MaterializedGitPackage, PackageGraphLimits,
 };
-
-use crate::cache::CacheStore;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResolutionPolicy {

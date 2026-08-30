@@ -2,7 +2,14 @@
 
 **Status:** S1-D public contract; audited 2026-08-20.
 
-## Failure classes
+## Visão Geral e Contexto
+
+Este contrato alinha falhas e diagnósticos entre a CLI batch e o LSP
+revisionado sem misturar suas políticas de transporte e lifetime.
+
+## Detalhes Técnicos da Implementação
+
+### Failure classes
 
 | Class | Examples | CLI | LSP |
 |---|---|---|---|
@@ -16,7 +23,7 @@ Exit `101` belongs to Cargo when Cargo itself fails; it is not an Arandu CLI
 exit-code contract. Shells and operating systems may restrict the observable
 range of a program return value.
 
-## Command matrix
+### Command matrix
 
 | Command | Purpose | Backend | Stability | Success |
 |---|---|---|---|---|
@@ -33,7 +40,7 @@ range of a program return value.
 Backend and cross-target details are defined in
 [`arandu-backend-contract-v0.1.md`](arandu-backend-contract-v0.1.md).
 
-## LSP request and snapshot rules
+### LSP request and snapshot rules
 
 1. Each semantic job owns an `AnalysisSnapshot`; the main thread owns edits.
 2. A result is publishable only while its `DocumentId` is live and its
@@ -53,7 +60,7 @@ This isolation assumes Rust panic unwinding. A build configured with
 `panic=abort`, process corruption, allocation failure, or a foreign unwind can
 still terminate the server; the editor may restart it as a new process.
 
-## Evidence and primary references
+### Evidence and primary references
 
 - [LSP 3.18 specification](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.18/specification/)
   defines request responses, cancellation, `ContentModified`, and server
@@ -68,3 +75,14 @@ still terminate the server; the editor may restart it as a new process.
 Executable evidence includes the LSP worker-survival, closed pending-document,
 malformed-URI, stale revision, concurrent Salsa cancellation, and stdlib
 resolution tests, plus the CLI smoke and project suites.
+
+## PONTOS DE MELHORIA (O que não está no roadmap)
+
+CLI e LSP ainda compartilham alguns tipos por dependência ampla. DTOs públicos
+devem continuar estruturados; nenhuma integração pode parsear texto renderizado
+de diagnóstico.
+
+## Futuro e Próximos Passos
+
+Extrair contratos compartilhados somente quando houver segundo consumidor e
+preservar testes de erro, stale revision e worker survival.

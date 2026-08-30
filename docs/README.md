@@ -2,14 +2,33 @@
 
 Esta pasta tem uma única fila de planejamento: o [roadmap mestre](arandu-compiler-roadmap-v0.1.md). Os demais documentos são decisões aceitas, contratos estáveis ou evidências; não crie checklists paralelos.
 
+## Taxonomia
+
+| Tipo | Finalidade | Pode conter fila de trabalho? |
+| --- | --- | --- |
+| roadmap | ordem executiva e estado de maturidade | somente o roadmap mestre |
+| contrato | comportamento público/normativo implementado | não |
+| arquitetura | fronteiras, invariantes e ownership | apenas dívida/futuro explícitos |
+| decisão concluída | motivação e escolha estabilizada | não |
+| diagnóstico | explicação e correção de um `DiagCode` | não |
+| release | evidência imutável de versão publicada | não |
+
+Uma campanha pode criar temporariamente um plano de pesquisa e implementação.
+Ao terminar, seu conteúdo útil é consolidado no contrato/arquitetura permanente,
+dívidas e futuro são classificados, e o plano paralelo é removido.
+
 ## Planejamento e decisões
 
 - [Roadmap mestre](arandu-compiler-roadmap-v0.1.md) — fases abertas e decisões Gold consolidadas.
 - [Projeto/pacotes Gold](arandu-project-package-lifecycle-gold-v0.1.md) — contrato detalhado implementado.
 - [Guia de migração](arandu-project-package-migration-v0.1.md) — uso do contrato de projeto e dependências.
 - [GenRef Gold](arandu-genref-gold-rfc-v0.1.md) — RFC aceita e implementada.
+- [Testes e benchmarks](arandu-testing-benchmark-harness-v0.1.md) — contrato
+  consolidado; roadmaps SL_T.3–SL_T.6 removidos após implementação.
 - [Nomes de anotações](arandu-attribute-naming-v0.1.md) — decisão PascalCase e migração.
 - [Contrato de ferramentas e scripts](tooling-scripts-contract.md) — dono e plataforma de cada automação.
+- [Auditoria de arquitetura e performance](arandu-architecture-audit-v0.1.md) — achados, guardrails e dívida classificada.
+- [Contrato de texto](repository-text-contract.md) — UTF-8/LF em Git, editores e CI.
 
 ## Contratos de arquitetura
 

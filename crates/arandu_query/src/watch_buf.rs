@@ -8,8 +8,8 @@
 use crate::db::{DatabaseImpl, SourceFile};
 use crate::debounce::{DebouncedMap, DEFAULT_DEBOUNCE};
 use crate::manifest::{
-    load_manifest, register_manifest, ManifestError, ProjectManifest, LEGACY_MANIFEST_FILENAME,
-    MANIFEST_FILENAME,
+    hash_manifest_bytes, parse_manifest_bytes, register_manifest, ManifestError, ProjectManifest,
+    LEGACY_MANIFEST_FILENAME, MANIFEST_FILENAME,
 };
 use crate::vfs::{scan_aru_entries, DirectoryListing, ModuleRoots};
 use salsa::Setter;
@@ -337,10 +337,27 @@ impl PackageWatchSession {
     }
 
     fn apply_remove(&mut self, db: &mut DatabaseImpl, path: &Path) -> Vec<String> {
-        let keys = self
+        let canonical = canonicalize_soft(path);
+        let mut keys = self
             .path_keys
-            .remove(&canonicalize_soft(path))
-            .unwrap_or_else(|| self.infer_keys(path));
+            .remove(&canonical)
+            .or_else(|| {
+                // A deleted/renamed path cannot be canonicalized anymore. Match
+                // the stable lexical identity used when the file was indexed.
+                let wanted = stable_path_identity(path);
+                let matched = self
+                    .path_keys
+                    .keys()
+                    .find(|candidate| stable_path_identity(candidate) == wanted)
+                    .cloned();
+                matched.and_then(|candidate| self.path_keys.remove(&candidate))
+            })
+            .unwrap_or_default();
+        for key in self.infer_keys(path) {
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
+        }
         for key in &keys {
             db.unregister_source_file(key);
         }
@@ -348,12 +365,7 @@ impl PackageWatchSession {
     }
 
     fn infer_keys(&self, path: &Path) -> Vec<String> {
-        // Event paths are canonicalized before they enter the buffer. Canonicalize
-        // the root as well so Windows `\\?\` paths and ordinary absolute paths do
-        // not fall through to an unusable absolute-only registry key.
-        let package_src = canonicalize_soft(&self.package_src);
-        if let Ok(rel) = path.strip_prefix(&package_src) {
-            let rel = rel.to_string_lossy().replace('\\', "/");
+        if let Some(rel) = package_relative_path(path, &self.package_src) {
             return self.keys_for_rel(&rel);
         }
         vec![path.to_string_lossy().into_owned()]
@@ -361,7 +373,12 @@ impl PackageWatchSession {
 
     /// Re-read Arandu.toml; if `name` changes, rebuild ModuleRoots (full local invalidation).
     pub fn reload_manifest(&mut self, db: &mut DatabaseImpl) -> Result<(), ManifestError> {
-        let (data, hash, _) = load_manifest(&self.manifest_path)?;
+        let bytes = std::fs::read(&self.manifest_path).map_err(|e| ManifestError::Io {
+            path: self.manifest_path.clone(),
+            message: e.to_string(),
+        })?;
+        let data = parse_manifest_bytes(&self.manifest_path, &bytes)?;
+        let hash = hash_manifest_bytes(&bytes);
         let old_name = self.package_name.clone();
         self.package_name = data.name.clone();
         self.entry_rel = data.entry.clone();
@@ -441,6 +458,14 @@ fn canonicalize_soft(p: &Path) -> PathBuf {
     normalize_windows_verbatim(path)
 }
 
+fn stable_path_identity(path: &Path) -> String {
+    let value = path.to_string_lossy().replace('\\', "/");
+    value
+        .strip_prefix("//?/")
+        .unwrap_or(&value)
+        .to_ascii_lowercase()
+}
+
 #[cfg(windows)]
 fn normalize_windows_verbatim(path: PathBuf) -> PathBuf {
     let value = path.to_string_lossy();
@@ -455,6 +480,40 @@ fn normalize_windows_verbatim(path: PathBuf) -> PathBuf {
 #[cfg(not(windows))]
 fn normalize_windows_verbatim(path: PathBuf) -> PathBuf {
     path
+}
+
+fn registry_path_key(path: &Path) -> String {
+    let text = path.to_string_lossy().replace('\\', "/");
+    #[cfg(windows)]
+    let text = text.strip_prefix("//?/").unwrap_or(&text).to_string();
+    text
+}
+
+fn package_relative_path(path: &Path, package_src: &Path) -> Option<String> {
+    let lexical_path = PathBuf::from(registry_path_key(path));
+    let lexical_src = PathBuf::from(registry_path_key(package_src));
+    if let Ok(rel) = lexical_path.strip_prefix(&lexical_src) {
+        return Some(rel.to_string_lossy().replace('\\', "/"));
+    }
+    let normalized_path = canonicalize_soft(path);
+    let normalized_src = canonicalize_soft(package_src);
+    if let Ok(rel) = normalized_path.strip_prefix(&normalized_src) {
+        return Some(rel.to_string_lossy().replace('\\', "/"));
+    }
+    let path_str = stable_path_identity(path);
+    let src_str = stable_path_identity(package_src);
+    if let Some(rel) = path_str.strip_prefix(&src_str) {
+        let rel = rel.trim_start_matches('/');
+        if !rel.is_empty() {
+            return Some(rel.to_string());
+        }
+    }
+    if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
+        if file_name.ends_with(".aru") {
+            return Some(file_name.to_string());
+        }
+    }
+    None
 }
 
 /// Ensure path is absolute for stable map keys.

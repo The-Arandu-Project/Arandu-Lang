@@ -5,7 +5,14 @@ Grammar source: `arandu-grammar-v0.6.ebnf`
 Consumes: `docs/arandu-lexer-v0.1.md`
 Produces: `docs/arandu-ast-v0.1.md`
 
-## Goal
+## Visão Geral e Contexto
+
+Este contrato descreve o parser CST-first e o lowering canônico do CST para
+AST, incluindo recuperação de erro e fixtures públicas.
+
+## Detalhes Técnicos da Implementação
+
+### Goal
 
 Define how the parser turns lexer tokens into the Arandu AST. This contract fixes parser behavior and documents the current `crates/arandu_parser/` implementation slice.
 
@@ -36,7 +43,7 @@ Current implemented slice:
 
 Still outside this parser contract: type checking, name resolution, mutability validation, ownership/memory validation, FFI legality, exhaustiveness, unsafe legality, and other checker-only rules.
 
-## Compiler Pipeline Status
+### Compiler Pipeline Status
 
 | Feature | Lexer | Parser | Name Resolution | Type Check |
 | --- | --- | --- | --- | --- |
@@ -49,7 +56,7 @@ Still outside this parser contract: type checking, name resolution, mutability v
 | `catch` / `as` / `?` / `??` / safe access | yes | yes | names | checked for v0.1 cases; full catch lowering deferred |
 | lambdas / arrays / block calls | yes | yes | names and lambda params | arrays yes; lambda semantics deferred |
 
-## Input and Output
+### Input and Output
 
 Input:
 
@@ -72,7 +79,7 @@ PartialProgram?
 
 v0.1 parser may stop at first fatal error. It should still structure diagnostics so later versions can recover and continue.
 
-## Parser Architecture
+### Parser Architecture
 
 Use two cooperating parsers:
 
@@ -84,7 +91,7 @@ Rationale:
 - Top-level and statement syntax is keyword-led and regular.
 - Expressions have many postfix, unary, binary, and control forms; Pratt parsing keeps precedence extensible.
 
-## Entry Point
+### Entry Point
 
 ### parse_program
 
@@ -109,7 +116,7 @@ E_PARSE_EXPECTED_TOP_LEVEL_DECL
 
 when a top-level token cannot start any declaration.
 
-## Semicolons
+### Semicolons
 
 The parser treats explicit and inserted `SEMICOLON` tokens identically.
 
@@ -134,7 +141,7 @@ VarDecl(name)
 ExprStmt(CallExpr(io.println))
 ```
 
-## Top-Level Declarations
+### Top-Level Declarations
 
 Top-level declaration starters:
 
@@ -360,7 +367,7 @@ Diagnostic:
 E_PARSE_EXTERN_MEMBER_MUST_BE_SIGNATURE
 ```
 
-## Types
+### Types
 
 Type expression starters:
 
@@ -397,7 +404,7 @@ Parser decision:
 
 - Nullable wraps only the immediately preceding type expression.
 
-## Blocks and Statements
+### Blocks and Statements
 
 Statement starters:
 
@@ -549,7 +556,7 @@ Decision:
 - If the token after `defer` or `errdefer` is `{`, parse block body.
 - Otherwise parse expression body and require `stmt_end`.
 
-## Patterns
+### Patterns
 
 Pattern starters:
 
@@ -580,7 +587,7 @@ Parser decision:
 - `IDENT_TYPE LBRACE` starts a struct pattern.
 - A literal followed by `..` or `..=` starts a range pattern.
 
-## Pratt Expression Parser
+### Pratt Expression Parser
 
 Expression entry:
 
@@ -697,7 +704,7 @@ Generic call ambiguity:
 - `a < b > c` is comparison syntax, not generic arguments.
 - Generic arguments in expressions are accepted only when immediately followed by `(`.
 
-## Error Recovery
+### Error Recovery
 
 v0.1 may stop at first fatal error, but diagnostics must include recovery hints.
 
@@ -748,7 +755,7 @@ Diagnostic shape:
 }
 ```
 
-## Parser Test Fixtures
+### Parser Test Fixtures
 
 ### Fixture: hello program
 
@@ -858,7 +865,7 @@ VarDecl(compare)
     ValuePath(c)
 ```
 
-## Known v0.1 Decisions
+### Known v0.1 Decisions
 
 - The parser does not perform name resolution.
 - The parser does not check mutability, ownership, type validity, exhaustiveness, or unsafe legality.
@@ -867,3 +874,14 @@ VarDecl(compare)
 - General enum value construction is not introduced by this contract because EBNF v0.6 does not define it as an expression form; current checked constructors use type-qualified calls such as `Result.Ok(...)`, `Result.Err(...)`, and `Option.Some(...)`.
 - `Err(...)` is not parsed as an error constructor. Use ordinary calls such as `err.new(...)` where an error value is needed.
 - Parser tests should use `examples/stable/` as positive fixtures and `examples/invalid/syntax/` as negative fixtures.
+
+## PONTOS DE MELHORIA (O que não está no roadmap)
+
+Os pontos de pressão gramatical registrados acima não autorizam sintaxe nova.
+O principal risco é criar um segundo caminho AST-first que duplique parsing e
+enfraqueça a recuperação incremental.
+
+## Futuro e Próximos Passos
+
+Evoluir a gramática somente com CST, formatter, erros e testes de recovery
+simultâneos; preservar `syntax_tree(file)` como entrada canônica.

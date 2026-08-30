@@ -7,9 +7,10 @@
 use crate::pool::{Priority, WorkerPool};
 use crate::state::{discover_aru_files, ServerState};
 use crate::uri_util::uri_from_path;
+use arandu_package::{find_manifest, load_manifest};
 use arandu_query::{
-    ensure_toolchain_compatible, find_manifest, load_manifest, resolve_stdlib_root,
-    scan_aru_entries, LocalPackageGraph, ManifestData, PackageModulePlan, StdlibResolveOpts,
+    ensure_toolchain_compatible, resolve_stdlib_root, scan_aru_entries, LocalPackageGraph,
+    ManifestData, PackageModulePlan, StdlibResolveOpts,
 };
 use crossbeam_channel::{bounded, Receiver};
 use std::path::PathBuf;
@@ -173,6 +174,15 @@ fn discover_workspace_project_with_cache(
         let stdlib_root = resolve_stdlib_root(StdlibResolveOpts::default())
             .ok()
             .map(|stdlib| stdlib.path);
+        if let Some(root) = stdlib_root.as_ref() {
+            for relative in scan_aru_entries(root) {
+                let path = root.join(relative);
+                let text = std::fs::read_to_string(&path).map_err(|error| {
+                    format!("cannot read stdlib module {}: {error}", path.display())
+                })?;
+                module_files.push(WorkspaceFile { path, text });
+            }
+        }
         return Ok(Some(WorkspaceProject {
             manifest_path,
             manifest_data,

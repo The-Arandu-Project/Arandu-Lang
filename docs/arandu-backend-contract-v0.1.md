@@ -8,7 +8,14 @@ This document is intentionally conservative. A green frontend test means that a
 program reaches AMIR; it does not automatically promote every runtime facility,
 target ABI, or external toolchain to supported backend status.
 
-## Target model
+## Visão Geral e Contexto
+
+O contrato separa o AMIR validado das implementações C, JIT e AOT e define o
+que constitui suporte real em vez de apenas compilação local.
+
+## Detalhes Técnicos da Implementação
+
+### Target model
 
 LLVM associates a target triple with a data layout, while GCC and Clang also
 require ABI, CPU, object format, system headers, libraries, and linker choices.
@@ -26,7 +33,7 @@ All profiles reject objects at or above the positive `isize` bound of the
 modeled address space. Layout arithmetic is checked and a failure returns a
 typed diagnostic before a successful artifact is exposed.
 
-## Backend and platform matrix
+### Backend and platform matrix
 
 | Capability | C backend | Cranelift backend |
 |---|---|---|
@@ -43,7 +50,7 @@ Windows builds are locally supported by the Rust workspace, but Windows backend
 Gold requires a dedicated mandatory CI runner and runtime campaign. Until that
 exists, this contract does not claim Windows backend Gold.
 
-## Type and representation matrix
+### Type and representation matrix
 
 | Family | Representation | C | Cranelift host JIT |
 |---|---|---|---|
@@ -64,7 +71,7 @@ exists, this contract does not claim Windows backend Gold.
 “Supported” here means covered at the backend boundary for well-typed AMIR. It
 does not override language-phase status or promise a stable external ABI.
 
-## Rejection and artifact rules
+### Rejection and artifact rules
 
 1. Both backends run `validate_amir_program` before backend work.
 2. Malformed SSA edges, poison types, and invalid statement ranges must produce
@@ -77,7 +84,7 @@ does not override language-phase status or promise a stable external ABI.
    returns a JIT module only after finalization or an object only after complete
    serialization; the CLI commits build provenance only after successful link.
 
-## What is required for real cross compilation
+### What is required for real cross compilation
 
 Adding a new Gold target requires one named target specification containing at
 least architecture, OS/environment, ABI/calling convention, endianness, object
@@ -94,7 +101,7 @@ Primary references used for this decision:
 - [GCC ABI compatibility scope](https://gcc.gnu.org/onlinedocs/gcc/Compatibility.html)
 - [Cranelift IR invariants](https://github.com/bytecodealliance/wasmtime/blob/main/cranelift/docs/ir.md)
 
-## Promotion criteria
+### Promotion criteria
 
 The C backend becomes Gold for a named target only when its generated source is
 compiled and linked with the declared toolchain and runtime, then executed in a
@@ -103,3 +110,14 @@ AOT additionally requires object validation, link, execution and
 failure-retention tests using the distributed runtime. Cross-target execution,
 LLVM release codegen, freestanding C, and a stable public ABI remain separate
 future milestones.
+
+## PONTOS DE MELHORIA (O que não está no roadmap)
+
+Cross-compilation, LLVM release, C freestanding e ABI pública continuam fora do
+escopo publicado. Arquivos grandes de emitter/translator são revistos por
+responsabilidade, não divididos mecanicamente.
+
+## Futuro e Próximos Passos
+
+Cada target novo precisa de layout, emissão, link, execução e pacote exercitado
+em ambiente nativo antes de entrar na matriz de suporte.

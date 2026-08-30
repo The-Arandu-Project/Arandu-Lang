@@ -5,7 +5,14 @@
 e biblioteca padrão formam uma unidade versionada; a extensão do editor é um
 cliente separado.
 
-## Promessa v0.x
+## Visão Geral e Contexto
+
+O contrato define o SDK autocontido, sua identidade, verificação e matriz
+nativa para que o usuário não dependa do monorepo ou de uma instalação Rust.
+
+## Detalhes Técnicos da Implementação
+
+### Promessa v0.x
 
 O primeiro canal público é `0.1.0-rc.N`. Uma RC pode ser substituída apenas por
 uma nova versão e nunca pela movimentação da mesma tag. `0.1.z` preserva os
@@ -17,7 +24,7 @@ queries Salsa e formatos não documentados não são API pública estável.
 de distribuição a partir dos archives publicados, sem checkout, Cargo ou
 toolchain de desenvolvimento; nenhuma RC pode manter bloqueador conhecido.
 
-## Componentes do SDK
+### Componentes do SDK
 
 Cada distribuição contém versões compatíveis de:
 
@@ -31,7 +38,7 @@ A extensão VS Code não incorpora outra cópia do compilador. Ela localiza o
 `arandu-lsp` instalado, fala LSP e mantém seu próprio ciclo de publicação, mas
 sua versão de compatibilidade é validada antes de uma release do SDK.
 
-## Matriz inicial
+### Matriz inicial
 
 | Host | Target Rust | Formato obrigatório | Estado no S3-A |
 | --- | --- | --- | --- |
@@ -44,7 +51,7 @@ posteriores. Eles não substituem os archives portáveis nem podem ampliar a
 matriz suportada sem o mesmo smoke nativo. macOS Intel, Linux musl/ARM e
 Windows ARM não possuem binário prometido no beta inicial.
 
-## Comandos e dependências do host
+### Comandos e dependências do host
 
 Após colocar `bin` no `PATH`, o nome do comando é `arandu` em Bash, Zsh,
 PowerShell e CMD. O sufixo `.exe` é transparente no Windows.
@@ -65,7 +72,7 @@ GCC/Clang. Isso não impede `check`, `run` JIT ou o LSP numa instalação binár
 mas `build` falha de forma operacional e preserva o último artefato válido.
 O SDK inclui a biblioteca estática do runtime correspondente ao target.
 
-## Limites explícitos de v0.1
+### Limites explícitos de v0.1
 
 - `run` é host-JIT; `build` gera executável AOT apenas para o host. Não há
   promessa de cross-compilation nem de executar um artefato em outro target.
@@ -78,10 +85,21 @@ O SDK inclui a biblioteca estática do runtime correspondente ao target.
 - Binários não prometem MSRV. A fonte só é validada com `rust-toolchain.toml`.
 - “Suportado” exige instalação e smoke em host limpo, não apenas build no CI.
 
-## Identidade e verificação
+### Identidade e verificação
 
 A tag `vX.Y.Z[-rc.N]`, as versões dos crates publicáveis, CLI, LSP e extensão
 devem coincidir. `cargo run --locked -p xtask -- check-release-contract` impede
 divergência antes do empacotamento. S3-B adicionará o manifest interno à mesma
 cadeia; S3-D exige BLAKE3 externo, provenance e conjunto completo de assets
 antes de tornar uma release pública.
+
+## PONTOS DE MELHORIA (O que não está no roadmap)
+
+Tooling de empacotamento ainda inclui wrappers Python/Bash/PowerShell no fluxo
+de desenvolvimento; a migração self-hosted está classificada no roadmap. Isso
+não adiciona dependência Python ao SDK instalado.
+
+## Futuro e Próximos Passos
+
+Migrar tooling quando o bootstrap for seguro e promover novos installers/hosts
+somente com smoke fora do checkout sobre os artefatos públicos exatos.

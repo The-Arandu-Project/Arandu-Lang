@@ -6,7 +6,14 @@ This document defines the intermediate representation (IR) strategy for the Aran
 
 ---
 
-## 1. Compiler Pipeline
+## Visão Geral e Contexto
+
+Este documento registra por que o compilador separa AST, AHIR/HIR e AMIR e
+quais responsabilidades podem cruzar cada fronteira.
+
+## Detalhes Técnicos da Implementação
+
+### 1. Compiler Pipeline
 
 The compilation pipeline for an Arandu source file follows a structured phase-by-phase layout:
 
@@ -36,7 +43,7 @@ Borrow Checker   (Ownership, lifetimes, and generational checks)
 
 ---
 
-## 2. AST vs AHIR vs AMIR
+### 2. AST vs AHIR vs AMIR
 
 > **Implementation note (C5):** In the `arandu_semantics` crate, **AHIR** is implemented as the Rust module `hir` (`HirProgram`, `lower_to_hir`, CLI `arandu hir`). Documentation and CLI may say “AHIR” or “HIR”; they refer to the same IR.
 
@@ -52,7 +59,7 @@ The intermediate representations serve distinct purposes at different stages of 
 
 ---
 
-## 3. AHIR v0.1 Responsibilities
+### 3. AHIR v0.1 Responsibilities
 
 AHIR v0.1 serves as the **Typed AST**. It represents the program semantically while maintaining tree structure and source-level constructs.
 
@@ -72,7 +79,7 @@ AHIR v0.1 serves as the **Typed AST**. It represents the program semantically wh
 
 ---
 
-## 4. AMIR Responsibilities
+### 4. AMIR Responsibilities
 
 AMIR represents the program as a Control Flow Graph (CFG) with explicit control-flow blocks and dataflow edges. It is designed to perform dataflow analysis and enforce memory safety.
 
@@ -98,7 +105,7 @@ AMIR represents the program as a Control Flow Graph (CFG) with explicit control-
 
 ---
 
-## 5. Deferred Features
+### 5. Deferred Features
 
 To ensure steady progress and prevent overengineering, several advanced compiler design patterns are deferred to later versions:
 
@@ -113,7 +120,7 @@ To ensure steady progress and prevent overengineering, several advanced compiler
 
 ---
 
-## 6. Pretty-Printing Contract
+### 6. Pretty-Printing Contract
 
 The `arandu hir` subcommand outputs a pretty-printed representation of the AHIR. This format is designed for readability, debugging, and verification via golden tests.
 
@@ -168,3 +175,13 @@ Enum LoadState
 Const maxRetries: int =
   Int(3): int
 ```
+
+## PONTOS DE MELHORIA (O que não está no roadmap)
+
+Os itens deferred acima são extensões, não permissão para fundir IRs. Mudanças
+devem evitar clones profundos e projeções monolíticas no caminho incremental.
+
+## Futuro e Próximos Passos
+
+Promover novos IR features apenas pelo roadmap mestre, acompanhados de
+invariantes, visitors completos e testes de paridade entre backends.

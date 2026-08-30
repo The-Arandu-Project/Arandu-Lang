@@ -8,6 +8,13 @@ lockfile, integridade e release pertencem ao Rust (`xtask` ou crates). Scripts
 não podem reimplementar essas regras; apenas adaptam o ambiente do sistema e
 encaminham a validação para o comando canônico.
 
+## Visão Geral e Contexto
+
+Este contrato define quais automações pertencem a Rust/xtask e quais wrappers
+de sistema continuam necessários durante o bootstrap.
+
+## Detalhes Técnicos da Implementação
+
 | Grupo | Arquivos | Responsabilidade |
 | --- | --- | --- |
 | Tarefas semânticas | `cargo run -p xtask -- ...` | Diagnósticos, corpus, release contract e campanhas do compilador |
@@ -17,7 +24,7 @@ encaminham a validação para o comando canônico.
 | Smoke/reprodutibilidade | `smoke_distribution.py`, `test_release_archives.py`, `check-package-reproducibility.sh` | Exercitar artefatos públicos em runners nativos |
 | Diagnósticos | `check-diag-docs.sh`, `check-diag-determinism.sh` | Wrappers de CI para `xtask` e testes de concorrência |
 
-## Política por sistema
+### Política por sistema
 
 - Bash é o wrapper de Linux/macOS; PowerShell é o wrapper de Windows.
 - Python é usado para testes e manipulação de formatos quando isso reduz a
@@ -27,10 +34,20 @@ encaminham a validação para o comando canônico.
 - Um novo script exige dono, plataforma, comando canônico que valida sua saída
   e um teste. Duplicação de parser ou regra de segurança é proibida.
 
-## Migração gradual
+### Migração gradual
 
 1. Adicionar a regra no crate/Rust responsável.
 2. Cobrir a regra com teste unitário e um teste de integração multiplataforma.
 3. Reduzir o script a preparação de argumentos e tradução de erros.
 4. Manter o wrapper antigo durante uma versão e removê-lo somente após a CI
    usar o comando Rust em Windows, Linux e macOS.
+
+## PONTOS DE MELHORIA (O que não está no roadmap)
+
+Wrappers ainda formam uma superfície ampla de manutenção multiplataforma. Eles
+não podem duplicar regras de lockfile, integridade, resolução ou release.
+
+## Futuro e Próximos Passos
+
+Executar a migração DIST prevista no roadmap quando o bootstrap permitir,
+mantendo compatibilidade por uma versão e CI nativa durante a transição.

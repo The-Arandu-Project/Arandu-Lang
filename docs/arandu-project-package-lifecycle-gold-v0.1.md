@@ -2,16 +2,15 @@
 
 > **Registro de decisão concluído.** O planejamento desta campanha foi
 > consolidado em “Decisões consolidadas (Gold v0.1)” no roadmap mestre. Este
-> arquivo agora serve apenas como contrato detalhado e evidência técnica; os
-> checkboxes abaixo não representam trabalho aberto.
+> arquivo agora serve apenas como contrato detalhado e evidência técnica.
 
-**Status:** active campaign  
+**Status:** implemented contract; Gold scope complete
 **Owner:** `arandu_cli` orchestrates filesystem/network effects;
 `arandu_query` owns deterministic manifest, package-graph and directory inputs.  
 **Prerequisite:** compiler, distribution and installed-SDK gates are Gold in their
 published scope.
 
-## Goal
+## Visão Geral e Contexto
 
 Turn the existing project-mode CLI into a reproducible package lifecycle that
 works outside the monorepo on Windows, Linux and macOS. A user must be able to
@@ -23,7 +22,7 @@ Gold here does **not** mean a public registry. The first stable package graph is
 local/workspace-first. Remote Git and registry resolution remain disabled until
 identity, lockfile integrity and cache isolation are proven.
 
-## Current implementation audit
+## Detalhes Técnicos da Implementação
 
 | Area | Current state | Gold gap |
 | --- | --- | --- |
@@ -39,7 +38,7 @@ The existing narrow query boundaries are retained. Parsing a manifest is pure;
 reading it, walking directories, resolving VCS and writing files stay in CLI or
 dedicated effectful infrastructure before values enter Salsa.
 
-## Decisions informed by existing ecosystems
+### Decisions informed by existing ecosystems
 
 ### Why TOML remains the right manifest format
 
@@ -540,7 +539,7 @@ Generated ignore entries initially cover:
 
 The lockfile is not ignored for applications/workspaces.
 
-## Failures observed elsewhere that Arandu must avoid
+### Failures observed elsewhere that Arandu must avoid
 
 | Failure class | Arandu guardrail |
 | --- | --- |
@@ -570,52 +569,52 @@ The lockfile is not ignored for applications/workspaces.
 | private package name leaks to public service | source routing is explicit; private origin has no public fallback |
 | dependency graph/archive resource exhaustion | strict graph, archive, expanded-size and file-count limits |
 
-## Campaign
+### Implementation evidence
 
-### P0 — Contract and compatibility
+#### P0 — Contract and compatibility
 
-- [x] Make `arandu.toml` canonical and implement conflict-safe legacy discovery
+- Make `arandu.toml` canonical and implement conflict-safe legacy discovery
   (`arandu.lock` becomes canonical when P3 introduces it).
-- [x] Replace the ad-hoc parser with a complete, deterministic TOML decoder.
-- [x] Add schema, derived package kind, edition and toolchain compatibility.
-- [x] Reject duplicates, unknown owned fields, invalid SemVer and unsafe paths.
-- [x] Keep manifest and directory data as narrow Salsa inputs.
-- [x] Reserve versioned capability-policy and compiler-produced effect-summary
+- Replace the ad-hoc parser with a complete, deterministic TOML decoder.
+- Add schema, derived package kind, edition and toolchain compatibility.
+- Reject duplicates, unknown owned fields, invalid SemVer and unsafe paths.
+- Keep manifest and directory data as narrow Salsa inputs.
+- Reserve versioned capability-policy and compiler-produced effect-summary
   metadata without claiming A2 inference before it exists.
 
-### P1 — Project creation and VCS
+#### P1 — Project creation and VCS
 
-- [x] Implement `arandu init` and `new --bin/--lib`.
-- [x] Generate README, `.gitignore`, `src/` and `tests/` without partial trees.
-- [x] Add `--vcs=auto|git|none`, detecting enclosing repositories.
-- [x] Test reserved names, Unicode, spaces, case collisions and interrupted creation.
+- Implement `arandu init` and `new --bin/--lib`.
+- Generate README, `.gitignore`, `src/` and `tests/` without partial trees.
+- Add `--vcs=auto|git|none`, detecting enclosing repositories.
+- Test reserved names, Unicode, spaces, case collisions and interrupted creation.
 
-### P2 — Artifact lifecycle
+#### P2 — Artifact lifecycle
 
-- [x] Define profiles, target triples and `target/` layout.
-- [x] Make `build` produce a real stable artifact outside the monorepo.
-- [x] Publish through staging/atomic rename and retain the last valid artifact.
-- [x] Implement safe `arandu clean` and artifact provenance metadata.
+- Define profiles, target triples and `target/` layout.
+- Make `build` produce a real stable artifact outside the monorepo.
+- Publish through staging/atomic rename and retain the last valid artifact.
+- Implement safe `arandu clean` and artifact provenance metadata.
 
-### P3 — Lockfile core
+#### P3 — Lockfile core
 
-- [x] Define a versioned deterministic lock format and canonical serializer.
-- [x] Implement atomic generation plus `--locked`, `--offline`, `--frozen`.
-- [x] Reject corruption, stale manifest fingerprints and nonportable fields.
-- [x] Prove byte-identical output across Windows, Linux and macOS.
+- Define a versioned deterministic lock format and canonical serializer.
+- Implement atomic generation plus `--locked`, `--offline`, `--frozen`.
+- Reject corruption, stale manifest fingerprints and nonportable fields.
+- Prove byte-identical output across Windows, Linux and macOS.
 
-### P4 — Local packages and workspaces
+#### P4 — Local packages and workspaces
 
-- [x] Introduce typed `PackageId`, `TargetId`, `ModuleId` and logical import roots.
-- [x] Support `bin` and `lib` targets plus relative path dependencies.
-- [x] Bind source imports through direct dependency aliases, `self` and `std`.
-- [x] Add explicit library export maps and reject dependency deep imports.
-- [x] Migrate bare local and quoted filesystem imports without ambiguous lookup.
-- [x] Add a single-root workspace with members and shared output/lockfile.
-- [x] Resolve a deterministic package DAG with cycle/collision diagnostics.
-- [x] Feed `PackageModuleMap` through Salsa inputs without filesystem reads in queries.
-- [x] Prove body-edit/export-surface/package-version invalidation boundaries.
-- [x] Refresh the live CLI/LSP package graph with cutoff after manifest edits.
+- Introduce typed `PackageId`, `TargetId`, `ModuleId` and logical import roots.
+- Support `bin` and `lib` targets plus relative path dependencies.
+- Bind source imports through direct dependency aliases, `self` and `std`.
+- Add explicit library export maps and reject dependency deep imports.
+- Migrate bare local and quoted filesystem imports without ambiguous lookup.
+- Add a single-root workspace with members and shared output/lockfile.
+- Resolve a deterministic package DAG with cycle/collision diagnostics.
+- Feed `PackageModuleMap` through Salsa inputs without filesystem reads in queries.
+- Prove body-edit/export-surface/package-version invalidation boundaries.
+- Refresh the live CLI/LSP package graph with cutoff after manifest edits.
 
 The implemented P4 core resolves only workspace-contained relative path
 dependencies. Discovery canonicalizes each package root, rejects escapes,
@@ -636,13 +635,13 @@ changes invalidate open importers without restarting the server. Package mode
 also diagnoses quoted filesystem imports and emits a structured replacement
 for legacy bare local imports. With these contracts covered, P4 is complete.
 
-### P5 — Verified global cache
+#### P5 — Verified global cache
 
-- [x] Specify platform-native cache/config locations and override flags.
-- [x] Store immutable content-addressed package sources with per-entry locking.
-- [x] Add `arandu cache inspect|verify|prune` with bounded, recoverable behavior.
-- [x] Never trust an extracted directory without rechecking its recorded digest.
-- [x] Bound archive bytes, expanded bytes, file count, graph depth and graph size.
+- Specify platform-native cache/config locations and override flags.
+- Store immutable content-addressed package sources with per-entry locking.
+- Add `arandu cache inspect|verify|prune` with bounded, recoverable behavior.
+- Never trust an extracted directory without rechecking its recorded digest.
+- Bound archive bytes, expanded bytes, file count, graph depth and graph size.
 
 P5-A fixes the cache root precedence as `--cache-dir`, then
 `ARANDU_CACHE_DIR`, then the platform-native per-user cache: Local AppData on
@@ -679,14 +678,14 @@ same fail-closed policy to graph nodes, dependency edges and traversal depth
 does not infer graph size from archive bytes, and P6 can add remote-resolution
 limits without weakening the local package contract.
 
-### P6 — Remote Git, intentionally narrow
+#### P6 — Remote Git, intentionally narrow
 
-- [x] Accept secure Git/HTTPS sources pinned to an exact commit.
-- [x] Record canonical origin, commit and content digest in the lockfile.
-- [x] Disable network in `--offline`; never fall back from private to public origins.
-- [x] Make first trust and every update an explicit reviewable graph diff.
-- [x] Add `tree`, `verify`, `audit` and verified `vendor` foundations.
-- [x] Defer floating branches, arbitrary URLs, registries and dependency scripts.
+- Accept secure Git/HTTPS sources pinned to an exact commit.
+- Record canonical origin, commit and content digest in the lockfile.
+- Disable network in `--offline`; never fall back from private to public origins.
+- Make first trust and every update an explicit reviewable graph diff.
+- Add `tree`, `verify`, `audit` and verified `vendor` foundations.
+- Defer floating branches, arbitrary URLs, registries and dependency scripts.
 
 P6-A freezes the remote manifest identity before networking is introduced:
 `alias = { git = "https://host/owner/repository.git", rev = "<full-commit>" }`.
@@ -780,17 +779,17 @@ link-like archive objects and revalidates trees before they become trusted.
 These checks follow the conservative extraction posture documented by Python's
 `tarfile` data filter and Windows' reparse-point guidance.
 
-### P7 — Gold promotion
+#### P7 — Gold promotion
 
-- [x] Native lifecycle E2E on Windows, Linux and macOS outside the checkout.
-- [x] Concurrent build/cache tests and crash-interrupted atomic-write recovery.
-- [x] Determinism campaign for manifests, graphs, lockfiles and artifact metadata.
-- [x] Adversarial path, symlink/junction, malformed archive and cache-tamper tests.
-- [x] Dependency-confusion, origin-substitution, rollback and graph/archive-bomb tests.
-- [x] Installed SDK smoke: `new → check → build → run → clean`.
-- [x] Documentation and migration guide complete; no known P0/P1 defect.
+- Native lifecycle E2E on Windows, Linux and macOS outside the checkout.
+- Concurrent build/cache tests and crash-interrupted atomic-write recovery.
+- Determinism campaign for manifests, graphs, lockfiles and artifact metadata.
+- Adversarial path, symlink/junction, malformed archive and cache-tamper tests.
+- Dependency-confusion, origin-substitution, rollback and graph/archive-bomb tests.
+- Installed SDK smoke: `new → check → build → run → clean`.
+- Documentation and migration guide complete; no known P0/P1 defect.
 
-## Initial command surface
+### Published command surface
 
 ```text
 arandu new <path> [--bin|--lib] [--vcs=auto|git|none]
@@ -813,7 +812,39 @@ not in the first Gold slice. Exact-commit Git graph changes use the deliberately
 narrow `update --accept` review flow; the schema reserves room for the other
 features without pretending they already exist.
 
-## References
+## PONTOS DE MELHORIA (O que não está no roadmap)
+
+- A infraestrutura de empacotamento e instalação ainda usa scripts Python,
+  Bash e PowerShell. Isso não afeta o usuário do SDK publicado, mas mantém uma
+  dependência de desenvolvimento que deve migrar para `xtask` ou para a própria
+  toolchain quando o bootstrap self-hosted estiver maduro.
+- O cache verificado conhece arquivos Git imutáveis, mas ainda não possui um
+  coletor de lixo baseado em raízes de lockfiles. O `prune` permanece
+  conservador e remove somente material transitório/quarentenado.
+- Políticas de capabilities/effects já participam da identidade do manifesto,
+  porém a inferência do effect system pertence a A2. Hoje elas são declarações
+  versionadas, não prova semântica produzida pelo compilador.
+- O código de CLI concentra parsing de comandos de projeto em `main.rs`. A
+  separação deve ocorrer por domínio quando a próxima superfície de comando
+  exigir mudanças, preservando as funções puras de `arandu_package`.
+
+Os limites abaixo são deliberados, não dívida escondida: não há dependência
+por branch/tag flutuante, URL arbitrária, registry público, script de build de
+dependência ou fallback entre origens privadas e públicas.
+
+## Futuro e Próximos Passos
+
+- Migrar tooling de release para uma implementação portável sem exigir Python
+  do colaborador somente depois de existir um bootstrap estável para essa
+  migração; até lá, os scripts continuam testados pela matriz nativa.
+- Introduzir registry apenas com identidade tipada, metadados assinados,
+  digests imutáveis, proteção contra rollback e transparência auditável.
+- Integrar resumos de effects inferidos ao lockfile e ao diff de autoridade
+  quando A2 entregar esse contrato semântico.
+- Avaliar resolução SemVer mais ampla somente quando houver registry. A fonte
+  Git continua exigindo commit exato por design.
+
+### References
 
 - [Cargo manifests](https://doc.rust-lang.org/cargo/reference/manifest.html),
   [workspaces](https://doc.rust-lang.org/cargo/reference/workspaces.html),

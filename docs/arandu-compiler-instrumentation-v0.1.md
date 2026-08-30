@@ -4,11 +4,18 @@ Status: implemented (dev/debug)
 Crate: `arandu_base::perf`
 CLI: `arandu_cli` (`-Z` flags)
 
-## Goal
+## Visão Geral e Contexto
+
+A instrumentação fornece observabilidade opt-in para desenvolvimento sem
+transformar queries puras em fontes de efeitos observáveis.
+
+## Detalhes Técnicos da Implementação
+
+### Goal
 
 Provide lightweight, opt-in observability for compiler development: pass timings, query cache stats, and arena allocation totals. All flags are **off by default** and use `Relaxed` atomic loads on hot paths so they add near-zero overhead when disabled.
 
-## Usage
+### Usage
 
 Pass `-Z` flags anywhere before the subcommand:
 
@@ -23,7 +30,7 @@ On PowerShell:
 cargo run -p arandu_cli -- -Ztime-passes run tests/codegen/add.aru
 ```
 
-## Flags
+### Flags
 
 | Flag | Global atomic | What it measures |
 |------|---------------|------------------|
@@ -34,7 +41,7 @@ cargo run -p arandu_cli -- -Ztime-passes run tests/codegen/add.aru
 
 Unknown flags print a warning to stderr and are ignored.
 
-## Output format
+### Output format
 
 All instrumentation writes to **stderr**. When the terminal supports colour and `NO_COLOR` is unset:
 
@@ -47,7 +54,7 @@ All instrumentation writes to **stderr**. When the terminal supports colour and 
 
 Pass timings slower than 20 ms appear in yellow; slower than 100 ms in red with a warning marker.
 
-## Passes instrumented today
+### Passes instrumented today
 
 The CLI wires `time_pass!` around:
 
@@ -61,7 +68,7 @@ The CLI wires `time_pass!` around:
 
 `perf_info!` lines appear only when **any** `-Z` flag is active.
 
-## API for compiler crates
+### API for compiler crates
 
 ```rust
 // In a pass entry point:
@@ -82,7 +89,7 @@ Initialize once at startup:
 arandu_base::init_z_flags(&z_flags);
 ```
 
-## Roadmap alignment
+### Roadmap alignment
 
 This covers the **PERF** milestone (Phase 2) at a minimal level. Future work:
 
@@ -91,8 +98,19 @@ This covers the **PERF** milestone (Phase 2) at a minimal level. Future work:
 - JSON output mode for CI regression tracking
 - Benchmark harness crate comparing pass timings across commits
 
-## Related
+### Related
 
 - Implementation: `crates/arandu_base/src/perf.rs`
 - CLI wiring: `crates/arandu_cli/src/main.rs`
 - Roadmap: `docs/arandu-compiler-roadmap-v0.1.md` (PERF item)
+
+## PONTOS DE MELHORIA (O que não está no roadmap)
+
+O buffer de Trace Event pode crescer com campanhas longas e o sink vive em
+`arandu_base::tracing_bridge`; ele é a exceção de I/O explicitamente verificada
+pelo guardrail arquitetural.
+
+## Futuro e Próximos Passos
+
+Usar esta instrumentação com corpus estável para localizar hot paths; se
+necessário, tornar o sink streaming/bounded sem inserir I/O nas queries.

@@ -69,7 +69,7 @@ export async function run(): Promise<void> {
             );
             return result && result.items.length > 0 ? result : undefined;
         });
-        assert.ok(completions.items.some(item => item.label === 'func'));
+        assert.ok(completions.items.some(item => completionItemLabel(item) === 'func'));
 
         await verifyNavigationAndRename(workspace);
 
@@ -186,6 +186,11 @@ async function verifyNavigationAndRename(workspace: vscode.WorkspaceFolder): Pro
 function diagnosticCode(diagnostic: vscode.Diagnostic): string | number | undefined {
     const code = diagnostic.code;
     return typeof code === 'object' ? code.value : code;
+}
+
+function completionItemLabel(item: vscode.CompletionItem): string {
+    const label = item.label;
+    return typeof label === 'string' ? label : label.label;
 }
 
 async function verifyHighlightingAcrossBuiltInThemes(uri: vscode.Uri): Promise<void> {

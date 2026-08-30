@@ -4,7 +4,14 @@
 
 AMIR v0.1 is a Control Flow Graph (CFG) representation of the program. It flattens the high-level syntax structures (like nesting and structured control flow) into linear lists of instructions grouped in Basic Blocks and linked by jumps.
 
-## Core Concepts
+## Visão Geral e Contexto
+
+AMIR é o CFG SSA/OSSA compartilhado pelas análises de ownership, otimizações
+e backends, sem depender de detalhes de host ou frontend.
+
+## Detalhes Técnicos da Implementação
+
+### Core Concepts
 
 1. **Locals and Temporary Registers**:
    - All function parameters, local variables, and intermediate expression values are represented as numbered registers: `_0`, `_1`, `_2`, etc.
@@ -29,7 +36,7 @@ AMIR v0.1 is a Control Flow Graph (CFG) representation of the program. It flatte
    - `Assign(lhs, rvalue)`: Evaluates an rvalue and assigns it to a register.
    - `Call(lhs, callee, args)`: Invokes a function or callable, writing the result to `lhs` (if any).
 
-## Textual Pretty-Printing Contract
+### Textual Pretty-Printing Contract
 
 AMIR outputs conform to a deterministic, indented format:
 
@@ -137,7 +144,7 @@ Func test() -> void
     return
 ```
 
-## Invariantes formais (v0.1)
+### Invariantes formais (v0.1)
 
 Todo pass que lê ou escreve AMIR deve preservar estas regras. O validador `validate_amir_program` em `arandu_semantics/src/amir_validate.rs` aplica CFG-1…CFG-5 e TYP-1 nos goldens `tests/amir/*`. HIR usa `validate_invariants` separadamente.
 
@@ -185,7 +192,7 @@ Violações devem falhar no validador de IR ou no pass que as introduz, não no 
 
 ---
 
-## Lowering from AHIR to AMIR
+### Lowering from AHIR to AMIR
 
 The AMIR lowering compiler pass performs the following steps:
 
@@ -200,7 +207,7 @@ The AMIR lowering compiler pass performs the following steps:
    
 - `While`: Jumps to a condition evaluation block, which checks the condition and jumps either to the loop body block or the loop exit block. The loop body block ends with an unconditional jump back to the condition block.
 
-## OSSA (Ownership Static Single Assignment) Construction & Virtual Anchoring
+### OSSA (Ownership Static Single Assignment) Construction & Virtual Anchoring
 
 In Arandu, local variable tracking (definite initialization and ownership/move checking) is performed on the completed AMIR CFG as separate compiler passes. However, to generate optimal machine code, variables are promoted to pure Static Single Assignment (SSA) form using **Braun's algorithm**.
 
@@ -231,3 +238,13 @@ After all validations succeed with no errors:
 1. **Operand Rewriting**: `rewrite_all_operands()` recursively replaces all virtual temporaries in statements and block parameters with their final, resolved SSA values from the redirection map.
 2. **Poda (Pruning)**: `prune_dummy_loads_stores()` sweeps the entire function CFG and deletes all virtual `Store` and `Load` statements of simple local variables (those with empty projections).
 3. The remaining AMIR contains pure, optimal SSA code with zero redundant copies, ready to be translated by the Cranelift backend.
+
+## PONTOS DE MELHORIA (O que não está no roadmap)
+
+Cada nova variante exige atualizar visitors, liveness, DCE, move checker e
+todos os backends. O texto não implica que toda otimização possível já exista.
+
+## Futuro e Próximos Passos
+
+Manter validação de dominância, argumentos de bloco e efeitos antes/depois de
+passes; novas otimizações exigem corpus e medição.

@@ -4,7 +4,14 @@ Status: specification draft
 Grammar source: `arandu-grammar-v0.6.ebnf`
 Depends on: `docs/arandu-ast-v0.1.md`
 
-## Goal
+## Visão Geral e Contexto
+
+Este contrato define a transformação determinística de texto UTF-8 na
+sequência de tokens consumida pelo parser e pelos testes dourados.
+
+## Detalhes Técnicos da Implementação
+
+### Goal
 
 Define the token stream that the parser will consume. This document is the contract for the future lexer implementation and for lexer tests.
 
@@ -17,7 +24,7 @@ The lexer must:
 - normalize statement endings by inserting logical semicolons;
 - report malformed tokens with precise source spans.
 
-## Token Record
+### Token Record
 
 Every token has:
 
@@ -37,7 +44,7 @@ Example:
 }
 ```
 
-## Lexing Order
+### Lexing Order
 
 Use longest-match first.
 
@@ -60,7 +67,7 @@ Reason:
 - `?.`, `?[`, `??`, `=>`, `+=`, `<<=`, and similar operators must remain single tokens.
 - `r"""..."""` must be recognized before identifier `r`.
 
-## Whitespace and Comments
+### Whitespace and Comments
 
 Whitespace:
 
@@ -103,7 +110,7 @@ DOC_COMMENT("/// Computes the distance.")
 FUNC IDENT_VALUE(distance) ...
 ```
 
-## Identifiers
+### Identifiers
 
 Value identifiers:
 
@@ -149,7 +156,7 @@ Invariant:
 - Identifier category is syntactic and decided by the lexer, not by name resolution.
 - Primitive types are keywords, not identifiers.
 
-## Keywords
+### Keywords
 
 Reserved control and declaration keywords:
 
@@ -243,7 +250,7 @@ Invariant:
 - `Err` is a primitive type token despite starting uppercase.
 - Keywords cannot be used as identifiers in v0.1.
 
-## Numeric Literals
+### Numeric Literals
 
 Integer tokens:
 
@@ -318,7 +325,7 @@ error: invalid binary digit `2`
 error: decimal literals cannot have leading zeroes
 ```
 
-## String and Char Literals
+### String and Char Literals
 
 Tokens:
 
@@ -414,7 +421,7 @@ error: expected `}` to close string interpolation
 error: unterminated multiline string literal
 ```
 
-## Operators and Punctuation
+### Operators and Punctuation
 
 Multi-character tokens:
 
@@ -471,7 +478,7 @@ Tokens:
 IDENT_VALUE(user) SAFE_DOT IDENT_VALUE(name) NULL_COALESCE STRING_START STRING_TEXT("unknown") STRING_END
 ```
 
-## Logical Semicolon Insertion
+### Logical Semicolon Insertion
 
 The grammar uses `stmt_end = ";"`, but source files do not require semicolons.
 
@@ -580,7 +587,7 @@ column {
 
 The newline after `column` is absent here; if users write `column\n{ ... }`, v0.1 treats that as statement end before `{`.
 
-## Lexer Contract Notes
+### Lexer Contract Notes
 
 The lexer contract suite pins a few behaviors that are easy to drift:
 
@@ -589,7 +596,7 @@ The lexer contract suite pins a few behaviors that are easy to drift:
 - `SEMICOLON(inserted=true)` is emitted before `EOF` and before `}` when the preceding token can end a statement.
 - `KW_ELSE` suppresses insertion so newline-separated `if`/`else` remains valid.
 
-## EOF Handling
+### EOF Handling
 
 The lexer emits:
 
@@ -611,7 +618,7 @@ Tokens:
 KW_MODULE IDENT_VALUE(examples) DOT IDENT_VALUE(hello) SEMICOLON(inserted) EOF
 ```
 
-## Error Tokens and Diagnostics
+### Error Tokens and Diagnostics
 
 The lexer should stop at the first invalid token in v0.1. Later tooling can add recovery.
 
@@ -647,7 +654,7 @@ E_LEX_LEADING_ZERO
 E_LEX_UNCLOSED_INTERPOLATION
 ```
 
-## Lexer Test Fixtures
+### Lexer Test Fixtures
 
 When implementation starts, create tests from these fixtures.
 
@@ -737,7 +744,7 @@ Expected tokens:
 KW_RETURN IDENT_VALUE(value) SEMICOLON(inserted) EOF
 ```
 
-## Known v0.1 Decisions
+### Known v0.1 Decisions
 
 - Nested block comments are supported.
 - Unicode identifiers are fully supported.
@@ -745,3 +752,14 @@ KW_RETURN IDENT_VALUE(value) SEMICOLON(inserted) EOF
 - No numeric suffixes such as `42u32`; type selection is handled by context or annotations.
 - No single-token interpolated string. Interpolation produces nested expression tokens between `INTERP_START` and `INTERP_END`.
 - Newline before `{` after a bare value path is treated as statement boundary. Same-line trailing block calls remain valid.
+
+## PONTOS DE MELHORIA (O que não está no roadmap)
+
+As decisões v0.1 acima permanecem restrições deliberadas. Novos literais,
+escapes ou interpolação não devem entrar apenas no lexer: precisam atualizar
+gramática, CST, parser, formatter e fixtures em conjunto.
+
+## Futuro e Próximos Passos
+
+Manter fixtures de Unicode, erros e inserção de semicolon alinhadas ao parser;
+qualquer extensão léxica futura é ordenada exclusivamente pelo roadmap mestre.

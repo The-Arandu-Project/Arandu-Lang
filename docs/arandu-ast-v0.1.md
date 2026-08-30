@@ -4,7 +4,14 @@ Status: specification draft
 Grammar source: `arandu-grammar-v0.6.ebnf`
 Goal: define the canonical in-memory shape of an Arandu program before choosing a compiler implementation language.
 
-## Principles
+## Visão Geral e Contexto
+
+A AST representa a estrutura semântica produzida a partir do CST, antes de
+resolução de nomes, tipos e lowering para os IRs.
+
+## Detalhes Técnicos da Implementação
+
+### Principles
 
 - The AST represents program meaning, not punctuation. Logical semicolons, commas, comments, and grouping parentheses are not nodes unless they affect meaning.
 - Every node has a `span`, even when it is synthesized later. Spans are required for diagnostics, editor tooling, and future source maps.
@@ -12,7 +19,7 @@ Goal: define the canonical in-memory shape of an Arandu program before choosing 
 - Declaration and mutation remain distinct in the AST: `x = 1` is `VarDecl`; `set x = 2` is `SetStmt`.
 - The AST does not perform type checking. It may contain semantically invalid programs so later passes can report precise errors.
 
-## Common Records
+### Common Records
 
 ### Span
 
@@ -75,7 +82,7 @@ extern "C" {
 }
 ```
 
-## Program Structure
+### Program Structure
 
 ### Program
 
@@ -162,7 +169,7 @@ Invariant:
 - `alias`: optional local name from `as`.
 - `span`
 
-## Declarations
+### Declarations
 
 `TopLevelDecl` variants:
 
@@ -325,7 +332,7 @@ Invariant:
 
 - Extern members have signatures only, never bodies.
 
-## Generics and Constraints
+### Generics and Constraints
 
 ### GenericParam
 
@@ -349,7 +356,7 @@ Fields:
 - `constraints`: list of `TypeName`
 - `span`
 
-## Types
+### Types
 
 `TypeExpr` variants:
 
@@ -427,7 +434,7 @@ Invariant:
 
 - `T?` is represented as a wrapper node, not a flag on every type.
 
-## Blocks and Statements
+### Blocks and Statements
 
 ### Block
 
@@ -568,7 +575,7 @@ Fields:
 - `Expr(expr)`
 - `Block(block)`
 
-## Patterns
+### Patterns
 
 `Pattern` variants:
 
@@ -606,7 +613,7 @@ Example:
 Token.Number(value) if value > 0 => "positive number"
 ```
 
-## Expressions
+### Expressions
 
 `Expr` variants:
 
@@ -750,7 +757,7 @@ Invariant:
 
 - `expr?` is parsed before the type checker decides whether the expression is `Result<T, E>`, `Option<T>`, or an allowed `Nullable` (`T?`).
 
-## Literals
+### Literals
 
 `Literal` variants:
 
@@ -810,7 +817,7 @@ AST sketch:
 }
 ```
 
-## v0.1 Pass Boundaries
+### v0.1 Pass Boundaries
 
 - Lexer: produces tokens, doc comments, inserted logical semicolons, and identifier categories.
 - Parser: produces this AST, including invalid semantic programs.
@@ -818,14 +825,24 @@ AST sketch:
 - Type checker: validates type expressions, calls, generics, nullability, errors, and match exhaustiveness.
 - Memory checker: validates ownership, moves, borrows, `free`, `defer`, `errdefer`, and `unsafe`.
 
-## Type Checker Semantic Restrictions
+### Type Checker Semantic Restrictions
 
 - The parser accepts primitive type `any` anywhere a type expression is allowed.
 - The type checker rejects `any` outside variadic parameters, extern/FFI declarations, and compiler builtins.
 - This keeps the grammar simple while preserving Arandu's goal of explicit, safe types in ordinary code.
 
-## Known Grammar Pressure Points
+### Known Grammar Pressure Points
 
 - General enum declarations and enum patterns exist in EBNF v0.6, but general enum value construction is not represented as a standalone primary expression. Current checked constructors use type-qualified calls such as `Result.Ok(...)`, `Result.Err(...)`, and `Option.Some(...)`.
 - `Err` is a primitive type keyword, not currently a value constructor. Stable examples use value-path helpers such as `err.new(...)` where an error value is needed.
 - UI and web examples live under `examples/draft/` because they intentionally explore syntax beyond the stable compiler contract.
+
+## PONTOS DE MELHORIA (O que não está no roadmap)
+
+As grammar pressure points acima são limites conhecidos. A AST não deve
+absorver tipos resolvidos, IDs de símbolo ou detalhes de backend.
+
+## Futuro e Próximos Passos
+
+Adicionar nós apenas quando a gramática/CST correspondente estiver aceita e
+coberta; manter spans reais e lowering total para HIR.
