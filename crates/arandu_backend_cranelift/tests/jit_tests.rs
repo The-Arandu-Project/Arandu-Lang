@@ -44,6 +44,20 @@ fn jit_constant_i32() {
 }
 
 #[test]
+fn jit_signed_negative_cast_preserves_sign() {
+    let src = "func main(): int { let a: i8 = -5 as i8; return a as int; }";
+    let (amir, symbols, type_info) = compile_src(src);
+    let backend = backend_for_test();
+    let module = backend.compile(&amir, &symbols, &type_info).unwrap();
+
+    let result: i64 = unsafe {
+        let f: unsafe fn() -> i64 = module.get_fn("main").unwrap();
+        f()
+    };
+    assert_eq!(result, -5);
+}
+
+#[test]
 fn jit_add_i32() {
     let src = "func add(a: int, b: int): int { return a + b; }";
     let (amir, symbols, type_info) = compile_src(src);

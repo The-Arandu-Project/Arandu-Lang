@@ -658,7 +658,7 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 let mut idx_val = self.translate_operand(index, None);
                 let idx_ty = self.builder.func.dfg.value_type(idx_val);
                 if idx_ty != self.ptr_type {
-                    idx_val = self.builder.ins().uextend(self.ptr_type, idx_val);
+                    idx_val = self.cast_int_width(idx_val, self.ptr_type);
                 }
 
                 let base_ty = self.get_operand_ar_type(base);
@@ -1018,7 +1018,7 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
         self.builder.inst_results(call)[0]
     }
 
-    fn cast_int_width(&mut self, val: Value, target: Type) -> Value {
+    pub(crate) fn cast_int_width(&mut self, val: Value, target: Type) -> Value {
         let src = self.builder.func.dfg.value_type(val);
         if src == target {
             return val;

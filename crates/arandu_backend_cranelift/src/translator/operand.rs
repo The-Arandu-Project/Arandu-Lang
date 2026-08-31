@@ -224,7 +224,18 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
             let val_ty = self.builder.func.dfg.value_type(val);
             if val_ty != target_ty && val_ty.is_int() && target_ty.is_int() {
                 if val_ty.bits() < target_ty.bits() {
-                    val = self.builder.ins().sextend(target_ty, val);
+                    let is_unsigned = match operand {
+                        AmirOperand::Copy(t) | AmirOperand::Move(t) => {
+                            let ar_ty = self.temp_ar_ty(*t);
+                            crate::types::ar_type_is_unsigned_integer(&ar_ty)
+                        }
+                        _ => false,
+                    };
+                    if is_unsigned {
+                        val = self.builder.ins().uextend(target_ty, val);
+                    } else {
+                        val = self.builder.ins().sextend(target_ty, val);
+                    }
                 } else if val_ty.bits() > target_ty.bits() {
                     val = self.builder.ins().ireduce(target_ty, val);
                 }
