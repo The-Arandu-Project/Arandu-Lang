@@ -22,9 +22,11 @@
   são descartados, filas são limitadas e diagnósticos permanecem estruturados.
   O servidor classifica semantic tokens; cores e ícones pertencem à extensão
   e ao tema do editor.
-- **Memória e execução:** GenRef é o fallback seguro e explícito; efeitos,
-  ownership, layout por alvo e invariantes SSA/AMIR permanecem contratos do
-  compilador. RC/ARC e tracing GC não são requisitos da Gold v0.1.
+- **Memória e execução:** o [Semantic Memory Model](./arandu-semantic-memory-model-v0.1.md)
+  conecta OSSA/liveness, `RelativeBorrow`, escape e GenRef. GenRef é fallback
+  seguro e explícito; efeitos, ownership, layout por alvo e invariantes
+  SSA/AMIR permanecem contratos do compilador. RC/ARC e tracing GC não são
+  requisitos da Gold v0.1.
 - **Tipos de produto:** um pacote Arandu pode publicar um target binário (`bin`),
   um target de biblioteca (`lib`) ou, futuramente, ambos (`mixed`). Binários
   exigem uma função `main` para `run`/`build`; bibliotecas não. O manifesto é a
@@ -89,8 +91,10 @@ quando cumprir seu contrato atual.
 
 1. Concluir a campanha de auditoria, documentação, modularização e portabilidade.
 2. Concluir o soak e promover [SL_T](./arandu-testing-benchmark-harness-v0.1.md) a `gold`.
-3. Entregar a `SL_S-Core`: targets `bin`/`lib`, link multi-file, módulos,
-   imports e `std.path` estrutural, sem efeitos de sistema.
+3. Entregar a `SL_S-Core`:
+   fundação `core`/`alloc`, targets `bin`/`lib`, link multi-file, módulos,
+   texto/coleções seguros, `std.path` estrutural e readiness `wasm32`, sem
+   efeitos de sistema.
 4. Estabilizar a API pública do GenRef e concluir a paridade semântica C/Cranelift
    nos alvos publicados; ampliar o corpus de regressão a cada etapa da stdlib.
 5. Publicar `0.1.0-rc.5` como candidata estável: contratos congelados, testes
@@ -102,10 +106,14 @@ quando cumprir seu contrato atual.
    testes nativos e limites por plataforma.
 8. Implementar `SL_R` (runtime async) e só então o compiler service com sandbox
    e site/editor remoto.
-9. Publicar `0.1.0-rc.6` como candidata otimizada, preservando o comportamento
-   e os contratos de `rc.5`, com melhorias de custo validadas por benchmark
-   antes/depois.
-10. Avaliar templates `mixed`, `ffi`, `plugin` e `workspace` conforme ABI,
+9. Estabilizar a campanha de otimização AMIR descrita em 3.2: validar o O2
+   existente, introduzir análises cooperativas antes de novos passes de memória
+   e promover LICM/TCO somente após as regressões semânticas e estruturais
+   obrigatórias.
+10. Publicar `0.1.0-rc.6` como candidata otimizada, preservando o comportamento
+    e os contratos de `rc.5`, com melhorias de custo validadas por benchmark
+    antes/depois e sem inferir ganhos de hardware apenas da forma da AMIR.
+11. Avaliar templates `mixed`, `ffi`, `plugin` e `workspace` conforme ABI,
     efeitos e distribuição amadureçam.
 
 ### Resíduos que continuam abertos
@@ -158,7 +166,7 @@ Legenda: `[x]` feito · `[/]` em andamento · `[ ]` não iniciado
 | AMIR CFG | `[x]` | Dominadores, SSA registers vs stack slots |
 | Definite init | `[x]` | lattices, InitBits flow, O008 diagnostic |
 | Move checker | `[x]` | OSSA intraprocedural, O001/O005/O007, spans reais |
-| Middle-end opt | `[x]` | Constant folding intra-bloco + DCE denso |
+| Middle-end opt | `[/]` | O1 estável: SCCP + DCE + SimplifyCFG; O2 experimental: field forwarding (SROA limitado) + GVN; LICM/TCO fora do pipeline até cumprir os gates de 3.2 |
 | Backend Cranelift | `[x]` | v0.2 Dev/Debug |
 | Backend C | `[x]` | Portabilidade fallback |
 | Backend LLVM | `[ ]` | v0.4+ Release Optimizer |
@@ -214,7 +222,8 @@ Fase 2 — A Construção da Infraestrutura & Execução (v0.2) · [FECHADA no c
     ├─ [x] PERF.2   SelfProfile Layer — Trace Event JSON buffer em memória, finalize_self_profile()
     ├─ [x] PERF.3   #[instrument] em 22 funções críticas (parser, unify, typeck, resolve, etc.)
     └─ [x] PERF.4   ParseCache (legado CompileSession) — absorvido pela query Salsa `parse`
-[x] SL_C   Stdlib Fundamental: arandu_core e arandu_alloc (primitivas heapless e arena/smallvec/bitset)
+[x] SL_C   Scaffolding da stdlib: primitivas iniciais de `core`/`alloc` e provas
+           de compilação; não equivale ao contrato público Gold de `SL_S-Core`
 [x] DOC1   docs/ossa-virtual-anchoring.md — RFC retroativo documentando a técnica de âncoras virtuais + poda
 
 Fase 3 — OSSA Avançado, Semântica e OS Runtime (v0.3) · [PARCIAL; vários marcos concluídos]
@@ -296,7 +305,18 @@ Fase 3 — OSSA Avançado, Semântica e OS Runtime (v0.3) · [PARCIAL; vários m
    ├─ [x] T3.5   Contrato parser: import_module + import_module_alias_path
    └─ [x] T3.6   LSP complete em path tokens `import std.▮` + members `alias.▮` (W4)
 [→] SL_S-Core   Stdlib fundamental: targets `bin`/`lib`, multi-file HIR link,
-                módulos/imports e `std.path` estrutural; sem filesystem implícito
+                 módulos/imports e fundação `std.core`/`std.alloc` em camelCase;
+                 resta fechar ownership genérico, OOM/allocators, paridade de alvo
+                 e a janela explícita de migração antes da promoção Gold
+                 · AUD.0–AUD.5 concluídos e BV.1 implementado: contratos de
+                   retorno estruturais, múltiplas origens demonstradas,
+                   forwarding/import/genérico/recursão e cutoff incremental
+                   são suportados; holders completos em carriers e
+                   `Slice`/`String` views permanecem pendentes, portanto a
+                   classificação global continua **parcial**; relatório
+                   permanente em [arquitetura da stdlib](./arandu-stdlib-architecture-v0.1.md#relatório-final-aud5--segurança-de-borrowed-views)
+                 · Campanha ativa para concluir o contrato estrutural, propagação
+                   OSSA e APIs públicas: [Borrowed Views Gold](./campaigns/sl-s-borrowed-views-gold-v0.1.md)
 [ ] SL_S-Host   APIs de sistema: host path/rt helpers, filesystem e processos;
                 depende de A2 e de contratos nativos por plataforma
 [→] SL_R   Async Runtime: SL_R.0 typed spawn/join/block_on Coroutine + SyncExecutor; SL_R.2 EpollReactor (epoll+timerfd); SL_R.1/3 open
@@ -778,8 +798,166 @@ O compilador do Arandu rejeita abordagens extremas e escolhe a estratégia ótim
 
 #### 3.2 Otimizações Avançadas na AMIR
 
-* **DCE Agressivo por Alcançabilidade (Tree-Shaking)**: A partir do ponto de entrada `main`, varre o grafo de chamadas estático do AMIR. Qualquer código da stdlib ou bibliotecas que não possua arestas ativas é eliminado.
-* **Stack Promotion via Escape Analysis**: O compilador rastreia a posse de objetos alocados. Se a posse não escapar do bloco de ativação local da função, a alocação que iria para a Heap é promovida para um slot contíguo na Stack física.
+O middle-end mantém dois níveis deliberadamente separados. Salsa, em
+`arandu_query`, reutiliza resultados entre revisões no nível de arquivos e itens;
+o `PassManager`, em `arandu_mir`, executa transformações puras dentro de uma
+função. Análises mutáveis pela passagem corrente nunca viram queries Salsa nem
+alteram a superfície exportada de módulos.
+
+##### Estado honesto do pipeline
+
+| Componente | Estado | Contrato atual / gate de promoção |
+| --- | --- | --- |
+| O0 | `done` | AMIR já nasce em SSA; O0 não executa transformações e não significa, por si só, que todo valor será materializado na stack |
+| O1 | `done` | fixpoint limitado de SCCP → mark-sweep DCE → SimplifyCFG, preservando argumentos de terminadores e parâmetros de bloco |
+| O2 | `experimental` | field forwarding (`SROA` limitado) → GVN → núcleo O1; não promete SROA completo, ausência de spills nem registradores físicos específicos |
+| LICM | `planned` | só entra após existir `LoopInfo`, inserção correta em `DenseRange`, agrupamento determinístico de loops, prova de dominância e exclusão de operações que podem trap ou não são seguras para especulação; protótipos desconectados não permanecem no produto |
+| TCO | `planned` | só entra após modelar parâmetros de entrada/loop corretamente, manter `AmirStmt`/`AmirStmtKind` sincronizados e provar tail position, ABI, drop e ownership; protótipos desconectados não permanecem no produto |
+| Tree-shaking | `planned` | alcançabilidade interprocedural determinística, raízes públicas/FFI/runtime explícitas e teste de paridade entre backends |
+| Stack promotion | `planned` | depende de escape/ownership; “SSA” não equivale a stack promotion e promoção não garante registrador físico |
+
+O nome SROA, enquanto o passe apenas encaminhar campos de
+`StructLiteral`/tupla para `FieldAccess`, designa um subconjunto conservador. A
+promoção para SROA completo exige stores parciais, escapes, projeções, layout por
+alvo e ownership de campos não-`Copy` cobertos por testes.
+
+##### OPT.1 — Infraestrutura de análises cooperativas
+
+- Um `AnalysisManager` por função vive por toda a execução do fixpoint e faz
+  lazy-compute/cache de análises intra-função; ele é descartado ao fim da função
+  e nunca é persistido em Salsa.
+- Passes recebem um único contexto de execução com literal pool, scratch arena e
+  acesso ao manager. O resultado de cada execução informa `changed` e a classe
+  real de mudança/preservação; preservação não deve ser uma promessa estática
+  quando o passe pode tanto reescrever valores quanto alterar terminadores.
+- A invalidação começa conservadora e respeita dependências transitivas:
+  `LoopInfo → Dominators → CFG`; futuras `MemorySSA → Dominators + Alias +
+  MemoryEffects`. Alterar arestas, reachability, ids ou numeração de blocos
+  invalida todas as análises dependentes.
+- SCCP só preserva análises de CFG quando não dobra branches nem altera
+  terminadores. GVN/DCE podem preservar análises puramente estruturais apenas
+  quando a transformação efetiva não muda CFG; SimplifyCFG invalida-as.
+- O cache é validado por contagem determinística de construções, reuse,
+  invalidação e dependências, não por igualdade acidental de endereços.
+
+##### OPT.2 — `LoopInfo` e transformações de loops
+
+- Implementar a detecção de loops como análise reutilizável baseada em
+  dominadores, antes do próprio LICM. Back-edges com o mesmo header formam um
+  único loop natural.
+- Representar header, latches, body ordenado canonicamente, preheader, nesting,
+  parent/children e profundidade; `loop_for(block)` retorna deterministicamente
+  o loop mais interno.
+- Definir comportamento conservador para CFG irredutível. Um predecessor externo
+  único não é automaticamente um preheader válido: a aresta e os argumentos de
+  bloco precisam permitir o hoist sem mudar semântica.
+- LICM só move uma definição quando operands dominam o destino, a instrução é
+  invariável, segura para especulação ou executada obrigatoriamente, e não move
+  `Move`/drop/efeito/trap através de fronteiras observáveis. `Div`, `Mod`, shifts,
+  loads e calls são conservadores até existir prova específica.
+- Toda movimentação reconstrói a tabela/ranges de statements por API central;
+  nunca aumenta um `DenseRange` e faz `push` global assumindo que o bloco é o
+  último da tabela.
+
+##### OPT.3 — Semântica de places, alias e efeitos de memória
+
+Antes de load forwarding, DSE ou MemorySSA, o contrato de `AmirPlace` deve
+definir identidade, proveniência e sobreposição:
+
+- `Local(x)` sem `Deref` identifica o storage local; locais-base distintos só
+  provam `NoAlias` enquanto nenhum caminho atravessar indireção.
+- Após `Deref`, o `LocalId` identifica o slot que contém um ponteiro, não o
+  objeto apontado; bases locais diferentes continuam `MayAlias` sem prova de
+  proveniência.
+- Campos distintos só são `NoAlias` quando o tipo/layout garante subobjetos não
+  sobrepostos. Índices dinâmicos são `MayAlias`; índices constantes exigem prova
+  de igualdade/desigualdade e validade.
+- O borrow checker responde se um acesso é permitido em um ponto; ele não
+  substitui análise de alias. Reborrows podem compartilhar identidade em
+  regiões temporais diferentes.
+- A análise inicial é `BasicAliasAnalysis`/`PlaceAliasAnalysis` conservadora:
+  retorna `NoAlias` somente com prova explícita, `MustAlias` com identidade
+  comprovada e `MayAlias` no restante. Ponteiros crus, globals, calls e interior
+  mutability formam barreiras até contratos mais precisos.
+- `MemoryEffects`/`ModRef` classifica loads, stores, destroy/free, alloc, calls,
+  atomics/volatile futuros e operações de runtime. Calls desconhecidas são
+  clobbers conservadores; o Effect System A2 poderá refinar essa resposta.
+
+O contrato normativo da linguagem para essas provas vive no
+[modelo semântico de memória](./arandu-semantic-memory-model-v0.1.md); o roadmap
+mantém apenas a ordem e os gates de entrega.
+
+##### OPT.4 — Dataflow compartilhado
+
+- Extrair primeiro uma engine forward do comportamento comum real de
+  `definite_init` e `move_checker`, migrando uma análise por vez e comparando
+  estados/diagnósticos com a implementação anterior.
+- O contrato cobre boundary por entry/exit, blocos inalcançáveis, join/meet,
+  transferência por bloco e por aresta, argumentos de `Goto`/`Branch`/`Suspend`,
+  ordem determinística da worklist e limite de convergência.
+- Análises backward, múltiplos exits, estado por program point e emissão de
+  diagnósticos entram somente quando houver consumidor concreto; não criar um
+  framework universal antecipadamente.
+
+##### OPT.5 — Canonicalização e GVN
+
+- Regras vivem numa biblioteca pura, type-aware e idempotente; primeiro são
+  exercitadas por um passe standalone observável. SCCP/GVN podem reutilizar
+  subconjuntos inline somente depois de testes de convergência e medição.
+- Cada regra preserva `Copy`/`Move`, traps, overflow, signed zero, NaN e a
+  semântica numérica do tipo. Identidades como `x * 0`, `x + 0` e `-(-x)` não
+  são universais para floats, inteiros com overflow observável ou operações
+  potencialmente trapping.
+- GVN exige dominância da definição líder, igualdade semântica da operação e
+  tratamento conservador de valores não-`Copy`, calls, memória e floats. Ordem
+  de `HashMap` nunca influencia a saída.
+
+##### OPT.6 — Otimizações de memória em camadas
+
+1. Formalizar places e implementar `MemoryEffects`/ModRef.
+2. Introduzir alias analysis básica e conservadora com corpus de ponteiros,
+   campos, índices, reborrow, calls e globals.
+3. Implementar load forwarding/DSE inicialmente local a bloco e medir ganho.
+4. Somente se workloads mostrarem benefício, criar MemorySSA intraprocedural
+   como IR virtual/side table com `liveOnEntry`, uses, defs, merges e clobber
+   walker. Tokens de memória não são parâmetros executáveis do AMIR e não
+   vazam para backends, pretty-print canônico ou hashing sem decisão explícita.
+5. Atualizações incrementais de MemorySSA só são aceitas com validator próprio;
+   caso contrário a transformação invalida e força recomputação.
+
+##### OPT.7 — TCO, alcance global e escape
+
+- TCO transforma apenas self tail calls em posição final comprovada. Argumentos
+  alimentam um header SSA explícito compatível com `func.params`; valores de
+  retorno, drops, borrows, calling convention e caminhos de erro permanecem
+  observáveis e equivalentes.
+- Tree-shaking parte de roots explícitas (`main`, exports, FFI, runtime e
+  reflection futura), preserva ordem determinística e não elimina símbolos
+  alcançáveis indiretamente sem prova.
+- Escape analysis pode promover heap para stack somente quando lifetime,
+  tamanho/layout por alvo, chamadas e retornos provarem não-escape. A documentação
+  reporta “sem load/store explícito na AMIR” separadamente de “sem spill” ou
+  “sem acesso à memória” no código de máquina.
+
+##### Gates obrigatórios de correção e desempenho
+
+- Validator após cada passe em testes/debug: ids densos, definições dominam usos,
+  block params e argumentos alinhados em `Goto`/`Branch`/`Suspend`, CFG coerente,
+  `DenseRange` e `AmirStmtKind` sincronizados e visitors exaustivos.
+- Regressões por passe para diamonds, blocos mortos, loops aninhados/múltiplos
+  latches, CFG irredutível, traps, overflow, floats, `Move`, drops, borrows,
+  calls, globals, corrotinas e determinismo repetido.
+- Testes metamórficos/diferenciais com O0/O1/O2 e paridade C/Cranelift: mesma
+  saída, traps e efeitos observáveis. TCO recebe teste de profundidade constante
+  apenas depois de provar tail calls com argumentos.
+- Benchmarks antes/depois registram tempo por passe/função, construções e hits do
+  cache de análises, iterações do fixpoint, tamanho da AMIR/código, compile time e
+  runtime. Contagem de blocos ou forma SSA isolada não prova branch prediction,
+  cache L1, ausência de stack/spills ou “latência zero”; tais alegações exigem
+  assembly e contadores de hardware apropriados.
+- Nenhum novo passe vira default por melhorar apenas uma fixture. O1 continua a
+  baseline estável; O2 permanece experimental até passar o gate completo do
+  `AGENTS.md`, corpus E2E, comparação entre backends e workload representativo.
 
 ---
 
@@ -1100,6 +1278,7 @@ Analisador estático avançado de uso de memória e desempenho.
 | 2026-07 | Antigravity | **Auditoria de Honestidade A10/A11/VM**: Removidos `vm.rs`, `arena.rs`, `stable_id.rs` e `string_pool.rs` (~1.080 LOC, 16 blocos `unsafe`) — código morto nunca integrado ao compilador. A10 corrigido para `[~]` parcial: IDs inteiros estáveis em uso, Generational IDs aguardam LSP (Fase 3) com `slotmap`. VM Reservation substituída por plano `bumpalo` para arenas de scratch nos passes de otimização. A11 permanece `[x]` via `smol_str`. |
 | 2026-07 | Antigravity | **Evolução do Ecossistema (E1–E5)**: Documentadas as propostas de evolução de ferramentas integradas (REPL, Gerador de Docs, FFI Bindgen, Package Manager e Linter de Alocação). |
 | 2026-08 | Codex | **Linhas de pesquisa avaliadas**: typed holes, effects/capabilities, teste diferencial/metamórfico, e-graphs, WebAssembly Component Model/WIT, refinement types, prova formal OSSA/GenRef e incrementalidade orientada à demanda; somente as linhas com contrato e evidência futura poderão virar implementação. |
+| 2026-08 | Codex | **Roadmap de otimização AMIR consolidado**: estado honesto de O0/O1/O2, análises cooperativas, LoopInfo, semântica de places/alias/ModRef, dataflow, canonicalização, MemorySSA virtual, TCO/escape e gates de correção e benchmark. |
 
 ---
 

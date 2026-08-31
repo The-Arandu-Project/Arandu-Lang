@@ -30,7 +30,12 @@ Implemented:
 - AHIR lowering and pretty-printing with golden tests (`tests/hir/`).
 - AMIR lowering v0.1 (experimental) with CFG, locals, match, defer/errdefer, `?`/safe ops, for-in, alloc/free, and golden tests (`tests/codegen/`).
 - Dense AMIR types (`TypeId` on locals/temps), use-site spans on ownership diags, shared rvalue visitor.
-- Method receivers with `shared self`, `mut self`, and `own self`.
+- Method receivers with `shared self`, `mut self`, and `own self` (legacy receiver
+  spelling retained while methods migrate to the uniform type syntax).
+- Safe references are represented by `ref T`/`mut ref T`; `T` means owned by
+  default and `own T` is the explicit spelling. Raw `ptr[T]` dereference
+  requires `unsafe`. `*` is not a general pointer API and is never a substitute
+  for an ownership proof.
 - Definite initialization analysis with O008 diagnostics.
 - OSSA foundation in AMIR: move/copy operands, storage lifetime markers, and destroy statements.
 - Intraprocedural move checker with O001/O005/O007 diagnostics.

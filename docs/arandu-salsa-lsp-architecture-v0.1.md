@@ -133,6 +133,11 @@ impedem o LSP de publicar resultados de buffers/revisões obsoletos.
     toda resposta exigindo sucesso ou cancelamento LSP conhecido e então aplica
     uma revisão-oráculo válida. Nenhum diagnóstico de revisão anterior pode ser
     publicado depois do oráculo; completion e shutdown devem continuar vivos.
+21. Summaries públicos de borrowed return fazem parte do hash de
+    `module_signatures`: editar somente o corpo preserva o cutoff dos callers,
+    enquanto mudar a dependência formal invalida seus corpos. O diagnóstico por
+    item usa esse mesmo summary; O002/O003/O006/O010 mantêm labels e notes no
+    wire, e uma revisão posterior nunca publica o resultado ownership stale.
 
 ### F4 / P3 — delta on-type
 
