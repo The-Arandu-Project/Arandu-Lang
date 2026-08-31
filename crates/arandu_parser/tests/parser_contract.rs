@@ -65,6 +65,40 @@ fn import_aliases_reject_reserved_keywords() {
 }
 
 #[test]
+fn canonical_borrow_syntax_is_uniform_in_parameters_returns_and_expressions() {
+    let source = r#"module tests.borrow_syntax
+func borrowValue(value: ref int): ref int {
+    return value
+}
+func replace(value: mut ref int): void {
+    let borrowed = mut ref value
+}
+func consume(value: own int): int {
+    let borrowed = ref value
+    return *borrowed
+}
+"#;
+
+    let dump = parse_to_string(source).expect("canonical borrow syntax should parse");
+    assert!(
+        dump.contains("value Ref "),
+        "missing shared reference type: {dump}"
+    );
+    assert!(
+        dump.contains("value RefMut "),
+        "missing exclusive reference type: {dump}"
+    );
+    assert!(
+        dump.contains("(ref , Path"),
+        "missing shared borrow expression: {dump}"
+    );
+    assert!(
+        dump.contains("(mut ref , Path"),
+        "missing exclusive borrow expression: {dump}"
+    );
+}
+
+#[test]
 fn ast_program_span_covers_source_before_eof() {
     let source = "module tests.spans\nfunc main() {\n    let value = add(1, 2)\n}\n";
     let program = parse(source).expect("parser should succeed");

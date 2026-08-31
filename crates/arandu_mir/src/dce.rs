@@ -334,6 +334,7 @@ mod tests {
                 lhs: Some(TempId::from_usize(0)),
                 callee: AmirOperand::FunctionRef(crate::SymbolId::new(0, 1)),
                 args: smallvec::smallvec![],
+                return_borrow: None,
             }],
             vec![bool_temp(0)],
         );

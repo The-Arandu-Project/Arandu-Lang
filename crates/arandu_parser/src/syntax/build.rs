@@ -750,6 +750,7 @@ fn is_keyword_kind(kind: TokenKind) -> bool {
             | TokenKind::KwOwn
             | TokenKind::KwMut
             | TokenKind::KwShared
+            | TokenKind::KwRef
             | TokenKind::KwPtr
             | TokenKind::KwAlloc
             | TokenKind::KwFree

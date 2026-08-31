@@ -52,6 +52,7 @@ pub fn name(kind: &TokenKind) -> &'static str {
         TokenKind::KwOwn => "KW_OWN",
         TokenKind::KwMut => "KW_MUT",
         TokenKind::KwShared => "KW_SHARED",
+        TokenKind::KwRef => "KW_REF",
         TokenKind::KwSelf => "KW_SELF",
         TokenKind::KwPtr => "KW_PTR",
         TokenKind::KwAlloc => "KW_ALLOC",

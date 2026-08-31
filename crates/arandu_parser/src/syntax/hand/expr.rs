@@ -175,6 +175,34 @@ fn parse_unary_primary_post(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>) -> Opti
                     .alloc_expr(ExprKind::Unary { op, expr }, ctx.span(start, end)),
             )
         }
+        // Canonical `ref expr` / `mut ref expr` safe borrows.
+        TokenKind::KwRef => {
+            let start = t.start;
+            cur.bump();
+            let expr = try_hand_lower_expr(ctx, cur, 140)?;
+            let end = ctx.pool.expr_span(expr).end;
+            Some(ctx.pool.alloc_expr(
+                ExprKind::Unary {
+                    op: UnaryOp::Ref,
+                    expr,
+                },
+                ctx.span(start, end),
+            ))
+        }
+        TokenKind::KwMut if cur.peek_at(1).map(|token| token.kind) == Some(TokenKind::KwRef) => {
+            let start = t.start;
+            cur.bump();
+            cur.bump();
+            let expr = try_hand_lower_expr(ctx, cur, 140)?;
+            let end = ctx.pool.expr_span(expr).end;
+            Some(ctx.pool.alloc_expr(
+                ExprKind::Unary {
+                    op: UnaryOp::RefMut,
+                    expr,
+                },
+                ctx.span(start, end),
+            ))
+        }
         // `*expr` — deref (F2.0). Unary binds tighter than binary `*`/`+` (bp ≤ 130).
         TokenKind::Star => {
             let start = t.start;

@@ -58,7 +58,13 @@ pub fn initialized_at_block_exit(func: &AmirFunc) -> Vec<BitSet<LocalId>> {
         .into_iter()
         .enumerate()
         .map(|(index, mut initialized)| {
-            for stmt in func.block_stmts(BlockId::from_usize(index)) {
+            let bid = BlockId::from_usize(index);
+            if let Some(block) = func.blocks.get(index) {
+                for param in &block.params {
+                    initialized.insert(param.local);
+                }
+            }
+            for stmt in func.block_stmts(bid) {
                 if let AmirStmt::Store { lhs, .. } = stmt
                     && lhs.projections.is_empty()
                 {
@@ -100,6 +106,11 @@ pub fn check_definite_init_by_block(
         let mut current = std::mem::take(&mut block_in[bi]);
         let bid = block.id;
 
+        // Block parameters define and initialize their corresponding local at block entry.
+        for param in &block.params {
+            current.insert(param.local);
+        }
+
         for stmt in func.block_stmts(block.id) {
             check_stmt_loads(stmt, &current, func, symbols, bid, &mut diagnostics);
 
@@ -128,6 +139,9 @@ fn compute_init_in(func: &AmirFunc) -> Option<Vec<BitSet<LocalId>>> {
 
     for block in &func.blocks {
         let bid = block.id;
+        for param in &block.params {
+            block_gens.insert(bid, param.local);
+        }
         for stmt in func.block_stmts(bid) {
             match stmt {
                 AmirStmt::Store { lhs, .. } if lhs.projections.is_empty() => {
@@ -735,5 +749,64 @@ mod tests {
         let st = make_symbol_table();
         let diags = check_definite_init(&func, &st);
         assert!(diags.is_empty(), "expected no errors, got: {:?}", diags);
+    }
+
+    #[test]
+    fn test_no_o008_for_block_param_initialized_local() {
+        // bb0 jumps to bb1 with arg
+        // bb1 has param for local0, then loads local0 -> should have no O008
+        let mut stmts = AmirStmtTable::new();
+        let b0 = make_block(
+            0,
+            vec![],
+            AmirTerminator::Goto {
+                target: BlockId::from_usize(1),
+                args: vec![AmirOperand::Constant(AmirConstant::Bool(true))],
+            },
+            &[1],
+            &[],
+            &mut stmts,
+        );
+        let mut b1 = make_block(
+            1,
+            vec![AmirStmt::Assign {
+                lhs: TempId::from_usize(1),
+                rhs: AmirRvalue::Load(place(0)),
+            }],
+            AmirTerminator::Return,
+            &[],
+            &[0],
+            &mut stmts,
+        );
+        b1.params.push(crate::amir::BlockParam {
+            id: TempId::from_usize(0),
+            local: LocalId::from_usize(0),
+            ty: intern_ty(ArType::Primitive(
+                crate::passes::type_checker::types::Primitive::Int,
+            )),
+            from: None,
+            moved: false,
+        });
+
+        let func = make_func(
+            vec![b0, b1],
+            stmts,
+            vec![make_local(0, None)],
+            vec![make_temp(0), make_temp(1)],
+        );
+
+        let st = make_symbol_table();
+        let diags = check_definite_init(&func, &st);
+        assert!(
+            diags.is_empty(),
+            "expected no uninitialized errors for block param, got: {:?}",
+            diags
+        );
+
+        let exit_facts = initialized_at_block_exit(&func);
+        assert!(
+            exit_facts[1].contains(LocalId::from_usize(0)),
+            "block 1 must report local 0 as definitely initialized"
+        );
     }
 }

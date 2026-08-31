@@ -215,6 +215,22 @@ impl<'a> Parser<'a> {
 
     pub(super) fn parse_type_primary(&mut self) -> Result<TypeExprId, ParseError> {
         let start = self.mark();
+        // Canonical ownership spelling: `own T`, `ref T`, `mut ref T`.
+        // `own` is semantically the default and therefore lowers directly to T.
+        if self.eat_name("KW_OWN") {
+            return self.parse_type();
+        }
+        if self.eat_name("KW_REF") {
+            let inner = self.parse_type()?;
+            let span = self.span_from_mark(start);
+            return Ok(self.pool.alloc_type_expr(TypeExpr::Ref { span, inner }));
+        }
+        if self.eat_name("KW_MUT") {
+            self.expect_name("KW_REF")?;
+            let inner = self.parse_type()?;
+            let span = self.span_from_mark(start);
+            return Ok(self.pool.alloc_type_expr(TypeExpr::RefMut { span, inner }));
+        }
         // `&mut T` / `&T` (F2.0 safe references)
         if self.eat_name("AMP") {
             let is_mut = self.eat_name("KW_MUT");

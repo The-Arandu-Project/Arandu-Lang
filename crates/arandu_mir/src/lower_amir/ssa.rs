@@ -539,6 +539,7 @@ impl LowerCtx<'_> {
                 lhs: _,
                 callee,
                 args,
+                ..
             } => {
                 *callee = Self::resolve_operand(redirected_temps, *callee);
                 for arg in args {

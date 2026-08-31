@@ -5,7 +5,7 @@
 //! boundaries (`shared` / `exclusive` dense bitsets, A9).
 //!
 //! ## F2.2 (gold)
-//! A loan opened by `t = &x` / `t = &mut x` stays active **exactly while**
+//! A loan opened by `t = ref x` / `t = mut ref x` stays active **exactly while**
 //! some holder of that reference is live:
 //! - the SSA temp produced by `Borrow`/`BorrowMut`
 //! - locals / temps that copy or load that reference
@@ -27,7 +27,7 @@ use crate::amir::{
 };
 use crate::liveness::{LocalLiveness, TempLiveness, analyze_local_liveness, analyze_temp_liveness};
 
-/// Shared (`&`) vs exclusive (`&mut`) loan.
+/// Shared (`ref`) vs exclusive (`mut ref`) loan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LoanKind {
     Shared,
@@ -38,7 +38,7 @@ pub enum LoanKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Loan {
     pub kind: LoanKind,
-    /// Root local of the borrowed place (`x` in `&x` / `&x.f`).
+    /// Root local of the borrowed place (`x` in `ref x` / `ref x.f`).
     pub place_local: LocalId,
     /// SSA temps that currently hold this reference value.
     pub holder_temps: BitSet<TempId>,
@@ -338,6 +338,31 @@ fn collect_loans(func: &AmirFunc) -> (Vec<Loan>, Vec<u32>) {
                         for loan in &mut loans {
                             if loan.holder_temps.contains(src)
                                 && loan.holder_locals.insert(lhs.local)
+                            {
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+                AmirStmt::Call {
+                    lhs: Some(lhs),
+                    args,
+                    return_borrow: Some(dependency),
+                    ..
+                } => {
+                    for source in dependency
+                        .dependencies
+                        .iter()
+                        .flat_map(|dependency| &dependency.sources)
+                    {
+                        let Ok(argument_index) = usize::try_from(source.parameter_index) else {
+                            continue;
+                        };
+                        let Some(source) = args.get(argument_index).and_then(operand_temp) else {
+                            continue;
+                        };
+                        for loan in &mut loans {
+                            if loan.holder_temps.contains(source) && loan.holder_temps.insert(*lhs)
                             {
                                 changed = true;
                             }

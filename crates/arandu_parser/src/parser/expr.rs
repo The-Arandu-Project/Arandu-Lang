@@ -294,6 +294,34 @@ impl<'a> Parser<'a> {
                     span,
                 ))
             }
+            TokenKind::KwRef => {
+                self.advance();
+                let expr = self.parse_expr(150)?;
+                let span = self.span_from_mark(start);
+                Ok(self.pool.alloc_expr(
+                    ExprKind::Unary {
+                        op: UnaryOp::Ref,
+                        expr,
+                    },
+                    span,
+                ))
+            }
+            TokenKind::KwMut
+                if self.tokens.get(self.pos + 1).map(|token| token.kind)
+                    == Some(TokenKind::KwRef) =>
+            {
+                self.advance();
+                self.advance();
+                let expr = self.parse_expr(150)?;
+                let span = self.span_from_mark(start);
+                Ok(self.pool.alloc_expr(
+                    ExprKind::Unary {
+                        op: UnaryOp::RefMut,
+                        expr,
+                    },
+                    span,
+                ))
+            }
             TokenKind::Star => {
                 self.advance();
                 let expr = self.parse_expr(150)?;

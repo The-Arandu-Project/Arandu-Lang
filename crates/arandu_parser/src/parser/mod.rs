@@ -681,8 +681,15 @@ static TOKEN_INFO_TABLE: [TokenInfo; TokenKind::COUNT] = {
             TokenKind::TypeErr => Some("Err"),
             _ => None,
         };
-        let is_type =
-            prim.is_some() || matches!(kind, TokenKind::IdentType | TokenKind::IdentValue);
+        let is_type = prim.is_some()
+            || matches!(
+                kind,
+                TokenKind::IdentType
+                    | TokenKind::IdentValue
+                    | TokenKind::KwOwn
+                    | TokenKind::KwRef
+                    | TokenKind::KwMut
+            );
         let is_contextual = matches!(
             kind,
             TokenKind::IdentType
@@ -717,6 +724,7 @@ static TOKEN_INFO_TABLE: [TokenInfo; TokenKind::COUNT] = {
                 | TokenKind::KwOwn
                 | TokenKind::KwMut
                 | TokenKind::KwShared
+                | TokenKind::KwRef
                 | TokenKind::KwSelf
                 | TokenKind::KwPtr
                 | TokenKind::KwDefer

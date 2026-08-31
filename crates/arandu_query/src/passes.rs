@@ -254,6 +254,24 @@ pub fn module_signatures(db: &dyn ArandCompilerDb, file: SourceFile) -> ModuleSi
                         checker
                             .type_info
                             .merge_from(imported_sigs.type_info.as_ref());
+                        // Body-derived contracts cross the module boundary
+                        // through their own HashEq query. A dependency body
+                        // edit therefore stops here when the public relation is
+                        // unchanged, while a changed relation invalidates the
+                        // importing item's checks.
+                        let recovered_cycle = imported_sigs
+                            .diagnostics
+                            .iter()
+                            .any(|diagnostic| diagnostic.message.contains("cyclic"));
+                        if !recovered_cycle {
+                            let imported_interfaces = borrow_interfaces(db, imported_file);
+                            for (symbol, summary) in &imported_interfaces.entries {
+                                checker
+                                    .type_info
+                                    .return_borrow_summaries
+                                    .insert(*symbol, summary.clone());
+                            }
+                        }
                         for diag in &imported_sigs.diagnostics {
                             if diag.message.contains("cyclic") {
                                 checker.diagnostics.push(diag.clone());
@@ -526,6 +544,17 @@ pub struct LowerAmirArtifacts {
     pub type_check: TypeCheckResult,
 }
 
+/// Canonical borrow contracts isolated from the function bodies that proved
+/// them. Consumers use this narrow query so Salsa can cut propagation when an
+/// implementation edit leaves the public dependency relation unchanged.
+#[derive(Debug, Clone)]
+pub struct BorrowInterfaces {
+    pub entries: Vec<(
+        arandu_middle::SymbolId,
+        arandu_middle::types::ReturnBorrowSummary,
+    )>,
+}
+
 /// Collect transitive imports of `root`, lower each to HIR, and link into `hir`.
 ///
 /// ## Why `file_typeck_view` (not `type_check`)
@@ -698,7 +727,7 @@ pub fn lower_amir(db: &dyn ArandCompilerDb, file: SourceFile) -> HashEq<LowerAmi
 
     let amir = {
         arandu_base::time_pass!("lower-amir-body");
-        match arandu_semantics::lower_to_amir(&type_check_result, &hir) {
+        match arandu_semantics::lower_to_amir_with_interfaces(&mut type_check_result, &hir) {
             Ok(a) => a,
             Err(diags) => {
                 for diag in diags {
@@ -712,6 +741,24 @@ pub fn lower_amir(db: &dyn ArandCompilerDb, file: SourceFile) -> HashEq<LowerAmi
         amir,
         type_check: type_check_result,
     })
+}
+
+#[salsa::tracked]
+#[tracing::instrument(level = "trace", target = "arandu_query", skip(db), fields(
+    query = "borrow_interfaces",
+    file = ?file.file_id(db),
+))]
+pub fn borrow_interfaces(db: &dyn ArandCompilerDb, file: SourceFile) -> HashEq<BorrowInterfaces> {
+    let lowered = lower_amir(db, file);
+    let mut entries = lowered
+        .type_check
+        .type_info
+        .return_borrow_summaries
+        .iter()
+        .map(|(symbol, summary)| (*symbol, summary.clone()))
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|(symbol, _)| (symbol.file_id, symbol.local_id.0));
+    HashEq::new(BorrowInterfaces { entries })
 }
 
 #[salsa::tracked]

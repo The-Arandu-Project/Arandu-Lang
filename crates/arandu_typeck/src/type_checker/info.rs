@@ -3,6 +3,7 @@ use std::sync::Arc;
 use rustc_hash::FxHashMap;
 
 use crate::SymbolId;
+use arandu_middle::types::{BorrowKind, BorrowPath, BorrowPathSegment, ReturnBorrowSummary};
 use arandu_parser::ast_pool::ExprId;
 
 use super::types::{
@@ -23,6 +24,8 @@ pub struct TypeInfo {
     pub type_interner: TypeInterner,
     pub expr_types: Vec<Option<TypeId>>,
     pub decl_types: FxHashMap<SymbolId, TypeId>,
+    /// Canonical flow-derived borrow interfaces published across item/module boundaries.
+    pub return_borrow_summaries: FxHashMap<SymbolId, ReturnBorrowSummary>,
     /// Struct field name → interned field type.
     pub struct_fields: FxHashMap<SymbolId, Arc<FxHashMap<String, TypeId>>>,
     pub struct_field_symbols: FxHashMap<SymbolId, Arc<FxHashMap<String, SymbolId>>>,
@@ -50,6 +53,12 @@ pub struct TypeInfo {
 }
 
 impl TypeInfo {
+    /// Maximum nesting published in a borrow interface. This bound is part of
+    /// the compiler contract, not a recursion guard chosen by the host stack.
+    pub const MAX_BORROW_PATH_DEPTH: usize = 32;
+    /// Maximum borrowed leaves published for one type.
+    pub const MAX_BORROW_PATHS: usize = 256;
+
     #[must_use]
     pub fn new() -> Self {
         Self::with_interner(TypeInterner::new())
@@ -61,6 +70,7 @@ impl TypeInfo {
             type_interner,
             expr_types: Vec::new(),
             decl_types: FxHashMap::default(),
+            return_borrow_summaries: FxHashMap::default(),
             struct_fields: FxHashMap::default(),
             struct_field_symbols: FxHashMap::default(),
             struct_field_indices: FxHashMap::default(),
@@ -94,6 +104,164 @@ impl TypeInfo {
     pub fn is_copy(&self, id: TypeId) -> bool {
         let mut visiting = FxHashMap::default();
         self.is_copy_rec(id, &mut visiting)
+    }
+
+    /// Enumerate every safe-borrow leaf contained by `id` in canonical order.
+    ///
+    /// Recursive nominal types terminate through `visiting`. Exceeding a
+    /// public bound is reported to the caller so it can fail closed instead of
+    /// silently truncating a safety contract.
+    pub fn borrow_paths(
+        &self,
+        id: TypeId,
+    ) -> Result<Vec<(BorrowPath, BorrowKind)>, BorrowShapeError> {
+        let mut output = Vec::new();
+        let mut visiting = Vec::new();
+        self.collect_borrow_paths(id, &mut Vec::new(), &mut visiting, &mut output)?;
+        output.sort();
+        output.dedup();
+        Ok(output)
+    }
+
+    fn collect_borrow_paths(
+        &self,
+        id: TypeId,
+        prefix: &mut Vec<BorrowPathSegment>,
+        visiting: &mut Vec<TypeId>,
+        output: &mut Vec<(BorrowPath, BorrowKind)>,
+    ) -> Result<(), BorrowShapeError> {
+        if prefix.len() > Self::MAX_BORROW_PATH_DEPTH {
+            return Err(BorrowShapeError::DepthExceeded);
+        }
+        if output.len() >= Self::MAX_BORROW_PATHS {
+            return Err(BorrowShapeError::PathCountExceeded);
+        }
+        if visiting.contains(&id) {
+            return Ok(());
+        }
+        visiting.push(id);
+        let ty = self.type_interner.resolve(id);
+        match ty {
+            ArType::Ref(_) => output.push((BorrowPath(prefix.clone()), BorrowKind::Shared)),
+            ArType::RefMut(_) => {
+                output.push((BorrowPath(prefix.clone()), BorrowKind::Exclusive));
+            }
+            ArType::Tuple(items) => {
+                for (index, item) in items.into_iter().enumerate() {
+                    let Ok(index) = u32::try_from(index) else {
+                        return Err(BorrowShapeError::PathCountExceeded);
+                    };
+                    prefix.push(BorrowPathSegment::Tuple(index));
+                    self.collect_borrow_paths(item, prefix, visiting, output)?;
+                    prefix.pop();
+                }
+            }
+            ArType::Option(inner) => {
+                prefix.push(BorrowPathSegment::OptionSome);
+                self.collect_borrow_paths(inner, prefix, visiting, output)?;
+                prefix.pop();
+            }
+            ArType::Result(ok, err) => {
+                prefix.push(BorrowPathSegment::ResultOk);
+                self.collect_borrow_paths(ok, prefix, visiting, output)?;
+                prefix.pop();
+                prefix.push(BorrowPathSegment::ResultErr);
+                self.collect_borrow_paths(err, prefix, visiting, output)?;
+                prefix.pop();
+            }
+            ArType::Named(symbol, arguments) => {
+                if let Some(fields) = self.struct_fields.get(&symbol) {
+                    let substitution = self.generic_params.get(&symbol).and_then(|parameters| {
+                        (parameters.len() == arguments.len() && !parameters.is_empty())
+                            .then(|| build_subst_ids(parameters, &arguments, &self.type_interner))
+                    });
+                    let mut fields = fields.iter().collect::<Vec<_>>();
+                    fields.sort_by_key(|(name, _)| *name);
+                    for (name, &field_id) in fields {
+                        let field_id = if let Some(substitution) = &substitution {
+                            let field = self.type_interner.resolve(field_id);
+                            self.type_interner.intern(substitute_type(
+                                &field,
+                                substitution,
+                                &self.type_interner,
+                            ))
+                        } else {
+                            field_id
+                        };
+                        prefix.push(BorrowPathSegment::Field(name.as_str().into()));
+                        self.collect_borrow_paths(field_id, prefix, visiting, output)?;
+                        prefix.pop();
+                    }
+                }
+
+                let mut variants = self
+                    .enum_variants
+                    .iter()
+                    .filter(|(_, (owner, _))| *owner == symbol)
+                    .map(|(variant, (_, payload))| {
+                        (
+                            self.enum_variant_tags.get(variant).copied().unwrap_or(0),
+                            payload,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                variants.sort_by_key(|(tag, _)| *tag);
+                for (tag, payload) in variants {
+                    let Ok(tag) = u32::try_from(tag) else {
+                        return Err(BorrowShapeError::PathCountExceeded);
+                    };
+                    if let EnumPayloadShape::Tuple(items) = payload {
+                        for (index, &item) in items.iter().enumerate() {
+                            let Ok(index) = u32::try_from(index) else {
+                                return Err(BorrowShapeError::PathCountExceeded);
+                            };
+                            prefix.push(BorrowPathSegment::Variant(tag));
+                            prefix.push(BorrowPathSegment::Payload(index));
+                            self.collect_borrow_paths(item, prefix, visiting, output)?;
+                            prefix.pop();
+                            prefix.pop();
+                        }
+                    }
+                }
+            }
+            ArType::Array(_, inner) => {
+                prefix.push(BorrowPathSegment::ArrayElement);
+                self.collect_borrow_paths(inner, prefix, visiting, output)?;
+                prefix.pop();
+            }
+            ArType::Nullable(inner) => {
+                prefix.push(BorrowPathSegment::NullableValue);
+                self.collect_borrow_paths(inner, prefix, visiting, output)?;
+                prefix.pop();
+            }
+            ArType::Coroutine(inner) => {
+                prefix.push(BorrowPathSegment::CoroutinePayload);
+                self.collect_borrow_paths(inner, prefix, visiting, output)?;
+                prefix.pop();
+            }
+            ArType::Poll(inner) => {
+                prefix.push(BorrowPathSegment::PollReady);
+                self.collect_borrow_paths(inner, prefix, visiting, output)?;
+                prefix.pop();
+            }
+            ArType::Range(inner) => {
+                prefix.push(BorrowPathSegment::RangeElement);
+                self.collect_borrow_paths(inner, prefix, visiting, output)?;
+                prefix.pop();
+            }
+            ArType::Primitive(_)
+            | ArType::Func(_, _)
+            | ArType::Slice(_)
+            | ArType::Ptr(_)
+            | ArType::GenRef
+            | ArType::Err
+            | ArType::Void
+            | ArType::IntLiteral
+            | ArType::FloatLiteral
+            | ArType::Error => {}
+        }
+        visiting.pop();
+        Ok(())
     }
 
     /// `visiting`: TypeId → currently on the stack (cycle → not copy).
@@ -185,6 +353,13 @@ impl TypeInfo {
             .values()
             .all(|&fid| self.is_pod_component(fid, visiting))
     }
+}
+
+/// Deterministic reason why a structural borrow contract cannot be published.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BorrowShapeError {
+    DepthExceeded,
+    PathCountExceeded,
 }
 
 /// Re-intern `ty` from `from` into `to`, recursively translating nested TypeIds.
@@ -314,6 +489,7 @@ impl TypeInfo {
     pub fn merge_from(&mut self, other: &TypeInfo) {
         // Fast path: empty body shards / empty import stubs.
         if other.decl_types.is_empty()
+            && other.return_borrow_summaries.is_empty()
             && other.struct_fields.is_empty()
             && other.struct_field_symbols.is_empty()
             && other.struct_field_indices.is_empty()
@@ -337,6 +513,12 @@ impl TypeInfo {
             let id = self.type_interner.intern(translated);
             self.record_decl_type(symbol, id);
         }
+        self.return_borrow_summaries.extend(
+            other
+                .return_borrow_summaries
+                .iter()
+                .map(|(&symbol, summary)| (symbol, summary.clone())),
+        );
         for (symbol, fields) in &other.struct_fields {
             let mut translated_fields = FxHashMap::default();
             for (name, &tid) in fields.iter() {
@@ -545,5 +727,81 @@ impl arandu_middle::layout::StructLayoutProvider for TypeInfo {
 
     fn destructor_for_type(&self, ty: TypeId) -> Option<SymbolId> {
         self.destructor_instances.get(&ty).copied()
+    }
+}
+
+#[cfg(test)]
+mod borrow_shape_tests {
+    use super::*;
+    use arandu_middle::types::{BorrowPath, BorrowPathSegment};
+
+    #[test]
+    fn structural_borrow_paths_cover_carriers_and_terminate_recursive_types() {
+        let mut info = TypeInfo::new();
+        let int = info.type_interner.intern(ArType::Primitive(Primitive::Int));
+        let shared = info.type_interner.intern(ArType::Ref(int));
+        let exclusive = info.type_interner.intern(ArType::RefMut(int));
+        let option_shared = info.type_interner.intern(ArType::Option(shared));
+
+        let record = SymbolId::new(0, 10);
+        let record_type = info.type_interner.intern(ArType::Named(record, vec![]));
+        info.struct_fields.insert(
+            record,
+            Arc::new(FxHashMap::from_iter([
+                ("next".to_string(), record_type),
+                ("read".to_string(), option_shared),
+                ("write".to_string(), exclusive),
+            ])),
+        );
+
+        let paths = info.borrow_paths(record_type).expect("bounded shape");
+        assert_eq!(
+            paths,
+            vec![
+                (
+                    BorrowPath(vec![
+                        BorrowPathSegment::Field("read".into()),
+                        BorrowPathSegment::OptionSome,
+                    ]),
+                    BorrowKind::Shared,
+                ),
+                (
+                    BorrowPath(vec![BorrowPathSegment::Field("write".into())]),
+                    BorrowKind::Exclusive,
+                ),
+            ]
+        );
+
+        let choice = SymbolId::new(0, 20);
+        let variant = SymbolId::new(0, 21);
+        info.enum_variants
+            .insert(variant, (choice, EnumPayloadShape::Tuple(vec![shared])));
+        info.enum_variant_tags.insert(variant, 7);
+        let choice_type = info.type_interner.intern(ArType::Named(choice, vec![]));
+        assert_eq!(
+            info.borrow_paths(choice_type).expect("enum shape"),
+            vec![(
+                BorrowPath(vec![
+                    BorrowPathSegment::Variant(7),
+                    BorrowPathSegment::Payload(0),
+                ]),
+                BorrowKind::Shared,
+            )]
+        );
+    }
+
+    #[test]
+    fn structural_borrow_paths_fail_closed_at_the_published_depth_bound() {
+        let info = TypeInfo::new();
+        let int = info.type_interner.intern(ArType::Primitive(Primitive::Int));
+        let mut nested = info.type_interner.intern(ArType::Ref(int));
+        for _ in 0..=TypeInfo::MAX_BORROW_PATH_DEPTH {
+            nested = info.type_interner.intern(ArType::Option(nested));
+        }
+
+        assert_eq!(
+            info.borrow_paths(nested),
+            Err(BorrowShapeError::DepthExceeded)
+        );
     }
 }

@@ -1,4 +1,5 @@
 mod ar_type;
+mod borrow;
 pub mod lower;
 mod primitive;
 mod result_option;
@@ -7,6 +8,10 @@ pub mod type_interner;
 mod unify;
 
 pub use ar_type::ArType;
+pub use borrow::{
+    BorrowKind, BorrowPath, BorrowPathSegment, BorrowSource, ReturnBorrowDependency,
+    ReturnBorrowSummary,
+};
 pub use lower::{LowerCtx, lower_named_type, lower_result_type, lower_type_expr};
 pub use primitive::Primitive;
 pub use result_option::{

@@ -9,7 +9,7 @@
 //! else:
 //!     → generational / escape path:
 //!         • always emit O004 (inspectable — never silent magic)
-//!         • return of &local → also O010 (hard error; cannot gen-fix a stack frame)
+//!         • return of `ref local` → also O010 (hard error; cannot gen-fix a stack frame)
 //!         • with @NoFallback / --no-generational-fallback → O004 is Error (G2)
 //! ```
 //!
@@ -29,6 +29,7 @@ use crate::borrow_facts::analyze_borrow_facts;
 use crate::diagnostics::{DiagCode, Diagnostic};
 use crate::types::ArType;
 use crate::{Span, SymbolTable};
+use arandu_middle::types::ReturnBorrowSummary;
 use std::sync::atomic::Ordering;
 
 /// How a reference escapes the current function's static window.
@@ -52,15 +53,17 @@ pub struct EscapeEvent {
 }
 
 /// Options for one function's escape check.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct EscapeCheckOptions {
     /// From `@NoFallback` on the function (G2 opt-in).
     pub no_fallback: bool,
+    /// Provenance exported by type checking for a borrowed return.
+    pub return_borrow: Option<ReturnBorrowSummary>,
 }
 
 impl EscapeCheckOptions {
     #[must_use]
-    pub fn effective_no_fallback(self) -> bool {
+    pub fn effective_no_fallback(&self) -> bool {
         self.no_fallback || NO_GENERATIONAL_FALLBACK.load(Ordering::Relaxed)
     }
 }
@@ -95,6 +98,9 @@ pub fn check_escapes_by_block(
     let mut diags = Vec::new();
 
     for ev in events {
+        if return_escape_is_declared(&ev, opts.return_borrow.as_ref()) {
+            continue;
+        }
         let name = local_name(ev.place_local, func, symbols);
         match ev.kind {
             EscapeKind::Return => {
@@ -112,7 +118,7 @@ pub fn check_escapes_by_block(
                     .with_label(ev.span, "reference to local would dangle after return")
                     .with_note(ev.reason)
                     .with_note(
-                        "keep the owner alive in the caller, or return owned data instead of `&`",
+                        "keep the owner alive in the caller, or return owned data instead of `ref`",
                     ),
                 ));
                 diags.push((
@@ -149,6 +155,18 @@ pub fn check_escapes_by_block(
     }
 
     diags
+}
+
+fn return_escape_is_declared(event: &EscapeEvent, summary: Option<&ReturnBorrowSummary>) -> bool {
+    event.kind == EscapeKind::Return
+        && summary.is_some_and(|summary| {
+            summary.dependencies.iter().any(|dependency| {
+                dependency.sources.iter().any(|source| {
+                    usize::try_from(source.parameter_index)
+                        .is_ok_and(|index| event.place_local.as_usize() == index)
+                })
+            })
+        })
 }
 
 fn has_projected_borrow(func: &AmirFunc, local: LocalId) -> bool {
@@ -203,34 +221,80 @@ pub fn find_escapes(func: &AmirFunc, interner: &crate::types::TypeInterner) -> V
         }
     }
 
-    // Also walk primary Borrow assigns (in case loan set is empty for edge cases).
-    for block in &func.blocks {
-        for stmt in func.block_stmts(block.id) {
-            if let AmirStmt::Assign {
-                lhs,
-                rhs: AmirRvalue::Borrow(place) | AmirRvalue::BorrowMut(place),
-            } = stmt
-            {
-                let i = lhs.as_usize();
-                if i < temp_to_place.len() {
-                    temp_to_place[i] = Some(place.local);
+    // Also walk primary Borrow assigns and aggregate constructions
+    // that incorporate stack references.
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for block in &func.blocks {
+            for stmt in func.block_stmts(block.id) {
+                if let AmirStmt::Assign {
+                    lhs,
+                    rhs: AmirRvalue::Borrow(place) | AmirRvalue::BorrowMut(place),
+                } = stmt
+                {
+                    let i = lhs.as_usize();
+                    if i < temp_to_place.len() && temp_to_place[i].is_none() {
+                        temp_to_place[i] = Some(place.local);
+                        changed = true;
+                    }
                 }
-            }
-            if let AmirStmt::Assign {
-                lhs,
-                rhs: AmirRvalue::RelativeBorrow { local, .. },
-            } = stmt
-            {
-                let i = lhs.as_usize();
-                if i < temp_to_place.len() {
-                    temp_to_place[i] = Some(*local);
+                if let AmirStmt::Assign {
+                    lhs,
+                    rhs: AmirRvalue::RelativeBorrow { local, .. },
+                } = stmt
+                {
+                    let i = lhs.as_usize();
+                    if i < temp_to_place.len() && temp_to_place[i].is_none() {
+                        temp_to_place[i] = Some(*local);
+                        changed = true;
+                    }
+                }
+                if let AmirStmt::Assign { lhs, rhs } = stmt {
+                    let i = lhs.as_usize();
+                    if i < temp_to_place.len() && temp_to_place[i].is_none() {
+                        match rhs {
+                            AmirRvalue::Use(op) => {
+                                if let Some(p) = operand_stack_place(op, &temp_to_place) {
+                                    temp_to_place[i] = Some(p);
+                                    changed = true;
+                                }
+                            }
+                            AmirRvalue::StructLiteral { fields, .. } => {
+                                for (_, op) in fields {
+                                    if let Some(p) = operand_stack_place(op, &temp_to_place) {
+                                        temp_to_place[i] = Some(p);
+                                        changed = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            AmirRvalue::Tuple { items } | AmirRvalue::Array { items } => {
+                                for op in items {
+                                    if let Some(p) = operand_stack_place(op, &temp_to_place) {
+                                        temp_to_place[i] = Some(p);
+                                        changed = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            AmirRvalue::EnumConstruct {
+                                payload: Some(op), ..
+                            } => {
+                                if let Some(p) = operand_stack_place(op, &temp_to_place) {
+                                    temp_to_place[i] = Some(p);
+                                    changed = true;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
         }
     }
 
     let mut events = Vec::new();
-
     for block in &func.blocks {
         // Return of stack-derived ref.
         if matches!(block.terminator, AmirTerminator::Return) {
@@ -267,6 +331,42 @@ pub fn find_escapes(func: &AmirFunc, interner: &crate::types::TypeInterner) -> V
                         reason: "reference escapes via return of the current function",
                     });
                 }
+                // Return of aggregate containing stack ref directly assigned to return temp
+                if let AmirStmt::Assign { lhs, rhs } = stmt
+                    && is_return_temp(*lhs, func)
+                {
+                    match rhs {
+                        AmirRvalue::StructLiteral { fields, .. } => {
+                            for (_, op) in fields {
+                                if let Some(place) = operand_stack_place(op, &temp_to_place) {
+                                    events.push(EscapeEvent {
+                                        kind: EscapeKind::Return,
+                                        place_local: place,
+                                        span: temp_span(*lhs, func).unwrap_or_else(|| local_span(place, func)),
+                                        block: block.id,
+                                        reason: "reference escapes via return of the current function",
+                                    });
+                                    break;
+                                }
+                            }
+                        }
+                        AmirRvalue::Tuple { items } | AmirRvalue::Array { items } => {
+                            for op in items {
+                                if let Some(place) = operand_stack_place(op, &temp_to_place) {
+                                    events.push(EscapeEvent {
+                                        kind: EscapeKind::Return,
+                                        place_local: place,
+                                        span: temp_span(*lhs, func).unwrap_or_else(|| local_span(place, func)),
+                                        block: block.id,
+                                        reason: "reference escapes via return of the current function",
+                                    });
+                                    break;
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
             }
         }
 
@@ -285,8 +385,6 @@ pub fn find_escapes(func: &AmirFunc, interner: &crate::types::TypeInterner) -> V
                 let dest_is_ref_slot = func.locals.get(lhs.local.as_usize()).is_some_and(|l| {
                     matches!(interner.resolve(l.ty), ArType::Ref(_) | ArType::RefMut(_))
                 });
-                // Storing a stack ref into another stack ref local is normal (`let p = &x`);
-                // only flag memory/aggregate destinations as heap-like escape.
                 if dest_is_memory && !dest_is_ref_slot {
                     events.push(EscapeEvent {
                         kind: EscapeKind::HeapStore,
@@ -353,12 +451,8 @@ mod tests {
     use crate::amir::{AmirBasicBlock, AmirLocal, AmirPlace, AmirStmtTable, AmirTemp};
     use crate::cfg::compute_cfg_edges;
     use crate::layout::DenseRange;
-    use crate::types::{Primitive, TypeId, TypeInterner};
+    use crate::types::{ArType, Primitive, TypeInterner};
     use smallvec::smallvec;
-
-    fn intern(ty: ArType) -> TypeId {
-        TypeInterner::new().intern(ty)
-    }
 
     fn place(l: usize) -> AmirPlace {
         AmirPlace {
@@ -373,8 +467,9 @@ mod tests {
 
     #[test]
     fn return_ref_to_local_is_o010() {
-        let int = intern(ArType::Primitive(Primitive::Int));
-        let ref_int = intern(ArType::Ref(int));
+        let interner = TypeInterner::new();
+        let int = interner.intern(ArType::Primitive(Primitive::Int));
+        let ref_int = interner.intern(ArType::Ref(int));
         let mut stmts = AmirStmtTable::new();
         // t0 = &s0  (return slot is t0? use assign to return temp 0)
         // Actually: t1 = &s0; _0 = use t1
@@ -427,7 +522,6 @@ mod tests {
             stmts,
             cfg,
         };
-        let interner = TypeInterner::new();
         let diags = check_escapes(
             &func,
             &empty_symbols(),
@@ -457,8 +551,9 @@ mod tests {
 
     #[test]
     fn no_fallback_promotes_o004_to_error() {
-        let int = intern(ArType::Primitive(Primitive::Int));
-        let ref_int = intern(ArType::Ref(int));
+        let interner = TypeInterner::new();
+        let int = interner.intern(ArType::Primitive(Primitive::Int));
+        let ref_int = interner.intern(ArType::Ref(int));
         let mut stmts = AmirStmtTable::new();
         stmts.push(AmirStmt::Assign {
             lhs: TempId::from_usize(1),
@@ -509,12 +604,14 @@ mod tests {
             stmts,
             cfg,
         };
-        let interner = TypeInterner::new();
         let diags = check_escapes(
             &func,
             &empty_symbols(),
             &interner,
-            EscapeCheckOptions { no_fallback: true },
+            EscapeCheckOptions {
+                no_fallback: true,
+                ..EscapeCheckOptions::default()
+            },
         );
         let o004: Vec<_> = diags
             .iter()
@@ -525,6 +622,214 @@ mod tests {
             o004.iter()
                 .all(|d| d.severity == crate::diagnostics::Severity::Error),
             "G2 must promote O004 to Error, got {o004:?}"
+        );
+    }
+
+    #[test]
+    fn return_ref_to_param_remains_rejected_without_interprocedural_provenance() {
+        let interner = TypeInterner::new();
+        let int = interner.intern(ArType::Primitive(Primitive::Int));
+        let ref_int = interner.intern(ArType::Ref(int));
+        let mut stmts = AmirStmtTable::new();
+        // t1 = &s0 (where s0 is param 0); _0 = use t1
+        stmts.push(AmirStmt::Assign {
+            lhs: TempId::from_usize(1),
+            rhs: AmirRvalue::Borrow(place(0)),
+        });
+        stmts.push(AmirStmt::Assign {
+            lhs: TempId::from_usize(0),
+            rhs: AmirRvalue::Use(AmirOperand::Copy(TempId::from_usize(1))),
+        });
+        let block = AmirBasicBlock {
+            id: BlockId::from_usize(0),
+            statements: DenseRange::new(0, 2),
+            params: vec![],
+            terminator: AmirTerminator::Return,
+        };
+        let blocks = vec![block];
+        let cfg = compute_cfg_edges(&blocks);
+        let func = AmirFunc {
+            symbol: SymbolId::new(0, 0),
+            return_type: ref_int,
+            receiver: None,
+            // 1 parameter (TempId(2)) corresponding to local 0
+            params: vec![TempId::from_usize(2)],
+            locals: vec![AmirLocal {
+                id: LocalId::from_usize(0),
+                ty: int,
+                is_memory: true,
+                symbol: None,
+                span: Span::new(0, 0, 1),
+                use_span: None,
+            }],
+            temps: vec![
+                AmirTemp {
+                    id: TempId::from_usize(0),
+                    ty: ref_int,
+                    is_copy: true,
+                    is_nullable: false,
+                    span: Span::new(0, 10, 11),
+                },
+                AmirTemp {
+                    id: TempId::from_usize(1),
+                    ty: ref_int,
+                    is_copy: true,
+                    is_nullable: false,
+                    span: Span::new(0, 12, 13),
+                },
+                AmirTemp {
+                    id: TempId::from_usize(2),
+                    ty: int,
+                    is_copy: true,
+                    is_nullable: false,
+                    span: Span::new(0, 5, 6),
+                },
+            ],
+            blocks,
+            stmts,
+            cfg,
+        };
+        let diags = check_escapes(
+            &func,
+            &empty_symbols(),
+            &interner,
+            EscapeCheckOptions::default(),
+        );
+        assert_eq!(
+            diags
+                .iter()
+                .filter(|diag| diag.code == DiagCode::O010EscapeOfBorrowedValue)
+                .count(),
+            1,
+            "borrowed parameter return must fail closed until callers inherit its loan: {diags:?}"
+        );
+
+        let declared = check_escapes(
+            &func,
+            &empty_symbols(),
+            &interner,
+            EscapeCheckOptions {
+                no_fallback: false,
+                return_borrow: Some(ReturnBorrowSummary::direct(
+                    0,
+                    arandu_middle::types::BorrowKind::Shared,
+                )),
+            },
+        );
+        assert!(
+            declared.is_empty(),
+            "a declared parameter dependency should make the return safe: {declared:?}"
+        );
+    }
+
+    #[test]
+    fn escape_via_struct_literal_detected_as_heap_store() {
+        let interner = TypeInterner::new();
+        let int = interner.intern(ArType::Primitive(Primitive::Int));
+        let ref_int = interner.intern(ArType::Ref(int));
+        let struct_ty = interner.intern(ArType::Named(SymbolId::new(0, 1), vec![]));
+        let void = interner.intern(ArType::Void);
+
+        let mut stmts = AmirStmtTable::new();
+        // t1 = &local0
+        stmts.push(AmirStmt::Assign {
+            lhs: TempId::from_usize(1),
+            rhs: AmirRvalue::Borrow(place(0)),
+        });
+        // t2 = StructLiteral { ref: t1 }
+        stmts.push(AmirStmt::Assign {
+            lhs: TempId::from_usize(2),
+            rhs: AmirRvalue::StructLiteral {
+                struct_symbol: SymbolId::new(0, 1),
+                fields: vec![(
+                    smol_str::SmolStr::new("ptr"),
+                    AmirOperand::Copy(TempId::from_usize(1)),
+                )],
+            },
+        });
+        // local1 (memory) = store t2
+        stmts.push(AmirStmt::Store {
+            lhs: place(1),
+            rhs: AmirOperand::Copy(TempId::from_usize(2)),
+        });
+
+        let block = AmirBasicBlock {
+            id: BlockId::from_usize(0),
+            statements: DenseRange::new(0, 3),
+            params: vec![],
+            terminator: AmirTerminator::Return,
+        };
+        let blocks = vec![block];
+        let cfg = compute_cfg_edges(&blocks);
+
+        let func = AmirFunc {
+            symbol: SymbolId::new(0, 0),
+            return_type: void,
+            receiver: None,
+            params: vec![],
+            locals: vec![
+                AmirLocal {
+                    id: LocalId::from_usize(0),
+                    ty: int,
+                    is_memory: true,
+                    symbol: None,
+                    span: Span::new(0, 0, 1),
+                    use_span: None,
+                },
+                AmirLocal {
+                    id: LocalId::from_usize(1),
+                    ty: struct_ty,
+                    is_memory: true,
+                    symbol: None,
+                    span: Span::new(0, 2, 3),
+                    use_span: None,
+                },
+            ],
+            temps: vec![
+                AmirTemp {
+                    id: TempId::from_usize(0),
+                    ty: void,
+                    is_copy: true,
+                    is_nullable: false,
+                    span: Span::new(0, 0, 0),
+                },
+                AmirTemp {
+                    id: TempId::from_usize(1),
+                    ty: ref_int,
+                    is_copy: true,
+                    is_nullable: false,
+                    span: Span::new(0, 0, 0),
+                },
+                AmirTemp {
+                    id: TempId::from_usize(2),
+                    ty: struct_ty,
+                    is_copy: false,
+                    is_nullable: false,
+                    span: Span::new(0, 0, 0),
+                },
+            ],
+            blocks,
+            stmts,
+            cfg,
+        };
+
+        let diags = check_escapes(
+            &func,
+            &empty_symbols(),
+            &interner,
+            EscapeCheckOptions {
+                no_fallback: true,
+                ..EscapeCheckOptions::default()
+            },
+        );
+
+        let o004: Vec<_> = diags
+            .iter()
+            .filter(|d| d.code == DiagCode::O004GenerationalFallback)
+            .collect();
+        assert!(
+            !o004.is_empty(),
+            "storing aggregate containing stack borrow into memory must trigger O004: {diags:?}"
         );
     }
 }

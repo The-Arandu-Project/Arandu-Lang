@@ -444,6 +444,7 @@ pub fn item_ide_diagnostics(
     let amir = func_amir(db, file, item_sym);
     if !amir.blocks.is_empty() {
         let sigs = crate::passes::module_signatures(db, file);
+        let borrow_ifaces = crate::passes::borrow_interfaces(db, file);
         let item = crate::passes::item_source_input(db, file, item_sym);
         // `func_amir` is post-promotion, so the original borrow no longer
         // escapes when the ordinary escape checker runs. Preserve G5
@@ -508,7 +509,17 @@ pub fn item_ide_diagnostics(
             amir,
             sigs.symbols.as_ref(),
             &body_tc.type_info.type_interner,
-            arandu_mir::escape_analysis::EscapeCheckOptions { no_fallback },
+            arandu_mir::escape_analysis::EscapeCheckOptions {
+                no_fallback,
+                // The per-item IDE pass must use the same exported contract as
+                // full lowering. Dropping it here made a valid `ref` parameter
+                // passthrough reappear as O004/O010 only in the editor.
+                return_borrow: borrow_ifaces
+                    .entries
+                    .iter()
+                    .find(|(sym, _)| *sym == item_sym)
+                    .map(|(_, s)| s.clone()),
+            },
         ) {
             let mut diagnostic = IdeDiagnostic::from_diag(&d, Some(item_sym), Some(bid));
             if diagnostic.code == "O004"
@@ -679,10 +690,10 @@ pub fn file_ide_diagnostics(
         }
     }
 
-    // Lowering accumulators include pre-promotion O004/O010 evidence that is
-    // intentionally absent from the post-promotion AMIR. Preserve it at the
-    // file composition boundary; do not force sibling item queries to depend
-    // on one another.
+    // Lowering accumulators include ownership diagnostics produced before an
+    // invalid function can be published as AMIR, plus pre-promotion O004/O010
+    // evidence. Preserve them at the file composition boundary; otherwise the
+    // CLI rejects O002/O003/O006 while the IDE incorrectly reports a clean file.
     let _ = crate::passes::lower_amir(db, file);
     let lower_diags = crate::passes::lower_amir::accumulated::<
         arandu_middle::db::DiagnosticsAccumulator,
@@ -691,7 +702,10 @@ pub fn file_ide_diagnostics(
     for accumulated in lower_diags {
         if !matches!(
             accumulated.0.code,
-            arandu_middle::DiagCode::O004GenerationalFallback
+            arandu_middle::DiagCode::O002MoveWhileBorrowed
+                | arandu_middle::DiagCode::O003MutableBorrowConflict
+                | arandu_middle::DiagCode::O004GenerationalFallback
+                | arandu_middle::DiagCode::O006DestroyWhileBorrowed
                 | arandu_middle::DiagCode::O010EscapeOfBorrowedValue
         ) {
             continue;

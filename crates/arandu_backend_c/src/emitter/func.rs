@@ -141,7 +141,9 @@ impl<'a> CEmitter<'a> {
                         used_temps.insert(t.as_usize());
                     }
                 }
-                AmirStmt::Call { lhs, callee, args } => {
+                AmirStmt::Call {
+                    lhs, callee, args, ..
+                } => {
                     if let Some(t) = lhs {
                         used_temps.insert(t.as_usize());
                     }

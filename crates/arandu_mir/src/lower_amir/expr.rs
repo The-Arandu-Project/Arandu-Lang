@@ -598,6 +598,7 @@ impl LowerCtx<'_> {
                             lhs: None,
                             callee: AmirOperand::FunctionRef(set_span_id),
                             args: smallvec::smallvec![file_id, start, end],
+                            return_borrow: None,
                         });
                     }
                 }
@@ -662,6 +663,9 @@ impl LowerCtx<'_> {
                     lhs: dest,
                     callee: callee_op,
                     args: arg_ops.into(),
+                    return_borrow: callee_symbol
+                        .and_then(|symbol| self.tc.type_info.return_borrow_summaries.get(&symbol))
+                        .cloned(),
                 });
                 Ok(dest.map_or(AmirOperand::Constant(AmirConstant::Nil), AmirOperand::Copy))
             }

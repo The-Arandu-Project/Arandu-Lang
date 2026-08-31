@@ -1,5 +1,7 @@
+pub mod borrow_audit;
 pub mod borrow_check;
 pub mod borrow_facts;
+pub mod borrow_interface;
 pub(crate) mod dce;
 pub mod definite_init;
 pub mod drop_elaborate;
@@ -18,7 +20,7 @@ pub(crate) mod sroa;
 pub mod suspend_check;
 
 pub use borrow_check::check_borrows;
-pub use lower_amir::lower_to_amir;
+pub use lower_amir::{lower_to_amir, lower_to_amir_with_interfaces};
 pub use move_checker::check_moves;
 pub use optimize::{optimize_amir, optimize_amir_checked, optimize_amir_with_level};
 pub use pass_manager::{FunctionPass, OptLevel, PassManager, PassStats};

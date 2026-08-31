@@ -310,6 +310,41 @@ pub(crate) fn collect_signature_types(checker: &mut TypeChecker<'_>, program: &P
                             .insert(symbol_id, std::sync::Arc::new(all_params));
                     }
                     let ret_id = checker.intern(ret_ty);
+                    let return_kind = match checker.resolve(ret_id) {
+                        ArType::Ref(_) => Some(arandu_middle::types::BorrowKind::Shared),
+                        ArType::RefMut(_) => Some(arandu_middle::types::BorrowKind::Exclusive),
+                        _ => None,
+                    };
+                    if let Some(kind) = return_kind {
+                        let candidates = param_types
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, parameter)| {
+                                matches!(
+                                    (kind, checker.resolve(**parameter)),
+                                    (
+                                        arandu_middle::types::BorrowKind::Shared,
+                                        ArType::Ref(_) | ArType::RefMut(_),
+                                    ) | (
+                                        arandu_middle::types::BorrowKind::Exclusive,
+                                        ArType::RefMut(_),
+                                    )
+                                )
+                            })
+                            .map(|(index, _)| index)
+                            .collect::<Vec<_>>();
+                        if let [parameter_index] = candidates.as_slice()
+                            && let Ok(parameter_index) = u32::try_from(*parameter_index)
+                        {
+                            checker.type_info.return_borrow_summaries.insert(
+                                symbol_id,
+                                arandu_middle::types::ReturnBorrowSummary::direct(
+                                    parameter_index,
+                                    kind,
+                                ),
+                            );
+                        }
+                    }
                     let func_ty = ArType::Func(param_types, ret_id);
                     let func_id = checker.intern(func_ty);
                     checker.record_decl_type(symbol_id, func_id);

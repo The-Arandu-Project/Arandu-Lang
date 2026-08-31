@@ -159,8 +159,8 @@ pub(super) fn dump_unary(op: UnaryOp) -> &'static str {
         UnaryOp::Not => "!",
         UnaryOp::BitNot => "~",
         UnaryOp::Await => "await",
-        UnaryOp::Ref => "&",
-        UnaryOp::RefMut => "&mut",
+        UnaryOp::Ref => "ref ",
+        UnaryOp::RefMut => "mut ref ",
         UnaryOp::Deref => "*",
     }
 }

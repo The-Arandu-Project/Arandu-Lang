@@ -1,9 +1,9 @@
-Func User.greet(shared self: &User) -> str
+Func User.greet(shared self: ref User) -> str
   locals:
     _0: str // return
-    _1: &User
-    _2: &User
-    s0: &User // self
+    _1: ref User
+    _2: ref User
+    s0: ref User // self
 
   bb0:
     _0 = _1.0
@@ -13,7 +13,7 @@ Func main() -> void
   locals:
     _0: void // return
     _1: User
-    _2: &User
+    _2: ref User
     _3: str
     s0: User // user
     s1: str // _

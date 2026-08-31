@@ -568,7 +568,10 @@ mod tests {
         apply_gen_promotion(
             &mut strict_func,
             &interner,
-            EscapeCheckOptions { no_fallback: true },
+            EscapeCheckOptions {
+                no_fallback: true,
+                ..EscapeCheckOptions::default()
+            },
         );
         assert_eq!(strict_func.temps[1].ty, ref_ty);
         assert!(

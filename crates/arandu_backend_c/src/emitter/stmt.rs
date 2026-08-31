@@ -203,7 +203,9 @@ impl<'a> CEmitter<'a> {
                 let rhs_str = self.format_operand(rhs, func);
                 let _ = writeln!(&mut self.output, "    {} = {};", lhs_str, rhs_str);
             }
-            AmirStmt::Call { lhs, callee, args } => {
+            AmirStmt::Call {
+                lhs, callee, args, ..
+            } => {
                 if self.try_emit_mem_intrinsic(lhs, callee, args, func) {
                     return;
                 }

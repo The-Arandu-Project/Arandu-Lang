@@ -1188,6 +1188,7 @@ fn jit_ice_indirect_call() {
         lhs: None,
         callee: AmirOperand::Constant(AmirConstant::Bool(true)),
         args: Default::default(),
+        return_borrow: None,
     };
 
     let backend = backend_for_test();

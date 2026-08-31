@@ -177,7 +177,9 @@ impl AmirStmt {
                 out.push_str(" = ");
                 rhs.pretty_print_to(out, symbols, pool);
             }
-            AmirStmt::Call { lhs, callee, args } => {
+            AmirStmt::Call {
+                lhs, callee, args, ..
+            } => {
                 if let Some(l) = lhs {
                     out.push_str(&format!("_{} = ", l.0));
                 }

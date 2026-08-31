@@ -166,23 +166,21 @@ fn check_stmt(
             }
         },
         AmirStmt::Store { lhs, rhs } => {
-            if lhs.projections.is_empty() {
-                // Mutation of the place while borrowed.
-                if place_borrowed(lhs.local, live, facts, block) {
-                    diags.push((
+            // Mutation of the place (whole struct or projected field/element) while borrowed.
+            if place_borrowed(lhs.local, live, facts, block) {
+                diags.push((
+                    block,
+                    conflict_diag(
+                        lhs.local,
+                        func,
+                        symbols,
+                        facts,
+                        live,
+                        "mutable borrow conflict",
+                        "cannot assign while value is borrowed",
                         block,
-                        conflict_diag(
-                            lhs.local,
-                            func,
-                            symbols,
-                            facts,
-                            live,
-                            "mutable borrow conflict",
-                            "cannot assign while value is borrowed",
-                            block,
-                        ),
-                    ));
-                }
+                    ),
+                ));
             }
             check_operand_move(rhs, point, live, facts, temp_origins, func, symbols, diags);
         }
@@ -444,6 +442,12 @@ fn compute_temp_live_before(func: &AmirFunc, temp_live: &TempLiveness) -> Vec<Ve
         let mut live_before = vec![BitSet::with_capacity(num_temps); n + 1];
 
         let mut live = temp_live.live_out(block.id).clone();
+        // `Return` consumes the conventional return register (`TempId(0)`).
+        // The terminator has no explicit operand in AMIR, so seed it here or a
+        // returned borrow appears dead before epilogue `Destroy` statements.
+        if matches!(block.terminator, AmirTerminator::Return) && !func.temps.is_empty() {
+            live.insert(TempId::from_usize(0));
+        }
         // Before terminator:
         live_before[n] = live.clone();
         // Reverse statements.

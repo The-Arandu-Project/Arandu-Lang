@@ -183,9 +183,10 @@ pub(crate) fn lower_func(
     // *p becomes Load of the local so addresses never pin the state blob.
     crate::pin_free::apply_pin_free_refs(&mut amir_f, &tc.type_info.type_interner);
 
-    // M2: O002/O003/O006 on the *final* AMIR (after prune/rewrite).
-    // Dummy Store of `&T` locals would otherwise hide holder liveness on raw AMIR.
-    func_diagnostics.extend(crate::borrow_check::check_borrows(&amir_f, &tc.symbols));
+    // Drop obligations are part of the semantic AMIR inspected by M2. Inserting
+    // them after borrow checking made O006 unreachable in the production
+    // pipeline even though the checker itself implemented the rule.
+    crate::drop_elaborate::elaborate_drops(&mut amir_f, &tc.type_info);
 
     // A3.2: remaining absolute Ref/RefMut live into resume → O010.
     func_diagnostics.extend(crate::suspend_check::check_borrow_across_suspend(
@@ -195,20 +196,6 @@ pub(crate) fn lower_func(
     ));
 
     promote_escaped_coroutines(&mut amir_f);
-
-    // F2.3 + G2: escape analysis (O010 / O004); `@NoFallback` promotes O004→error.
-    let escape_opts = crate::escape_analysis::EscapeCheckOptions {
-        no_fallback: f.no_fallback,
-    };
-    func_diagnostics.extend(crate::escape_analysis::check_escapes(
-        &amir_f,
-        &tc.symbols,
-        &tc.type_info.type_interner,
-        escape_opts,
-    ));
-    // G4: structural Copy proof comes from typeck; MIR does not duplicate it.
-    crate::gen_promote::apply_gen_promotion_with_type_info(&mut amir_f, &tc.type_info, escape_opts);
-    crate::drop_elaborate::elaborate_drops(&mut amir_f, &tc.type_info);
 
     Ok(amir_f)
 }

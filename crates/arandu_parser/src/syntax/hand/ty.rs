@@ -14,6 +14,9 @@ pub fn can_start_type_kind(kind: TokenKind) -> bool {
         TokenKind::IdentType
             | TokenKind::IdentValue
             | TokenKind::KwPtr
+            | TokenKind::KwOwn
+            | TokenKind::KwRef
+            | TokenKind::KwMut
             | TokenKind::LBracket
             | TokenKind::LParen
             | TokenKind::KwFunc
@@ -72,6 +75,28 @@ pub fn try_hand_lower_type(
 pub fn parse_type(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>) -> Option<TypeExprId> {
     let start_tok = cur.peek()?;
     let start = start_tok.start;
+
+    // Canonical ownership spelling: `own T`, `ref T`, `mut ref T`.
+    if cur.eat(TokenKind::KwOwn) {
+        return parse_type(ctx, cur);
+    }
+    if cur.eat(TokenKind::KwRef) {
+        let inner = parse_type(ctx, cur)?;
+        let end = ctx.pool.type_expr_span(inner).end;
+        return Some(ctx.pool.alloc_type_expr(TypeExpr::Ref {
+            span: ctx.span(start, end),
+            inner,
+        }));
+    }
+    if cur.eat(TokenKind::KwMut) {
+        cur.expect(TokenKind::KwRef)?;
+        let inner = parse_type(ctx, cur)?;
+        let end = ctx.pool.type_expr_span(inner).end;
+        return Some(ctx.pool.alloc_type_expr(TypeExpr::RefMut {
+            span: ctx.span(start, end),
+            inner,
+        }));
+    }
 
     // `&mut T` / `&T` — safe reference types (F2.0). Not raw `ptr[T]`.
     if cur.eat(TokenKind::Amp) {

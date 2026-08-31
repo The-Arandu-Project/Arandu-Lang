@@ -42,6 +42,19 @@ pub fn lower_to_amir(
     tc: &TypeCheckResult,
     hir: &HirProgram,
 ) -> Result<AmirProgram, Vec<Diagnostic>> {
+    let mut owned = tc.clone();
+    lower_to_amir_with_interfaces(&mut owned, hir)
+}
+
+/// Lower AMIR and publish flow-derived borrow interfaces back into `tc`.
+///
+/// Query orchestration uses this entry point so the returned type-check bundle
+/// and the AMIR consumed by codegen share exactly the same public contracts.
+#[tracing::instrument(level = "trace", target = "arandu_mir::lower_amir", skip(tc, hir))]
+pub fn lower_to_amir_with_interfaces(
+    tc: &mut TypeCheckResult,
+    hir: &HirProgram,
+) -> Result<AmirProgram, Vec<Diagnostic>> {
     if tc.diagnostics.iter().any(|d| d.severity == Severity::Error) {
         return Err(tc.diagnostics.clone());
     }
@@ -49,8 +62,9 @@ pub fn lower_to_amir(
     let mut funcs = Vec::new();
     let mut diagnostics = Vec::new();
     let mut literal_pool = AmirLiteralPool::default();
+    let mut no_fallback = FxHashMap::default();
     // Single post-mono table: receiver Shared/Mut/Own → Copy vs Move at call sites.
-    let arg_modes = CalleeArgModes::from_hir(hir);
+    let arg_modes = CalleeArgModes::from_hir(hir, &tc.type_info.type_interner);
 
     for &decl_id in &hir.decls {
         if let HirDecl::Func(
@@ -59,6 +73,7 @@ pub fn lower_to_amir(
             },
         ) = hir.pool.decl(decl_id)
         {
+            no_fallback.insert(f.symbol, f.no_fallback);
             // Skip generic templates — only monomorphized specializations (and
             // non-generic functions) are lowered to AMIR.
             if tc.type_info.generic_params.contains_key(&f.symbol) {
@@ -98,11 +113,72 @@ pub fn lower_to_amir(
                 }
             }
         }
-        Ok(AmirProgram {
+        let mut program = AmirProgram {
             funcs,
             literal_pool,
             extern_funcs,
-        })
+        };
+
+        let solution =
+            crate::borrow_interface::solve_borrow_interfaces(&mut program, &tc.type_info);
+        {
+            let info = tc.type_info_mut();
+            info.return_borrow_summaries = solution.summaries.clone();
+        }
+
+        for function in &mut program.funcs {
+            // M2 and escape validation intentionally run only after calls carry
+            // the converged interprocedural interface.
+            diagnostics.extend(crate::borrow_check::check_borrows(function, &tc.symbols));
+            let options = crate::escape_analysis::EscapeCheckOptions {
+                no_fallback: no_fallback.get(&function.symbol).copied().unwrap_or(false),
+                return_borrow: solution.summaries.get(&function.symbol).cloned(),
+            };
+            let escape_diagnostics = crate::escape_analysis::check_escapes(
+                function,
+                &tc.symbols,
+                &tc.type_info.type_interner,
+                options.clone(),
+            );
+            let already_reports_return = escape_diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == DiagCode::O010EscapeOfBorrowedValue);
+            diagnostics.extend(escape_diagnostics);
+            if !already_reports_return
+                && solution
+                    .unproven
+                    .iter()
+                    .any(|failure| failure.function == function.symbol)
+            {
+                let span = function
+                    .temps
+                    .first()
+                    .map_or(Span::new(0, 0, 0), |temp| temp.span);
+                diagnostics.push(
+                    Diagnostic::error(
+                        DiagCode::O010EscapeOfBorrowedValue,
+                        "borrowed return has no demonstrable formal origin".to_string(),
+                        span,
+                    )
+                    .with_label(span, "this returned borrow cannot be tied to a caller-owned input")
+                    .with_note(
+                        "borrow interfaces are inferred from AMIR flow; compatible parameter types alone are not proof",
+                    )
+                    .with_hint("return owned data or forward a borrow derived from a formal `ref` input"),
+                );
+            }
+            crate::gen_promote::apply_gen_promotion_with_type_info(
+                function,
+                &tc.type_info,
+                options,
+            );
+        }
+
+        if diagnostics.is_empty() {
+            Ok(program)
+        } else {
+            Err(diagnostics)
+        }
     } else {
         Err(diagnostics)
     }

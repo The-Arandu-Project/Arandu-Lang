@@ -58,7 +58,10 @@ pub use rename::{prepare_rename, rename_occurrences, validate_rename, RenameErro
 // re-export for tests/CLI convenience
 pub use debounce::{DebouncedMap, DEFAULT_DEBOUNCE};
 pub use edit_vfs::{EditVfs, Vfs};
-pub use passes::{file_typeck_view, item_body_typeck, lower_amir, syntax_tree, LowerAmirArtifacts};
+pub use passes::{
+    borrow_interfaces, file_typeck_view, item_body_typeck, lower_amir, syntax_tree,
+    BorrowInterfaces, LowerAmirArtifacts,
+};
 pub use stable_hash::StableHash;
 pub use stdlib::{
     import_path_on_disk, is_stdlib_root, resolve_exe_path, resolve_stdlib_root, StdlibNotFound,

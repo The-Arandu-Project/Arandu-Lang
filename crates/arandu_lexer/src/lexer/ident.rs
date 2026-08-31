@@ -104,6 +104,7 @@ pub(crate) fn keyword_kind(text: &str) -> Option<TokenKind> {
         "own" => TokenKind::KwOwn,
         "mut" => TokenKind::KwMut,
         "shared" => TokenKind::KwShared,
+        "ref" => TokenKind::KwRef,
         "self" => TokenKind::KwSelf,
         "ptr" => TokenKind::KwPtr,
         "defer" => TokenKind::KwDefer,

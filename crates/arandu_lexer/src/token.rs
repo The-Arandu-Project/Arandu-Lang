@@ -112,6 +112,7 @@ pub enum TokenKind {
     KwOwn,
     KwMut,
     KwShared,
+    KwRef,
     KwSelf,
     KwPtr,
     KwAlloc,
@@ -206,7 +207,7 @@ impl fmt::Display for TokenKind {
 }
 
 impl TokenKind {
-    pub const COUNT: usize = 131;
+    pub const COUNT: usize = 132;
 
     #[must_use]
     pub const fn index(&self) -> usize {
@@ -267,6 +268,7 @@ impl TokenKind {
             TokenKind::KwDefer => 53,
             TokenKind::KwErrdefer => 54,
             TokenKind::KwLet => 129,
+            TokenKind::KwRef => 130,
             TokenKind::TypeInt => 55,
             TokenKind::TypeUint => 56,
             TokenKind::TypeFloat => 57,
@@ -341,7 +343,7 @@ impl TokenKind {
             TokenKind::Ellipsis => 126,
             TokenKind::Arrow => 127,
             TokenKind::Eof => 128,
-            TokenKind::Error(_) => 130,
+            TokenKind::Error(_) => 131,
         }
     }
 
@@ -478,6 +480,7 @@ impl TokenKind {
             127 => TokenKind::Arrow,
             128 => TokenKind::Eof,
             129 => TokenKind::KwLet,
+            130 => TokenKind::KwRef,
             _ => TokenKind::Error(crate::LexErrorCode::InvalidChar),
         }
     }
@@ -526,13 +529,13 @@ struct TokenFlags {
     prevents: bool,
 }
 
-static TOKEN_FLAGS_TABLE: [TokenFlags; 131] = {
+static TOKEN_FLAGS_TABLE: [TokenFlags; TokenKind::COUNT] = {
     let mut table = [TokenFlags {
         can_end: false,
         prevents: false,
-    }; 131];
+    }; TokenKind::COUNT];
     let mut i = 0;
-    while i < 131 {
+    while i < TokenKind::COUNT {
         let kind = TokenKind::index_to_token_kind(i);
         let can_end = matches!(
             kind,

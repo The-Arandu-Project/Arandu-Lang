@@ -79,7 +79,7 @@ pub fn expand_specializations<'bump>(
         .expr_types
         .iter()
         .flatten()
-        .copied()
+        .cloned()
         .chain(tc.type_info.decl_types.values().copied())
         .collect();
     observed_types.sort_by_key(|ty| ty.0);
@@ -587,6 +587,16 @@ fn specialize_free_func(
     let func_ty_id = tc.type_info.type_interner.intern(func_ty);
     tc.type_info_mut()
         .record_decl_type(new_func_sym, func_ty_id);
+    if let Some(summary) = tc
+        .type_info
+        .return_borrow_summaries
+        .get(&key.symbol)
+        .cloned()
+    {
+        tc.type_info_mut()
+            .return_borrow_summaries
+            .insert(new_func_sym, summary);
+    }
     let specializes_destructor = tc
         .type_info
         .destructors

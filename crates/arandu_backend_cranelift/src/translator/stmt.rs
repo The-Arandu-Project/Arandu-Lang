@@ -76,7 +76,9 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 }
             }
 
-            AmirStmt::Call { lhs, callee, args } => {
+            AmirStmt::Call {
+                lhs, callee, args, ..
+            } => {
                 self.translate_call(lhs, callee, args);
             }
             AmirStmt::Free(op) => {

@@ -35,12 +35,12 @@ pub enum TypeExpr {
         span: Span,
         inner: TypeExprId,
     },
-    /// Shared reference type: `&T` (F2.0).
+    /// Shared reference type: canonical `ref T` (legacy `&T`).
     Ref {
         span: Span,
         inner: TypeExprId,
     },
-    /// Exclusive reference type: `&mut T` (F2.0).
+    /// Exclusive reference type: canonical `mut ref T` (legacy `&mut T`).
     RefMut {
         span: Span,
         inner: TypeExprId,

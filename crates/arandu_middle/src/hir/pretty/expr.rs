@@ -422,8 +422,8 @@ pub(super) fn unary_op_str(op: &UnaryOp) -> &str {
         UnaryOp::Neg => "-",
         UnaryOp::BitNot => "~",
         UnaryOp::Await => "await ",
-        UnaryOp::Ref => "&",
-        UnaryOp::RefMut => "&mut ",
+        UnaryOp::Ref => "ref ",
+        UnaryOp::RefMut => "mut ref ",
         UnaryOp::Deref => "*",
     }
 }

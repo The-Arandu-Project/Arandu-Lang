@@ -27,7 +27,8 @@ pub mod passes;
 pub mod testing;
 
 pub use arandu_mir::{
-    check_borrows, check_moves, lower_to_amir, optimize_amir, optimize_amir_checked,
+    check_borrows, check_moves, lower_to_amir, lower_to_amir_with_interfaces, optimize_amir,
+    optimize_amir_checked,
 };
 pub use arandu_resolve::{resolve_for_test, resolve_imports_and_bodies, resolve_local};
 pub use arandu_typeck::{

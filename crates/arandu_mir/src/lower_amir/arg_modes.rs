@@ -5,6 +5,7 @@
 
 use arandu_middle::SymbolId;
 use arandu_middle::hir::{HirDecl, HirProgram, ReceiverKind};
+use arandu_middle::types::{ArType, TypeInterner};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
@@ -41,7 +42,7 @@ pub struct CalleeArgModes {
 impl CalleeArgModes {
     /// One HIR walk: every `HirDecl::Func` (including mono specializations).
     #[must_use]
-    pub fn from_hir(hir: &HirProgram) -> Self {
+    pub fn from_hir(hir: &HirProgram, interner: &TypeInterner) -> Self {
         let mut modes = FxHashMap::default();
         for &decl_id in &hir.decls {
             let HirDecl::Func(f) = hir.pool.decl(decl_id) else {
@@ -50,14 +51,16 @@ impl CalleeArgModes {
             let params = hir.pool.params_list(f.params);
             let mut vec = SmallVec::with_capacity(params.len());
             for p in params {
-                let kind = if p.is_receiver {
-                    match p.receiver_kind {
-                        Some(ReceiverKind::Own) => ArgConsumeKind::Move,
-                        Some(ReceiverKind::Mut) => ArgConsumeKind::BorrowMut,
-                        Some(ReceiverKind::Shared) | None => ArgConsumeKind::BorrowShared,
-                    }
-                } else {
-                    ArgConsumeKind::Move
+                let kind = match p.receiver_kind {
+                    Some(ReceiverKind::Own) => ArgConsumeKind::Move,
+                    Some(ReceiverKind::Mut) => ArgConsumeKind::BorrowMut,
+                    Some(ReceiverKind::Shared) => ArgConsumeKind::BorrowShared,
+                    None => match interner.resolve(p.ty) {
+                        ArType::Ref(_) => ArgConsumeKind::BorrowShared,
+                        ArType::RefMut(_) => ArgConsumeKind::BorrowMut,
+                        _ if p.is_receiver => ArgConsumeKind::BorrowShared,
+                        _ => ArgConsumeKind::Move,
+                    },
                 };
                 vec.push(kind);
             }

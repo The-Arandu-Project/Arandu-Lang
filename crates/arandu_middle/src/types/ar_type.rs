@@ -219,11 +219,11 @@ impl ArType {
             }
             ArType::Ref(inner) => {
                 let inner_str = interner.resolve(*inner).display(symbols, interner);
-                format!("&{}", inner_str)
+                format!("ref {}", inner_str)
             }
             ArType::RefMut(inner) => {
                 let inner_str = interner.resolve(*inner).display(symbols, interner);
-                format!("&mut {}", inner_str)
+                format!("mut ref {}", inner_str)
             }
             ArType::GenRef => "GenRef".to_string(),
             ArType::Tuple(types) => {

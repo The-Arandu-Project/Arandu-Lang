@@ -282,3 +282,84 @@ fn copy_type_move_does_not_mark_origin_moved() {
 
     assert!(check_moves(&func, &symbols).is_empty());
 }
+
+#[test]
+fn branch_arms_both_moving_same_local_do_not_conflict() {
+    // bb0 branches on cond; true_args moves local0, false_args moves local0
+    // Since true and false are mutually exclusive paths, this must NOT report O001.
+    let mut stmts = AmirStmtTable::new();
+    let r0 = stmts.push(AmirStmt::Assign {
+        lhs: TempId::from_usize(0),
+        rhs: AmirRvalue::Load(place(0)),
+    });
+    let r_cond = stmts.push(AmirStmt::Assign {
+        lhs: TempId::from_usize(1),
+        rhs: AmirRvalue::Load(place(1)),
+    });
+    let mut range0 = DenseRange::empty();
+    extend_block_range(&mut range0, r0);
+    extend_block_range(&mut range0, r_cond);
+
+    let block0 = AmirBasicBlock {
+        id: BlockId::from_usize(0),
+        statements: range0,
+        params: Vec::new(),
+        terminator: AmirTerminator::Branch {
+            condition: AmirOperand::Copy(TempId::from_usize(1)),
+            if_true: BlockId::from_usize(1),
+            if_false: BlockId::from_usize(2),
+            true_args: vec![AmirOperand::Move(TempId::from_usize(0))],
+            false_args: vec![AmirOperand::Move(TempId::from_usize(0))],
+        },
+    };
+
+    let block1 = AmirBasicBlock {
+        id: BlockId::from_usize(1),
+        statements: DenseRange::empty(),
+        params: vec![crate::amir::BlockParam {
+            id: TempId::from_usize(2),
+            local: LocalId::from_usize(2),
+            ty: intern_ty(non_copy_ty()),
+            from: None,
+            moved: true,
+        }],
+        terminator: AmirTerminator::Return,
+    };
+
+    let block2 = AmirBasicBlock {
+        id: BlockId::from_usize(2),
+        statements: DenseRange::empty(),
+        params: vec![crate::amir::BlockParam {
+            id: TempId::from_usize(3),
+            local: LocalId::from_usize(3),
+            ty: intern_ty(non_copy_ty()),
+            from: None,
+            moved: true,
+        }],
+        terminator: AmirTerminator::Return,
+    };
+
+    let func = make_func(
+        vec![block0, block1, block2],
+        vec![
+            local(0, non_copy_ty()),
+            local(1, int_ty()),
+            local(2, non_copy_ty()),
+            local(3, non_copy_ty()),
+        ],
+        vec![
+            temp(0, non_copy_ty()),
+            temp(1, int_ty()),
+            temp(2, non_copy_ty()),
+            temp(3, non_copy_ty()),
+        ],
+        stmts,
+    );
+    let symbols = SymbolTable::new(0);
+    let diags = check_moves(&func, &symbols);
+    assert!(
+        diags.is_empty(),
+        "expected no move errors when both branch arms move to their target, got: {:?}",
+        diags
+    );
+}
