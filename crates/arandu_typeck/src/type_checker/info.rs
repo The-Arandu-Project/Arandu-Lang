@@ -93,7 +93,8 @@ impl TypeInfo {
     /// Whether values of this type may be used after "move" (copy semantics).
     ///
     /// # Rules (Minimal / big-tech POD)
-    /// - Scalars, AMIR `GenRef`, bare `ptr`/`&`/`&mut`: same as [`ArType::is_copy_v01`].
+    /// - Scalars, AMIR `GenRef`, bare `ptr` and shared `ref`: same as
+    ///   [`ArType::is_copy_v01`]. Exclusive `mut ref` is move-only.
     /// - **Named structs**: auto-copy iff **all fields are POD components**
     ///   (no raw pointers / refs / `str` / owned aggregates). Empty structs are copy.
     /// - Tuples / arrays / `Option` / `Result`: copy iff all payload components are POD.
@@ -301,9 +302,11 @@ impl TypeInfo {
             ArType::Result(ok, err) => {
                 self.is_pod_component(*ok, visiting) && self.is_pod_component(*err, visiting)
             }
-            // Nested ownership / handles: not POD components of a struct.
+            // Shared borrows remain copyable inside structural carriers. An
+            // exclusive borrow is move-only, and raw pointers nested in an
+            // owner aggregate remain non-POD to avoid accidental double free.
+            ArType::Ref(_) => true,
             ArType::Ptr(_)
-            | ArType::Ref(_)
             | ArType::RefMut(_)
             | ArType::Nullable(_)
             | ArType::Func(_, _)

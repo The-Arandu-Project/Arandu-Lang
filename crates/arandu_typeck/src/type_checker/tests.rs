@@ -214,6 +214,33 @@ fn type_info_pod_struct_is_copy_vec_like_is_not() {
 
     // Bare ptr remains copy (cheap handle)
     assert!(info.is_copy(ptr_ty));
+
+    // Borrow carriers preserve the permission contract structurally: shared
+    // refs may be copied, exclusive refs must move.
+    let shared_ref = info.type_interner.intern(ArType::Ref(int_ty));
+    let exclusive_ref = info.type_interner.intern(ArType::RefMut(int_ty));
+    assert!(info.is_copy(shared_ref));
+    assert!(!info.is_copy(exclusive_ref));
+
+    let view_sym = SymbolId::new(0, 13);
+    let mut view_fields = FxHashMap::default();
+    view_fields.insert("value".into(), shared_ref);
+    info.struct_fields.insert(view_sym, Arc::new(view_fields));
+    let view_ty = info.type_interner.intern(ArType::Named(view_sym, vec![]));
+    assert!(info.is_copy(view_ty), "shared-ref carrier should be copy");
+
+    let mut_view_sym = SymbolId::new(0, 14);
+    let mut mut_view_fields = FxHashMap::default();
+    mut_view_fields.insert("value".into(), exclusive_ref);
+    info.struct_fields
+        .insert(mut_view_sym, Arc::new(mut_view_fields));
+    let mut_view_ty = info
+        .type_interner
+        .intern(ArType::Named(mut_view_sym, vec![]));
+    assert!(
+        !info.is_copy(mut_view_ty),
+        "exclusive-ref carrier must remain move-only"
+    );
 }
 
 #[test]

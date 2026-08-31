@@ -305,7 +305,6 @@ impl ArType {
             | ArType::Ptr(_)
             | ArType::Nullable(_)
             | ArType::Ref(_)
-            | ArType::RefMut(_)
             | ArType::GenRef => true,
             ArType::Error | ArType::Void | ArType::Err => true,
             // Named / aggregates: structural decision needs `TypeInfo::is_copy`.
@@ -318,7 +317,8 @@ impl ArType {
             | ArType::Option(_)
             | ArType::Coroutine(_)
             | ArType::Poll(_)
-            | ArType::Range(_) => false,
+            | ArType::Range(_)
+            | ArType::RefMut(_) => false,
         }
     }
 }
@@ -535,9 +535,9 @@ mod tests {
         let i = new_interner();
         assert!(ArType::Ptr(i.intern(ArType::Primitive(Primitive::Int))).is_copy_v01());
         assert!(ArType::Nullable(i.intern(ArType::Primitive(Primitive::Int))).is_copy_v01());
-        // F2.0: safe refs are Copy (pointer-width handles).
+        // Shared refs are Copy; exclusive refs preserve uniqueness by moving.
         assert!(ArType::Ref(i.intern(ArType::Primitive(Primitive::Int))).is_copy_v01());
-        assert!(ArType::RefMut(i.intern(ArType::Primitive(Primitive::Int))).is_copy_v01());
+        assert!(!ArType::RefMut(i.intern(ArType::Primitive(Primitive::Int))).is_copy_v01());
     }
 
     #[test]

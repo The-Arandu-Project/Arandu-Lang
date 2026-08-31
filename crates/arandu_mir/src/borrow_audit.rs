@@ -255,75 +255,74 @@ fn observe_stmt(
                         block,
                         statement,
                         operation: BorrowAuditOperation::Aggregate,
-                        status: OriginStatus::Lost,
-                        origins,
+                        status: if temp_origins
+                            .get(lhs.as_usize())
+                            .is_some_and(|tracked| !tracked.is_empty())
+                        {
+                            OriginStatus::Preserved
+                        } else {
+                            OriginStatus::Lost
+                        },
+                        origins: temp_origins.get(lhs.as_usize()).cloned().unwrap_or(origins),
                         result: Some(*lhs),
                         callee: None,
-                        reason: "aggregate containing a reference has no structural holder propagation",
+                        reason: "aggregate holder paths preserve nested reference origins",
                     });
                 }
             }
             _ => {}
         },
-        AmirStmt::Store { lhs, rhs }
-            if func
-                .locals
-                .get(lhs.local.as_usize())
-                .is_some_and(|local| is_reference_type(interner, local.ty)) =>
-        {
-            observations.push(observation(
-                block,
-                statement,
-                BorrowAuditOperation::Store,
-                operand_origins(rhs, temp_origins),
-                None,
-                None,
-                "storing a reference must retain its origin in the destination local",
-            ));
+        AmirStmt::Store { lhs, rhs } => {
+            let origins = operand_origins(rhs, temp_origins);
+            if !origins.is_empty() {
+                observations.push(observation(
+                    block,
+                    statement,
+                    BorrowAuditOperation::Store,
+                    local_origins
+                        .get(lhs.local.as_usize())
+                        .cloned()
+                        .unwrap_or(origins),
+                    None,
+                    None,
+                    "storing a carrier retains nested reference origins in the destination place",
+                ));
+            }
         }
         AmirStmt::Call {
             lhs: Some(lhs),
             callee,
-            args,
+            args: _,
             return_borrow,
-        } if is_reference_temp(func, interner, *lhs) => {
+        } => {
             let callee_symbol = match callee {
                 AmirOperand::FunctionRef(symbol) => Some(*symbol),
                 _ => None,
             };
-            let mut origins = BTreeSet::new();
-            if let Some(summary) = return_borrow {
-                for source in summary
-                    .dependencies
-                    .iter()
-                    .flat_map(|dependency| &dependency.sources)
-                {
-                    if let Ok(index) = usize::try_from(source.parameter_index)
-                        && let Some(argument) = args.get(index)
-                    {
-                        origins.extend(operand_origins(argument, temp_origins));
-                    }
-                }
+            if return_borrow.is_some() || is_reference_temp(func, interner, *lhs) {
+                let tracked = temp_origins
+                    .get(lhs.as_usize())
+                    .cloned()
+                    .unwrap_or_default();
+                observations.push(BorrowAuditObservation {
+                    block,
+                    statement,
+                    operation: BorrowAuditOperation::CallResult,
+                    status: if !tracked.is_empty() {
+                        OriginStatus::Preserved
+                    } else {
+                        OriginStatus::Lost
+                    },
+                    origins: tracked,
+                    result: Some(*lhs),
+                    callee: callee_symbol,
+                    reason: if return_borrow.is_some() {
+                        "AMIR Call composes its exported structural return-dependency summary"
+                    } else {
+                        "borrow-bearing call result has no exported return-dependency summary"
+                    },
+                });
             }
-            let origins = origins.into_iter().collect::<Vec<_>>();
-            observations.push(BorrowAuditObservation {
-                block,
-                statement,
-                operation: BorrowAuditOperation::CallResult,
-                status: if return_borrow.is_some() && !origins.is_empty() {
-                    OriginStatus::Preserved
-                } else {
-                    OriginStatus::Lost
-                },
-                origins,
-                result: Some(*lhs),
-                callee: callee_symbol,
-                reason: if return_borrow.is_some() {
-                    "AMIR Call carries its exported return-dependency summary"
-                } else {
-                    "AMIR Call has no exported return-dependency summary"
-                },
-            });
         }
         _ => {}
     }
@@ -585,7 +584,7 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_holder_is_reported_as_an_origin_gap() {
+    fn aggregate_holder_preserves_its_nested_origin() {
         let (mut func, interner) = reference_func(false);
         *func
             .stmts
@@ -600,7 +599,7 @@ mod tests {
         let report = audit_borrow_origins(&func, &interner);
         assert!(report.observations.iter().any(|item| {
             item.operation == BorrowAuditOperation::Aggregate
-                && item.status == OriginStatus::Lost
+                && item.status == OriginStatus::Preserved
                 && item.origins == vec![LocalId::from_usize(0)]
         }));
     }

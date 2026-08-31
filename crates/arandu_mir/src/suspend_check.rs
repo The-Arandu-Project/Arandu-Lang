@@ -7,16 +7,16 @@
 
 use crate::DiagCode;
 use crate::SymbolTable;
-use crate::amir::{AmirFunc, AmirTerminator, TempId};
+use crate::amir::{AmirFunc, AmirTerminator};
+use crate::borrow_facts::analyze_borrow_facts;
 use crate::diagnostics::Diagnostic;
-use crate::liveness::analyze_temp_liveness;
-use crate::types::{ArType, TypeInterner};
+use crate::types::TypeInterner;
 
 /// Reject borrows whose temp is live into a resume block after `Suspend`.
 pub fn check_borrow_across_suspend(
     func: &AmirFunc,
     _symbols: &SymbolTable,
-    interner: &TypeInterner,
+    _interner: &TypeInterner,
 ) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
     let has_suspend = func
@@ -27,31 +27,34 @@ pub fn check_borrow_across_suspend(
         return diags;
     }
 
-    let temp_live = analyze_temp_liveness(func);
+    let facts = analyze_borrow_facts(func);
 
     for block in &func.blocks {
-        let AmirTerminator::Suspend { resume, .. } = &block.terminator else {
+        let AmirTerminator::Suspend { resume, args, .. } = &block.terminator else {
             continue;
         };
-        let live_into_resume = temp_live.live_in(*resume);
-        for t in 0..func.temps.len() {
-            let tid = TempId::from_usize(t);
-            if !live_into_resume.contains(tid) {
+        let live_into_resume = facts.temp_live.live_in(*resume);
+        for loan in &facts.loans {
+            if loan.relative {
                 continue;
             }
-            let Some(temp) = func.temps.get(t) else {
+            let Some(holder) = loan.holder_temps.iter().find(|temp| {
+                live_into_resume.contains(*temp)
+                    || args.iter().any(|argument| {
+                        matches!(
+                            argument,
+                            crate::amir::AmirOperand::Copy(found)
+                                | crate::amir::AmirOperand::Move(found)
+                                if found == temp
+                        )
+                    })
+            }) else {
                 continue;
             };
-            let ty = interner.resolve(temp.ty);
-            if !matches!(ty, ArType::Ref(_) | ArType::RefMut(_)) {
-                continue;
-            }
-            // RelativeBorrow temps still have Ref type but hold a LocalId index —
-            // safe across suspend. Detect by scanning defining assign.
-            if temp_is_relative_borrow(func, tid) {
-                continue;
-            }
-            let span = temp.span;
+            let span = func
+                .temps
+                .get(holder.as_usize())
+                .map_or_else(|| crate::Span::new(0, 0, 0), |temp| temp.span);
             diags.push(
                 Diagnostic::error(
                     DiagCode::O010EscapeOfBorrowedValue,
@@ -61,10 +64,10 @@ pub fn check_borrow_across_suspend(
                 )
                 .with_label(
                     span,
-                    "this absolute reference is still live when the coroutine suspends",
+                    "this value contains an absolute reference that is still live when the coroutine suspends",
                 )
                 .with_hint(
-                    "copy the value before `await`, or use a local-only borrow that \
+                    "copy the referent before `await`, or use a local-only borrow that \
                      A3.4 can rewrite to a pin-free LocalId relative ref",
                 ),
             );
@@ -74,19 +77,100 @@ pub fn check_borrow_across_suspend(
     diags
 }
 
-fn temp_is_relative_borrow(func: &AmirFunc, tid: TempId) -> bool {
-    use crate::amir::{AmirRvalue, AmirStmt};
-    for block in &func.blocks {
-        for stmt in func.block_stmts(block.id) {
-            if let AmirStmt::Assign {
-                lhs,
-                rhs: AmirRvalue::RelativeBorrow { .. },
-            } = stmt
-                && *lhs == tid
-            {
-                return true;
-            }
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::amir::{
+        AmirBasicBlock, AmirFunc, AmirLocal, AmirOperand, AmirPlace, AmirRvalue, AmirStmt,
+        AmirStmtTable, AmirTemp, BlockId, LocalId, TempId,
+    };
+    use crate::layout::DenseRange;
+    use crate::types::{ArType, Primitive};
+    use smallvec::smallvec;
+
+    #[test]
+    fn aggregate_with_absolute_borrow_is_rejected_across_suspend() {
+        let interner = TypeInterner::new();
+        let int = interner.intern(ArType::Primitive(Primitive::Int));
+        let ref_int = interner.intern(ArType::Ref(int));
+        let tuple = interner.intern(ArType::Tuple(vec![ref_int]));
+        let coroutine = interner.intern(ArType::Coroutine(int));
+        let mut stmts = AmirStmtTable::new();
+        stmts.push(AmirStmt::Assign {
+            lhs: TempId::from_usize(0),
+            rhs: AmirRvalue::Borrow(AmirPlace {
+                local: LocalId::from_usize(0),
+                projections: smallvec![],
+            }),
+        });
+        stmts.push(AmirStmt::Assign {
+            lhs: TempId::from_usize(1),
+            rhs: AmirRvalue::Tuple {
+                items: vec![AmirOperand::Copy(TempId::from_usize(0))],
+            },
+        });
+        let blocks = vec![
+            AmirBasicBlock {
+                id: BlockId::from_usize(0),
+                statements: DenseRange::new(0, 2),
+                params: vec![],
+                terminator: AmirTerminator::Suspend {
+                    future: AmirOperand::Copy(TempId::from_usize(2)),
+                    resume: BlockId::from_usize(1),
+                    args: vec![AmirOperand::Copy(TempId::from_usize(1))],
+                },
+            },
+            AmirBasicBlock {
+                id: BlockId::from_usize(1),
+                statements: DenseRange::new(2, 0),
+                params: vec![],
+                terminator: AmirTerminator::Return,
+            },
+        ];
+        let cfg = crate::cfg::compute_cfg_edges(&blocks);
+        let func = AmirFunc {
+            symbol: crate::SymbolId::new(0, 0),
+            return_type: int,
+            receiver: None,
+            params: vec![],
+            locals: vec![AmirLocal {
+                id: LocalId::from_usize(0),
+                ty: int,
+                is_memory: true,
+                symbol: None,
+                span: crate::Span::new(0, 0, 1),
+                use_span: None,
+            }],
+            temps: vec![
+                AmirTemp {
+                    id: TempId::from_usize(0),
+                    ty: ref_int,
+                    is_copy: true,
+                    is_nullable: false,
+                    span: crate::Span::new(0, 1, 2),
+                },
+                AmirTemp {
+                    id: TempId::from_usize(1),
+                    ty: tuple,
+                    is_copy: true,
+                    is_nullable: false,
+                    span: crate::Span::new(0, 2, 3),
+                },
+                AmirTemp {
+                    id: TempId::from_usize(2),
+                    ty: coroutine,
+                    is_copy: false,
+                    is_nullable: false,
+                    span: crate::Span::new(0, 3, 4),
+                },
+            ],
+            blocks,
+            stmts,
+            cfg,
+        };
+
+        let diagnostics = check_borrow_across_suspend(&func, &SymbolTable::new(0), &interner);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, DiagCode::O010EscapeOfBorrowedValue);
     }
-    false
 }

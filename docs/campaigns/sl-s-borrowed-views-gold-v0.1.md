@@ -180,22 +180,40 @@ recursão, import, especialização genérica, `Option<ref T>` e cutoff incremen
 
 - [x] Generalizar `CallBorrowDependency` para múltiplos caminhos e origens
       (entregue como pré-requisito estrutural da BV.1).
-- [ ] Propagar holders por `Use`, `Load`, `Store`, aggregate construction,
+- [x] Propagar holders por `Use`, `Load`, `Store`, aggregate construction,
       field/tuple projection, enum payload, match/destructuring e reborrow.
-- [ ] Unir dependências em block arguments, branches e loops até fixpoint.
-- [ ] Atualizar todos os visitors compartilhados: liveness, borrow facts, move
+- [x] Unir dependências em block arguments, branches e loops até fixpoint.
+- [x] Atualizar todos os visitors compartilhados: liveness, borrow facts, move
       checker, escape analysis, DCE, CFG transforms, pretty printer e auditor.
-- [ ] Tornar aggregates com borrow não escapáveis; proibir global/static,
+- [x] Tornar aggregates com borrow não escapáveis; proibir global/static,
       armazenamento em heap não provado e captura por closure escapável.
-- [ ] Permitir closure não escapável somente quando o próprio contrato de
+- [x] Permitir closure não escapável somente quando o próprio contrato de
       closure puder provar a janela; até lá, rejeitar em vez de promover.
-- [ ] Manter a regra de suspensão: borrow absoluto cru não atravessa `await`;
+- [x] Manter a regra de suspensão: borrow absoluto cru não atravessa `await`;
       somente a representação relativa já provada por A3 pode atravessar.
-- [ ] Provar que qualquer chamada `mut ref` conflita com views vivas do owner,
+- [x] Provar que qualquer chamada `mut ref` conflita com views vivas do owner,
       incluindo mutações que podem realocar storage.
 
 **Saída BV.2:** o borrow não desaparece quando é copiado, armazenado, colocado
 em carrier ou unido por CFG, e nenhuma forma ainda não modelada chega ao backend.
+
+**BV.2 concluída:** `borrow_facts` mantém caminhos ordenados por loan para temps
+e places, compõe `ReturnBorrowSummary` em calls e executa um dataflow forward
+para carriers locais. Stores projetados removem somente o subcaminho escrito;
+joins unem fatos por caminho e loops convergem sobre domínio finito. Liveness,
+borrow checker, escape analysis e `borrow_audit` consomem a mesma relação. A
+checagem de `Suspend` inspeciona carriers, não apenas temps cujo tipo de topo é
+`ref`. `ref T` permanece copiável; `mut ref T` e qualquer carrier estrutural que
+o contenha são move-only. Como closures ainda não são uma construção pública da
+linguagem, nenhuma captura recebe exceção implícita: a política atual é
+fail-closed até existir um contrato não escapável próprio.
+
+Regressões executáveis cobrem tuple/field projection, store/load projetado,
+enum payload, resumo estrutural de call, overwrite, block arguments, loops,
+auditoria determinística, exclusividade e borrow absoluto escondido em aggregate
+atravessando `await`. A suíte completa também exercita os dois backends, CLI,
+queries Salsa e LSP; proveniência continua exclusivamente compile-time e não
+altera layout ou ABI.
 
 #### Plano de execução da BV.2
 
