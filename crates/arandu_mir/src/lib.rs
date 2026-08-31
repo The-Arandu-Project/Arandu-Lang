@@ -5,6 +5,7 @@ pub mod definite_init;
 pub mod drop_elaborate;
 pub mod escape_analysis;
 pub mod gen_promote;
+pub(crate) mod gvn;
 pub mod liveness;
 pub mod lower_amir;
 pub mod move_checker;
@@ -13,6 +14,7 @@ pub mod pass_manager;
 pub mod pin_free;
 pub(crate) mod sccp;
 pub(crate) mod simplify_cfg;
+pub(crate) mod sroa;
 pub mod suspend_check;
 
 pub use borrow_check::check_borrows;
