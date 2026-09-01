@@ -3,7 +3,7 @@ module std.core.str
 import std.core.option as option
 
 extern "C" {
-    func ar_str_len(s: str): u64
+    func ar_str_len(s: str): uint
     func ar_str_starts_with(s: str, prefix: str): int
     func ar_str_ends_with(s: str, suffix: str): int
     func ar_str_contains(s: str, needle: str): int
@@ -34,7 +34,7 @@ public func isEmpty(s: str): bool {
 ///
 /// # Complexity
 /// Time: O(1) | Space: O(1)
-public func lenBytes(s: str): u64 {
+public func lenBytes(s: str): uint {
     unsafe {
         return ar_str_len(s)
     }
@@ -98,12 +98,12 @@ public func contains(s: str, needle: str): bool {
 ///
 /// # Complexity
 /// Time: O(N * M) | Space: O(1)
-public func find(s: str, needle: str): Option<u64> {
+public func find(s: str, needle: str): Option<uint> {
     unsafe {
         let idx = ar_str_find(s, needle)
         if idx < 0 {
             return Option.None
         }
-        return Option.Some(idx as u64)
+        return Option.Some(idx as uint)
     }
 }

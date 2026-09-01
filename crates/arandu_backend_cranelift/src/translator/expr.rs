@@ -1024,7 +1024,7 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 let base = self.translate_operand(op, Some(self.ptr_type));
                 let len_off = self.ptr_type.bytes() as i32;
                 let len_val = self.builder.ins().load(
-                    i64_ty,
+                    self.ptr_type,
                     cranelift_codegen::ir::MemFlagsData::new(),
                     base,
                     len_off,

@@ -5,7 +5,7 @@ import std.alloc.vec as vec
 
 func main(): int {
     // withCapacity pre-allocates (may round up geometrically).
-    let mut v = vec.withCapacity<int>(4 as u64)
+    let mut v = vec.withCapacity<int>(4)
     let c0 = vec.capacity(v)
     if c0 < 4 {
         vec.destroy(v)
@@ -29,7 +29,7 @@ func main(): int {
     vec.push(v, 1)
     vec.push(v, 2)
     // reserve(6) from len=2 → need capacity ≥ 8
-    vec.reserve(v, 6 as u64)
+    vec.reserve(v, 6)
     if vec.capacity(v) < 8 {
         vec.destroy(v)
         return 13
@@ -45,7 +45,7 @@ func main(): int {
     vec.push(v, 9)
     vec.push(v, 10)
     let n = vec.len(v) as int
-    let last = vec.get(v, 9 as u64)
+    let last = vec.get(v, 9)
     match last {
         Some(x) => {
             vec.clear(v)

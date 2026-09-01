@@ -7,7 +7,7 @@ extern "arandu-intrinsic" {
     /// ```arandu
     /// mem.sizeOf<int>() // 8 on x64, 4 on x32
     /// ```
-    func sizeOf<T>() : u64
+    func sizeOf<T>() : uint
 
     /// Returns the required ABI alignment in bytes for type `T`.
     ///
@@ -15,7 +15,7 @@ extern "arandu-intrinsic" {
     /// ```arandu
     /// mem.alignOf<int>() // 8 on x64, 4 on x32
     /// ```
-    func alignOf<T>() : u64
+    func alignOf<T>() : uint
 
     /// Computes a pointer offset by `offset` elements of type `T` from `base`.
     ///

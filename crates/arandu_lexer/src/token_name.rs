@@ -60,6 +60,7 @@ pub fn name(kind: &TokenKind) -> &'static str {
         TokenKind::KwDefer => "KW_DEFER",
         TokenKind::KwErrdefer => "KW_ERRDEFER",
         TokenKind::KwLet => "KW_LET",
+        TokenKind::KwImpl => "KW_IMPL",
         TokenKind::TypeInt => "TYPE_INT",
         TokenKind::TypeUint => "TYPE_UINT",
         TokenKind::TypeFloat => "TYPE_FLOAT",

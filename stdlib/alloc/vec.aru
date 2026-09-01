@@ -13,48 +13,48 @@ import std.core.mem as mem
 import std.core.intrinsics as intrinsics
 
 extern "C" {
-    func ar_vec_malloc(size: u64): ptr[u8]
-    func ar_vec_buf_free(p: ptr[u8], size: u64): void
-    func ar_vec_realloc(p: ptr[u8], oldSize: u64, newSize: u64): ptr[u8]
+    func ar_vec_malloc(size: uint): ptr[u8]
+    func ar_vec_buf_free(p: ptr[u8], size: uint): void
+    func ar_vec_realloc(p: ptr[u8], oldSize: uint, newSize: uint): ptr[u8]
 }
 
 /// Growable contiguous buffer of `T`.
 public struct Vec<T> {
     data: ptr[T]
-    len: u64
-    capacity: u64
+    len: uint
+    capacity: uint
 }
 
 /// Empty vector (no allocation until first `push` or `reserve` / `withCapacity`).
 public func new<T>(): Vec<T> {
     return Vec<T> {
         data: nil,
-        len: 0 as u64,
-        capacity: 0 as u64,
+        len: 0,
+        capacity: 0,
     }
 }
 
 /// Empty vector with room for at least `cap` elements.
-public func withCapacity<T>(cap: u64): Vec<T> {
+public func withCapacity<T>(cap: uint): Vec<T> {
     let mut v = new<T>()
     ensureCapacity<T>(v, cap)
     return v
 }
 
 /// Ensure absolute capacity ≥ `minCap`.
-func ensureCapacity<T>(v: mut ref Vec<T>, minCap: u64): void {
+func ensureCapacity<T>(v: mut ref Vec<T>, minCap: uint): void {
     if v.capacity >= minCap {
         return
     }
-    let maxCap: u64 = 2147483647 as u64
+    let maxCap: uint = 2147483647
     if minCap > maxCap {
         unsafe {
             intrinsics.abort()
         }
     }
-    let mut newCap: u64 = v.capacity
+    let mut newCap: uint = v.capacity
     if newCap == 0 {
-        newCap = 8 as u64
+        newCap = 8
     }
     while newCap < minCap {
         if newCap > maxCap / 2 {
@@ -64,7 +64,7 @@ func ensureCapacity<T>(v: mut ref Vec<T>, minCap: u64): void {
         }
     }
     let elem = mem.sizeOf<T>()
-    if elem > 0 && newCap > ((18446744073709551615 as u64) / elem) {
+    if elem > 0 && newCap > ((18446744073709551615 as uint) / elem) {
         unsafe {
             intrinsics.abort()
         }
@@ -83,8 +83,8 @@ func ensureCapacity<T>(v: mut ref Vec<T>, minCap: u64): void {
 }
 
 /// Reserve room for at least `additional` more elements beyond `len`.
-public func reserve<T>(v: mut ref Vec<T>, additional: u64): void {
-    let maxCap: u64 = 2147483647 as u64
+public func reserve<T>(v: mut ref Vec<T>, additional: uint): void {
+    let maxCap: uint = 2147483647
     if additional > maxCap - v.len {
         unsafe {
             intrinsics.abort()
@@ -96,7 +96,7 @@ public func reserve<T>(v: mut ref Vec<T>, additional: u64): void {
 
 /// Append `value` (amortized O(1)).
 public func push<T>(v: mut ref Vec<T>, value: T): void {
-    let maxCap: u64 = 2147483647 as u64
+    let maxCap: uint = 2147483647
     if v.len >= maxCap {
         unsafe {
             intrinsics.abort()
@@ -126,8 +126,8 @@ public func pop<T>(v: mut ref Vec<T>): Option<T> {
 }
 
 /// Element at `index`, or `None` if out of range.
-public func get<T>(v: ref Vec<T>, index: u64): Option<T> {
-    let maxCap: u64 = 2147483647 as u64
+public func get<T>(v: ref Vec<T>, index: uint): Option<T> {
+    let maxCap: uint = 2147483647
     if index >= v.len || index > maxCap {
         return Option.None
     }
@@ -138,8 +138,8 @@ public func get<T>(v: ref Vec<T>, index: u64): Option<T> {
 }
 
 /// Overwrite index; `false` if out of range.
-public func put<T>(v: mut ref Vec<T>, index: u64, value: T): bool {
-    let maxCap: u64 = 2147483647 as u64
+public func put<T>(v: mut ref Vec<T>, index: uint, value: T): bool {
+    let maxCap: uint = 2147483647
     if index >= v.len || index > maxCap {
         return false
     }
@@ -151,12 +151,12 @@ public func put<T>(v: mut ref Vec<T>, index: u64, value: T): bool {
 }
 
 /// Number of elements.
-public func len<T>(v: ref Vec<T>): u64 {
+public func len<T>(v: ref Vec<T>): uint {
     return v.len
 }
 
 /// Allocated capacity (element slots).
-public func capacity<T>(v: ref Vec<T>): u64 {
+public func capacity<T>(v: ref Vec<T>): uint {
     return v.capacity
 }
 
@@ -174,7 +174,7 @@ public func asSlice<T>(v: ref Vec<T>): []T {
 
 /// Drop length to zero (capacity retained).
 public func clear<T>(v: mut ref Vec<T>): void {
-    v.len = 0 as u64
+    v.len = 0
 }
 
 /// Deallocate the buffer and reset to empty.
@@ -185,8 +185,8 @@ public func destroy<T>(v: mut ref Vec<T>): void {
             ar_vec_buf_free(v.data as ptr[u8], size)
         }
         v.data = nil
-        v.capacity = 0 as u64
-        v.len = 0 as u64
+        v.capacity = 0
+        v.len = 0
     }
 }
 
@@ -203,22 +203,22 @@ public func Vec.pop<T>(self: mut ref Vec<T>): Option<T> {
 }
 
 /// Method form of [`get`].
-public func Vec.get<T>(self: ref Vec<T>, index: u64): Option<T> {
+public func Vec.get<T>(self: ref Vec<T>, index: uint): Option<T> {
     return get(self, index)
 }
 
 /// Method form of [`put`].
-public func Vec.put<T>(self: mut ref Vec<T>, index: u64, value: T): bool {
+public func Vec.put<T>(self: mut ref Vec<T>, index: uint, value: T): bool {
     return put(self, index, value)
 }
 
 /// Method form of [`len`].
-public func Vec.len<T>(self: ref Vec<T>): u64 {
+public func Vec.len<T>(self: ref Vec<T>): uint {
     return len(self)
 }
 
 /// Method form of [`capacity`].
-public func Vec.capacity<T>(self: ref Vec<T>): u64 {
+public func Vec.capacity<T>(self: ref Vec<T>): uint {
     return capacity(self)
 }
 
@@ -232,7 +232,7 @@ public func Vec.asSlice<T>(self: ref Vec<T>): []T {
 }
 
 /// Method form of [`reserve`].
-public func Vec.reserve<T>(self: mut ref Vec<T>, additional: u64): void {
+public func Vec.reserve<T>(self: mut ref Vec<T>, additional: uint): void {
     reserve(self, additional)
 }
 

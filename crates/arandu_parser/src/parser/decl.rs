@@ -221,6 +221,7 @@ impl<'a> Parser<'a> {
                     self.parse_interface_decl(attrs, visibility)?,
                 )),
                 TokenKind::KwExtern => Ok(TopLevelDecl::Extern(self.parse_extern_decl(attrs)?)),
+                TokenKind::KwImpl => self.parse_impl_decl(attrs, visibility),
                 _ => Err(ParseError::new(
                     ParseErrorCode::ExpectedTopLevelDecl,
                     "expected top-level declaration",
@@ -281,6 +282,7 @@ impl<'a> Parser<'a> {
                 TokenKind::KwEnum => return SyntaxKind::ENUM_ITEM,
                 TokenKind::KwInterface => return SyntaxKind::INTERFACE_ITEM,
                 TokenKind::KwExtern => return SyntaxKind::EXTERN_ITEM,
+                TokenKind::KwImpl => return SyntaxKind::IMPL_ITEM,
                 _ => return SyntaxKind::ITEM,
             }
         }
@@ -587,6 +589,106 @@ impl<'a> Parser<'a> {
             abi,
             members,
         })
+    }
+
+    pub(super) fn parse_impl_decl(
+        &mut self,
+        _attrs: Vec<Attribute>,
+        _visibility: Visibility,
+    ) -> Result<TopLevelDecl, ParseError> {
+        let start = self.mark();
+        self.expect_name("KW_IMPL")?;
+        let impl_generic_params = self.parse_generic_params()?;
+        let target_type_name = self.parse_type_name()?;
+        let type_generic_args = if self.eat_name("LT") {
+            let args = self.parse_comma_separated_list("GT", 1, super::Parser::parse_type)?;
+            self.expect_name("GT")?;
+            args
+        } else {
+            Vec::new()
+        };
+        let _ = type_generic_args;
+        let where_clause = self.parse_where_clause("LBRACE")?;
+
+        self.start_node(crate::syntax::SyntaxKind::BLOCK);
+        self.expect_name("LBRACE")?;
+
+        let mut methods = Vec::new();
+        while !self.at_kind_name("RBRACE") {
+            self.skip_semicolons();
+            if self.at_kind_name("RBRACE") {
+                break;
+            }
+            if self.at_kind_name("EOF") {
+                self.diagnostics.push(ParseError::new(
+                    ParseErrorCode::ExpectedToken,
+                    "expected '}'",
+                    self.current(),
+                    self.file_id,
+                    self.source,
+                ));
+                break;
+            }
+
+            self.start_node(crate::syntax::SyntaxKind::FUNC_ITEM);
+            let method_start = self.mark();
+            let m_attrs = self.parse_attributes()?;
+            let m_visibility = self.parse_visibility();
+            let is_async = self.eat_name("KW_ASYNC");
+            self.expect_name("KW_FUNC")?;
+            let func_name_start = self.mark();
+            let method_name = self.expect_ident_value()?;
+            let method_func_name = FuncName::Method {
+                span: self.span_from_mark(func_name_start),
+                receiver: target_type_name.clone(),
+                name: method_name,
+            };
+
+            let method_generics = self.parse_generic_params()?;
+            let mut all_generics = impl_generic_params.clone();
+            all_generics.extend(method_generics);
+
+            self.expect_name("LPAREN")?;
+            let params = self.parse_params(Some(&target_type_name))?;
+            self.expect_name("RPAREN")?;
+
+            let result = if self.eat_name("COLON") {
+                Some(self.parse_result_type()?)
+            } else {
+                None
+            };
+
+            let m_where = self.parse_where_clause("LBRACE")?;
+            let mut all_where = where_clause.clone();
+            all_where.extend(m_where);
+
+            let body = self.parse_block()?;
+            self.finish_node(); // FUNC_ITEM
+
+            let func_decl = FuncDecl {
+                span: self.span_from_mark(method_start),
+                attrs: m_attrs.into(),
+                visibility: m_visibility,
+                is_async,
+                name: method_func_name,
+                generic_params: all_generics,
+                params,
+                result,
+                where_clause: all_where,
+                body,
+            };
+            methods.push(func_decl);
+            self.skip_semicolons();
+        }
+
+        self.expect_name("RBRACE")?;
+        self.finish_node(); // BLOCK
+
+        if let Some(first) = methods.into_iter().next() {
+            Ok(TopLevelDecl::Func(first))
+        } else {
+            Ok(TopLevelDecl::Error(self.span_from_mark(start)))
+        }
     }
 
     pub(super) fn parse_abi_literal(&mut self) -> Result<SmolStr, ParseError> {

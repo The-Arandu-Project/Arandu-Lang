@@ -120,6 +120,7 @@ pub enum TokenKind {
     KwDefer,
     KwErrdefer,
     KwLet,
+    KwImpl,
     TypeInt,
     TypeUint,
     TypeFloat,
@@ -207,7 +208,7 @@ impl fmt::Display for TokenKind {
 }
 
 impl TokenKind {
-    pub const COUNT: usize = 132;
+    pub const COUNT: usize = 133;
 
     #[must_use]
     pub const fn index(&self) -> usize {
@@ -269,6 +270,7 @@ impl TokenKind {
             TokenKind::KwErrdefer => 54,
             TokenKind::KwLet => 129,
             TokenKind::KwRef => 130,
+            TokenKind::KwImpl => 131,
             TokenKind::TypeInt => 55,
             TokenKind::TypeUint => 56,
             TokenKind::TypeFloat => 57,
@@ -343,7 +345,7 @@ impl TokenKind {
             TokenKind::Ellipsis => 126,
             TokenKind::Arrow => 127,
             TokenKind::Eof => 128,
-            TokenKind::Error(_) => 131,
+            TokenKind::Error(_) => 132,
         }
     }
 
@@ -481,6 +483,7 @@ impl TokenKind {
             128 => TokenKind::Eof,
             129 => TokenKind::KwLet,
             130 => TokenKind::KwRef,
+            131 => TokenKind::KwImpl,
             _ => TokenKind::Error(crate::LexErrorCode::InvalidChar),
         }
     }

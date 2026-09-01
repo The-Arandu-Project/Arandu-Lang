@@ -167,6 +167,7 @@ pub fn lower_from_green_recovering(tree: &SyntaxTree, file_id: u32) -> ParseOutp
             | SyntaxKind::CONST_ITEM
             | SyntaxKind::TYPE_ALIAS_ITEM
             | SyntaxKind::EXTERN_ITEM
+            | SyntaxKind::IMPL_ITEM
             | SyntaxKind::ITEM => {
                 if let Some(decl) = hand::try_hand_lower_top_level(
                     &mut parser.pool,

@@ -71,8 +71,42 @@ pub(super) fn synth_literal_expr(
     expected: Option<TypeId>,
 ) -> Option<TypeId> {
     match kind {
-        ExprKind::Int { .. } => Some(checker.intern(ArType::IntLiteral)),
-        ExprKind::Float { .. } => Some(checker.intern(ArType::FloatLiteral)),
+        ExprKind::Int { value, .. } => {
+            if let Some(exp_id) = expected
+                && let ArType::Primitive(p) = checker.resolve(exp_id)
+                && p.is_integer()
+                && let Some(parsed) = arandu_middle::literal_pool::parse_int_literal(value)
+            {
+                let fits = match p {
+                    Primitive::I8 => (i8::MIN as i128..=i8::MAX as i128).contains(&parsed),
+                    Primitive::I16 => (i16::MIN as i128..=i16::MAX as i128).contains(&parsed),
+                    Primitive::I32 => (i32::MIN as i128..=i32::MAX as i128).contains(&parsed),
+                    Primitive::I64 | Primitive::Int => {
+                        (i64::MIN as i128..=i64::MAX as i128).contains(&parsed)
+                    }
+                    Primitive::U8 | Primitive::Byte => (0..=u8::MAX as i128).contains(&parsed),
+                    Primitive::U16 => (0..=u16::MAX as i128).contains(&parsed),
+                    Primitive::U32 => (0..=u32::MAX as i128).contains(&parsed),
+                    Primitive::U64 | Primitive::Uint => {
+                        parsed >= 0 && (parsed as u128 <= u64::MAX as u128)
+                    }
+                    _ => true,
+                };
+                if fits {
+                    return Some(exp_id);
+                }
+            }
+            Some(checker.intern(ArType::IntLiteral))
+        }
+        ExprKind::Float { .. } => {
+            if let Some(exp_id) = expected
+                && let ArType::Primitive(p) = checker.resolve(exp_id)
+                && p.is_float()
+            {
+                return Some(exp_id);
+            }
+            Some(checker.intern(ArType::FloatLiteral))
+        }
         ExprKind::Bool { .. } => Some(checker.intern(ArType::Primitive(Primitive::Bool))),
         ExprKind::Char { .. } => Some(checker.intern(ArType::Primitive(Primitive::Char))),
         ExprKind::InterpolatedString { parts } => {
@@ -203,15 +237,21 @@ pub(super) fn synth_literal_expr(
                         // `nil` in a field needs the field's expected type (`ptr[T]`, `T?`),
                         // not the enclosing function return (which produced bogus `int?` /
                         // `Vec?` for `data: nil` in Vec / BoxG).
+                        let expected_id_opt = defined_field_ty_opt
+                            .as_ref()
+                            .map(|ty| checker.intern(ty.clone()));
                         let field_val_ty_id =
                             if matches!(checker.pool.expr(field.value), ExprKind::Nil)
-                                && let Some(ref expected) = defined_field_ty_opt
+                                && let Some(expected_id) = expected_id_opt
                             {
-                                let expected_id = checker.intern(expected.clone());
                                 checker.type_info.record_expr_type(field.value, expected_id);
                                 expected_id
                             } else {
-                                synth_expr(checker, field.value)
+                                super::super::synth_expr_expected(
+                                    checker,
+                                    field.value,
+                                    expected_id_opt,
+                                )
                             };
                         if let Some(defined_field_ty) = defined_field_ty_opt {
                             let field_val_ty = checker.resolve(field_val_ty_id);

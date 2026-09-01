@@ -3,18 +3,18 @@ module std.core.slice
 import std.core.intrinsics as intrinsics
 
 /// Number of elements in the built-in borrowed view `[]T`.
-public func len<T>(s: []T): u64 {
+public func len<T>(s: []T): uint {
     unsafe {
         return intrinsics.sliceLen<T>(s)
     }
 }
 
 public func isEmpty<T>(s: []T): bool {
-    return len<T>(s) == 0 as u64
+    return len<T>(s) == 0
 }
 
 /// Element borrow at `index`, or `None` when out of bounds.
-public func get<T>(s: []T, index: u64): Option<ref T> {
+public func get<T>(s: []T, index: uint): Option<ref T> {
     if index >= len<T>(s) {
         return Option.None
     }
@@ -22,19 +22,19 @@ public func get<T>(s: []T, index: u64): Option<ref T> {
 }
 
 public func first<T>(s: []T): Option<ref T> {
-    return get<T>(s, 0 as u64)
+    return get<T>(s, 0)
 }
 
 public func last<T>(s: []T): Option<ref T> {
     let count = len<T>(s)
-    if count == 0 as u64 {
+    if count == 0 {
         return Option.None
     }
-    return get<T>(s, count - 1 as u64)
+    return get<T>(s, count - 1)
 }
 
 /// Checked half-open subview.
-public func subslice<T>(s: []T, start: u64, count: u64): Option<[]T> {
+public func subslice<T>(s: []T, start: uint, count: uint): Option<[]T> {
     let total = len<T>(s)
     if start > total || count > total - start {
         return Option.None
@@ -47,17 +47,18 @@ public func subslice<T>(s: []T, start: u64, count: u64): Option<[]T> {
 /// Minimal allocation-free iterator over shared element borrows.
 public struct Iterator<T> {
     view: []T
-    index: u64
+    index: uint
 }
 
 public func iter<T>(s: []T): Iterator<T> {
-    return Iterator<T> { view: s, index: 0 as u64 }
+    return Iterator<T> { view: s, index: 0 }
 }
 
 public func Iterator.next<T>(self: mut ref Iterator<T>): Option<ref T> {
     let item = get<T>(self.view, self.index)
     if self.index < len<T>(self.view) {
-        self.index = self.index + 1 as u64
+        self.index = self.index + 1
     }
     return item
 }
+

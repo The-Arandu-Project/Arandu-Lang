@@ -471,3 +471,32 @@ fn test_new_project_template_parses_cleanly() {
         )
     });
 }
+
+#[test]
+fn test_impl_block_parsing() {
+    let source = r#"
+    module test;
+
+    struct Point {
+        x: float;
+        y: float;
+    }
+
+    impl Point {
+        public func new(x: float, y: float): Point {
+            return Point { x, y };
+        }
+
+        public func get_x(self: ref): float {
+            return self.x
+        }
+
+        public func set_x(self: mut ref, x: float) {
+            self.x = x
+        }
+    }
+    "#;
+
+    let program = arandu_parser::parse(source).expect("impl block should parse successfully");
+    assert!(!program.decls.is_empty());
+}

@@ -8,14 +8,14 @@ import std.core.mem as mem
 import std.core.intrinsics as intrinsics
 import std.core.char as chars
 
-func maxBufferCapacity(): u64 {
-    return 2147483647 as u64
+func maxBufferCapacity(): uint {
+    return 2147483647
 }
 
 extern "C" {
-    func ar_vec_malloc(size: u64): ptr[u8]
-    func ar_vec_buf_free(p: ptr[u8], size: u64): void
-    func ar_vec_realloc(p: ptr[u8], oldSize: u64, newSize: u64): ptr[u8]
+    func ar_vec_malloc(size: uint): ptr[u8]
+    func ar_vec_buf_free(p: ptr[u8], size: uint): void
+    func ar_vec_realloc(p: ptr[u8], oldSize: uint, newSize: uint): ptr[u8]
     func ar_string_push_str(s: mut ref String, value: str): bool
 }
 
@@ -43,28 +43,28 @@ public func pushStr(s: mut ref String, value: str): bool {
 /// Owned UTF-8 string.
 public struct String {
     data: ptr[u8]
-    len: u64
-    capacity: u64
+    len: uint
+    capacity: uint
 }
 
 /// Create a new empty String.
 public func new(): String {
     return String {
         data: nil,
-        len: 0 as u64,
-        capacity: 0 as u64,
+        len: 0,
+        capacity: 0,
     }
 }
 
 /// Create a new String with preallocated capacity in bytes.
-public func withCapacity(cap: u64): String {
+public func withCapacity(cap: uint): String {
     let mut s = new()
     ensureCapacity(s, cap)
     return s
 }
 
 /// Ensure capacity in bytes ≥ `minCap`.
-func ensureCapacity(s: mut ref String, minCap: u64): void {
+func ensureCapacity(s: mut ref String, minCap: uint): void {
     let maxCap = maxBufferCapacity()
     if minCap > maxCap {
         unsafe {
@@ -74,15 +74,15 @@ func ensureCapacity(s: mut ref String, minCap: u64): void {
     if s.capacity >= minCap {
         return
     }
-    let mut newCap: u64 = s.capacity
+    let mut newCap: uint = s.capacity
     if newCap == 0 {
-        newCap = 8 as u64
+        newCap = 8
     }
     while newCap < minCap {
-        if newCap > maxCap / 2 as u64 {
+        if newCap > maxCap / 2 {
             newCap = maxCap
         } else {
-            newCap = newCap * 2 as u64
+            newCap = newCap * 2
         }
     }
     unsafe {
@@ -97,22 +97,22 @@ func ensureCapacity(s: mut ref String, minCap: u64): void {
 }
 
 /// Byte length.
-public func len(s: ref String): u64 {
+public func len(s: ref String): uint {
     return s.len
 }
 
 /// Allocated byte capacity.
-public func capacity(s: ref String): u64 {
+public func capacity(s: ref String): uint {
     return s.capacity
 }
 
 /// True if length is 0.
 public func isEmpty(s: ref String): bool {
-    return s.len == 0 as u64
+    return s.len == 0
 }
 
 /// Reserve additional bytes.
-public func reserve(s: mut ref String, additional: u64): void {
+public func reserve(s: mut ref String, additional: uint): void {
     if additional > maxBufferCapacity() - s.len {
         unsafe {
             intrinsics.abort()
@@ -124,7 +124,7 @@ public func reserve(s: mut ref String, additional: u64): void {
 
 /// Append an ASCII or Unicode scalar character.
 public func pushScalar(s: mut ref String, c: char): void {
-    let clen = chars.lenUtf8(c) as u64
+    let clen = chars.lenUtf8(c) as uint
     if clen > maxBufferCapacity() - s.len {
         unsafe {
             intrinsics.abort()
@@ -136,23 +136,23 @@ public func pushScalar(s: mut ref String, c: char): void {
     }
     let val = c as u32
     unsafe {
-        if clen == 1 as u64 {
+        if clen == 1 {
             let p = mem.ptrOffset<u8>(s.data, s.len as i32)
             mem.ptrWrite<u8>(p, val as u8)
-        } else if clen == 2 as u64 {
+        } else if clen == 2 {
             let b0 = (192 as u32 | (val >> 6)) as u8
             let b1 = (128 as u32 | (val & 63 as u32)) as u8
             let p0 = mem.ptrOffset<u8>(s.data, s.len as i32)
-            let p1 = mem.ptrOffset<u8>(s.data, (s.len + 1 as u64) as i32)
+            let p1 = mem.ptrOffset<u8>(s.data, (s.len + 1) as i32)
             mem.ptrWrite<u8>(p0, b0)
             mem.ptrWrite<u8>(p1, b1)
-        } else if clen == 3 as u64 {
+        } else if clen == 3 {
             let b0 = (224 as u32 | (val >> 12)) as u8
             let b1 = (128 as u32 | ((val >> 6) & 63 as u32)) as u8
             let b2 = (128 as u32 | (val & 63 as u32)) as u8
             let p0 = mem.ptrOffset<u8>(s.data, s.len as i32)
-            let p1 = mem.ptrOffset<u8>(s.data, (s.len + 1 as u64) as i32)
-            let p2 = mem.ptrOffset<u8>(s.data, (s.len + 2 as u64) as i32)
+            let p1 = mem.ptrOffset<u8>(s.data, (s.len + 1) as i32)
+            let p2 = mem.ptrOffset<u8>(s.data, (s.len + 2) as i32)
             mem.ptrWrite<u8>(p0, b0)
             mem.ptrWrite<u8>(p1, b1)
             mem.ptrWrite<u8>(p2, b2)
@@ -162,9 +162,9 @@ public func pushScalar(s: mut ref String, c: char): void {
             let b2 = (128 as u32 | ((val >> 6) & 63 as u32)) as u8
             let b3 = (128 as u32 | (val & 63 as u32)) as u8
             let p0 = mem.ptrOffset<u8>(s.data, s.len as i32)
-            let p1 = mem.ptrOffset<u8>(s.data, (s.len + 1 as u64) as i32)
-            let p2 = mem.ptrOffset<u8>(s.data, (s.len + 2 as u64) as i32)
-            let p3 = mem.ptrOffset<u8>(s.data, (s.len + 3 as u64) as i32)
+            let p1 = mem.ptrOffset<u8>(s.data, (s.len + 1) as i32)
+            let p2 = mem.ptrOffset<u8>(s.data, (s.len + 2) as i32)
+            let p3 = mem.ptrOffset<u8>(s.data, (s.len + 3) as i32)
             mem.ptrWrite<u8>(p0, b0)
             mem.ptrWrite<u8>(p1, b1)
             mem.ptrWrite<u8>(p2, b2)
@@ -176,28 +176,28 @@ public func pushScalar(s: mut ref String, c: char): void {
 
 /// Reset length to 0 (capacity retained).
 public func clear(s: mut ref String): void {
-    s.len = 0 as u64
+    s.len = 0
 }
 
 /// Deallocate buffer.
 public func destroy(s: mut ref String): void {
-    if s.capacity > 0 as u64 {
+    if s.capacity > 0 {
         unsafe {
             ar_vec_buf_free(s.data, s.capacity)
         }
         s.data = nil
-        s.capacity = 0 as u64
-        s.len = 0 as u64
+        s.capacity = 0
+        s.len = 0
     }
 }
 
 // ── Method-style surface ───────────────────────────────────────────────────
 
-public func String.len(self: ref String): u64 {
+public func String.len(self: ref String): uint {
     return len(self)
 }
 
-public func String.capacity(self: ref String): u64 {
+public func String.capacity(self: ref String): uint {
     return capacity(self)
 }
 
@@ -205,7 +205,7 @@ public func String.isEmpty(self: ref String): bool {
     return isEmpty(self)
 }
 
-public func String.reserve(self: mut ref String, additional: u64): void {
+public func String.reserve(self: mut ref String, additional: uint): void {
     reserve(self, additional)
 }
 

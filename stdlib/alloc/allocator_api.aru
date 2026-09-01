@@ -11,9 +11,9 @@ module std.alloc.allocator_api
 import std.core.mem as mem
 
 extern "C" {
-    func ar_vec_malloc(size: u64): ptr[u8]
-    func ar_vec_buf_free(p: ptr[u8], size: u64): void
-    func ar_vec_realloc(p: ptr[u8], oldSize: u64, newSize: u64): ptr[u8]
+    func ar_vec_malloc(size: uint): ptr[u8]
+    func ar_vec_buf_free(p: ptr[u8], size: uint): void
+    func ar_vec_realloc(p: ptr[u8], oldSize: uint, newSize: uint): ptr[u8]
 }
 
 /// Failure modes for fallible alloc (thin enum).
@@ -31,7 +31,7 @@ public func global(): GlobalAllocator {
 }
 
 /// Allocate `size` bytes.
-public func globalAlloc(size: u64): Result<ptr[u8], AllocError> {
+public func globalAlloc(size: uint): Result<ptr[u8], AllocError> {
     if size == 0 {
         return Result.Err(AllocError.InvalidLayout)
     }
@@ -46,14 +46,14 @@ public func globalAlloc(size: u64): Result<ptr[u8], AllocError> {
 }
 
 /// Free a buffer from [`globalAlloc`] / [`globalRealloc`].
-public func globalDealloc(p: ptr[u8], size: u64): void {
+public func globalDealloc(p: ptr[u8], size: uint): void {
     unsafe {
         ar_vec_buf_free(p, size)
     }
 }
 
 /// Grow/shrink buffer.
-public func globalRealloc(p: ptr[u8], oldSize: u64, newSize: u64): Result<ptr[u8], AllocError> {
+public func globalRealloc(p: ptr[u8], oldSize: uint, newSize: uint): Result<ptr[u8], AllocError> {
     if newSize == 0 {
         return Result.Err(AllocError.InvalidLayout)
     }
@@ -72,12 +72,12 @@ public func globalRealloc(p: ptr[u8], oldSize: u64, newSize: u64): Result<ptr[u8
 /// Contiguous bump region (allocate-only until `bumpReset` / `bumpDestroy`).
 public struct BumpArena {
     buffer: ptr[u8]
-    capacity: u64
-    offset: u64
+    capacity: uint
+    offset: uint
 }
 
 /// New bump with capacity bytes (malloc once).
-public func bumpNew(capacity: u64): Result<BumpArena, AllocError> {
+public func bumpNew(capacity: uint): Result<BumpArena, AllocError> {
     if capacity == 0 {
         return Result.Err(AllocError.InvalidLayout)
     }
@@ -90,16 +90,16 @@ public func bumpNew(capacity: u64): Result<BumpArena, AllocError> {
         return Result.Ok(BumpArena {
             buffer: p,
             capacity: capacity,
-            offset: 0 as u64,
+            offset: 0,
         })
     }
 }
 
 /// Bump-allocate `size` bytes with `align` (min 1).
-public func bumpAlloc(a: mut ref BumpArena, size: u64, align: u64): Result<ptr[u8], AllocError> {
-    let mut al: u64 = align
+public func bumpAlloc(a: mut ref BumpArena, size: uint, align: uint): Result<ptr[u8], AllocError> {
+    let mut al: uint = align
     if al == 0 {
-        al = 1 as u64
+        al = 1
     }
     let off = a.offset
     let aligned = ((off + al - 1) / al) * al
@@ -115,11 +115,11 @@ public func bumpAlloc(a: mut ref BumpArena, size: u64, align: u64): Result<ptr[u
 
 /// Reset offset to 0 (memory retained).
 public func bumpReset(a: mut ref BumpArena): void {
-    a.offset = 0 as u64
+    a.offset = 0
 }
 
 /// Bytes still free in the bump.
-public func bumpRemaining(a: ref BumpArena): u64 {
+public func bumpRemaining(a: ref BumpArena): uint {
     return a.capacity - a.offset
 }
 
@@ -130,7 +130,7 @@ public func bumpDestroy(a: mut ref BumpArena): void {
             ar_vec_buf_free(a.buffer, a.capacity)
         }
         a.buffer = nil
-        a.capacity = 0 as u64
-        a.offset = 0 as u64
+        a.capacity = 0
+        a.offset = 0
     }
 }

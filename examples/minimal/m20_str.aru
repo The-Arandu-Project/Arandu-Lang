@@ -10,7 +10,7 @@ func main(): int {
     if s.isEmpty("x") {
         return 2
     }
-    if s.lenBytes("hi") != 2 as u64 {
+    if s.lenBytes("hi") != 2 {
         return 3
     }
     if !s.startsWith("hello", "he") {
@@ -30,7 +30,7 @@ func main(): int {
     }
     match s.find("hello world", "world") {
         Some(idx) => {
-            if idx != 6 as u64 {
+            if idx != 6 {
                 return 9
             }
         }
