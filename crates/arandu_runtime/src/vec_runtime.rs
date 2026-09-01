@@ -148,11 +148,11 @@ pub unsafe extern "C" fn ar_vec_destroy(id: i64) {
 /// # Safety
 /// JIT host only; free with [`ar_vec_buf_free`] using the same size.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ar_vec_malloc(size: i64) -> *mut u8 {
-    if size <= 0 {
+pub unsafe extern "C" fn ar_vec_malloc(size: usize) -> *mut u8 {
+    if size == 0 {
         return std::ptr::null_mut();
     }
-    let layout = match std::alloc::Layout::from_size_align(size as usize, 8) {
+    let layout = match std::alloc::Layout::from_size_align(size, 8) {
         Ok(l) => l,
         Err(_) => return std::ptr::null_mut(),
     };
@@ -164,11 +164,11 @@ pub unsafe extern "C" fn ar_vec_malloc(size: i64) -> *mut u8 {
 /// # Safety
 /// `p`/`size` must match a prior `ar_vec_malloc` pair (or `p` null).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ar_vec_buf_free(p: *mut u8, size: i64) {
-    if p.is_null() || size <= 0 {
+pub unsafe extern "C" fn ar_vec_buf_free(p: *mut u8, size: usize) {
+    if p.is_null() || size == 0 {
         return;
     }
-    let layout = match std::alloc::Layout::from_size_align(size as usize, 8) {
+    let layout = match std::alloc::Layout::from_size_align(size, 8) {
         Ok(l) => l,
         Err(_) => return,
     };
@@ -180,8 +180,8 @@ pub unsafe extern "C" fn ar_vec_buf_free(p: *mut u8, size: i64) {
 /// # Safety
 /// Same as malloc/free pair.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ar_vec_realloc(p: *mut u8, old_size: i64, new_size: i64) -> *mut u8 {
-    if new_size <= 0 {
+pub unsafe extern "C" fn ar_vec_realloc(p: *mut u8, old_size: usize, new_size: usize) -> *mut u8 {
+    if new_size == 0 {
         unsafe { ar_vec_buf_free(p, old_size) };
         return std::ptr::null_mut();
     }
@@ -190,7 +190,7 @@ pub unsafe extern "C" fn ar_vec_realloc(p: *mut u8, old_size: i64, new_size: i64
         return std::ptr::null_mut();
     }
     if !p.is_null() && old_size > 0 {
-        let n = std::cmp::min(old_size, new_size) as usize;
+        let n = std::cmp::min(old_size, new_size);
         unsafe {
             std::ptr::copy_nonoverlapping(p, new_ptr, n);
             ar_vec_buf_free(p, old_size);
@@ -205,8 +205,8 @@ pub unsafe extern "C" fn ar_vec_realloc(p: *mut u8, old_size: i64, new_size: i64
 #[repr(C)]
 pub struct ArOwnedString {
     pub data: *mut u8,
-    pub len: i64,
-    pub capacity: i64,
+    pub len: usize,
+    pub capacity: usize,
 }
 
 /// Append a UTF-8 byte sequence to the owned String buffer.
@@ -219,18 +219,18 @@ pub struct ArOwnedString {
 pub unsafe extern "C" fn ar_string_push_str(
     string: *mut ArOwnedString,
     value: *const u8,
-    value_len: i64,
+    value_len: usize,
 ) -> i8 {
     let Some(string) = (unsafe { string.as_mut() }) else {
         return 0;
     };
-    if value_len < 0 || (value_len > 0 && value.is_null()) {
+    if value_len > 0 && value.is_null() {
         return 0;
     }
     let Some(required) = string.len.checked_add(value_len) else {
         return 0;
     };
-    if required < 0 || required > i64::from(i32::MAX) {
+    if required > i32::MAX as usize {
         return 0;
     }
     if required > string.capacity {
@@ -240,8 +240,8 @@ pub unsafe extern "C" fn ar_string_push_str(
                 capacity = required;
                 break;
             };
-            capacity = doubled.min(i64::from(i32::MAX));
-            if capacity == i64::from(i32::MAX) && capacity < required {
+            capacity = doubled.min(i32::MAX as usize);
+            if capacity == i32::MAX as usize && capacity < required {
                 return 0;
             }
         }
@@ -254,11 +254,7 @@ pub unsafe extern "C" fn ar_string_push_str(
     }
     if value_len > 0 {
         unsafe {
-            std::ptr::copy_nonoverlapping(
-                value,
-                string.data.add(string.len as usize),
-                value_len as usize,
-            );
+            std::ptr::copy_nonoverlapping(value, string.data.add(string.len), value_len);
         }
     }
     string.len = required;
@@ -298,17 +294,17 @@ mod tests {
             };
             let first = "olá".as_bytes();
             assert_eq!(
-                ar_string_push_str(&mut string, first.as_ptr(), first.len() as i64),
+                ar_string_push_str(&mut string, first.as_ptr(), first.len()),
                 1
             );
             assert_eq!(string.len, 4);
-            assert_eq!(
-                std::slice::from_raw_parts(string.data, string.len as usize),
-                first
-            );
+            assert_eq!(std::slice::from_raw_parts(string.data, string.len), first);
 
             let before = (string.data, string.len, string.capacity);
-            assert_eq!(ar_string_push_str(&mut string, first.as_ptr(), i64::MAX), 0);
+            assert_eq!(
+                ar_string_push_str(&mut string, first.as_ptr(), usize::MAX),
+                0
+            );
             assert_eq!((string.data, string.len, string.capacity), before);
 
             ar_vec_buf_free(string.data, string.capacity);

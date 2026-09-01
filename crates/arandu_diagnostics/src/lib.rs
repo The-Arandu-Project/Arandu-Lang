@@ -191,6 +191,8 @@ pub enum DiagCode {
     T036InvalidTestContract,
     /// Invalid signature for a function marked with `@Benchmark`.
     T037InvalidBenchmarkContract,
+    /// Integer literal cannot be represented by its contextual integer type.
+    T038IntegerLiteralOutOfRange,
 
     // ── Lowering (L) ──
     L001LoweringUnresolvedSymbol,
@@ -314,6 +316,7 @@ impl DiagCode {
             T035InvalidDestructor,
             T036InvalidTestContract,
             T037InvalidBenchmarkContract,
+            T038IntegerLiteralOutOfRange,
             L001LoweringUnresolvedSymbol,
             G001GenericInstantiationCycle,
             G002GenericInstantiationLimit,
@@ -444,6 +447,7 @@ impl DiagCode {
             DiagCode::T035InvalidDestructor => "T035",
             DiagCode::T036InvalidTestContract => "T036",
             DiagCode::T037InvalidBenchmarkContract => "T037",
+            DiagCode::T038IntegerLiteralOutOfRange => "T038",
             DiagCode::L001LoweringUnresolvedSymbol => "L001",
             DiagCode::G001GenericInstantiationCycle => "G001",
             DiagCode::G002GenericInstantiationLimit => "G002",

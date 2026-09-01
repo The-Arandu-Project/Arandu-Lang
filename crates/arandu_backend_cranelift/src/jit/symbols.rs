@@ -171,8 +171,8 @@ pub(crate) fn declare_runtime_imports<M: Module>(
 
     let mut path_sig = Signature::new(default_call_conv);
     path_sig.params.push(AbiParam::new(ptr_type));
-    path_sig.params.push(AbiParam::new(I64));
-    path_sig.returns.push(AbiParam::new(I64));
+    path_sig.params.push(AbiParam::new(ptr_type));
+    path_sig.returns.push(AbiParam::new(ptr_type));
     for name in [
         "ar_path_is_absolute",
         "ar_path_is_empty",
@@ -193,10 +193,10 @@ pub(crate) fn declare_runtime_imports<M: Module>(
         }
         for _ in 0..2 {
             join_sig.params.push(AbiParam::new(ptr_type));
-            join_sig.params.push(AbiParam::new(I64));
+            join_sig.params.push(AbiParam::new(ptr_type));
         }
         join_sig.returns.push(AbiParam::new(ptr_type));
-        join_sig.returns.push(AbiParam::new(I64));
+        join_sig.returns.push(AbiParam::new(ptr_type));
         let id = module
             .declare_function("ar_path_join", Linkage::Import, &join_sig)
             .map_err(|err| codegen_ice(format!("failed to declare ar_path_join: {err:?}")))?;
@@ -208,9 +208,9 @@ pub(crate) fn declare_runtime_imports<M: Module>(
             file_sig.call_conv = CallConv::SystemV;
         }
         file_sig.params.push(AbiParam::new(ptr_type));
-        file_sig.params.push(AbiParam::new(I64));
+        file_sig.params.push(AbiParam::new(ptr_type));
         file_sig.returns.push(AbiParam::new(ptr_type));
-        file_sig.returns.push(AbiParam::new(I64));
+        file_sig.returns.push(AbiParam::new(ptr_type));
         let id = module
             .declare_function("ar_path_file_name", Linkage::Import, &file_sig)
             .map_err(|err| codegen_ice(format!("failed to declare ar_path_file_name: {err:?}")))?;
@@ -218,8 +218,8 @@ pub(crate) fn declare_runtime_imports<M: Module>(
 
         let mut len_sig = Signature::new(default_call_conv);
         len_sig.params.push(AbiParam::new(ptr_type));
-        len_sig.params.push(AbiParam::new(I64));
-        len_sig.returns.push(AbiParam::new(I64));
+        len_sig.params.push(AbiParam::new(ptr_type));
+        len_sig.returns.push(AbiParam::new(ptr_type));
         let id = module
             .declare_function("ar_str_len", Linkage::Import, &len_sig)
             .map_err(|err| codegen_ice(format!("failed to declare ar_str_len: {err:?}")))?;
@@ -233,9 +233,9 @@ pub(crate) fn declare_runtime_imports<M: Module>(
         let mut pref_sig = Signature::new(default_call_conv);
         for _ in 0..2 {
             pref_sig.params.push(AbiParam::new(ptr_type));
-            pref_sig.params.push(AbiParam::new(I64));
+            pref_sig.params.push(AbiParam::new(ptr_type));
         }
-        pref_sig.returns.push(AbiParam::new(I64));
+        pref_sig.returns.push(AbiParam::new(ptr_type));
         for name in [
             "ar_str_starts_with",
             "ar_str_ends_with",
@@ -334,7 +334,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
     // Raw buffer helpers for pure-Arandu Vec
     {
         let mut malloc_sig = Signature::new(default_call_conv);
-        malloc_sig.params.push(AbiParam::new(I64));
+        malloc_sig.params.push(AbiParam::new(ptr_type));
         malloc_sig.returns.push(AbiParam::new(ptr_type));
         let id = module
             .declare_function("ar_vec_malloc", Linkage::Import, &malloc_sig)
@@ -343,7 +343,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
 
         let mut free_sig = Signature::new(default_call_conv);
         free_sig.params.push(AbiParam::new(ptr_type));
-        free_sig.params.push(AbiParam::new(I64));
+        free_sig.params.push(AbiParam::new(ptr_type));
         let id = module
             .declare_function("ar_vec_buf_free", Linkage::Import, &free_sig)
             .map_err(|err| codegen_ice(format!("failed to declare ar_vec_buf_free: {err:?}")))?;
@@ -351,8 +351,8 @@ pub(crate) fn declare_runtime_imports<M: Module>(
 
         let mut realloc_sig = Signature::new(default_call_conv);
         realloc_sig.params.push(AbiParam::new(ptr_type));
-        realloc_sig.params.push(AbiParam::new(I64));
-        realloc_sig.params.push(AbiParam::new(I64));
+        realloc_sig.params.push(AbiParam::new(ptr_type));
+        realloc_sig.params.push(AbiParam::new(ptr_type));
         realloc_sig.returns.push(AbiParam::new(ptr_type));
         let id = module
             .declare_function("ar_vec_realloc", Linkage::Import, &realloc_sig)

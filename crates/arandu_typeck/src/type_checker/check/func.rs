@@ -14,9 +14,16 @@ fn func_name_key(decl: &FuncDecl) -> crate::NodeKey {
 }
 
 fn validate_method_receiver(checker: &mut TypeChecker<'_>, decl: &FuncDecl) {
-    let arandu_parser::FuncName::Method { receiver, span, .. } = &decl.name else {
+    let arandu_parser::FuncName::Method { receiver, .. } = &decl.name else {
         return;
     };
+    // `Type.name` is the namespace representation for both instance methods
+    // and associated functions. Only a member that explicitly declares
+    // `self` participates in receiver validation; members without `self` are
+    // associated functions such as `Point.new(...)`.
+    if !decl.params.first().is_some_and(|param| param.is_receiver) {
+        return;
+    }
     let mut recv_ty =
         checker.lower_named_type(receiver.span, receiver, &[], checker.symbols.global_scope());
     // Only generic *structs* parameterize `self` (e.g. List<T>.push). Method type
@@ -33,22 +40,7 @@ fn validate_method_receiver(checker: &mut TypeChecker<'_>, decl: &FuncDecl) {
         }
         recv_ty = ArType::Named(struct_id, new_args);
     }
-    let Some(first) = decl.params.first() else {
-        checker.diagnostics.push(crate::Diagnostic::error(
-            crate::DiagCode::T021MethodSelfRequired,
-            "method must declare a receiver parameter `self`",
-            *span,
-        ));
-        return;
-    };
-    if !first.is_receiver {
-        checker.diagnostics.push(crate::Diagnostic::error(
-            crate::DiagCode::T021MethodSelfRequired,
-            "first parameter of a method must be `self`",
-            first.span,
-        ));
-        return;
-    }
+    let first = &decl.params[0];
     let mut self_ty = checker.lower_type_expr(first.ty, checker.symbols.global_scope());
     // Canonical receiver syntax carries ownership in the type (`self: ref T`
     // or `self: mut ref T`). Legacy prefix ownership is applied later. Compare

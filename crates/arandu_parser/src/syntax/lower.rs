@@ -182,10 +182,12 @@ pub fn lower_from_green_recovering(tree: &SyntaxTree, file_id: u32) -> ParseOutp
                     let decl_id = parser.pool.alloc_decl(decl);
                     decls.push(decl_id);
                 } else {
-                    match parser.parse_top_level_decl() {
-                        Ok(decl) => {
-                            let decl_id = parser.pool.alloc_decl(decl);
-                            decls.push(decl_id);
+                    match parser.parse_top_level_decls() {
+                        Ok(parsed_decls) => {
+                            for decl in parsed_decls {
+                                let decl_id = parser.pool.alloc_decl(decl);
+                                decls.push(decl_id);
+                            }
                         }
                         Err(err) => {
                             parser.report_error(err);
@@ -209,9 +211,12 @@ pub fn lower_from_green_recovering(tree: &SyntaxTree, file_id: u32) -> ParseOutp
         .iter()
         .filter(|n| n.kind() == SyntaxKind::IMPORT_ITEM)
         .count();
+    // An `impl` CST item deliberately lowers to one function declaration per
+    // member, so declaration cardinality is not one-to-one for those items.
+    let has_impl = items.iter().any(|n| n.kind() == SyntaxKind::IMPL_ITEM);
     let need_fallback = !walk_ok
         || !parser.diagnostics.is_empty()
-        || decls.len() != decl_like
+        || (!has_impl && decls.len() != decl_like)
         || imports.len() != import_like
         || (items.iter().any(|n| n.kind() == SyntaxKind::MODULE_ITEM) && module.is_none());
 

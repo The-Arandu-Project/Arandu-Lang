@@ -176,39 +176,39 @@ static void ar_gen_shutdown_raw(void) {{
     }
 
     /// Raw buffer hosts for `std.alloc.vec` / `std.alloc.gen_arena` pure-buffer path.
-    pub(super) fn emit_vec_buf_runtime(&mut self) {
+    pub(super) fn emit_vec_buf_runtime(&mut self, uint_c_ty: &str) {
         let _ = writeln!(
             &mut self.output,
             r#"/* Pure-buffer alloc (Vec / GenArena thin) — mirrors JIT ar_vec_*. */
-static void *ar_vec_malloc(int64_t size) {{
-    if (size <= 0) return NULL;
+static void *ar_vec_malloc({uint_c_ty} size) {{
+    if (size == 0) return NULL;
     void *p = malloc((size_t)size);
     return p;
 }}
-static void ar_vec_buf_free(void *p, int64_t size) {{
+static void ar_vec_buf_free(void *p, {uint_c_ty} size) {{
     (void)size;
     free(p);
 }}
-static void *ar_vec_realloc(void *p, int64_t old_size, int64_t new_size) {{
-    if (new_size <= 0) {{ free(p); return NULL; }}
+static void *ar_vec_realloc(void *p, {uint_c_ty} old_size, {uint_c_ty} new_size) {{
+    if (new_size == 0) {{ free(p); return NULL; }}
     void *q = realloc(p, (size_t)new_size);
     (void)old_size;
     return q;
 }}
-typedef struct {{ uint8_t *data; uint64_t len; uint64_t capacity; }} ArOwnedStringRuntime;
+typedef struct {{ uint8_t *data; {uint_c_ty} len; {uint_c_ty} capacity; }} ArOwnedStringRuntime;
 static bool ar_string_push_str(void *raw, const uint8_t *value_ptr, int64_t value_len) {{
     ArOwnedStringRuntime *s = (ArOwnedStringRuntime*)raw;
     if (!s || value_len < 0 || (value_len > 0 && !value_ptr)) return false;
-    uint64_t n = (uint64_t)value_len;
+    {uint_c_ty} n = ({uint_c_ty})value_len;
     if (n > UINT32_MAX || s->len > UINT32_MAX - n) return false;
-    uint64_t required = s->len + n;
+    {uint_c_ty} required = s->len + n;
     if (required > s->capacity) {{
-        uint64_t capacity = s->capacity < 8 ? 8 : s->capacity;
+        {uint_c_ty} capacity = s->capacity < 8 ? 8 : s->capacity;
         while (capacity < required) {{
             capacity = capacity > UINT32_MAX / 2 ? UINT32_MAX : capacity * 2;
             if (capacity == UINT32_MAX && capacity < required) return false;
         }}
-        uint8_t *replacement = (uint8_t*)ar_vec_realloc(s->data, (int64_t)s->capacity, (int64_t)capacity);
+        uint8_t *replacement = (uint8_t*)ar_vec_realloc(s->data, s->capacity, capacity);
         if (!replacement) return false;
         s->data = replacement;
         s->capacity = capacity;
@@ -225,11 +225,11 @@ static bool ar_string_push_str(void *raw, const uint8_t *value_ptr, int64_t valu
         let _ = writeln!(
             &mut self.output,
             r#"/* std.path host (Unix-oriented gold; mirrors JIT Path helpers). */
-static int64_t ar_path_is_absolute(ArStr p) {{
+static {len_c_ty} ar_path_is_absolute(ArStr p) {{
     if (p.len <= 0 || !p.ptr) return 0;
     return p.ptr[0] == '/' ? 1 : 0;
 }}
-static int64_t ar_path_is_empty(ArStr p) {{
+static {len_c_ty} ar_path_is_empty(ArStr p) {{
     return p.len <= 0 ? 1 : 0;
 }}
 static ArStr ar_path_join(ArStr a, ArStr b) {{
@@ -261,8 +261,8 @@ static ArStr ar_path_file_name(ArStr p) {{
     return ar_str_pack(buf, n);
 }}
 /* std.core.str thin hosts */
-static int64_t ar_str_len(ArStr s) {{
-    return (int64_t)(s.len < 0 ? 0 : s.len);
+static {len_c_ty} ar_str_len(ArStr s) {{
+    return ({len_c_ty})(s.len < 0 ? 0 : s.len);
 }}
 static ArStr ar_str_concat(ArStr a, ArStr b) {{
     {len_c_ty} al = a.len < 0 ? 0 : a.len;
@@ -275,17 +275,17 @@ static ArStr ar_str_concat(ArStr a, ArStr b) {{
     buf[total] = 0;
     return ar_str_pack(buf, total);
 }}
-static int64_t ar_str_starts_with(ArStr s, ArStr p) {{
+static {len_c_ty} ar_str_starts_with(ArStr s, ArStr p) {{
     if (p.len <= 0) return 1;
     if (s.len < p.len || !s.ptr || !p.ptr) return 0;
     return memcmp(s.ptr, p.ptr, (size_t)p.len) == 0 ? 1 : 0;
 }}
-static int64_t ar_str_ends_with(ArStr s, ArStr p) {{
+static {len_c_ty} ar_str_ends_with(ArStr s, ArStr p) {{
     if (p.len <= 0) return 1;
     if (s.len < p.len || !s.ptr || !p.ptr) return 0;
     return memcmp(s.ptr + (s.len - p.len), p.ptr, (size_t)p.len) == 0 ? 1 : 0;
 }}
-static int64_t ar_str_contains(ArStr s, ArStr needle) {{
+static {len_c_ty} ar_str_contains(ArStr s, ArStr needle) {{
     if (needle.len <= 0) return 1;
     if (s.len < needle.len || !s.ptr || !needle.ptr) return 0;
     for (int64_t i = 0; i + needle.len <= s.len; i++) {{
@@ -293,7 +293,7 @@ static int64_t ar_str_contains(ArStr s, ArStr needle) {{
     }}
     return 0;
 }}
-static int64_t ar_str_find(ArStr s, ArStr needle) {{
+static {len_c_ty} ar_str_find(ArStr s, ArStr needle) {{
     if (needle.len <= 0) return 0;
     if (s.len < needle.len || !s.ptr || !needle.ptr) return -1;
     for (int64_t i = 0; i + needle.len <= s.len; i++) {{
@@ -440,7 +440,12 @@ static inline void* ar_co_await_ptr(uint8_t* aw) {{
         // F2.3.runtime: process-lifetime gen arena (i64 payload MVP; mirrors JIT host).
         self.emit_gen_arena_runtime();
         // Pure-buffer host used by std.alloc.vec / gen_arena product surface.
-        self.emit_vec_buf_runtime();
+        let uint_c_ty = if self.layout.pointer_width() == 4 {
+            "uint32_t"
+        } else {
+            "uint64_t"
+        };
+        self.emit_vec_buf_runtime(uint_c_ty);
         // A3.6: poll / block_on for coroutine state blobs (disc@0, payload@8).
         self.emit_co_poll_runtime();
         let _ = writeln!(&mut self.output);

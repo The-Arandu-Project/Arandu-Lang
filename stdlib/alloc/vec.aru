@@ -64,7 +64,7 @@ func ensureCapacity<T>(v: mut ref Vec<T>, minCap: uint): void {
         }
     }
     let elem = mem.sizeOf<T>()
-    if elem > 0 && newCap > ((18446744073709551615 as uint) / elem) {
+    if elem > 0 && newCap > (maxCap / elem) {
         unsafe {
             intrinsics.abort()
         }

@@ -498,5 +498,17 @@ fn test_impl_block_parsing() {
     "#;
 
     let program = arandu_parser::parse(source).expect("impl block should parse successfully");
-    assert!(!program.decls.is_empty());
+    assert_eq!(program.decls.len(), 4, "struct plus every impl member");
+    let names: Vec<_> = program
+        .decls
+        .iter()
+        .filter_map(|id| match program.pool.decl(*id) {
+            arandu_parser::TopLevelDecl::Func(func) => match &func.name {
+                arandu_parser::FuncName::Method { name, .. } => Some(name.as_str()),
+                arandu_parser::FuncName::Free { .. } => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(names, ["new", "get_x", "set_x"]);
 }

@@ -1382,3 +1382,53 @@ fn test_mixed_layout_typecheck() {
     ";
     assert_type_errors!(source, []);
 }
+
+#[test]
+fn contextual_integer_literals_accept_boundaries() {
+    let source = "
+        func take(value: u8): u8 { return value }
+        func main() {
+            let low: u8 = 0
+            let high: u8 = 255
+            let passed = take(255)
+        }
+    ";
+    assert_type_errors!(source, []);
+}
+
+#[test]
+fn contextual_integer_literals_reject_values_outside_fixed_width() {
+    let source = "
+        func take(value: u8): u8 { return value }
+        func main() {
+            let high: u8 = 256
+            let passed = take(300)
+        }
+    ";
+    assert_type_errors!(
+        source,
+        [T038IntegerLiteralOutOfRange, T038IntegerLiteralOutOfRange]
+    );
+}
+
+#[test]
+fn impl_blocks_preserve_associated_functions_and_instance_methods() {
+    let source = "
+        struct Point {
+            x: float
+            y: float
+        }
+        impl Point {
+            public func new(x: float, y: float): Point { return Point { x, y } }
+            public func getX(self: ref): float { return self.x }
+            public func setX(self: mut ref, x: float) { self.x = x }
+        }
+        func main(): int {
+            let mut point = Point.new(1.0, 2.0)
+            point.setX(3.0)
+            if point.getX() == 3.0 { return 0 }
+            return 1
+        }
+    ";
+    assert_type_errors!(source, []);
+}

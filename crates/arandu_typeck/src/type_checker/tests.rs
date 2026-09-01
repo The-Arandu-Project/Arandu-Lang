@@ -1114,3 +1114,29 @@ fn field_init_diagnostic_carries_struct_context_label() {
     assert_eq!(diag.labels.len(), 3);
     assert!(diag.labels[0].message.contains("initializing field 'name'"));
 }
+
+#[test]
+fn test_contextual_literal_overflow_diagnostic() {
+    let source = r#"
+    module test;
+    func take(x: u8): u8 { return x; }
+    func main(): u8 {
+        let a: u8 = 255;
+        let b: u8 = 256;
+        return take(300);
+    }
+    "#;
+    let program = arandu_parser::parse(source).unwrap();
+    let res = arandu_resolve::resolve_for_test(0, &program);
+    let check_res = crate::type_check(res, &program);
+    let overflow_diags: Vec<_> = check_res
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == crate::DiagCode::T038IntegerLiteralOutOfRange)
+        .collect();
+    assert_eq!(
+        overflow_diags.len(),
+        2,
+        "256 and 300 must be flagged as out-of-range for u8"
+    );
+}

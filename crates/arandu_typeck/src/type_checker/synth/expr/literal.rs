@@ -92,9 +92,24 @@ pub(super) fn synth_literal_expr(
                     }
                     _ => true,
                 };
-                if fits {
-                    return Some(exp_id);
+                if !fits {
+                    checker.diagnostics.push(
+                        crate::Diagnostic::error(
+                            crate::DiagCode::T038IntegerLiteralOutOfRange,
+                            format!("integer literal `{value}` does not fit in `{}`", p.as_str()),
+                            span,
+                        )
+                        .with_label(
+                            span,
+                            format!("value is outside the range of `{}`", p.as_str()),
+                        )
+                        .with_hint("use a wider integer type or change the literal value"),
+                    );
                 }
+                // Keep the contextual type after reporting. Falling back to
+                // `IntLiteral` would make generic literal unification accept
+                // the same out-of-range value silently.
+                return Some(exp_id);
             }
             Some(checker.intern(ArType::IntLiteral))
         }

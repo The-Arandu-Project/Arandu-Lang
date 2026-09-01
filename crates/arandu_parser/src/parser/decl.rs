@@ -183,19 +183,19 @@ impl<'a> Parser<'a> {
         Ok(text.into())
     }
 
-    pub(crate) fn parse_top_level_decl(&mut self) -> Result<TopLevelDecl, ParseError> {
+    pub(crate) fn parse_top_level_decls(&mut self) -> Result<Vec<TopLevelDecl>, ParseError> {
         let start = self.mark();
-        match self.try_parse_top_level_decl() {
-            Ok(decl) => Ok(decl),
+        match self.try_parse_top_level_decls() {
+            Ok(decls) => Ok(decls),
             Err(err) => {
                 self.diagnostics.push(err);
                 self.synchronize_top_level();
-                Ok(TopLevelDecl::Error(self.span_from_mark(start)))
+                Ok(vec![TopLevelDecl::Error(self.span_from_mark(start))])
             }
         }
     }
 
-    pub(super) fn try_parse_top_level_decl(&mut self) -> Result<TopLevelDecl, ParseError> {
+    pub(super) fn try_parse_top_level_decls(&mut self) -> Result<Vec<TopLevelDecl>, ParseError> {
         self.collect_doc_comments();
         let docs = self.take_pending_docs();
         let item_kind = self.peek_top_level_item_kind();
@@ -204,23 +204,27 @@ impl<'a> Parser<'a> {
             let attrs = self.parse_attributes()?;
             let visibility = self.parse_visibility();
             match self.current().kind {
-                TokenKind::KwConst => Ok(TopLevelDecl::Const(self.parse_const(attrs, visibility)?)),
-                TokenKind::KwType => Ok(TopLevelDecl::TypeAlias(
+                TokenKind::KwConst => Ok(vec![TopLevelDecl::Const(
+                    self.parse_const(attrs, visibility)?,
+                )]),
+                TokenKind::KwType => Ok(vec![TopLevelDecl::TypeAlias(
                     self.parse_type_alias(attrs, visibility)?,
-                )),
-                TokenKind::KwAsync | TokenKind::KwFunc => {
-                    Ok(TopLevelDecl::Func(self.parse_func(attrs, visibility)?))
-                }
-                TokenKind::KwStruct => Ok(TopLevelDecl::Struct(
+                )]),
+                TokenKind::KwAsync | TokenKind::KwFunc => Ok(vec![TopLevelDecl::Func(
+                    self.parse_func(attrs, visibility)?,
+                )]),
+                TokenKind::KwStruct => Ok(vec![TopLevelDecl::Struct(
                     self.parse_struct_decl(attrs, visibility)?,
-                )),
-                TokenKind::KwEnum => {
-                    Ok(TopLevelDecl::Enum(self.parse_enum_decl(attrs, visibility)?))
-                }
-                TokenKind::KwInterface => Ok(TopLevelDecl::Interface(
+                )]),
+                TokenKind::KwEnum => Ok(vec![TopLevelDecl::Enum(
+                    self.parse_enum_decl(attrs, visibility)?,
+                )]),
+                TokenKind::KwInterface => Ok(vec![TopLevelDecl::Interface(
                     self.parse_interface_decl(attrs, visibility)?,
-                )),
-                TokenKind::KwExtern => Ok(TopLevelDecl::Extern(self.parse_extern_decl(attrs)?)),
+                )]),
+                TokenKind::KwExtern => {
+                    Ok(vec![TopLevelDecl::Extern(self.parse_extern_decl(attrs)?)])
+                }
                 TokenKind::KwImpl => self.parse_impl_decl(attrs, visibility),
                 _ => Err(ParseError::new(
                     ParseErrorCode::ExpectedTopLevelDecl,
@@ -232,9 +236,11 @@ impl<'a> Parser<'a> {
             }
         })();
         self.finish_node();
-        let decl = result?;
-        self.attach_docs(docs, decl.span());
-        Ok(decl)
+        let decls = result?;
+        if let Some(first) = decls.first() {
+            self.attach_docs(docs, first.span());
+        }
+        Ok(decls)
     }
 
     /// Look ahead past `@attr` / `public` / `async` to classify the green item kind.
@@ -595,8 +601,7 @@ impl<'a> Parser<'a> {
         &mut self,
         _attrs: Vec<Attribute>,
         _visibility: Visibility,
-    ) -> Result<TopLevelDecl, ParseError> {
-        let start = self.mark();
+    ) -> Result<Vec<TopLevelDecl>, ParseError> {
         self.expect_name("KW_IMPL")?;
         let impl_generic_params = self.parse_generic_params()?;
         let target_type_name = self.parse_type_name()?;
@@ -607,7 +612,10 @@ impl<'a> Parser<'a> {
         } else {
             Vec::new()
         };
-        let _ = type_generic_args;
+        // The target arguments select the implemented instantiation. The
+        // nominal receiver remains `TypeName`; its declaration owns the
+        // generic parameter symbols imported into every member scope.
+        let _type_generic_args = type_generic_args;
         let where_clause = self.parse_where_clause("LBRACE")?;
 
         self.start_node(crate::syntax::SyntaxKind::BLOCK);
@@ -638,7 +646,7 @@ impl<'a> Parser<'a> {
             self.expect_name("KW_FUNC")?;
             let func_name_start = self.mark();
             let method_name = self.expect_ident_value()?;
-            let method_func_name = FuncName::Method {
+            let member_func_name = FuncName::Method {
                 span: self.span_from_mark(func_name_start),
                 receiver: target_type_name.clone(),
                 name: method_name,
@@ -670,7 +678,7 @@ impl<'a> Parser<'a> {
                 attrs: m_attrs.into(),
                 visibility: m_visibility,
                 is_async,
-                name: method_func_name,
+                name: member_func_name,
                 generic_params: all_generics,
                 params,
                 result,
@@ -684,11 +692,16 @@ impl<'a> Parser<'a> {
         self.expect_name("RBRACE")?;
         self.finish_node(); // BLOCK
 
-        if let Some(first) = methods.into_iter().next() {
-            Ok(TopLevelDecl::Func(first))
-        } else {
-            Ok(TopLevelDecl::Error(self.span_from_mark(start)))
+        if methods.is_empty() {
+            return Err(ParseError::new(
+                ParseErrorCode::ExpectedTopLevelDecl,
+                "an impl block must declare at least one function",
+                self.previous(),
+                self.file_id,
+                self.source,
+            ));
         }
+        Ok(methods.into_iter().map(TopLevelDecl::Func).collect())
     }
 
     pub(super) fn parse_abi_literal(&mut self) -> Result<SmolStr, ParseError> {

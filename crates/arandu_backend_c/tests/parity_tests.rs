@@ -756,6 +756,11 @@ fn c_emit_arstr_layout_32bit() {
         "expected 32-bit ArStr, headers:\n{}",
         c.lines().take(40).collect::<Vec<_>>().join("\n")
     );
+    assert!(c.contains("static void *ar_vec_malloc(uint32_t size)"));
+    assert!(c.contains(
+        "typedef struct { uint8_t *data; uint32_t len; uint32_t capacity; } ArOwnedStringRuntime;"
+    ));
+    assert!(c.contains("static int32_t ar_str_len(ArStr s)"));
 }
 
 #[test]

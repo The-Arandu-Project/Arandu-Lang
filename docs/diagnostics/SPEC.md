@@ -276,6 +276,7 @@ Abaixo estão listados todos os diagnósticos mapeados para o compilador Arandu.
 | **T035** | `invalid @Destructor contract` | Error | `0.1.0` | O método anotado não é um destrutor consumidor válido ou o tipo já possui outro destrutor. |
 | **T036** | `invalid @Test contract` | Error | `0.1.0` | A função de teste não satisfaz o contrato síncrono, não genérico, sem parâmetros e com retorno `void` ou `Result<void, E>`. |
 | **T037** | `invalid @Benchmark contract` | Error | `0.1.0` | A função de benchmark não satisfaz o contrato síncrono, não genérico, com um contexto `mut testing.Benchmark` e retorno `void`. |
+| **T038** | `integer literal does not fit in the expected type` | Error | `0.1.0` | Um literal inteiro contextual excede o intervalo representável pelo tipo inteiro esperado. |
 
 ---
 

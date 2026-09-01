@@ -276,10 +276,12 @@ impl<'a> Parser<'a> {
                 }
                 continue;
             }
-            match self.parse_top_level_decl() {
-                Ok(decl) => {
-                    let decl_id = self.pool.alloc_decl(decl);
-                    decls.push(decl_id);
+            match self.parse_top_level_decls() {
+                Ok(parsed_decls) => {
+                    for decl in parsed_decls {
+                        let decl_id = self.pool.alloc_decl(decl);
+                        decls.push(decl_id);
+                    }
                 }
                 Err(err) => {
                     self.report_error(err);
