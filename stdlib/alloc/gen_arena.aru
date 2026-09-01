@@ -45,7 +45,7 @@ public func new<T>(): GenArena<T> {
     }
 }
 
-func growSlots<T>(mut a: GenArena<T>, minCap: u64): void {
+func growSlots<T>(a: mut ref GenArena<T>, minCap: u64): void {
     if a.slots_cap >= minCap {
         return
     }
@@ -81,7 +81,7 @@ func growSlots<T>(mut a: GenArena<T>, minCap: u64): void {
     }
 }
 
-func growFree<T>(mut a: GenArena<T>, minCap: u64): void {
+func growFree<T>(a: mut ref GenArena<T>, minCap: u64): void {
     if a.free_cap >= minCap {
         return
     }
@@ -107,7 +107,7 @@ func growFree<T>(mut a: GenArena<T>, minCap: u64): void {
 }
 
 /// Insert `value` into arena; returns valid generational handle.
-public func insert<T>(mut a: GenArena<T>, value: T): GenRef {
+public func insert<T>(a: mut ref GenArena<T>, value: T): GenRef {
     if a.free_len > 0 {
         let lastIdx = a.free_len - 1
         unsafe {
@@ -149,7 +149,7 @@ public func insert<T>(mut a: GenArena<T>, value: T): GenRef {
 }
 
 /// Load payload; aborts if generation mismatches or slot is empty.
-public func get<T>(shared a: GenArena<T>, r: GenRef): T {
+public func get<T>(a: ref GenArena<T>, r: GenRef): T {
     let idx = r.index as u64
     if idx >= a.slots {
         unsafe {
@@ -173,7 +173,7 @@ public func get<T>(shared a: GenArena<T>, r: GenRef): T {
 }
 
 /// Drop ownership of the slot if `r.generation` still matches; else `None`.
-public func remove<T>(mut a: GenArena<T>, r: GenRef): Option<T> {
+public func remove<T>(a: mut ref GenArena<T>, r: GenRef): Option<T> {
     let idx = r.index as u64
     if idx >= a.slots {
         return Option.None
@@ -204,17 +204,17 @@ public func remove<T>(mut a: GenArena<T>, r: GenRef): Option<T> {
 }
 
 /// Number of live (occupied) slots.
-public func len<T>(shared a: GenArena<T>): u64 {
+public func len<T>(a: ref GenArena<T>): u64 {
     return a.slots - a.free_len
 }
 
 /// `true` when no live slots.
-public func isEmpty<T>(shared a: GenArena<T>): bool {
+public func isEmpty<T>(a: ref GenArena<T>): bool {
     return len<T>(a) == 0 as u64
 }
 
 /// Deallocate all tables and reset to empty.
-public func destroy<T>(mut a: GenArena<T>): void {
+public func destroy<T>(a: mut ref GenArena<T>): void {
     if a.slots_cap > 0 {
         let elem = mem.sizeOf<T>()
         let genElem = mem.sizeOf<u32>()

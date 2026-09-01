@@ -64,7 +64,7 @@ public func withCapacity(cap: u64): String {
 }
 
 /// Ensure capacity in bytes ≥ `minCap`.
-func ensureCapacity(mut s: String, minCap: u64): void {
+func ensureCapacity(s: mut ref String, minCap: u64): void {
     let maxCap = maxBufferCapacity()
     if minCap > maxCap {
         unsafe {
@@ -97,22 +97,22 @@ func ensureCapacity(mut s: String, minCap: u64): void {
 }
 
 /// Byte length.
-public func len(shared s: String): u64 {
+public func len(s: ref String): u64 {
     return s.len
 }
 
 /// Allocated byte capacity.
-public func capacity(shared s: String): u64 {
+public func capacity(s: ref String): u64 {
     return s.capacity
 }
 
 /// True if length is 0.
-public func isEmpty(shared s: String): bool {
+public func isEmpty(s: ref String): bool {
     return s.len == 0 as u64
 }
 
 /// Reserve additional bytes.
-public func reserve(mut s: String, additional: u64): void {
+public func reserve(s: mut ref String, additional: u64): void {
     if additional > maxBufferCapacity() - s.len {
         unsafe {
             intrinsics.abort()
@@ -123,7 +123,7 @@ public func reserve(mut s: String, additional: u64): void {
 }
 
 /// Append an ASCII or Unicode scalar character.
-public func pushScalar(mut s: String, c: char): void {
+public func pushScalar(s: mut ref String, c: char): void {
     let clen = chars.lenUtf8(c) as u64
     if clen > maxBufferCapacity() - s.len {
         unsafe {
@@ -175,12 +175,12 @@ public func pushScalar(mut s: String, c: char): void {
 }
 
 /// Reset length to 0 (capacity retained).
-public func clear(mut s: String): void {
+public func clear(s: mut ref String): void {
     s.len = 0 as u64
 }
 
 /// Deallocate buffer.
-public func destroy(mut s: String): void {
+public func destroy(s: mut ref String): void {
     if s.capacity > 0 as u64 {
         unsafe {
             ar_vec_buf_free(s.data, s.capacity)
@@ -193,43 +193,43 @@ public func destroy(mut s: String): void {
 
 // ── Method-style surface ───────────────────────────────────────────────────
 
-public func String.len(shared self): u64 {
+public func String.len(self: ref String): u64 {
     return len(self)
 }
 
-public func String.capacity(shared self): u64 {
+public func String.capacity(self: ref String): u64 {
     return capacity(self)
 }
 
-public func String.isEmpty(shared self): bool {
+public func String.isEmpty(self: ref String): bool {
     return isEmpty(self)
 }
 
-public func String.reserve(mut self, additional: u64): void {
+public func String.reserve(self: mut ref String, additional: u64): void {
     reserve(self, additional)
 }
 
-public func String.pushScalar(mut self, c: char): void {
+public func String.pushScalar(self: mut ref String, c: char): void {
     pushScalar(self, c)
 }
 
-public func String.asStr(shared self): ref str {
+public func String.asStr(self: ref String): ref str {
     return asStr(self)
 }
 
-public func String.asBytes(shared self): []u8 {
+public func String.asBytes(self: ref String): []u8 {
     return asBytes(self)
 }
 
-public func String.pushStr(mut self, value: str): bool {
+public func String.pushStr(self: mut ref String, value: str): bool {
     return pushStr(self, value)
 }
 
-public func String.clear(mut self): void {
+public func String.clear(self: mut ref String): void {
     clear(self)
 }
 
 @Destructor
-public func String.destroy(own self): void {
+public func String.destroy(self: own String): void {
     destroy(self)
 }

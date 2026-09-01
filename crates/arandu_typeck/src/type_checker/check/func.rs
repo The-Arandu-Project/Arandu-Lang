@@ -49,14 +49,14 @@ fn validate_method_receiver(checker: &mut TypeChecker<'_>, decl: &FuncDecl) {
         ));
         return;
     }
-    if first.ownership.is_none() {
-        checker.diagnostics.push(crate::Diagnostic::error(
-            crate::DiagCode::T021MethodSelfRequired,
-            "receiver `self` requires an ownership qualifier (`shared`, `mut`, or `own`)",
-            first.span,
-        ));
-    }
     let mut self_ty = checker.lower_type_expr(first.ty, checker.symbols.global_scope());
+    // Canonical receiver syntax carries ownership in the type (`self: ref T`
+    // or `self: mut ref T`). Legacy prefix ownership is applied later. Compare
+    // the associated nominal type against the unwrapped receiver here.
+    self_ty = match self_ty {
+        ArType::Ref(inner) | ArType::RefMut(inner) => checker.resolve(inner),
+        other => other,
+    };
     if let ArType::Named(struct_id, ref args) = self_ty
         && args.is_empty()
         && let Some(struct_params) = checker.type_info.generic_params.get(&struct_id).cloned()

@@ -665,7 +665,8 @@ fn parity_to_str_int_interp() {
 
 #[test]
 fn parity_io_println_to_str() {
-    // println stub + ToStr; exit code only (stdout not compared).
+    // Exercise the official `io.println` lowering. This parity harness compares
+    // process status; stdout behavior has its own runtime contract tests.
     let src = r#"
     import io
     func main(): int {

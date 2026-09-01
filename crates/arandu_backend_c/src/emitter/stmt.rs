@@ -29,7 +29,7 @@ impl<'a> CEmitter<'a> {
         let is_size = bare == "sizeOf" || bare == "size_of" || name.contains("sizeOf");
         let is_align = bare == "alignOf" || bare == "align_of" || name.contains("alignOf");
         let is_abort = bare == "abort"
-            || bare == "abort_generational_mismatch"
+            || bare == "abortGenerationalMismatch"
             || name.contains("intrinsics.abort");
 
         if is_abort {

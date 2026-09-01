@@ -54,7 +54,7 @@ public func iter<T>(s: []T): Iterator<T> {
     return Iterator<T> { view: s, index: 0 as u64 }
 }
 
-public func Iterator.next<T>(mut self): Option<ref T> {
+public func Iterator.next<T>(self: mut ref Iterator<T>): Option<ref T> {
     let item = get<T>(self.view, self.index)
     if self.index < len<T>(self.view) {
         self.index = self.index + 1 as u64

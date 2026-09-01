@@ -96,7 +96,7 @@ public func bumpNew(capacity: u64): Result<BumpArena, AllocError> {
 }
 
 /// Bump-allocate `size` bytes with `align` (min 1).
-public func bumpAlloc(mut a: BumpArena, size: u64, align: u64): Result<ptr[u8], AllocError> {
+public func bumpAlloc(a: mut ref BumpArena, size: u64, align: u64): Result<ptr[u8], AllocError> {
     let mut al: u64 = align
     if al == 0 {
         al = 1 as u64
@@ -114,17 +114,17 @@ public func bumpAlloc(mut a: BumpArena, size: u64, align: u64): Result<ptr[u8], 
 }
 
 /// Reset offset to 0 (memory retained).
-public func bumpReset(mut a: BumpArena): void {
+public func bumpReset(a: mut ref BumpArena): void {
     a.offset = 0 as u64
 }
 
 /// Bytes still free in the bump.
-public func bumpRemaining(shared a: BumpArena): u64 {
+public func bumpRemaining(a: ref BumpArena): u64 {
     return a.capacity - a.offset
 }
 
 /// Free the underlying buffer.
-public func bumpDestroy(mut a: BumpArena): void {
+public func bumpDestroy(a: mut ref BumpArena): void {
     if a.capacity > 0 {
         unsafe {
             ar_vec_buf_free(a.buffer, a.capacity)

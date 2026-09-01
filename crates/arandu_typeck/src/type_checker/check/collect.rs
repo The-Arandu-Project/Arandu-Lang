@@ -5,9 +5,9 @@ use crate::type_checker::types::ArType;
 
 /// Wrap a receiver's bare type with the ownership qualifier.
 ///
-/// - `shared self: T` → `&T`
-/// - `mut self: T` → `&mut T`
-/// - `own self: T` / bare → `T`
+/// Legacy receiver prefixes are lowered to the canonical `ref T` / `mut ref T`
+/// types. Canonical type-qualified parameters already arrive wrapped and pass
+/// through unchanged.
 #[inline]
 pub(crate) fn apply_receiver_ownership(
     checker: &mut TypeChecker<'_>,
@@ -266,10 +266,12 @@ pub(crate) fn collect_signature_types(checker: &mut TypeChecker<'_>, program: &P
                         && first_param.is_receiver
                         && let Some(first_ty_id) = param_types.first_mut()
                     {
-                        // Peel ownership for receiver generic expand, then re-wrap.
-                        let bare_id = match checker.resolve(*first_ty_id) {
-                            ArType::Ref(inner) | ArType::RefMut(inner) => inner,
-                            _ => *first_ty_id,
+                        // Peel the receiver for generic expansion, then restore
+                        // either the canonical type wrapper or a legacy prefix.
+                        let (bare_id, effective_ownership) = match checker.resolve(*first_ty_id) {
+                            ArType::Ref(inner) => (inner, Some(Ownership::Shared)),
+                            ArType::RefMut(inner) => (inner, Some(Ownership::Mut)),
+                            _ => (*first_ty_id, first_param.ownership),
                         };
                         let lowered_first_ty = checker.resolve(bare_id);
                         if let ArType::Named(struct_id, ref args) = lowered_first_ty
@@ -286,7 +288,7 @@ pub(crate) fn collect_signature_types(checker: &mut TypeChecker<'_>, program: &P
                             let new_first_ty = ArType::Named(struct_id, new_args);
                             let bare_inst = checker.intern(new_first_ty);
                             *first_ty_id =
-                                apply_receiver_ownership(checker, bare_inst, first_param.ownership);
+                                apply_receiver_ownership(checker, bare_inst, effective_ownership);
                             struct_params_for_mono = Some(struct_params);
                         }
                     }

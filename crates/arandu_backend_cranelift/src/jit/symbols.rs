@@ -40,7 +40,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
     func_ids.insert("abort".to_string(), abort_id);
     func_ids.insert("std.core.intrinsics.abort".to_string(), abort_id);
     func_ids.insert(
-        "std.core.intrinsics.abort_generational_mismatch".to_string(),
+        "std.core.intrinsics.abortGenerationalMismatch".to_string(),
         abort_id,
     );
 

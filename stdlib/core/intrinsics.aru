@@ -11,7 +11,7 @@ extern "arandu-intrinsic" {
 
     /// Generational ref mismatch trap: slot was recycled (use-after-free detected).
     /// Used by `std.alloc.gen_arena` verification paths and compiler-lowered `GenGet` nodes.
-    func abort_generational_mismatch() : void
+    func abortGenerationalMismatch() : void
     func sliceFromRaw<Owner, T>(owner: ref Owner, data: ptr[T], len: u64): []T
     func sliceLen<T>(source: []T): u64
     func sliceSubslice<T>(source: []T, start: u64, len: u64): []T

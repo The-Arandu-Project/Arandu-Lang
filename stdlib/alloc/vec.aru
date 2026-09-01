@@ -42,7 +42,7 @@ public func withCapacity<T>(cap: u64): Vec<T> {
 }
 
 /// Ensure absolute capacity ≥ `minCap`.
-func ensureCapacity<T>(mut v: Vec<T>, minCap: u64): void {
+func ensureCapacity<T>(v: mut ref Vec<T>, minCap: u64): void {
     if v.capacity >= minCap {
         return
     }
@@ -83,7 +83,7 @@ func ensureCapacity<T>(mut v: Vec<T>, minCap: u64): void {
 }
 
 /// Reserve room for at least `additional` more elements beyond `len`.
-public func reserve<T>(mut v: Vec<T>, additional: u64): void {
+public func reserve<T>(v: mut ref Vec<T>, additional: u64): void {
     let maxCap: u64 = 2147483647 as u64
     if additional > maxCap - v.len {
         unsafe {
@@ -95,7 +95,7 @@ public func reserve<T>(mut v: Vec<T>, additional: u64): void {
 }
 
 /// Append `value` (amortized O(1)).
-public func push<T>(mut v: Vec<T>, value: T): void {
+public func push<T>(v: mut ref Vec<T>, value: T): void {
     let maxCap: u64 = 2147483647 as u64
     if v.len >= maxCap {
         unsafe {
@@ -114,7 +114,7 @@ public func push<T>(mut v: Vec<T>, value: T): void {
 }
 
 /// Remove last element, or `None` if empty.
-public func pop<T>(mut v: Vec<T>): Option<T> {
+public func pop<T>(v: mut ref Vec<T>): Option<T> {
     if v.len == 0 {
         return Option.None
     }
@@ -126,7 +126,7 @@ public func pop<T>(mut v: Vec<T>): Option<T> {
 }
 
 /// Element at `index`, or `None` if out of range.
-public func get<T>(shared v: Vec<T>, index: u64): Option<T> {
+public func get<T>(v: ref Vec<T>, index: u64): Option<T> {
     let maxCap: u64 = 2147483647 as u64
     if index >= v.len || index > maxCap {
         return Option.None
@@ -138,7 +138,7 @@ public func get<T>(shared v: Vec<T>, index: u64): Option<T> {
 }
 
 /// Overwrite index; `false` if out of range.
-public func put<T>(mut v: Vec<T>, index: u64, value: T): bool {
+public func put<T>(v: mut ref Vec<T>, index: u64, value: T): bool {
     let maxCap: u64 = 2147483647 as u64
     if index >= v.len || index > maxCap {
         return false
@@ -151,17 +151,17 @@ public func put<T>(mut v: Vec<T>, index: u64, value: T): bool {
 }
 
 /// Number of elements.
-public func len<T>(shared v: Vec<T>): u64 {
+public func len<T>(v: ref Vec<T>): u64 {
     return v.len
 }
 
 /// Allocated capacity (element slots).
-public func capacity<T>(shared v: Vec<T>): u64 {
+public func capacity<T>(v: ref Vec<T>): u64 {
     return v.capacity
 }
 
 /// `true` if `len == 0`.
-public func isEmpty<T>(shared v: Vec<T>): bool {
+public func isEmpty<T>(v: ref Vec<T>): bool {
     return v.len == 0
 }
 
@@ -173,12 +173,12 @@ public func asSlice<T>(v: ref Vec<T>): []T {
 }
 
 /// Drop length to zero (capacity retained).
-public func clear<T>(mut v: Vec<T>): void {
+public func clear<T>(v: mut ref Vec<T>): void {
     v.len = 0 as u64
 }
 
 /// Deallocate the buffer and reset to empty.
-public func destroy<T>(mut v: Vec<T>): void {
+public func destroy<T>(v: mut ref Vec<T>): void {
     if v.capacity > 0 {
         let size = v.capacity * mem.sizeOf<T>()
         unsafe {
@@ -193,56 +193,56 @@ public func destroy<T>(mut v: Vec<T>): void {
 // ── Method-style surface ───────────────────────────────────────────────────
 
 /// Method form of [`push`].
-public func Vec.push<T>(mut self, value: T): void {
+public func Vec.push<T>(self: mut ref Vec<T>, value: T): void {
     push(self, value)
 }
 
 /// Method form of [`pop`].
-public func Vec.pop<T>(mut self): Option<T> {
+public func Vec.pop<T>(self: mut ref Vec<T>): Option<T> {
     return pop(self)
 }
 
 /// Method form of [`get`].
-public func Vec.get<T>(shared self, index: u64): Option<T> {
+public func Vec.get<T>(self: ref Vec<T>, index: u64): Option<T> {
     return get(self, index)
 }
 
 /// Method form of [`put`].
-public func Vec.put<T>(mut self, index: u64, value: T): bool {
+public func Vec.put<T>(self: mut ref Vec<T>, index: u64, value: T): bool {
     return put(self, index, value)
 }
 
 /// Method form of [`len`].
-public func Vec.len<T>(shared self): u64 {
+public func Vec.len<T>(self: ref Vec<T>): u64 {
     return len(self)
 }
 
 /// Method form of [`capacity`].
-public func Vec.capacity<T>(shared self): u64 {
+public func Vec.capacity<T>(self: ref Vec<T>): u64 {
     return capacity(self)
 }
 
 /// Method form of [`isEmpty`].
-public func Vec.isEmpty<T>(shared self): bool {
+public func Vec.isEmpty<T>(self: ref Vec<T>): bool {
     return isEmpty(self)
 }
 
-public func Vec.asSlice<T>(shared self): []T {
+public func Vec.asSlice<T>(self: ref Vec<T>): []T {
     return asSlice<T>(self)
 }
 
 /// Method form of [`reserve`].
-public func Vec.reserve<T>(mut self, additional: u64): void {
+public func Vec.reserve<T>(self: mut ref Vec<T>, additional: u64): void {
     reserve(self, additional)
 }
 
 /// Method form of [`clear`].
-public func Vec.clear<T>(mut self): void {
+public func Vec.clear<T>(self: mut ref Vec<T>): void {
     clear(self)
 }
 
 /// Method form of [`destroy`].
 @Destructor
-public func Vec.destroy<T>(own self): void {
+public func Vec.destroy<T>(self: own Vec<T>): void {
     destroy(self)
 }
