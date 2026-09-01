@@ -7,7 +7,7 @@
 use crate::db::HashEq;
 use crate::{ArandCompilerDb, SourceFile};
 use arandu_middle::amir::{AmirFunc, AmirRvalue, AmirStmt, BlockId};
-use arandu_middle::{Diagnostic, SymbolId, SymbolKind};
+use arandu_middle::{DiagCode, Diagnostic, SymbolId, SymbolKind};
 
 /// Compact, hash-stable summary of block-local dataflow.
 ///
@@ -522,7 +522,7 @@ pub fn item_ide_diagnostics(
             },
         ) {
             let mut diagnostic = IdeDiagnostic::from_diag(&d, Some(item_sym), Some(bid));
-            if diagnostic.code == "O004"
+            if d.code == DiagCode::O004GenerationalFallback
                 && d.severity == arandu_middle::Severity::Note
                 && !no_fallback
             {

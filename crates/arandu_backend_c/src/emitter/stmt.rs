@@ -22,71 +22,64 @@ impl<'a> CEmitter<'a> {
             }
             _ => return false,
         };
-        let bare = name.rsplit(['.', '$']).next().unwrap_or(name);
-        let is_read = bare == "ptrRead" || bare == "ptr_read" || name.contains("ptrRead");
-        let is_write = bare == "ptrWrite" || bare == "ptr_write" || name.contains("ptrWrite");
-        let is_offset = bare == "ptrOffset" || bare == "ptr_offset" || name.contains("ptrOffset");
-        let is_size = bare == "sizeOf" || bare == "size_of" || name.contains("sizeOf");
-        let is_align = bare == "alignOf" || bare == "align_of" || name.contains("alignOf");
-        let is_abort = bare == "abort"
-            || bare == "abortGenerationalMismatch"
-            || name.contains("intrinsics.abort");
+        let kind = arandu_middle::IntrinsicKind::from_name(name);
 
-        if is_abort {
-            let _ = writeln!(&mut self.output, "    abort();");
-            return true;
+        match kind {
+            Some(arandu_middle::IntrinsicKind::Abort) => {
+                let _ = writeln!(&mut self.output, "    abort();");
+                true
+            }
+            Some(arandu_middle::IntrinsicKind::PtrRead) => {
+                if args.is_empty() {
+                    return true;
+                }
+                let p = self.format_operand(&args[0], func);
+                if let Some(dest) = lhs {
+                    let _ = writeln!(&mut self.output, "    t{} = *({});", dest.as_usize(), p);
+                }
+                true
+            }
+            Some(arandu_middle::IntrinsicKind::PtrWrite) => {
+                if args.len() < 2 {
+                    return true;
+                }
+                let p = self.format_operand(&args[0], func);
+                let v = self.format_operand(&args[1], func);
+                let _ = writeln!(&mut self.output, "    *({}) = {};", p, v);
+                true
+            }
+            Some(arandu_middle::IntrinsicKind::PtrOffset) => {
+                if args.len() < 2 {
+                    return true;
+                }
+                let p = self.format_operand(&args[0], func);
+                let i = self.format_operand(&args[1], func);
+                // C pointer arithmetic scales by pointee size when `p` is a typed pointer.
+                if let Some(dest) = lhs {
+                    let _ = writeln!(
+                        &mut self.output,
+                        "    t{} = ({}) + ({});",
+                        dest.as_usize(),
+                        p,
+                        i
+                    );
+                }
+                true
+            }
+            Some(arandu_middle::IntrinsicKind::SizeOf | arandu_middle::IntrinsicKind::AlignOf) => {
+                // Residual only — prefer AMIR fold. Host pointer width for `int`.
+                let n = if kind == Some(arandu_middle::IntrinsicKind::SizeOf) {
+                    self.layout.pointer_width()
+                } else {
+                    self.layout.pointer_width().min(8)
+                };
+                if let Some(dest) = lhs {
+                    let _ = writeln!(&mut self.output, "    t{} = {}ULL;", dest.as_usize(), n);
+                }
+                true
+            }
+            _ => false,
         }
-
-        if is_read {
-            if args.is_empty() {
-                return true;
-            }
-            let p = self.format_operand(&args[0], func);
-            if let Some(dest) = lhs {
-                let _ = writeln!(&mut self.output, "    t{} = *({});", dest.as_usize(), p);
-            }
-            return true;
-        }
-        if is_write {
-            if args.len() < 2 {
-                return true;
-            }
-            let p = self.format_operand(&args[0], func);
-            let v = self.format_operand(&args[1], func);
-            let _ = writeln!(&mut self.output, "    *({}) = {};", p, v);
-            return true;
-        }
-        if is_offset {
-            if args.len() < 2 {
-                return true;
-            }
-            let p = self.format_operand(&args[0], func);
-            let i = self.format_operand(&args[1], func);
-            // C pointer arithmetic scales by pointee size when `p` is a typed pointer.
-            if let Some(dest) = lhs {
-                let _ = writeln!(
-                    &mut self.output,
-                    "    t{} = ({}) + ({});",
-                    dest.as_usize(),
-                    p,
-                    i
-                );
-            }
-            return true;
-        }
-        if is_size || is_align {
-            // Residual only — prefer AMIR fold. Host pointer width for `int`.
-            let n = if is_size {
-                self.layout.pointer_width()
-            } else {
-                self.layout.pointer_width().min(8)
-            };
-            if let Some(dest) = lhs {
-                let _ = writeln!(&mut self.output, "    t{} = {}ULL;", dest.as_usize(), n);
-            }
-            return true;
-        }
-        false
     }
 
     pub(super) fn emit_stmt(&mut self, stmt: &AmirStmt, func: &AmirFunc) {

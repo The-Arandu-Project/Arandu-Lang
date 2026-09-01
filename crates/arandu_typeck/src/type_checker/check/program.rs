@@ -37,7 +37,10 @@ pub fn check_bodies(checker: &mut TypeChecker<'_>, program: &Program) {
                     checker.record_decl_type(*symbol_id, val_ty);
                 }
             }
-            TopLevelDecl::Extern(extern_decl) if extern_decl.abi == "arandu-intrinsic" => {
+            TopLevelDecl::Extern(extern_decl)
+                if arandu_parser::AbiKind::from_abi_str(&extern_decl.abi)
+                    == arandu_parser::AbiKind::AranduIntrinsic =>
+            {
                 let module_name = program
                     .module
                     .as_ref()

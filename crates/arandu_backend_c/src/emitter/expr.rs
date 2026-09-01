@@ -35,34 +35,37 @@ impl<'a> CEmitter<'a> {
             }
             AmirRvalue::BlackBox { value, .. } => {
                 let operand = self.format_operand(value, func);
-                if matches!(expected_ar_type, ArType::Primitive(Primitive::Str)) {
-                    let _ = write!(
-                        &mut self.output,
-                        "({{ volatile {expected_c_type} opaque = ({operand}); opaque; }})"
-                    );
-                } else if expected_c_type == "double" || expected_c_type == "float" {
-                    let _ = write!(
-                        &mut self.output,
-                        "ar_bench_black_box_f64((double)({operand}))"
-                    );
-                } else if expected_c_type.ends_with('*') || expected_c_type == "void*" {
-                    let _ = write!(
-                        &mut self.output,
-                        "({expected_c_type})ar_bench_black_box_ptr((void*)({operand}))"
-                    );
-                } else if matches!(
-                    expected_ar_type,
-                    ArType::Primitive(_) | ArType::IntLiteral | ArType::FloatLiteral
-                ) {
-                    let _ = write!(
-                        &mut self.output,
-                        "({expected_c_type})ar_bench_black_box_i64((int64_t)({operand}))"
-                    );
-                } else {
-                    let _ = write!(
-                        &mut self.output,
-                        "({{ volatile {expected_c_type} opaque = ({operand}); opaque; }})"
-                    );
+                match expected_ar_type {
+                    ArType::Primitive(Primitive::Str) => {
+                        let _ = write!(
+                            &mut self.output,
+                            "({{ volatile {expected_c_type} opaque = ({operand}); opaque; }})"
+                        );
+                    }
+                    ArType::Primitive(Primitive::Float) | ArType::FloatLiteral => {
+                        let _ = write!(
+                            &mut self.output,
+                            "ar_bench_black_box_f64((double)({operand}))"
+                        );
+                    }
+                    ArType::Ptr(_) | ArType::Ref(_) | ArType::RefMut(_) => {
+                        let _ = write!(
+                            &mut self.output,
+                            "({expected_c_type})ar_bench_black_box_ptr((void*)({operand}))"
+                        );
+                    }
+                    ArType::Primitive(_) | ArType::IntLiteral => {
+                        let _ = write!(
+                            &mut self.output,
+                            "({expected_c_type})ar_bench_black_box_i64((int64_t)({operand}))"
+                        );
+                    }
+                    _ => {
+                        let _ = write!(
+                            &mut self.output,
+                            "({{ volatile {expected_c_type} opaque = ({operand}); opaque; }})"
+                        );
+                    }
                 }
             }
             AmirRvalue::Binary { op, left, right } => {
@@ -322,8 +325,14 @@ impl<'a> CEmitter<'a> {
                     // Load/store the **expected payload C type** (not i64 cast). Casting
                     // block_on_i64 → float/ptr was the root of nonsensical C for non-int.
                     UnaryOp::Await => {
-                        let is_float = expected_c_type == "double" || expected_c_type == "float";
-                        let is_ptr = expected_c_type.ends_with('*') || expected_c_type == "void*";
+                        let is_float = matches!(
+                            expected_ar_type,
+                            ArType::Primitive(Primitive::Float) | ArType::FloatLiteral
+                        );
+                        let is_ptr = matches!(
+                            expected_ar_type,
+                            ArType::Ptr(_) | ArType::Ref(_) | ArType::RefMut(_)
+                        );
                         let helper = if is_float {
                             "ar_co_await_f64"
                         } else if is_ptr {

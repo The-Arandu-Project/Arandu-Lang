@@ -395,7 +395,8 @@ impl LowerCtx<'_> {
                 };
                 if black_box_symbol.is_some_and(|symbol| {
                     let name = symbols.get(symbol).name.as_str();
-                    name == "blackBox" || name.ends_with(".blackBox")
+                    arandu_middle::IntrinsicKind::from_name(name)
+                        == Some(arandu_middle::IntrinsicKind::BlackBox)
                 }) {
                     let args_slice = self.hir.pool.expr_list(*args);
                     if let Some(&argument) = args_slice.first() {
@@ -666,31 +667,34 @@ impl LowerCtx<'_> {
                 } else {
                     Some(target.unwrap_or_else(|| self.new_temp_id(expr.ty)))
                 };
-                if let (Some(symbol), Some(dest)) = (callee_symbol, dest) {
+                if let Some(symbol) = callee_symbol {
                     let name = symbols.get(symbol).name.as_str();
-                    let bare = name.rsplit('.').next().unwrap_or(name);
-                    let intrinsic = match arg_ops.as_slice() {
-                        [owner, data, len] if bare.starts_with("sliceFromRaw") => {
+                    let kind = arandu_middle::IntrinsicKind::from_name(name);
+                    let intrinsic = match (kind, arg_ops.as_slice()) {
+                        (Some(arandu_middle::IntrinsicKind::SliceFromRaw), [owner, data, len]) => {
                             Some(AmirRvalue::SliceView {
                                 owner: *owner,
                                 data: *data,
                                 len: *len,
                             })
                         }
-                        [slice, start, len] if bare.starts_with("sliceSubslice") => {
-                            Some(AmirRvalue::SliceSubslice {
-                                slice: *slice,
-                                start: *start,
-                                len: *len,
-                            })
+                        (
+                            Some(arandu_middle::IntrinsicKind::SliceSubslice),
+                            [slice, start, len],
+                        ) => Some(AmirRvalue::SliceSubslice {
+                            slice: *slice,
+                            start: *start,
+                            len: *len,
+                        }),
+                        (Some(arandu_middle::IntrinsicKind::SliceLen), [slice]) => {
+                            Some(AmirRvalue::Len(*slice))
                         }
-                        [slice] if bare.starts_with("sliceLen") => Some(AmirRvalue::Len(*slice)),
-                        [owner] if bare.starts_with("strView") => {
+                        (Some(arandu_middle::IntrinsicKind::StrView), [owner]) => {
                             Some(AmirRvalue::StrView { owner: *owner })
                         }
                         _ => None,
                     };
-                    if let Some(intrinsic) = intrinsic {
+                    if let (Some(intrinsic), Some(dest)) = (intrinsic, dest) {
                         self.emit_assign_temp(dest, intrinsic);
                         return Ok(AmirOperand::Copy(dest));
                     }
@@ -1061,13 +1065,12 @@ impl LowerCtx<'_> {
             }
             _ => return Ok(None),
         };
-        // Accept bare or qualified names after import rewrite.
-        let bare = name.rsplit('.').next().unwrap_or(name);
-        let is_size = bare == "sizeOf" || bare == "size_of";
-        let is_align = bare == "alignOf" || bare == "align_of";
-        if !is_size && !is_align {
-            return Ok(None);
-        }
+        let kind = arandu_middle::IntrinsicKind::from_name(name);
+        let bare = match kind {
+            Some(arandu_middle::IntrinsicKind::SizeOf) => "sizeOf",
+            Some(arandu_middle::IntrinsicKind::AlignOf) => "alignOf",
+            _ => return Ok(None),
+        };
 
         let ty = self.resolve_ty(type_args[0]);
         let pointer_width = std::mem::size_of::<usize>() as u64;
@@ -1085,7 +1088,11 @@ impl LowerCtx<'_> {
                     callee_expr.span,
                 )
             })?;
-        let value = if is_size { layout.size } else { layout.align };
+        let value = if kind == Some(arandu_middle::IntrinsicKind::SizeOf) {
+            layout.size
+        } else {
+            layout.align
+        };
 
         let lit = self.intern_literal_int(value.to_string());
         let dest = target.unwrap_or_else(|| self.new_temp_id(result_ty));

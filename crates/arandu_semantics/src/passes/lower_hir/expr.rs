@@ -146,15 +146,7 @@ pub(crate) fn lower_expr_raw(
         ExprKind::VariantSugar { name, args, .. } => {
             // T2.2: lower like Result/Option/Poll ctors from the recorded expr type.
             let arg_ids = pool.expr_list(*args).to_vec();
-            let variant = match name.as_str() {
-                "Ok" => Some(crate::hir::ResultCtorVariant::Ok),
-                "Err" => Some(crate::hir::ResultCtorVariant::Err),
-                "Some" => Some(crate::hir::ResultCtorVariant::Some),
-                "None" => Some(crate::hir::ResultCtorVariant::None),
-                "Ready" => Some(crate::hir::ResultCtorVariant::PollReady),
-                "Pending" => Some(crate::hir::ResultCtorVariant::PollPending),
-                _ => None,
-            };
+            let variant = crate::hir::ResultCtorVariant::from_name(name.as_str());
             if let Some(variant) = variant {
                 if arg_ids.len() == 1 {
                     let value_id = lower_expr(type_check, pool, hir_pool, arg_ids[0])?;

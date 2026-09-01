@@ -165,7 +165,9 @@ fn check_one_item_body(checker: &mut TypeChecker<'_>, program: &Program, decl: &
         }
         TopLevelDecl::Extern(extern_decl) => {
             validate_top_level_any(checker, decl);
-            if extern_decl.abi == "arandu-intrinsic" {
+            if arandu_parser::AbiKind::from_abi_str(&extern_decl.abi)
+                == arandu_parser::AbiKind::AranduIntrinsic
+            {
                 let module_name = program
                     .module
                     .as_ref()
