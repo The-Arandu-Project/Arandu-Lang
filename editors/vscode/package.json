@@ -176,9 +176,9 @@
         ]
     },
     "scripts": {
-        "vscode:prepublish": "npm run compile && npm run lint",
-        "compile": "tsc -p ./",
-        "watch": "tsc -watch -p ./",
+        "vscode:prepublish": "npm run compile && npm run lint && node esbuild.js --production",
+        "compile": "tsc -p ./ && node esbuild.js",
+        "watch": "node esbuild.js --watch",
         "lint": "eslint src --max-warnings=0",
         "pretest": "npm run compile && npm run lint",
         "test": "npm run test:unit && npm run test:extension",
@@ -198,6 +198,7 @@
         "@types/vscode": "1.92.0",
         "@vscode/test-electron": "3.1.0",
         "@vscode/vsce": "3.9.2",
+        "esbuild": "0.28.2",
         "eslint": "10.9.0",
         "typescript": "5.9.3",
         "typescript-eslint": "8.67.0"
