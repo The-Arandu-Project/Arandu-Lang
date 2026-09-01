@@ -16,13 +16,23 @@ pub fn optimize_amir_checked(
     symbols: &SymbolTable,
     interner: &TypeInterner,
 ) -> Result<(), Diagnostic> {
+    optimize_amir_checked_with_level(program, symbols, interner, OptLevel::O1)
+}
+
+/// Validates AMIR before and after running the selected optimization pipeline.
+pub fn optimize_amir_checked_with_level(
+    program: &mut AmirProgram,
+    symbols: &SymbolTable,
+    interner: &TypeInterner,
+    level: OptLevel,
+) -> Result<(), Diagnostic> {
     if let Some(issue) = crate::amir_validate::validate_amir_program(program, symbols, interner)
         .into_iter()
         .next()
     {
         return Err(issue);
     }
-    optimize_amir(program)?;
+    optimize_amir_with_level(program, level)?;
     if let Some(issue) = crate::amir_validate::validate_amir_program(program, symbols, interner)
         .into_iter()
         .next()

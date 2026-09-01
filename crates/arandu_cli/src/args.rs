@@ -134,7 +134,7 @@ pub fn usage_and_exit() -> ! {
         "  -Z flags: -Ztime-passes  -Zprofile-queries  -Zprint-alloc-stats  -Zdump-mir\n",
         "           : -Zdebug-parser -Zdebug-typeck -Zdebug-ossa -Zdebug-layout -Zdebug-backend -Zdebug-all\n",
         "           : -Zself-profile=<path>  -Zexplain-rebuild  -Zno-generational-fallback\n\n",
-        "  backend: build → Cranelift (dev); build --release → LLVM when available\n",
+        "  backend: build → Cranelift baseline; build --release → Cranelift speed + AMIR O2\n",
         "  stdlib:  --stdlib-path > ARANDU_STDLIB > relative to binary (never cwd)\n",
         "  cache:   --cache-dir > ARANDU_CACHE_DIR > platform-native user cache"
     );

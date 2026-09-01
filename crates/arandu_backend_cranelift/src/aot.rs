@@ -43,6 +43,25 @@ pub struct CraneliftObjectBackend {
     compiler: AranduModule<ObjectModule>,
 }
 
+/// Code-generation policy for native object emission.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AotOptimization {
+    /// Minimize compiler latency for the edit/build cycle.
+    #[default]
+    Baseline,
+    /// Ask Cranelift to optimize generated machine code for execution speed.
+    Speed,
+}
+
+impl AotOptimization {
+    fn cranelift_value(self) -> &'static str {
+        match self {
+            Self::Baseline => "none",
+            Self::Speed => "speed",
+        }
+    }
+}
+
 impl CraneliftObjectBackend {
     /// Creates a baseline backend for the current Rust host target.
     ///
@@ -53,11 +72,24 @@ impl CraneliftObjectBackend {
         Self::for_target(Triple::host())
     }
 
+    /// Creates a speed-optimized backend for release builds on the host.
+    pub fn host_release() -> Result<Self, Diagnostic> {
+        Self::for_target_with_optimization(Triple::host(), AotOptimization::Speed)
+    }
+
     /// Creates a baseline backend for `target`.
     ///
     /// A target is accepted only when this Cranelift build contains its ISA.
     /// Linking and target runtime selection are intentionally later stages.
     pub fn for_target(target: Triple) -> Result<Self, Diagnostic> {
+        Self::for_target_with_optimization(target, AotOptimization::Baseline)
+    }
+
+    /// Creates a backend for `target` using an explicit code-generation policy.
+    pub fn for_target_with_optimization(
+        target: Triple,
+        optimization: AotOptimization,
+    ) -> Result<Self, Diagnostic> {
         let mut flag_builder = settings::builder();
         for (key, value) in [
             ("enable_verifier", "true"),
@@ -70,7 +102,7 @@ impl CraneliftObjectBackend {
                     "true"
                 },
             ),
-            ("opt_level", "none"),
+            ("opt_level", optimization.cranelift_value()),
             ("preserve_frame_pointers", "true"),
         ] {
             flag_builder.set(key, value).map_err(|err| {

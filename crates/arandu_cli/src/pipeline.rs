@@ -60,6 +60,22 @@ pub fn optimize_amir_or_exit(
     }
 }
 
+pub fn optimize_amir_with_level_or_exit(
+    amir: &mut arandu_semantics::amir::AmirProgram,
+    type_check: &arandu_semantics::TypeCheckResult,
+    level: arandu_semantics::OptLevel,
+    filepath: &str,
+) {
+    if let Err(diag) = arandu_semantics::optimize_amir_checked_with_level(
+        amir,
+        type_check.symbols.as_ref(),
+        &type_check.type_info.type_interner,
+        level,
+    ) {
+        print_diagnostics_and_exit(std::iter::once(diag), filepath);
+    }
+}
+
 pub fn validate_hir_and_monomorphize(
     hir: &mut arandu_semantics::hir::HirProgram,
     type_check: &mut arandu_semantics::TypeCheckResult,

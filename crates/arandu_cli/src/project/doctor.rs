@@ -235,20 +235,27 @@ pub fn cmd_doctor(flags: &ProjectFlags) -> i32 {
         },
     );
 
-    // [LLVM] release backend (reserved convention)
-    categories.push(DoctorCategory {
-        status: DoctorStatus::Skip,
-        title: "LLVM backend (release)".into(),
-        details: vec![
-            DoctorDetail::Info("not implemented yet".into()),
-            DoctorDetail::Info(
-                "convention is fixed: `build` → Cranelift, `build --release` → LLVM".into(),
-            ),
-            DoctorDetail::Hint(
-                "`arandu_cli build --release` exits with a clear error until LLVM lands".into(),
-            ),
-        ],
-    });
+    // [Cranelift] release AOT backend
+    categories.push(
+        match arandu_backend_cranelift::CraneliftObjectBackend::host_release() {
+            Ok(_) => DoctorCategory {
+                status: DoctorStatus::Ok,
+                title: "Cranelift backend (release AOT)".into(),
+                details: vec![
+                    DoctorDetail::Info("host ISA initialized with speed optimization".into()),
+                    DoctorDetail::Info("used by `build --release` with AMIR O2".into()),
+                ],
+            },
+            Err(diag) => DoctorCategory {
+                status: DoctorStatus::Fail,
+                title: "Cranelift backend (release AOT)".into(),
+                details: vec![DoctorDetail::Error(format!(
+                    "failed to initialize release ISA ({})",
+                    diag.message
+                ))],
+            },
+        },
+    );
 
     // Env extras only in verbose
     if flags.verbose {

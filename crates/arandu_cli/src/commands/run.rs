@@ -15,7 +15,7 @@ use crate::project::{self, ProjectFlags};
 pub fn cmd_project_run(start: &Path, flags: &ProjectFlags, opt: bool, _debug: bool) -> CliResult {
     if flags.release {
         return Err(CliFailure::usage(
-            "`run --release` (LLVM) is not implemented yet; use `run` for Cranelift JIT",
+            "`--release` is supported by `build`; `run` remains the interactive Cranelift JIT path",
         ));
     }
     let (mut db, rebuild_log) = arandu_query::DatabaseImpl::with_rebuild_log();

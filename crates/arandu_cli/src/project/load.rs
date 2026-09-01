@@ -245,26 +245,26 @@ pub fn load_project(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendChoice {
     /// Fast host path — Cranelift JIT for `run`, AOT object/link for `build`.
-    Cranelift,
-    /// Future release path — `build --release` (not implemented yet).
-    LlvmReserved,
+    CraneliftDev,
+    /// Speed-oriented Cranelift AOT path used by `build --release`.
+    CraneliftRelease,
 }
 
 impl BackendChoice {
     #[must_use]
     pub fn from_release_flag(release: bool) -> Self {
         if release {
-            BackendChoice::LlvmReserved
+            BackendChoice::CraneliftRelease
         } else {
-            BackendChoice::Cranelift
+            BackendChoice::CraneliftDev
         }
     }
 
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
-            BackendChoice::Cranelift => "cranelift",
-            BackendChoice::LlvmReserved => "llvm (reserved)",
+            BackendChoice::CraneliftDev => "cranelift-dev",
+            BackendChoice::CraneliftRelease => "cranelift-release",
         }
     }
 }

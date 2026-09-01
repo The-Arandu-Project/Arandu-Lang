@@ -60,3 +60,26 @@ fn baseline_object_emission_is_byte_deterministic() {
     assert_eq!(first.target(), second.target());
     assert_eq!(first.bytes(), second.bytes());
 }
+
+#[test]
+fn release_object_emission_is_byte_deterministic() {
+    let src = "func add(a: int, b: int): int { return a + b; }";
+    let program = arandu_parser::parse(src).expect("parse failed");
+    let resolution = resolve_for_test(0, &program);
+    let mut tc = type_check(resolution, &program);
+    let hir = lower_to_hir(&mut tc, &program).expect("HIR lowering failed");
+    let amir = lower_to_amir(&tc, &hir).expect("AMIR lowering failed");
+    let symbols = Arc::unwrap_or_clone(tc.symbols);
+    let type_info = Arc::unwrap_or_clone(tc.type_info);
+
+    let emit = || {
+        CraneliftObjectBackend::host_release()
+            .expect("host release ISA should be supported")
+            .compile(&amir, &symbols, &type_info)
+            .expect("release object emission should succeed")
+    };
+    let first = emit();
+    let second = emit();
+    assert_eq!(first.target(), second.target());
+    assert_eq!(first.bytes(), second.bytes());
+}
