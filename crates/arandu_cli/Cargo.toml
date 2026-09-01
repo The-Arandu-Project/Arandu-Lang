@@ -5,6 +5,10 @@ edition = "2024"
 license.workspace = true
 authors.workspace = true
 
+[features]
+default = ["self-profile"]
+self-profile = ["arandu_base/self-profile"]
+
 [lints]
 workspace = true
 

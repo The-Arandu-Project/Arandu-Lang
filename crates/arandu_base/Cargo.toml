@@ -5,6 +5,10 @@ edition = "2024"
 license.workspace = true
 authors.workspace = true
 
+[features]
+default = []
+self-profile = []
+
 [dependencies]
 rustc-hash = { workspace = true }
 tracing.workspace = true
