@@ -307,8 +307,46 @@ impl<'a> Parser<'a> {
             }));
         }
         if self.eat_name("LPAREN") {
-            let ty = self.parse_type()?;
+            let mut params = Vec::new();
+            let mut saw_comma = false;
+            if !self.at_kind_name("RPAREN") {
+                loop {
+                    params.push(self.parse_type()?);
+                    if !self.eat_name("COMMA") {
+                        break;
+                    }
+                    saw_comma = true;
+                    if self.at_kind_name("RPAREN") {
+                        break;
+                    }
+                }
+            }
             self.expect_name("RPAREN")?;
+            if self.eat_name("ARROW") {
+                let result_start = self.mark();
+                let result_ty = self.parse_type()?;
+                let result = ResultType::Single {
+                    span: self.span_from_mark(result_start),
+                    ty: result_ty,
+                };
+                let span = self.span_from_mark(start);
+                let params = self.pool.alloc_type_expr_list(&params);
+                return Ok(self.pool.alloc_type_expr(TypeExpr::Func {
+                    span,
+                    params,
+                    result: Some(result),
+                }));
+            }
+            if saw_comma || params.len() != 1 {
+                return Err(ParseError::new(
+                    ParseErrorCode::ExpectedToken,
+                    "expected '->' after function type parameters",
+                    self.current(),
+                    self.file_id,
+                    self.source,
+                ));
+            }
+            let ty = params[0];
             let span = self.span_from_mark(start);
             return Ok(self
                 .pool

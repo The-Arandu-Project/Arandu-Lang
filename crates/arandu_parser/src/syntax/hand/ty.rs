@@ -151,16 +151,58 @@ pub fn parse_type(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>) -> Option<TypeExp
         }));
     }
 
-    // (T) group or func type (T, U) -> R — keep group / simple for now
+    // `(T)` grouped type or `(T, U) -> R` function type. A comma without an
+    // arrow is not silently accepted as a tuple because tuple types do not yet
+    // have an AST representation.
     if cur.eat(TokenKind::LParen) {
-        let inner = parse_type(ctx, cur)?;
+        let mut params = Vec::new();
+        let mut saw_comma = false;
+        if cur.peek_kind() != Some(TokenKind::RParen) {
+            loop {
+                params.push(parse_type(ctx, cur)?);
+                if !cur.eat(TokenKind::Comma) {
+                    break;
+                }
+                saw_comma = true;
+                if cur.peek_kind() == Some(TokenKind::RParen) {
+                    break;
+                }
+            }
+        }
         let close = cur.expect(TokenKind::RParen)?;
-        return Some(ctx.pool.alloc_type_expr(TypeExpr::Group {
+        if cur.eat(TokenKind::Arrow) {
+            let result_start = cur.peek()?.start;
+            let result_ty = parse_type(ctx, cur)?;
+            let end = ctx.pool.type_expr_span(result_ty).end;
+            let result = ResultType::Single {
+                span: ctx.span(result_start, end),
+                ty: result_ty,
+            };
+            let params = ctx.pool.alloc_type_expr_list(&params);
+            return Some(ctx.pool.alloc_type_expr(TypeExpr::Func {
+                span: ctx.span(start, end),
+                params,
+                result: Some(result),
+            }));
+        }
+        if saw_comma || params.len() != 1 {
+            return None;
+        }
+        let inner = params[0];
+        Some(ctx.pool.alloc_type_expr(TypeExpr::Group {
             span: ctx.span(start, close.start + close.len),
             inner,
-        }));
+        }))
+    } else {
+        parse_named_or_primitive_type(ctx, cur, start)
     }
+}
 
+fn parse_named_or_primitive_type(
+    ctx: &mut HandCtx<'_>,
+    cur: &mut Cursor<'_>,
+    start: u32,
+) -> Option<TypeExprId> {
     let t = cur.bump()?;
     let span = ctx.token_span(t);
     let mut ty = if let Some(name) = primitive_type_token_name(t.kind) {
