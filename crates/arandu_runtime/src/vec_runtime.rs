@@ -202,6 +202,69 @@ pub unsafe extern "C" fn ar_vec_realloc(p: *mut u8, old_size: i64, new_size: i64
     new_ptr
 }
 
+#[repr(C)]
+pub struct ArOwnedString {
+    pub data: *mut u8,
+    pub len: i64,
+    pub capacity: i64,
+}
+
+/// Append a UTF-8 byte sequence to the owned String buffer.
+/// Returns 0 on overflow/OOM and leaves the original value unchanged.
+///
+/// # Safety
+/// `string` must point to the std.alloc.String layout and `value` must be
+/// readable for `value_len` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ar_string_push_str(
+    string: *mut ArOwnedString,
+    value: *const u8,
+    value_len: i64,
+) -> i8 {
+    let Some(string) = (unsafe { string.as_mut() }) else {
+        return 0;
+    };
+    if value_len < 0 || (value_len > 0 && value.is_null()) {
+        return 0;
+    }
+    let Some(required) = string.len.checked_add(value_len) else {
+        return 0;
+    };
+    if required < 0 || required > i64::from(i32::MAX) {
+        return 0;
+    }
+    if required > string.capacity {
+        let mut capacity = string.capacity.max(8);
+        while capacity < required {
+            let Some(doubled) = capacity.checked_mul(2) else {
+                capacity = required;
+                break;
+            };
+            capacity = doubled.min(i64::from(i32::MAX));
+            if capacity == i64::from(i32::MAX) && capacity < required {
+                return 0;
+            }
+        }
+        let replacement = unsafe { ar_vec_realloc(string.data, string.capacity, capacity) };
+        if replacement.is_null() {
+            return 0;
+        }
+        string.data = replacement;
+        string.capacity = capacity;
+    }
+    if value_len > 0 {
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                value,
+                string.data.add(string.len as usize),
+                value_len as usize,
+            );
+        }
+    }
+    string.len = required;
+    1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,6 +285,33 @@ mod tests {
             assert_eq!(ar_vec_len(id), 1);
             ar_vec_destroy(id);
             assert_eq!(ar_vec_len(id), -1);
+        }
+    }
+
+    #[test]
+    fn string_push_str_is_utf8_preserving_and_failure_atomic() {
+        unsafe {
+            let mut string = ArOwnedString {
+                data: std::ptr::null_mut(),
+                len: 0,
+                capacity: 0,
+            };
+            let first = "olá".as_bytes();
+            assert_eq!(
+                ar_string_push_str(&mut string, first.as_ptr(), first.len() as i64),
+                1
+            );
+            assert_eq!(string.len, 4);
+            assert_eq!(
+                std::slice::from_raw_parts(string.data, string.len as usize),
+                first
+            );
+
+            let before = (string.data, string.len, string.capacity);
+            assert_eq!(ar_string_push_str(&mut string, first.as_ptr(), i64::MAX), 0);
+            assert_eq!((string.data, string.len, string.capacity), before);
+
+            ar_vec_buf_free(string.data, string.capacity);
         }
     }
 }

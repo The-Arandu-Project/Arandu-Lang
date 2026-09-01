@@ -115,7 +115,7 @@ pub fn clif_type(ty: &ArType, ptr_type: Type) -> ClifType {
 #[must_use]
 pub fn clif_types(ty: &ArType, ptr_type: Type) -> Vec<Type> {
     match ty {
-        ArType::Primitive(Primitive::Str) => vec![ptr_type, ptr_type],
+        ArType::Primitive(Primitive::Str) | ArType::Slice(_) => vec![ptr_type, ptr_type],
         _ => match clif_type(ty, ptr_type) {
             ClifType::Concrete(t) => vec![t],
             ClifType::Void => vec![],
@@ -129,7 +129,7 @@ pub fn clif_types(ty: &ArType, ptr_type: Type) -> Vec<Type> {
 #[must_use]
 pub fn clif_slot_count(ty: &ArType) -> usize {
     match ty {
-        ArType::Primitive(Primitive::Str) => 2,
+        ArType::Primitive(Primitive::Str) | ArType::Slice(_) => 2,
         ArType::Void | ArType::Error => 0,
         _ => 1,
     }
@@ -147,5 +147,18 @@ mod tests {
         );
         let clif_tys = clif_types(&str_ty, ptr_type_32);
         assert_eq!(clif_tys, vec![ptr_type_32, ptr_type_32]);
+    }
+
+    #[test]
+    fn slice_abi_is_two_pointer_sized_slots_on_32_and_64_bit_targets() {
+        let interner = arandu_semantics::passes::type_checker::types::TypeInterner::new();
+        let element = interner.intern(ArType::Primitive(Primitive::U8));
+        let slice = ArType::Slice(element);
+
+        assert_eq!(clif_types(&slice, I32), vec![I32, I32]);
+        assert_eq!(clif_types(&slice, I64), vec![I64, I64]);
+        assert_eq!(clif_slot_count(&slice), 2);
+        assert_eq!(clif_type(&slice, I32), ClifType::Concrete(I32));
+        assert_eq!(clif_type(&slice, I64), ClifType::Concrete(I64));
     }
 }

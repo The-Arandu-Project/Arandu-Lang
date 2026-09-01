@@ -5,6 +5,19 @@ use cranelift_module::Module;
 use super::FunctionTranslator;
 
 impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
+    pub(super) fn translate_slice_operand(&mut self, operand: &AmirOperand) -> (Value, Value) {
+        let descriptor = self.translate_operand(operand, Some(self.ptr_type));
+        let flags = cranelift_codegen::ir::MemFlagsData::new();
+        let data = self.builder.ins().load(self.ptr_type, flags, descriptor, 0);
+        let len = self.builder.ins().load(
+            self.ptr_type,
+            flags,
+            descriptor,
+            self.ptr_type.bytes() as i32,
+        );
+        (data, len)
+    }
+
     pub(super) fn translate_str_operand(&mut self, operand: &AmirOperand) -> (Value, Value) {
         if self.error.is_some() {
             return (self.poison_i32(), self.poison_i32());

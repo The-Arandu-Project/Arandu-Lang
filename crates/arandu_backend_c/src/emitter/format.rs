@@ -198,14 +198,7 @@ impl<'a> CEmitter<'a> {
                     };
                     let offset = layout.field_offsets.get(field_idx).copied().unwrap_or(0);
 
-                    let field_ty = match self.provider.get_struct_fields(struct_id) {
-                        Some(fields) => fields
-                            .get(field_name)
-                            .copied()
-                            .map(|tid| self.interner.resolve(tid))
-                            .unwrap_or(ArType::Error),
-                        None => ArType::Error,
-                    };
+                    let field_ty = self.instantiated_field_ty(&struct_ty, field_name);
                     let field_c_ty = self.format_type(&field_ty);
                     // If path is already a pointer (heap/ptr local without Deref), GEP from
                     // the pointer value; otherwise take address of the stack lvalue.

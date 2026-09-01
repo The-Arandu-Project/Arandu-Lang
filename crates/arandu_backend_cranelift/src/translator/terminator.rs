@@ -18,10 +18,8 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                         .declare_func_in_func(shutdown_id, self.builder.func);
                     self.builder.ins().call(shutdown, &[]);
                 }
-                if matches!(
-                    self.resolve_ty(self.current_func.return_type),
-                    ArType::Primitive(Primitive::Str)
-                ) {
+                let return_ty = self.resolve_ty(self.current_func.return_type);
+                if matches!(&return_ty, ArType::Primitive(Primitive::Str)) {
                     let ret_temp = arandu_semantics::amir::TempId::from_usize(0);
                     if let Some(&(var_ptr, var_len)) = self.str_temp_map.get(&ret_temp) {
                         let ptr_val = self.builder.use_var(var_ptr);
@@ -31,8 +29,13 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                         let p = self.poison_i32();
                         self.builder.ins().return_(&[p, p]);
                     }
+                } else if matches!(&return_ty, ArType::Slice(_)) {
+                    let ret_temp = arandu_semantics::amir::TempId::from_usize(0);
+                    let operand = arandu_semantics::amir::AmirOperand::Copy(ret_temp);
+                    let (data, len) = self.translate_slice_operand(&operand);
+                    self.builder.ins().return_(&[data, len]);
                 } else {
-                    let ret_ty = self.resolve_ty(self.current_func.return_type);
+                    let ret_ty = return_ty;
                     let clif_ret = clif_type(&ret_ty, self.ptr_type);
                     match clif_ret {
                         ClifType::Concrete(clif_ty) => {
@@ -61,6 +64,10 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                         let (ptr_val, len_val) = self.translate_str_operand(arg);
                         clif_args.push(BlockArg::Value(ptr_val));
                         clif_args.push(BlockArg::Value(len_val));
+                    } else if matches!(&param_ty, ArType::Slice(_)) {
+                        let (data, len) = self.translate_slice_operand(arg);
+                        clif_args.push(BlockArg::Value(data));
+                        clif_args.push(BlockArg::Value(len));
                     } else if let ClifType::Concrete(ty) = clif_type(&param_ty, self.ptr_type) {
                         let val = self.translate_operand(arg, Some(ty));
                         clif_args.push(BlockArg::Value(val));
@@ -86,6 +93,10 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                         let (ptr_val, len_val) = self.translate_str_operand(arg);
                         true_clif_args.push(BlockArg::Value(ptr_val));
                         true_clif_args.push(BlockArg::Value(len_val));
+                    } else if matches!(&param_ty, ArType::Slice(_)) {
+                        let (data, len) = self.translate_slice_operand(arg);
+                        true_clif_args.push(BlockArg::Value(data));
+                        true_clif_args.push(BlockArg::Value(len));
                     } else if let ClifType::Concrete(ty) = clif_type(&param_ty, self.ptr_type) {
                         let val = self.translate_operand(arg, Some(ty));
                         true_clif_args.push(BlockArg::Value(val));
@@ -100,6 +111,10 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                         let (ptr_val, len_val) = self.translate_str_operand(arg);
                         false_clif_args.push(BlockArg::Value(ptr_val));
                         false_clif_args.push(BlockArg::Value(len_val));
+                    } else if matches!(&param_ty, ArType::Slice(_)) {
+                        let (data, len) = self.translate_slice_operand(arg);
+                        false_clif_args.push(BlockArg::Value(data));
+                        false_clif_args.push(BlockArg::Value(len));
                     } else if let ClifType::Concrete(ty) = clif_type(&param_ty, self.ptr_type) {
                         let val = self.translate_operand(arg, Some(ty));
                         false_clif_args.push(BlockArg::Value(val));
@@ -155,6 +170,10 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                         let (ptr_val, len_val) = self.translate_str_operand(arg);
                         clif_args.push(BlockArg::Value(ptr_val));
                         clif_args.push(BlockArg::Value(len_val));
+                    } else if matches!(&param_ty, ArType::Slice(_)) {
+                        let (data, len) = self.translate_slice_operand(arg);
+                        clif_args.push(BlockArg::Value(data));
+                        clif_args.push(BlockArg::Value(len));
                     } else if let ClifType::Concrete(ty) = clif_type(&param_ty, self.ptr_type) {
                         let val = self.translate_operand(arg, Some(ty));
                         clif_args.push(BlockArg::Value(val));
@@ -163,8 +182,11 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 // Extra AMIR params without args: poison (should not happen after A3.5).
                 for param in target_block.params.iter().skip(args.len()) {
                     let param_ty = self.resolve_ty(param.ty);
-                    if matches!(&param_ty, ArType::Primitive(Primitive::Str)) {
-                        let p = self.poison_i32();
+                    if matches!(
+                        &param_ty,
+                        ArType::Primitive(Primitive::Str) | ArType::Slice(_)
+                    ) {
+                        let p = self.builder.ins().iconst(self.ptr_type, 0);
                         clif_args.push(BlockArg::Value(p));
                         clif_args.push(BlockArg::Value(p));
                     } else if let ClifType::Concrete(ty) = clif_type(&param_ty, self.ptr_type) {

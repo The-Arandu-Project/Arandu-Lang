@@ -305,12 +305,12 @@ impl ArType {
             | ArType::Ptr(_)
             | ArType::Nullable(_)
             | ArType::Ref(_)
+            | ArType::Slice(_)
             | ArType::GenRef => true,
             ArType::Error | ArType::Void | ArType::Err => true,
             // Named / aggregates: structural decision needs `TypeInfo::is_copy`.
             ArType::Named(_, _)
             | ArType::Func(_, _)
-            | ArType::Slice(_)
             | ArType::Array(_, _)
             | ArType::Tuple(_)
             | ArType::Result(_, _)
@@ -553,7 +553,7 @@ mod tests {
         let i = new_interner();
         let int = i.intern(ArType::Primitive(Primitive::Int));
         assert!(!ArType::Func(vec![int], int).is_copy_v01());
-        assert!(!ArType::Slice(int).is_copy_v01());
+        assert!(ArType::Slice(int).is_copy_v01());
         assert!(!ArType::Array(3, int).is_copy_v01());
         assert!(!ArType::Tuple(vec![int]).is_copy_v01());
         assert!(!ArType::Result(int, int).is_copy_v01());

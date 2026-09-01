@@ -9,7 +9,7 @@ use std::fmt::Write;
 
 use arandu_middle::amir::{AmirFunc, AmirProgram};
 use arandu_middle::layout::{LayoutEngine, StructLayoutProvider};
-use arandu_middle::types::{ArType, TypeInterner};
+use arandu_middle::types::{ArType, TypeInterner, build_subst_ids, substitute_type};
 use arandu_middle::{DiagCode, Diagnostic, Span};
 use arandu_semantics::SymbolTable;
 
@@ -92,6 +92,35 @@ impl<'a> CEmitter<'a> {
         self.interner.resolve(func.locals[local.as_usize()].ty)
     }
 
+    /// Resolve a field through the concrete arguments of a named type.
+    ///
+    /// Layout already substitutes generic parameters, so code generation must
+    /// do the same when it chooses the C lvalue type.  Returning the template
+    /// field (`T*`) for `Vec<int>` produces a translation unit whose temporary
+    /// declarations and field accesses disagree.
+    pub(super) fn instantiated_field_ty(&self, named_ty: &ArType, field_name: &str) -> ArType {
+        let ArType::Named(struct_id, generic_args) = named_ty else {
+            return ArType::Error;
+        };
+        let Some(field_ty) = self
+            .provider
+            .get_struct_fields(*struct_id)
+            .and_then(|fields| fields.get(field_name).copied())
+        else {
+            return ArType::Error;
+        };
+        let field_ty = self.interner.resolve(field_ty);
+        if generic_args.is_empty() {
+            return field_ty;
+        }
+        let substitution = build_subst_ids(
+            self.symbols.type_params_of(*struct_id),
+            generic_args,
+            self.interner,
+        );
+        substitute_type(&field_ty, &substitution, self.interner)
+    }
+
     pub(super) fn record_codegen_ice(&mut self, func: &AmirFunc, message: impl Into<String>) {
         if self.error.is_none() {
             let span = func
@@ -171,6 +200,7 @@ impl<'a> CEmitter<'a> {
                     | "ar_str_contains"
                     | "ar_str_find"
                     | "ar_str_split_last"
+                    | "ar_string_push_str"
             ) {
                 continue;
             }

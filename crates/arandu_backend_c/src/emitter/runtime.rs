@@ -183,7 +183,6 @@ static void ar_gen_shutdown_raw(void) {{
 static void *ar_vec_malloc(int64_t size) {{
     if (size <= 0) return NULL;
     void *p = malloc((size_t)size);
-    if (!p) abort();
     return p;
 }}
 static void ar_vec_buf_free(void *p, int64_t size) {{
@@ -193,9 +192,30 @@ static void ar_vec_buf_free(void *p, int64_t size) {{
 static void *ar_vec_realloc(void *p, int64_t old_size, int64_t new_size) {{
     if (new_size <= 0) {{ free(p); return NULL; }}
     void *q = realloc(p, (size_t)new_size);
-    if (!q) abort();
     (void)old_size;
     return q;
+}}
+typedef struct {{ uint8_t *data; uint64_t len; uint64_t capacity; }} ArOwnedStringRuntime;
+static bool ar_string_push_str(void *raw, const uint8_t *value_ptr, int64_t value_len) {{
+    ArOwnedStringRuntime *s = (ArOwnedStringRuntime*)raw;
+    if (!s || value_len < 0 || (value_len > 0 && !value_ptr)) return false;
+    uint64_t n = (uint64_t)value_len;
+    if (n > UINT32_MAX || s->len > UINT32_MAX - n) return false;
+    uint64_t required = s->len + n;
+    if (required > s->capacity) {{
+        uint64_t capacity = s->capacity < 8 ? 8 : s->capacity;
+        while (capacity < required) {{
+            capacity = capacity > UINT32_MAX / 2 ? UINT32_MAX : capacity * 2;
+            if (capacity == UINT32_MAX && capacity < required) return false;
+        }}
+        uint8_t *replacement = (uint8_t*)ar_vec_realloc(s->data, (int64_t)s->capacity, (int64_t)capacity);
+        if (!replacement) return false;
+        s->data = replacement;
+        s->capacity = capacity;
+    }}
+    if (n > 0) memcpy(s->data + s->len, value_ptr, (size_t)n);
+    s->len = required;
+    return true;
 }}"#
         );
     }
@@ -403,17 +423,10 @@ static inline void* ar_co_await_ptr(uint8_t* aw) {{
             &mut self.output,
             "static AR_BENCH_NOINLINE void *ar_bench_black_box_ptr(void *value) {{ void * volatile opaque = value; return opaque; }}"
         );
-        // F2.3.runtime: process-lifetime gen arena (i64 payload MVP; mirrors JIT host).
-        self.emit_gen_arena_runtime();
-        // Pure-buffer host used by std.alloc.vec / gen_arena product surface.
-        self.emit_vec_buf_runtime();
-        // A3.6: poll / block_on for coroutine state blobs (disc@0, payload@8).
-        self.emit_co_poll_runtime();
-        let _ = writeln!(&mut self.output);
-        if !needs_str {
-            return;
-        }
-        // ArStr = LayoutEngine fat pointer: { ptr, len:usize } (target-dependent width).
+        // `ArStr` is also part of the owned-string runtime ABI.  Keep the
+        // two-word descriptor available even when the user program contains
+        // no `str` value: `String.pushStr` is emitted with this ABI and the
+        // allocation runtime below is unconditional.
         let len_c_ty = if self.layout.pointer_width() == 4 {
             "int32_t"
         } else {
@@ -424,6 +437,16 @@ static inline void* ar_co_await_ptr(uint8_t* aw) {{
             "typedef struct {{ const uint8_t *ptr; {len_c_ty} len; }} ArStr;"
         );
         self.emitted_types.insert("ArStr".to_string());
+        // F2.3.runtime: process-lifetime gen arena (i64 payload MVP; mirrors JIT host).
+        self.emit_gen_arena_runtime();
+        // Pure-buffer host used by std.alloc.vec / gen_arena product surface.
+        self.emit_vec_buf_runtime();
+        // A3.6: poll / block_on for coroutine state blobs (disc@0, payload@8).
+        self.emit_co_poll_runtime();
+        let _ = writeln!(&mut self.output);
+        if !needs_str {
+            return;
+        }
         // Runtime helpers for fat-pointer strings (string interpolation).
         let _ = writeln!(
             &mut self.output,

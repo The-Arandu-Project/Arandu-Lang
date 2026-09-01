@@ -175,7 +175,9 @@ fn ide_o003_is_born_and_removed_after_cached_edits() {
     assert!(!diagnostic.notes.is_empty());
 
     file.set_text(&mut db).to(Arc::from(mutation_source(false)));
-    assert!(!codes(&db, file).iter().any(|code| code == "O003"));
+    assert!(!codes(&db, file)
+        .iter()
+        .any(|code| code == "O002" || code == "O003"));
 }
 
 fn local_escape_source(escape: bool) -> String {
@@ -311,4 +313,66 @@ fn diagnostic_code_enum_still_owns_aud4_contracts() {
     assert_eq!(DiagCode::O003MutableBorrowConflict.as_str(), "O003");
     assert_eq!(DiagCode::O006DestroyWhileBorrowed.as_str(), "O006");
     assert_eq!(DiagCode::O010EscapeOfBorrowedValue.as_str(), "O010");
+}
+
+fn slice_view_source(with_conflict: bool) -> String {
+    let mutation = if with_conflict { "owner.value = 2" } else { "" };
+    format!(
+        r#"module std.core.slice_test
+
+struct Owner {{ value: int }}
+
+extern "arandu-intrinsic" {{
+    func makeRawView(owner: ref Owner): []int
+}}
+
+func makeView(owner: ref Owner): []int {{
+    unsafe {{
+        return makeRawView(owner)
+    }}
+}}
+
+func observe(values: []int): int {{
+    return 0
+}}
+
+func main(): int {{
+    let mut owner = Owner {{ value: 1 }}
+    let view = makeView(owner)
+    {mutation}
+    return observe(view)
+}}
+"#
+    )
+}
+
+#[test]
+fn ide_slice_view_conflict_is_born_and_removed_incrementally() {
+    let mut db = DatabaseImpl::new();
+    let file = db.new_file("slice_view.aru".into(), slice_view_source(false));
+    assert!(!codes(&db, file).iter().any(|code| code == "O003"));
+
+    file.set_text(&mut db)
+        .to(Arc::from(slice_view_source(true)));
+    let conflicting = file_ide_diagnostics(&db, file);
+    let diagnostic = conflicting
+        .iter()
+        .find(|diagnostic| diagnostic.code == "O002" || diagnostic.code == "O003")
+        .unwrap_or_else(|| {
+            let observed: Vec<_> = conflicting
+                .iter()
+                .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.message.as_str()))
+                .collect();
+            panic!(
+                "mutating an owner under a live []T view must surface an ownership conflict: {observed:?}"
+            )
+        });
+    assert!(!diagnostic.labels.is_empty());
+    assert!(!diagnostic.notes.is_empty());
+
+    file.set_text(&mut db)
+        .to(Arc::from(slice_view_source(false)));
+    assert!(!codes(&db, file)
+        .iter()
+        .any(|code| code == "O002" || code == "O003"));
 }

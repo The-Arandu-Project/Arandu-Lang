@@ -235,6 +235,10 @@ pub(crate) fn create_jit_builder() -> Result<JITBuilder, Diagnostic> {
         "ar_vec_realloc",
         crate::vec_runtime::ar_vec_realloc as *const u8,
     );
+    builder.symbol(
+        "ar_string_push_str",
+        crate::vec_runtime::ar_string_push_str as *const u8,
+    );
     builder.symbol("ar_vec_new", crate::vec_runtime::ar_vec_new as *const u8);
     builder.symbol("ar_vec_push", crate::vec_runtime::ar_vec_push as *const u8);
     builder.symbol("ar_vec_len", crate::vec_runtime::ar_vec_len as *const u8);

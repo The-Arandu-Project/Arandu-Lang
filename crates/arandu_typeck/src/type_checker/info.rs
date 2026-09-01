@@ -250,9 +250,15 @@ impl TypeInfo {
                 self.collect_borrow_paths(inner, prefix, visiting, output)?;
                 prefix.pop();
             }
+            ArType::Slice(_) => {
+                // A slice is itself a shared, non-owning view of its backing
+                // storage. Its ptr+len runtime representation carries no
+                // provenance, so the root dependency must survive in the
+                // compile-time structural contract.
+                output.push((BorrowPath(prefix.clone()), BorrowKind::Shared));
+            }
             ArType::Primitive(_)
             | ArType::Func(_, _)
-            | ArType::Slice(_)
             | ArType::Ptr(_)
             | ArType::GenRef
             | ArType::Err
@@ -305,12 +311,11 @@ impl TypeInfo {
             // Shared borrows remain copyable inside structural carriers. An
             // exclusive borrow is move-only, and raw pointers nested in an
             // owner aggregate remain non-POD to avoid accidental double free.
-            ArType::Ref(_) => true,
+            ArType::Ref(_) | ArType::Slice(_) => true,
             ArType::Ptr(_)
             | ArType::RefMut(_)
             | ArType::Nullable(_)
             | ArType::Func(_, _)
-            | ArType::Slice(_)
             | ArType::Coroutine(_)
             | ArType::Poll(_)
             | ArType::Range(_)
@@ -791,6 +796,19 @@ mod borrow_shape_tests {
                 BorrowKind::Shared,
             )]
         );
+    }
+
+    #[test]
+    fn slice_is_a_copyable_shared_borrow_at_its_root() {
+        let info = TypeInfo::new();
+        let int = info.type_interner.intern(ArType::Primitive(Primitive::Int));
+        let slice = info.type_interner.intern(ArType::Slice(int));
+
+        assert_eq!(
+            info.borrow_paths(slice).expect("slice shape"),
+            vec![(BorrowPath::root(), BorrowKind::Shared)]
+        );
+        assert!(info.is_copy(slice));
     }
 
     #[test]

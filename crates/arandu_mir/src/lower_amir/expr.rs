@@ -560,6 +560,13 @@ impl LowerCtx<'_> {
                 let callee_symbol = method_target.or(match &callee_expr.kind {
                     HirExprKind::Path { symbol } => Some(*symbol),
                     HirExprKind::TypePath { member_symbol, .. } => Some(*member_symbol),
+                    HirExprKind::Generic { callee, .. } => {
+                        match &self.hir.pool.expr(*callee).kind {
+                            HirExprKind::Path { symbol } => Some(*symbol),
+                            HirExprKind::TypePath { member_symbol, .. } => Some(*member_symbol),
+                            _ => None,
+                        }
+                    }
                     _ => None,
                 });
                 if let Some(callee_symbol) = callee_symbol {
@@ -659,6 +666,35 @@ impl LowerCtx<'_> {
                 } else {
                     Some(target.unwrap_or_else(|| self.new_temp_id(expr.ty)))
                 };
+                if let (Some(symbol), Some(dest)) = (callee_symbol, dest) {
+                    let name = symbols.get(symbol).name.as_str();
+                    let bare = name.rsplit('.').next().unwrap_or(name);
+                    let intrinsic = match arg_ops.as_slice() {
+                        [owner, data, len] if bare.starts_with("sliceFromRaw") => {
+                            Some(AmirRvalue::SliceView {
+                                owner: *owner,
+                                data: *data,
+                                len: *len,
+                            })
+                        }
+                        [slice, start, len] if bare.starts_with("sliceSubslice") => {
+                            Some(AmirRvalue::SliceSubslice {
+                                slice: *slice,
+                                start: *start,
+                                len: *len,
+                            })
+                        }
+                        [slice] if bare.starts_with("sliceLen") => Some(AmirRvalue::Len(*slice)),
+                        [owner] if bare.starts_with("strView") => {
+                            Some(AmirRvalue::StrView { owner: *owner })
+                        }
+                        _ => None,
+                    };
+                    if let Some(intrinsic) = intrinsic {
+                        self.emit_assign_temp(dest, intrinsic);
+                        return Ok(AmirOperand::Copy(dest));
+                    }
+                }
                 self.push_stmt(AmirStmt::Call {
                     lhs: dest,
                     callee: callee_op,

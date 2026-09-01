@@ -64,6 +64,14 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 }
                 AmirProjection::Index(op) => {
                     let idx_val = self.translate_operand(op, Some(self.ptr_type));
+                    if matches!(current_ty, ArType::Slice(_)) {
+                        ptr_val = self.builder.ins().load(
+                            self.ptr_type,
+                            cranelift_codegen::ir::MemFlagsData::new(),
+                            ptr_val,
+                            0,
+                        );
+                    }
                     let inner_ty_id = match &current_ty {
                         ArType::Ptr(inner) | ArType::Slice(inner) | ArType::Array(_, inner) => {
                             *inner
@@ -116,6 +124,14 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                     current_ty = unwrap_ptr_like(&current_ty, self);
                 }
                 let idx_val = self.translate_operand(op, Some(self.ptr_type));
+                if matches!(current_ty, ArType::Slice(_)) {
+                    ptr_val = self.builder.ins().load(
+                        self.ptr_type,
+                        cranelift_codegen::ir::MemFlagsData::new(),
+                        ptr_val,
+                        0,
+                    );
+                }
                 let inner_ty_id = match &current_ty {
                     ArType::Ptr(inner) | ArType::Slice(inner) | ArType::Array(_, inner) => *inner,
                     ArType::Ref(inner) | ArType::RefMut(inner) => *inner,

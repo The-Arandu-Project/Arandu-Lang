@@ -65,10 +65,9 @@ For compilation backends (such as the C backend and Cranelift JIT), platform-dep
 
 Strings and slices use a **Fat Pointer ABI** (`pointer + length`). This is only
 the physical representation; it does not by itself provide lifetime or
-ownership safety. The compiler must separately prove the provenance of safe
-references. `str` is an owned/managed language value, while the current
-`Slice<T>` stdlib type is a non-owning raw view until borrowed-view provenance
-is implemented.
+ownership safety. The compiler separately proves the provenance of safe
+references. `str` is a managed language value and `[]T` is a non-owning safe
+borrowed view whose origin and live range are erased only after validation.
 
 ### String Layout (`str`)
 
@@ -111,10 +110,10 @@ struct SliceLayout {
 - **64-bit Target**: `size = 16`, `align = 8`, field offsets: `ptr` at offset `0`, `len` at offset `8`.
 - **32-bit Target**: `size = 8`, `align = 4`, field offsets: `ptr` at offset `0`, `len` at offset `4`.
 
-The two-word layout must not be confused with a safe borrowed reference. A
-`ptr[T]` may be null or dangling and requires `unsafe` dereference. A future
-borrowed slice may reuse this ABI, but its origin, mutability and live range
-remain compiler-only ownership facts and must be checked before code generation.
+The two-word layout is not itself the safety proof. A raw `ptr[T]` may be null
+or dangling and requires `unsafe` dereference; `[]T` additionally carries
+compiler-only origin, mutability and live-range facts checked before code
+generation. C and Cranelift receive only the same two target-width slots.
 
 ### Generational reference (`GenRef`) — F2.3.runtime
 

@@ -165,6 +165,13 @@ public func isEmpty<T>(shared v: Vec<T>): bool {
     return v.len == 0
 }
 
+/// Shared zero-copy view of the initialized prefix.
+public func asSlice<T>(v: ref Vec<T>): []T {
+    unsafe {
+        return intrinsics.sliceFromRaw<Vec<T>, T>(v, v.data, v.len)
+    }
+}
+
 /// Drop length to zero (capacity retained).
 public func clear<T>(mut v: Vec<T>): void {
     v.len = 0 as u64
@@ -218,6 +225,10 @@ public func Vec.capacity<T>(shared self): u64 {
 /// Method form of [`isEmpty`].
 public func Vec.isEmpty<T>(shared self): bool {
     return isEmpty(self)
+}
+
+public func Vec.asSlice<T>(shared self): []T {
+    return asSlice<T>(self)
 }
 
 /// Method form of [`reserve`].

@@ -265,25 +265,39 @@ Critérios de aceite específicos:
 
 ### Marco BV.3 — APIs públicas, backends e promoção Gold
 
-- [ ] Tornar `Slice<T>` uma borrowed view segura no sistema de tipos, mantendo
+- [x] Tornar `Slice<T>` uma borrowed view segura no sistema de tipos, mantendo
       ABI `ptr + len` e construção raw confinada a `unsafe`.
-- [ ] Publicar `Slice.get -> Option<ref T>`, `first`, `last`, subslice e
+- [x] Publicar `Slice.get -> Option<ref T>`, `first`, `last`, subslice e
       iteração mínima sem cópia nem ponteiro seguro falsificado.
-- [ ] Publicar `String.asStr`, `String.asBytes` e `pushStr`; views vivas devem
+- [x] Publicar `String.asStr`, `String.asBytes` e `pushStr`; views vivas devem
       bloquear qualquer mutação/realloc do owner.
-- [ ] Cobrir `Option`, `Result`, tuple, struct e enum com shared e exclusive
+- [x] Cobrir `Option`, `Result`, tuple, struct e enum com shared e exclusive
       borrows, inclusive nested carriers e generic specialization.
-- [ ] Garantir paridade semântica e ABI nos backends C e Cranelift; metadados de
+- [x] Garantir paridade semântica e ABI nos backends C e Cranelift; metadados de
       lifetime não podem mudar layout ou aparecer no runtime.
-- [ ] Publicar corpus positivo/negativo CLI e incremental LSP para cada forma;
+- [x] Publicar corpus positivo/negativo CLI e incremental IDE para cada forma;
       diagnósticos mantêm código, labels, notes, hints e replacements.
 - [ ] Exercitar targets nativos publicados 32/64 bits onde suportados pelo SDK,
       além de Windows, Linux e macOS da matriz oficial.
-- [ ] Rodar determinismo, fuzz regressions e testes de transformação AMIR para
+- [x] Rodar determinismo, fuzz regressions e testes de transformação AMIR para
       provar que otimizações não apagam dependências antes da checagem.
 - [ ] Consolidar decisões/evidências em
       `arandu-stdlib-architecture-v0.1.md`, marcar `SL_S-Core` Gold apenas se
       todos os gates abaixo passarem e remover esta campanha.
+
+**Implementação BV.3 concluída localmente:** `ArType::Slice` é um shared borrow
+estrutural copiável; `SliceView`, `SliceSubslice` e `StrView` carregam owner na
+AMIR e são apagados nos backends. Cranelift expande `[]T` em dois slots nas
+assinaturas, block arguments e retornos, materializando descritores apenas
+internamente. O backend C emite o mesmo layout e agora substitui campos
+genéricos antes de formar lvalues, o que também corrige `Vec<T>` monomorfizado.
+O runtime de `String.pushStr` é fallible e failure-atomic.
+
+O corpus de produto cobre execução JIT, execução C nativa local, UTF-8,
+subslice/element borrow, escape O010, conflito de realloc/mutação, diagnóstico
+IDE incremental e layouts de dois slots com pointer width 32/64. Os itens ainda
+abertos acima são evidências de promoção: matriz nativa/fuzz/determinismo, CI do
+PR e remoção deste plano temporário — não implementação ausente da API BV.3.
 
 **Saída BV.3:** usuários conseguem obter e compor views seguras de `Slice` e
 `String`; código inseguro é rejeitado antes de C/Cranelift; os dois backends

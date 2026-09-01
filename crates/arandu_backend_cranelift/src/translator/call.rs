@@ -51,6 +51,11 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                         clif_args.push(ptr_val);
                         clif_args.push(len_val);
                         clif_param_idx += 2;
+                    } else if matches!(arg_ty, ArType::Slice(_)) {
+                        let (data, len) = self.translate_slice_operand(arg);
+                        clif_args.push(data);
+                        clif_args.push(len);
+                        clif_param_idx += 2;
                     } else {
                         let expected = expected_tys.get(clif_param_idx).copied();
                         let val = self.translate_operand(arg, expected);
@@ -79,6 +84,14 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                     if let Some(&(var_ptr, var_len)) = self.str_temp_map.get(lhs_temp) {
                         self.builder.def_var(var_ptr, res0);
                         self.builder.def_var(var_len, res1);
+                    }
+                }
+            } else if matches!(&lhs_ty, ArType::Slice(_)) {
+                let results = self.builder.inst_results(call_inst);
+                if results.len() >= 2 {
+                    let descriptor = self.materialize_slice_descriptor(results[0], results[1]);
+                    if let Some(&var) = self.temp_map.get(lhs_temp) {
+                        self.builder.def_var(var, descriptor);
                     }
                 }
             } else if let Some(&var) = self.temp_map.get(lhs_temp) {

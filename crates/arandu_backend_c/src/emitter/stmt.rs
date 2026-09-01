@@ -209,6 +209,34 @@ impl<'a> CEmitter<'a> {
                 if self.try_emit_mem_intrinsic(lhs, callee, args, func) {
                     return;
                 }
+                if let AmirOperand::FunctionRef(symbol) = callee
+                    && self
+                        .symbols
+                        .get(*symbol)
+                        .name
+                        .contains("ar_string_push_str")
+                    && let [owner, value] = args.as_slice()
+                {
+                    let owner = self.format_operand(owner, func);
+                    let value = self.format_operand(value, func);
+                    if let Some(dest) = lhs {
+                        let _ = writeln!(
+                            &mut self.output,
+                            "    t{} = ar_string_push_str({}, ({}).ptr, ({}).len);",
+                            dest.as_usize(),
+                            owner,
+                            value,
+                            value
+                        );
+                    } else {
+                        let _ = writeln!(
+                            &mut self.output,
+                            "    ar_string_push_str({}, ({}).ptr, ({}).len);",
+                            owner, value, value
+                        );
+                    }
+                    return;
+                }
                 let callee_str = self.format_operand(callee, func);
                 let args_str: Vec<_> = args.iter().map(|a| self.format_operand(a, func)).collect();
                 if let Some(dest) = lhs {

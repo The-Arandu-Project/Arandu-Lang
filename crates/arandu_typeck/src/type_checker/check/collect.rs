@@ -368,6 +368,61 @@ pub(crate) fn collect_signature_types(checker: &mut TypeChecker<'_>, program: &P
                     let name_key = crate::NodeKey::from(member.span);
                     if let Some(symbol_id) = checker.resolved.definitions.get(&name_key).copied() {
                         let ret_id = checker.intern(ret_ty);
+                        // Signature-only intrinsics cannot be inspected by the
+                        // AMIR solver. Publish a borrow interface only when the
+                        // signature has one unambiguous borrow-bearing input.
+                        // This covers stdlib view constructors without adding
+                        // names, addresses, or lifetimes to the stable contract.
+                        if let Ok(result_paths) = checker.type_info.borrow_paths(ret_id)
+                            && !result_paths.is_empty()
+                        {
+                            let candidates = param_types
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(index, parameter)| {
+                                    let paths = checker.type_info.borrow_paths(*parameter).ok()?;
+                                    (!paths.is_empty()).then_some((index, paths))
+                                })
+                                .collect::<Vec<_>>();
+                            if let [(parameter_index, parameter_paths)] = candidates.as_slice()
+                                && let Ok(parameter_index) = u32::try_from(*parameter_index)
+                            {
+                                let mut summary =
+                                    arandu_middle::types::ReturnBorrowSummary::default();
+                                for (result_path, kind) in result_paths {
+                                    let sources = parameter_paths
+                                        .iter()
+                                        .filter(|(_, source_kind)| {
+                                            kind == arandu_middle::types::BorrowKind::Shared
+                                                || *source_kind
+                                                    == arandu_middle::types::BorrowKind::Exclusive
+                                        })
+                                        .map(|(parameter_path, _)| {
+                                            arandu_middle::types::BorrowSource {
+                                                parameter_index,
+                                                parameter_path: parameter_path.clone(),
+                                            }
+                                        })
+                                        .collect::<Vec<_>>();
+                                    if !sources.is_empty() {
+                                        summary.dependencies.push(
+                                            arandu_middle::types::ReturnBorrowDependency {
+                                                result_path,
+                                                sources,
+                                                kind,
+                                            },
+                                        );
+                                    }
+                                }
+                                summary.canonicalize();
+                                if !summary.dependencies.is_empty() {
+                                    checker
+                                        .type_info
+                                        .return_borrow_summaries
+                                        .insert(symbol_id, summary);
+                                }
+                            }
+                        }
                         let func_ty = ArType::Func(param_types, ret_id);
                         let func_id = checker.intern(func_ty);
                         checker.record_decl_type(symbol_id, func_id);

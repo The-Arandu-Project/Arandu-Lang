@@ -500,6 +500,10 @@ fn rvalue_holder_paths(rhs: &AmirRvalue, loan: &Loan) -> BTreeSet<HolderPath> {
         AmirRvalue::Use(operand) | AmirRvalue::BlackBox { value: operand, .. } => {
             operand_holder_paths(*operand, loan)
         }
+        AmirRvalue::SliceView { owner, .. } | AmirRvalue::StrView { owner } => {
+            operand_holder_paths(*owner, loan)
+        }
+        AmirRvalue::SliceSubslice { slice, .. } => operand_holder_paths(*slice, loan),
         AmirRvalue::Load(place) => {
             let input = loan
                 .holder_local_paths

@@ -308,12 +308,11 @@ Fase 3 — OSSA Avançado, Semântica e OS Runtime (v0.3) · [PARCIAL; vários m
                  módulos/imports e fundação `std.core`/`std.alloc` em camelCase;
                  resta fechar ownership genérico, OOM/allocators, paridade de alvo
                  e a janela explícita de migração antes da promoção Gold
-                 · AUD.0–AUD.5 concluídos e BV.1 implementado: contratos de
-                   retorno estruturais, múltiplas origens demonstradas,
-                   forwarding/import/genérico/recursão e cutoff incremental
-                   são suportados; holders completos em carriers e
-                   `Slice`/`String` views permanecem pendentes, portanto a
-                   classificação global continua **parcial**; relatório
+                 · AUD.0–AUD.5 e BV.1–BV.3 implementados: contratos de retorno,
+                   múltiplas origens, carriers OSSA e APIs seguras de `[]T` e
+                   `String` preservam proveniência somente em compile-time;
+                   a classificação global continua **parcial** pelos gates de
+                   allocator, drop e matriz nativa; relatório
                    permanente em [arquitetura da stdlib](./arandu-stdlib-architecture-v0.1.md#relatório-final-aud5--segurança-de-borrowed-views)
                  · Campanha ativa para concluir o contrato estrutural, propagação
                    OSSA e APIs públicas: [Borrowed Views Gold](./campaigns/sl-s-borrowed-views-gold-v0.1.md)

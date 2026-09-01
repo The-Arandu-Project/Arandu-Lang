@@ -1,8 +1,9 @@
 # Arandu Semantic Memory Model v0.1
 
-**Status:** arquitetura aceita, parcialmente implementada. O subconjunto local,
-o fallback GenRef e referências relativas de coroutine existem; borrowed views
-estruturais permanecem em campanha até a promoção de `SL_S-Core`.
+**Status:** arquitetura aceita, parcialmente implementada. Borrow local,
+interfaces estruturais, carriers OSSA, borrowed views `[]T`/`String`, fallback
+GenRef e referências relativas de coroutine existem. A promoção de toda
+`SL_S-Core` ainda depende dos gates independentes de allocator, drop e targets.
 
 ## Visão Geral e Contexto
 
@@ -214,10 +215,10 @@ modelo executável, Miri/sanitizers e corpus adversarial próprios.
 
 ## Futuro e Próximos Passos
 
-A campanha Borrowed Views Gold implementará `BorrowInterface` estrutural,
-solver por fluxo/SCC, carriers não escapáveis e APIs seguras de `Slice` e
-`String`. Depois da campanha, o modelo deve ganhar um microcálculo formal e um
-oráculo executável que compare resultados do solver com casos reduzidos.
+BV.1–BV.3 implementaram `BorrowInterface` estrutural, solver por fluxo/SCC,
+carriers não escapáveis e APIs seguras de `[]T` e `String`. O próximo avanço do
+modelo deve ser um microcálculo formal e um oráculo executável que compare os
+resultados do solver com casos reduzidos.
 
 Comparações de desempenho ou precisão com Polonius devem usar corpus comum,
 classificação prévia de casos, tempo/memória de compilação e conjuntos de

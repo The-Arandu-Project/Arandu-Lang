@@ -358,6 +358,18 @@ pub(crate) fn declare_runtime_imports<M: Module>(
             .declare_function("ar_vec_realloc", Linkage::Import, &realloc_sig)
             .map_err(|err| codegen_ice(format!("failed to declare ar_vec_realloc: {err:?}")))?;
         func_ids.insert("ar_vec_realloc".to_string(), id);
+
+        let mut push_str_sig = Signature::new(default_call_conv);
+        push_str_sig.params.push(AbiParam::new(ptr_type));
+        push_str_sig.params.push(AbiParam::new(ptr_type));
+        push_str_sig.params.push(AbiParam::new(ptr_type));
+        push_str_sig
+            .returns
+            .push(AbiParam::new(cranelift_codegen::ir::types::I8));
+        let id = module
+            .declare_function("ar_string_push_str", Linkage::Import, &push_str_sig)
+            .map_err(|err| codegen_ice(format!("failed to declare ar_string_push_str: {err:?}")))?;
+        func_ids.insert("ar_string_push_str".to_string(), id);
     }
 
     // SL_R.2 reactor host imports

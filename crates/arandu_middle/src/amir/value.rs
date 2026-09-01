@@ -65,6 +65,25 @@ pub enum AmirRvalue {
     },
     Len(AmirOperand),
 
+    /// Construct a safe `[]T` view from an owner borrow plus raw storage.
+    /// `owner` is compile-time provenance; backends erase it and emit ptr+len.
+    SliceView {
+        owner: AmirOperand,
+        data: AmirOperand,
+        len: AmirOperand,
+    },
+    /// Derive a ptr+len subview while preserving the source slice provenance.
+    SliceSubslice {
+        slice: AmirOperand,
+        start: AmirOperand,
+        len: AmirOperand,
+    },
+    /// Reinterpret the `String` owner prefix (`data`, `len`) as `ref str`.
+    /// The owner operand is both the runtime address and borrow provenance.
+    StrView {
+        owner: AmirOperand,
+    },
+
     Alloc(AmirOperand),
     /// Load value from a stack-allocated local place (memory) into an SSA register.
     Load(AmirPlace),
