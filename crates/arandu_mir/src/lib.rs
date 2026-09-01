@@ -1,3 +1,4 @@
+pub mod analysis_limits;
 pub mod borrow_audit;
 pub mod borrow_check;
 pub mod borrow_facts;

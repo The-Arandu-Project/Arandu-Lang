@@ -16,6 +16,29 @@ use crate::manifest_io::{find_manifest, load_manifest};
 /// CLI version string (mirrors package version).
 pub const ARANDU_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Canonical root target kind used in stable tooling identities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetKind {
+    Bin,
+    Lib,
+}
+
+impl TargetKind {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Bin => "bin",
+            Self::Lib => "lib",
+        }
+    }
+}
+
+impl std::fmt::Display for TargetKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Resolved package context for project-mode commands.
 #[allow(dead_code)] // fields reserved for doctor/logs and future multi-file package graph
 pub struct ProjectContext {
@@ -33,7 +56,7 @@ pub struct ProjectContext {
     pub version: String,
     pub entry_rel: String,
     /// Canonical root target kind used in stable tooling identities.
-    pub target_kind: &'static str,
+    pub target_kind: TargetKind,
 }
 
 /// Shared flags for project / doctor commands.
@@ -216,9 +239,9 @@ pub fn load_project(
     let version = data.version.clone();
     let entry_rel = data.entry.clone();
     let target_kind = if data.binary_target.is_some() {
-        "bin"
+        TargetKind::Bin
     } else {
-        "lib"
+        TargetKind::Lib
     };
 
     let manifest = register_manifest(db, manifest_path.clone(), data, hash);

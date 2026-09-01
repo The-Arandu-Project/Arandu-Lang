@@ -90,6 +90,33 @@ impl TypeInfo {
         self.enum_variant_tags.insert(variant, tag);
     }
 
+    /// Lookup struct field type by struct symbol and field name.
+    #[must_use]
+    pub fn get_struct_field_type(&self, struct_sym: SymbolId, field: &str) -> Option<TypeId> {
+        self.struct_fields
+            .get(&struct_sym)
+            .and_then(|f| f.get(field))
+            .copied()
+    }
+
+    /// Lookup struct field symbol by struct symbol and field name.
+    #[must_use]
+    pub fn get_struct_field_symbol(&self, struct_sym: SymbolId, field: &str) -> Option<SymbolId> {
+        self.struct_field_symbols
+            .get(&struct_sym)
+            .and_then(|f| f.get(field))
+            .copied()
+    }
+
+    /// Lookup struct field index by struct symbol and field name.
+    #[must_use]
+    pub fn get_struct_field_index(&self, struct_sym: SymbolId, field: &str) -> Option<usize> {
+        self.struct_field_indices
+            .get(&struct_sym)
+            .and_then(|f| f.get(field))
+            .copied()
+    }
+
     /// Whether values of this type may be used after "move" (copy semantics).
     ///
     /// # Rules (Minimal / big-tech POD)

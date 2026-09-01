@@ -53,7 +53,7 @@ pub fn project_test_sources(
         .parent()
         .ok_or_else(|| format!("entry {} has no source directory", ctx.entry_path.display()))?;
     for (directory, target) in [
-        (source_root.to_path_buf(), ctx.target_kind),
+        (source_root.to_path_buf(), ctx.target_kind.as_str()),
         (ctx.root.join("tests"), "test"),
     ] {
         if !directory.is_dir() {

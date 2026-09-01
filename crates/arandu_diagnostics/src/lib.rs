@@ -351,12 +351,10 @@ impl DiagCode {
         ]
     };
 
-    /// User-facing codes that require `docs/errors/{as_str()}.md`.
-    ///
-    /// ICE codes are internal and are documented elsewhere (if at all).
+    /// Returns `true` if this diagnostic code represents an Internal Compiler Error (ICE).
     #[must_use]
-    pub fn requires_error_doc(self) -> bool {
-        !matches!(
+    pub fn is_ice(self) -> bool {
+        matches!(
             self,
             DiagCode::ICELX001
                 | DiagCode::ICEP001
@@ -367,6 +365,14 @@ impl DiagCode {
                 | DiagCode::ICEGEN001
                 | DiagCode::ICEGEN002
         )
+    }
+
+    /// User-facing codes that require `docs/errors/{as_str()}.md`.
+    ///
+    /// ICE codes are internal and are documented elsewhere (if at all).
+    #[must_use]
+    pub fn requires_error_doc(self) -> bool {
+        !self.is_ice()
     }
 
     /// File stem for `docs/errors/{stem}.md` (same as [`Self::as_str`] for user codes).
@@ -649,6 +655,12 @@ impl Diagnostic {
         }
     }
 
+    /// Returns `true` if this diagnostic represents an Internal Compiler Error (ICE).
+    #[must_use]
+    pub fn is_ice(&self) -> bool {
+        self.kind == DiagnosticKind::InternalCompilerError || self.code.is_ice()
+    }
+
     /// Creates an Internal Compiler Error (ICE) diagnostic.
     ///
     /// ICEs indicate a bug in the compiler itself, not in the user's code.
@@ -664,6 +676,24 @@ impl Diagnostic {
             notes: Vec::new(),
             hints: Vec::new(),
         }
+    }
+
+    /// Creates an Internal Compiler Error (ICE) diagnostic with optional item context and phase note.
+    pub fn ice_with_context(
+        code: DiagCode,
+        message: impl Into<String>,
+        span: Span,
+        item_name: Option<&str>,
+        phase_note: Option<&str>,
+    ) -> Self {
+        let mut diag = Self::ice(code, message, span);
+        if let Some(item) = item_name {
+            diag = diag.with_note(format!("while compiling item `{item}`"));
+        }
+        if let Some(note) = phase_note {
+            diag = diag.with_note(format!("compiler state note: {note}"));
+        }
+        diag
     }
 
     /// Attaches a secondary source label to this diagnostic.

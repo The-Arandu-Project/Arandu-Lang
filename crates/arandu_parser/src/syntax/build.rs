@@ -1,6 +1,6 @@
 //! CST-first green tree: lex once → ITEM green + token cache; lower AST without re-lex.
 
-use super::kind::{AranduLanguage, SyntaxKind, SyntaxNode};
+use super::kind::{SyntaxKind, SyntaxNode};
 use arandu_lexer::{Token, TokenKind, lex_recovering};
 use rowan::{GreenNode, GreenNodeBuilder, TextRange, TextSize};
 use std::sync::Arc;
@@ -763,9 +763,4 @@ fn is_keyword_kind(kind: TokenKind) -> bool {
 #[must_use]
 pub fn text_range(start: u32, end: u32) -> TextRange {
     TextRange::new(TextSize::from(start), TextSize::from(end))
-}
-
-#[allow(dead_code)]
-fn _lang() -> AranduLanguage {
-    unreachable!()
 }

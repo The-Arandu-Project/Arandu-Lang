@@ -521,7 +521,7 @@ fn temp_origins_from_loads(func: &AmirFunc) -> Vec<Option<LocalId>> {
     let mut origins = vec![None; func.temps.len()];
     let mut changed = true;
     let mut iterations = 0;
-    while changed && iterations < 100 {
+    while changed && iterations < crate::analysis_limits::TEMP_ORIGIN_SOLVER_MAX_PASSES {
         changed = false;
         iterations += 1;
         for block in &func.blocks {

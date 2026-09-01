@@ -7,7 +7,7 @@
 use crate::db::HashEq;
 use crate::{ArandCompilerDb, SourceFile};
 use arandu_middle::amir::{AmirFunc, AmirRvalue, AmirStmt, BlockId};
-use arandu_middle::{DiagCode, Diagnostic, SymbolId, SymbolKind};
+use arandu_middle::{DiagCode, Diagnostic, SymbolId};
 
 /// Compact, hash-stable summary of block-local dataflow.
 ///
@@ -758,10 +758,4 @@ pub fn ide_diags_fingerprint(diags: &[IdeDiagnostic]) -> blake3::Hash {
 #[must_use]
 pub fn item_ide_diags_fingerprint(diags: &[IdeDiagnostic]) -> blake3::Hash {
     ide_diags_fingerprint(diags)
-}
-
-// Silence unused import if SymbolKind unused in some builds
-#[allow(dead_code)]
-fn _kind_marker() -> SymbolKind {
-    SymbolKind::Func
 }

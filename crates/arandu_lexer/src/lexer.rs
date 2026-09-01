@@ -20,20 +20,20 @@ pub struct Lexer<'a> {
 }
 
 #[derive(Clone, Copy)]
-#[allow(dead_code)]
 pub(super) struct Mark {
     pub(super) pos: usize,
-    pub(super) line: usize,
-    pub(super) col: usize,
 }
 
 impl<'a> Lexer<'a> {
+    /// Heuristic ratio for token buffer preallocation based on average token density.
+    const ESTIMATED_BYTES_PER_TOKEN: usize = 10;
+    /// Minimum initial token capacity for small files.
+    const MIN_TOKEN_CAPACITY: usize = 32;
+
     #[must_use]
     pub fn new(source: &'a str) -> Self {
-        // Average token size is typically around 10-15 bytes in typical code
-        // (including whitespace, idents, punctuation). Preallocating len / 10
-        // avoids massive overallocation for large files while preventing most reallocations.
-        let capacity = (source.len() / 10).max(32);
+        let capacity =
+            (source.len() / Self::ESTIMATED_BYTES_PER_TOKEN).max(Self::MIN_TOKEN_CAPACITY);
         Self {
             source,
             pos: 0,
@@ -355,11 +355,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn mark(&self) -> Mark {
-        Mark {
-            pos: self.pos,
-            line: self.line,
-            col: self.col,
-        }
+        Mark { pos: self.pos }
     }
 
     fn slice_from(&self, start: usize) -> &str {

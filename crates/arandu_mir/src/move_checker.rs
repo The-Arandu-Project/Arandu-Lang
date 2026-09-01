@@ -211,7 +211,8 @@ fn compute_move_in<'bump>(
     }
 
     let mut iterations = 0;
-    let sanity_limit = num_blocks * num_locals * 2 + 1000;
+    let sanity_limit =
+        num_blocks * num_locals * 2 + crate::analysis_limits::DATAFLOW_FIXPOINT_HEADROOM;
 
     while let Some(bid) = worklist.pop_front() {
         iterations += 1;

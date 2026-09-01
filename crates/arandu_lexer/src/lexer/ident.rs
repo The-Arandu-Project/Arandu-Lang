@@ -58,13 +58,6 @@ pub(crate) fn is_ident_continue(ch: char) -> bool {
 }
 
 #[inline]
-#[allow(dead_code)]
-pub(super) fn is_whitespace(ch: char) -> bool {
-    let val = ch as u32;
-    val < 128 && (CHAR_PROPERTIES[val as usize] & FLAG_WHITESPACE) != 0
-}
-
-#[inline]
 pub(super) fn is_digit(ch: char) -> bool {
     let val = ch as u32;
     val < 128 && (CHAR_PROPERTIES[val as usize] & FLAG_DIGIT) != 0

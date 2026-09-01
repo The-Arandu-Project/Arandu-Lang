@@ -267,7 +267,7 @@ pub(crate) fn lower_decl(
             }
             let members = hir_pool.alloc_func_signature_list(&members);
             Ok(Some(HirDecl::Extern(HirExtern {
-                abi: d.abi.to_string(),
+                abi: arandu_parser::AbiKind::from_abi_str(&d.abi),
                 members,
                 span: d.span,
             })))

@@ -347,7 +347,7 @@ fn collect_loans(func: &AmirFunc) -> (Vec<Loan>, Vec<u32>) {
         let index = block_id.as_usize();
         in_worklist[index] = false;
         guard += 1;
-        if guard >= 100_000 {
+        if guard >= crate::analysis_limits::BORROW_FACTS_ITERATION_GUARD {
             // The domain is finite and monotone. Reaching this defensive bound
             // means malformed AMIR, so retain the conservative facts collected
             // so far instead of panicking in production compiler code.

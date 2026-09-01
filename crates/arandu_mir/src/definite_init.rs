@@ -161,7 +161,7 @@ fn compute_init_in(func: &AmirFunc) -> Option<Vec<BitSet<LocalId>>> {
     }
 
     let mut iterations = 0;
-    let sanity_limit = num_blocks * num_locals + 1000;
+    let sanity_limit = num_blocks * num_locals + crate::analysis_limits::DATAFLOW_FIXPOINT_HEADROOM;
 
     while let Some(bid) = worklist.pop_front() {
         iterations += 1;

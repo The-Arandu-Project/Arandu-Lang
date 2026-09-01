@@ -273,6 +273,22 @@ impl AbiKind {
             _ => Self::Other,
         }
     }
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::C => "C",
+            Self::AranduIntrinsic => "arandu-intrinsic",
+            Self::Rust => "Rust",
+            Self::Other => "other",
+        }
+    }
+}
+
+impl std::fmt::Display for AbiKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

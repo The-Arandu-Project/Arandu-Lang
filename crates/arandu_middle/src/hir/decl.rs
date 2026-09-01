@@ -113,7 +113,7 @@ pub struct HirInterface {
 
 #[derive(Debug, Clone)]
 pub struct HirExtern {
-    pub abi: String,
+    pub abi: arandu_parser::AbiKind,
     pub members: IndexRange,
     pub span: Span,
 }
