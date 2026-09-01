@@ -30,7 +30,7 @@ Implemented:
 - AHIR lowering and pretty-printing with golden tests (`tests/hir/`).
 - AMIR lowering v0.1 (experimental) with CFG, locals, match, defer/errdefer, `?`/safe ops, for-in, alloc/free, and golden tests (`tests/codegen/`).
 - Dense AMIR types (`TypeId` on locals/temps), use-site spans on ownership diags, shared rvalue visitor.
-- Method receivers with `shared self`, `mut self`, and `own self` (legacy receiver
+- Method receivers with `self: ref T`, `self: mut ref T`, and `self: own T` (legacy receiver
   spelling retained while methods migrate to the uniform type syntax).
 - Safe references are represented by `ref T`/`mut ref T`; `T` means owned by
   default and `own T` is the explicit spelling. Raw `ptr[T]` dereference
@@ -64,7 +64,7 @@ Not gold / still partial or experimental:
 - Full typed/self-hosted generational fallback beyond the current i64 GenRef MVP
 - Full user `Display` trait / custom `to_str` for structs/enums
 - Full ownership surface syntax
-- Production C polish / freestanding RT; LLVM release backend
+- Production C polish / freestanding RT; optional LLVM/LTO/PGO release tier
 
 **Compiler roadmap (single source of truth):** [docs/arandu-compiler-roadmap-v0.1.md](docs/arandu-compiler-roadmap-v0.1.md)
 

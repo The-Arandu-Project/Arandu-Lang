@@ -176,7 +176,7 @@ Legenda: `[x]` feito · `[/]` em andamento · `[ ]` não iniciado
 ```
 Fase 1 — Estabilização Semântica (v0.1) · [CONCLUÍDA]
 [x] B      Result<T,E> + Option<T> no type checker
-[x] C      self receiver (own | mut | shared)
+[x] C      receiver canônico (`self: own T` | `self: mut ref T` | `self: ref T`)
 [x] T      Generics instantiations + Constraints (Go-style)
 [x] G      Definite initialization (O008)
 [x] F1     Instruções OSSA no AMIR (StorageLive/StorageDead/Destroy/Borrow/Move)
@@ -210,16 +210,20 @@ Fase 2 — A Construção da Infraestrutura & Execução (v0.2) · [FECHADA no c
    ├─ [x] BC.4a  Borrow/BorrowMut no Cranelift JIT
    │              · `AmirProjection::Deref` + place addr via `use_var` (nunca `stack_addr` do slot do ponteiro)
    │              · materializar base (`is_memory`) em place projetado para Stores sobreviverem ao prune
-   │              · stack `&`/`&mut` local: F2.0–F2.3 (stack home + OSSA); heap/`&*p`/`&p.x`: path BC.4a
+   │              · `ref T`/`mut ref T` local: F2.0–F2.3 (stack home + OSSA);
+   │                projeções seguras sobre storage indireto: path BC.4a
    │              · backend C: `format_place` com Deref lvalue
    ├─ [x] BC.4b  Await no Cranelift JIT (A3.0–A3.6: layout disc/payload + block_on; scheduler = SL_R)
-   ├─ [ ] BC.5   ABI Multi-valorizada para Tipos Nomeados (structs/enums) no Cranelift (atualmente passados via ponteiro no JIT)
+   ├─ [ ] BC.5   Classificador ABI por target para tipos nomeados no Cranelift;
+   │              não usar limiar universal `<=16`: SysV AMD64, Windows x64 e
+   │              AArch64 divergem em passagem/retorno de agregados
    └─ [x] FUZZ   Fuzzing Lexer/Parser SIMD (arandu_fuzz e cron jobs semanais de robustez)
 [x] C_FB   Backend C de portabilidade e bootstrapping
 [x] DX     Diagnostics & Tooling Infrastructure (DX1-DX3, DX4 CFG visualization; DX2 recovery anchors completed)
 [x] PERF   Compiler Instrumentation & Observabilidade (pass timers, allocations, query logs, -Z flags, tracing-based self-profile)
     ├─ [x] PERF.1   Tracing subscriber + -Zdebug-* flags via EnvFilter (replaces time_pass!/debug_point!)
-    ├─ [x] PERF.2   SelfProfile Layer — Trace Event JSON buffer em memória, finalize_self_profile()
+    ├─ [x] PERF.2   SelfProfile Layer — feature `self-profile` + debug build;
+    │               Trace Event JSON em memória e `finalize_self_profile()`
     ├─ [x] PERF.3   #[instrument] em 22 funções críticas (parser, unify, typeck, resolve, etc.)
     └─ [x] PERF.4   ParseCache (legado CompileSession) — absorvido pela query Salsa `parse`
 [x] SL_C   Scaffolding da stdlib: primitivas iniciais de `core`/`alloc` e provas
@@ -260,14 +264,14 @@ Fase 3 — OSSA Avançado, Semântica e OS Runtime (v0.3) · [PARCIAL; vários m
    └─ [ ] A4.3   Small Object Optimization (SOO) para tipos <= 24 bytes
 [x] F2     OSSA borrow completo — FECHADO no escopo de linguagem v0.3 compiler
    │  Residuals W3 (parcialmente fechados):
-   │  · [x] auto-ref/auto-deref call args & method receivers (`T` ↔ `&T`/`&mut T`)
+   │  · [x] auto-ref/auto-deref call args & method receivers (`T` ↔ `ref T`/`mut ref T`)
    │  · [x] lower materializa `Borrow`/`BorrowMut` quando formal é Ref/RefMut
-   │  · [x] `ArgConsumeKind::is_exclusive` (mut self vs shared)
-   │  · [x] assinaturas `shared`/`mut self` → formals `&T`/`&mut T` (typeck + call auto-ref)
+   │  · [x] `ArgConsumeKind::is_exclusive` (`mut ref` vs `ref`)
+   │  · [x] assinaturas canônicas carregam `ref T`/`mut ref T` diretamente
    │  Backend honesty (W5):
    │  · [x] T033 barrando call indireto no typeck; JIT só rede de segurança
    │  · [x] `??` é CFG no AMIR; BinaryOp::NullCoalesce no JIT = ICE de pipeline
-   ├─ [x] F2.0   Sintaxe de referências à pilha (& / &mut) no parser + type-checker
+   ├─ [x] F2.0   Tipos seguros `ref T` / `mut ref T` no parser + type-checker
    ├─ [x] F2.1   Local Borrow Checking Incremental (Salsa `block_borrow_facts` / may-borrow dataflow A9)
    ├─ [x] F2.2   Janelas de Liveness de Empréstimos (loan window = live range da ref; `is_borrowed_at`)
    ├─ [x] F2.3   Escape policy + O004/O010 + G2 promote (análise + GenRef nos backends i64 MVP)
@@ -314,8 +318,8 @@ Fase 3 — OSSA Avançado, Semântica e OS Runtime (v0.3) · [PARCIAL; vários m
                    a classificação global continua **parcial** pelos gates de
                    allocator, drop e matriz nativa; relatório
                    permanente em [arquitetura da stdlib](./arandu-stdlib-architecture-v0.1.md#relatório-final-aud5--segurança-de-borrowed-views)
-                 · Campanha ativa para concluir o contrato estrutural, propagação
-                   OSSA e APIs públicas: [Borrowed Views Gold](./campaigns/sl-s-borrowed-views-gold-v0.1.md)
+                 · [ ] evidência nativa de pointer width 32 quando um SDK 32-bit
+                   for oficialmente publicado; layout 32/64 já possui regressão
 [ ] SL_S-Host   APIs de sistema: host path/rt helpers, filesystem e processos;
                 depende de A2 e de contratos nativos por plataforma
 [→] SL_R   Async Runtime: SL_R.0 typed spawn/join/block_on Coroutine + SyncExecutor; SL_R.2 EpollReactor (epoll+timerfd); SL_R.1/3 open
@@ -448,7 +452,7 @@ Source (.aru)
     ↓
   Backend Selector
        ⚡ Dev/Debug   → Cranelift (Compilação Instantânea em Memória)
-       🚀 Release     → LLVM IR (Otimização Extrema)
+       🚀 Release     → AMIR O2 + Cranelift AOT `speed`
        🔌 Portability → C Puro (Fallback)
 ```
 
@@ -548,8 +552,8 @@ O Arandu resolve o "Color Problem" das linguagens modernas (onde funções sínc
 Um subsistema dedicado a rearranjar dados na pilha e na memória física para garantir máxima eficiência de cache e pegada zero:
 
 * **Struct Field Reordering**: Organiza campos de structs automaticamente para eliminar padding de alinhamento desnecessário, minimizando o consumo de cache L1.
-* **Niche Optimization (Option/Enum Packing)**: Enums como `Option<T>` e `Result<T, E>` aproveitam valores inválidos do tipo base (como padrões de bits inválidos) para codificar tags, mantendo a representação de `Option<&T>` no mesmo tamanho de um ponteiro cru.
-  * *Invariante de Segurança e Sequenciamento*: Esta otimização possui dependência sequencial estrita de **F2.0 (OSSA Borrow completo)**. Somente referências seguras (`&T` / `&mut T`), garantidas como não-nulas pelo Borrow Checker, são qualificadas para nicho.
+* **Niche Optimization (Option/Enum Packing)**: Enums como `Option<T>` e `Result<T, E>` aproveitam valores inválidos do tipo base (como padrões de bits inválidos) para codificar tags, mantendo a representação de `Option<ref T>` no mesmo tamanho de um ponteiro cru.
+  * *Invariante de Segurança e Sequenciamento*: Esta otimização possui dependência sequencial estrita de **F2.0 (OSSA Borrow completo)**. Somente referências seguras (`ref T` / `mut ref T`), garantidas como não-nulas pelo Borrow Checker, são qualificadas para nicho.
   * *Exclusão de Ponteiros Crus*: Ponteiros crus (`ptr[T]`) são **estritamente inelegíveis** para otimização de nicho, pois o valor `0` (NULL) é um padrão de bits válido e comum em limites FFI e allocators.
   * *Garantia GenRef*: Handles geracionais (`GenRef`) requerem validação estática de que o valor de geração/índice `0` é reservado e inválido antes de serem elegíveis.
 * **Pointer Tagging**: Codifica metadados ou tags de variantes de enums nos bits menos significativos não utilizados de ponteiros alinhados de 64 bits.
@@ -967,7 +971,9 @@ mantém apenas a ordem e os gates de entrega.
 O compilador do Arandu abandona o acoplamento exclusivo a um único backend:
 
 * **arandu run / build --dev**: `run` utiliza o JIT **Cranelift** em memória; `build` reutiliza o mesmo lowering para emitir objeto baseline do host, ligar o runtime estático distribuído e publicar um executável nativo transacional.
-* **arandu build --release**: Utiliza o backend **LLVM** aplicando vetorização avançada, PGO (Profile-Guided Optimization) e LTO (Link-Time Optimization) para desempenho máximo de produção.
+* **arandu build --release**: utiliza **AMIR O2 + Cranelift AOT `speed`** como
+  pipeline de produção v0.1. LLVM/LTO/PGO permanece um tier futuro opcional,
+  condicionado a benchmark e sem mudar o significado de `--release`.
 * **arandu build --portability**: Utiliza o backend **C** puro para transpilar o código linearizado 1:1, servindo estritamente como fallback para plataformas de nicho, embarcados de arquiteturas exóticas e bootstrapping.
 
 #### 4.2 Register Allocation Strategy
@@ -976,8 +982,8 @@ A alocação de registradores é o ponto onde a qualidade do código gerado vive
 
 | Backend | Algoritmo | Prioridade | Descrição |
 |---------|-----------|------------|----------|
-| **Cranelift (Dev)** | Linear Scan | Velocidade de compilação | Alocação em tempo linear sobre intervalos de vida, minimizando latência de compilação para ciclos edit-compile-run < 100ms |
-| **LLVM (Release)** | Graph Coloring global | Qualidade do código | Alocação baseada em interferência com coalescing agressivo, minimizando spills e maximizando reuso de registradores físicos |
+| **Cranelift (Dev/Release v0.1)** | alocador do backend | Dev prioriza compilação; release usa `speed` | A política de qualidade pertence ao Cranelift; o Arandu não promete algoritmo interno específico do backend |
+| **LLVM (tier futuro)** | definido pelo backend | qualidade adicional comprovada | só entra após benchmark representativo; LTO/PGO não são promessa atual |
 | **C (Portability)** | Delegado ao compilador C host | Portabilidade | O backend C emite variáveis locais e confia no GCC/Clang para alocação |
 
 **Objetivos mensuráveis:**

@@ -97,7 +97,7 @@ arandu_core
  ├─ borrow       # Abstrações de empréstimo (Borrow, BorrowMut)
  ├─ fmt          # Formatação e diagnostics de baixo nível (Debug, Display, formatting engines)
  ├─ panic        # Handlers básicos de pânico e asserções estáticas
- ├─ intrinsics   # abort, abort_generational_mismatch (traps; zero heap)
+ ├─ intrinsics   # abort, abortGenerationalMismatch (traps; zero heap)
  ├─ simd         # Tipos vetoriais e primitivas portáveis de SIMD (Fase A7)
  ├─ atomic       # Tipos atômicos puros suportados pelo hardware
  └─ arch         # Especificações arquiteturais específicas (x86_64, AArch64, RISC-V)
@@ -131,7 +131,7 @@ arandu_alloc
 ```
 
 > **F2.3 / GenRef:** `gen_arena` is the only place dynamic generational tables live.
-> Trap on mismatch is `std.core.intrinsics.abort_generational_mismatch`.
+> Trap on mismatch is `std.core.intrinsics.abortGenerationalMismatch`.
 > Compiler ABI: `docs/arandu-genref-gold-rfc-v0.1.md`.
 
 ### Filosofia de Alocadores Customizados
