@@ -334,6 +334,10 @@ Fase 4 — Expressividade de Linguagem e Tipagem (v0.35) · [PARCIAL; superfíci
 [x] SYN.4  Patterns: `_`, binds, ranges, or-patterns `p1|p2` (parse/typeck/AMIR)
 [→] TYP.1  Structural interface satisfaction (method sig duck) — done; dyn/existential interface types later
 [x] TYP.2  Constraints: `<T: I>` + `where T: I`; Self em interface; check_instantiation T025; call via bound
+[ ] TYP.3  Inferência Bidirecional e Coerção Segura de Literais (Target-Aware Literal Unification)
+   ├─ [x] TYP.3.1  Descida Contextual Direta (`expected: Option<TypeId>` em chamadas, let, retornos e campos; validação com `TargetInfo` e T038)
+   ├─ [ ] TYP.3.2  Propagação em Operadores Binários e Coleções (Inferência contextual em `1 + x`, `x + 1`, `[1, 2, 3]` sem casts manuais)
+   └─ [ ] TYP.3.3  Unificação de Restrições Tardias no Solver (`TypeVar` de literais não resolvidos; resolução retroativa sem fallback arbitrário `i32`)
 
 Fase 5 — Otimização Global, CodeGen & Ecossistema (v0.4+) · [NÃO INICIADA]
 [ ] LLVM   Backend LLVM (Release Optimizer, LTO, PGO profile-guided optimization pipeline)
@@ -1053,6 +1057,33 @@ O compilador inclui suporte nativo para emissão visual de fluxo de controle (CF
 #### IDE — Native LSP Engine
 
 Uma camada unificada de Language Server (LSP) nativa no compilador que expõe consultas eficientes de autocompletar, goto definition, busca de referências e diagnósticos inline. Ao compartilhar o mesmo banco de dados Salsa e as Persistent Green Trees de parser, a engine LSP responde a alterações de código em menos de 5ms de forma incremental.
+
+---
+
+### TYP.3 — Inferência Bidirecional e Coerção Segura de Literais
+
+O Arandu implementa inferência contextual bidirecional estrita com coerção segura de literais inteiros sem sufixo (`10`, `0`, `1`), eliminando ruído de casts manuais (`as uint`) sem incorrer nos erros de fallback silencioso (`i32`) do Rust.
+
+#### Arquitetura de 3 Camadas
+
+1. **TYP.3.1 — Descida Contextual Direta (`expected: Option<TypeId>`) [v0.1 / CONCLUÍDO]**:
+   - `synth_expr_expected` propaga o tipo esperado top-down para argumentos de função, declarações `let x: T`, retornos de função e campos de struct.
+   - O `synth_literal_expr` consulta `TargetInfo` (`uint_max()`, `int_min()`, `int_max()`) derivado do `TargetConfig` (Salsa input) e materializa o tipo concreto diretamente, emitindo `T038IntegerLiteralOutOfRange` se o valor exceder a largura do alvo.
+
+2. **TYP.3.2 — Propagação em Operadores Binários e Coleções [v0.2 / IMEDIATO]**:
+   - **Operações Binárias**: `1 + x` e `x + 1` onde `x: T` (com `T` sendo qualquer tipo inteiro primitivo) propagam `Some(T)` para o lado literal, sintetizando `T` sem exigir cast explícito.
+   - **Coleções e Arrays**: Literais de array `[1, 2, 3]` sob contexto `array[uint, 3]` ou `slice[u8]` propagam o tipo do elemento para cada item da lista.
+   - **Requisitos de Implementação**:
+     - `crates/arandu_typeck/src/type_checker/synth/expr/binary.rs`: inspeção de operandos heterogêneos `(IntLiteral, ConcreteInt)` e `(ConcreteInt, IntLiteral)`.
+     - `crates/arandu_typeck/src/type_checker/synth/expr/array.rs`: propagação de `expected_element_ty` para os elementos.
+
+3. **TYP.3.3 — Unificação de Restrições Tardias no Solver [v0.35 / TÉCNICO]**:
+   - Para variáveis livres inicializadas sem anotação explícita (`let a = 10; let b = a + 20; take_uint(b);`), o compilador cria uma variável de tipo `TypeVar` atrelada a `ArType::IntLiteral`.
+   - O *constraint solver* resolve o grafo de tipos por unificação tardia: quando `take_uint(b)` impõe `uint`, o solver propaga `uint` para `b`, `a` e os literais, validando os limites numéricos retroativamente.
+   - **Política Anti-Ambiguidade**: Caso uma variável inteira livre nunca participe de uma operação com tipo concreto determinístico, o compilador adota `int` nativo (largura de ponteiro) ou emite aviso de desambiguação, nunca adotando `i32` silencioso.
+   - **Requisitos de Implementação**:
+     - `crates/arandu_typeck/src/type_checker/solver/`: extensão do unificador para restrições `ConstraintOrigin::LiteralPromotion`.
+     - `crates/arandu_typeck/src/type_checker/context/`: resolução de substituições na tabela de tipos locais (`TyCtx`).
 
 ---
 
