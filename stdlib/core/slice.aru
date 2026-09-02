@@ -2,18 +2,47 @@ module std.core.slice
 
 import std.core.intrinsics as intrinsics
 
-/// Number of elements in the built-in borrowed view `[]T`.
+/// Returns the number of elements in the borrowed view `[]T`.
+///
+/// # Examples
+/// ```arandu
+/// let arr = [10, 20, 30]
+/// slice.len<int>(arr) // 3
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func len<T>(s: []T): uint {
     unsafe {
         return intrinsics.sliceLen<T>(s)
     }
 }
 
+/// Returns `true` if the slice contains no elements (`len == 0`).
+///
+/// # Examples
+/// ```arandu
+/// slice.isEmpty<int>([])    // true
+/// slice.isEmpty<int>([10])  // false
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func isEmpty<T>(s: []T): bool {
     return len<T>(s) == 0
 }
 
-/// Element borrow at `index`, or `None` when out of bounds.
+/// Returns a shared reference to the element at `index`, or `Option.None` if out of bounds.
+///
+/// # Examples
+/// ```arandu
+/// let s = [10, 20, 30]
+/// slice.get<int>(s, 1) // Some(ref 20)
+/// slice.get<int>(s, 5) // None
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func get<T>(s: []T, index: uint): Option<ref T> {
     if index >= len<T>(s) {
         return Option.None
@@ -21,10 +50,30 @@ public func get<T>(s: []T, index: uint): Option<ref T> {
     return Option.Some(ref s[index])
 }
 
+/// Returns a shared reference to the first element, or `Option.None` if the slice is empty.
+///
+/// # Examples
+/// ```arandu
+/// slice.first<int>([10, 20]) // Some(ref 10)
+/// slice.first<int>([])       // None
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func first<T>(s: []T): Option<ref T> {
     return get<T>(s, 0)
 }
 
+/// Returns a shared reference to the last element, or `Option.None` if the slice is empty.
+///
+/// # Examples
+/// ```arandu
+/// slice.last<int>([10, 20, 30]) // Some(ref 30)
+/// slice.last<int>([])           // None
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func last<T>(s: []T): Option<ref T> {
     let count = len<T>(s)
     if count == 0 {
@@ -33,7 +82,17 @@ public func last<T>(s: []T): Option<ref T> {
     return get<T>(s, count - 1)
 }
 
-/// Checked half-open subview.
+/// Returns a checked subview starting at `start` with length `count`, or `Option.None` if out of bounds.
+///
+/// # Examples
+/// ```arandu
+/// let s = [10, 20, 30, 40, 50]
+/// slice.subslice<int>(s, 1, 3) // Some([20, 30, 40])
+/// slice.subslice<int>(s, 4, 3) // None
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func subslice<T>(s: []T, start: uint, count: uint): Option<[]T> {
     let total = len<T>(s)
     if start > total || count > total - start {
@@ -50,10 +109,26 @@ public struct Iterator<T> {
     index: uint
 }
 
+/// Creates an iterator over the slice elements.
+///
+/// # Examples
+/// ```arandu
+/// let mut it = slice.iter<int>([1, 2])
+/// it.next() // Some(ref 1)
+/// it.next() // Some(ref 2)
+/// it.next() // None
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func iter<T>(s: []T): Iterator<T> {
     return Iterator<T> { view: s, index: 0 }
 }
 
+/// Advances the iterator and returns the next element reference.
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func Iterator.next<T>(self: mut ref Iterator<T>): Option<ref T> {
     let item = get<T>(self.view, self.index)
     if self.index < len<T>(self.view) {

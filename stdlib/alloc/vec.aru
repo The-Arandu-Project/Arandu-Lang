@@ -25,7 +25,16 @@ public struct Vec<T> {
     capacity: uint
 }
 
-/// Empty vector (no allocation until first `push` or `reserve` / `withCapacity`).
+/// Creates a new empty `Vec<T>` without heap allocation.
+///
+/// # Examples
+/// ```arandu
+/// let v = vec.new<int>()
+/// vec.len<int>(v) // 0
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func new<T>(): Vec<T> {
     return Vec<T> {
         data: nil,
@@ -34,7 +43,16 @@ public func new<T>(): Vec<T> {
     }
 }
 
-/// Empty vector with room for at least `cap` elements.
+/// Creates an empty `Vec<T>` preallocated with room for at least `cap` elements.
+///
+/// # Examples
+/// ```arandu
+/// let v = vec.withCapacity<int>(16)
+/// vec.capacity<int>(v) // >= 16
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(cap)
 public func withCapacity<T>(cap: uint): Vec<T> {
     let mut v = new<T>()
     ensureCapacity<T>(v, cap)
@@ -82,7 +100,17 @@ func ensureCapacity<T>(v: mut ref Vec<T>, minCap: uint): void {
     }
 }
 
-/// Reserve room for at least `additional` more elements beyond `len`.
+/// Reserves capacity for at least `additional` more elements beyond current `len`.
+///
+/// # Examples
+/// ```arandu
+/// let mut v = vec.new<int>()
+/// vec.reserve<int>(v, 10)
+/// vec.capacity<int>(v) // >= 10
+/// ```
+///
+/// # Complexity
+/// Time: O(n) reallocation | Space: O(capacity)
 public func reserve<T>(v: mut ref Vec<T>, additional: uint): void {
     let maxCap: uint = 2147483647
     if additional > maxCap - v.len {
@@ -94,7 +122,17 @@ public func reserve<T>(v: mut ref Vec<T>, additional: uint): void {
     ensureCapacity<T>(v, need)
 }
 
-/// Append `value` (amortized O(1)).
+/// Appends `value` to the end of the vector.
+///
+/// # Examples
+/// ```arandu
+/// let mut v = vec.new<int>()
+/// vec.push<int>(v, 42)
+/// vec.len<int>(v) // 1
+/// ```
+///
+/// # Complexity
+/// Time: Amortized O(1) | Space: O(1)
 public func push<T>(v: mut ref Vec<T>, value: T): void {
     let maxCap: uint = 2147483647
     if v.len >= maxCap {
@@ -113,7 +151,18 @@ public func push<T>(v: mut ref Vec<T>, value: T): void {
     v.len = v.len + 1
 }
 
-/// Remove last element, or `None` if empty.
+/// Removes and returns the last element, or `Option.None` if the vector is empty.
+///
+/// # Examples
+/// ```arandu
+/// let mut v = vec.new<int>()
+/// vec.push<int>(v, 10)
+/// vec.pop<int>(v) // Some(10)
+/// vec.pop<int>(v) // None
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func pop<T>(v: mut ref Vec<T>): Option<T> {
     if v.len == 0 {
         return Option.None
@@ -125,7 +174,18 @@ public func pop<T>(v: mut ref Vec<T>): Option<T> {
     }
 }
 
-/// Element at `index`, or `None` if out of range.
+/// Returns a copy of the element at `index`, or `Option.None` if out of bounds.
+///
+/// # Examples
+/// ```arandu
+/// let mut v = vec.new<int>()
+/// vec.push<int>(v, 100)
+/// vec.get<int>(v, 0) // Some(100)
+/// vec.get<int>(v, 5) // None
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func get<T>(v: ref Vec<T>, index: uint): Option<T> {
     let maxCap: uint = 2147483647
     if index >= v.len || index > maxCap {
@@ -137,7 +197,18 @@ public func get<T>(v: ref Vec<T>, index: uint): Option<T> {
     }
 }
 
-/// Overwrite index; `false` if out of range.
+/// Overwrites the element at `index` with `value`, returning `false` if out of bounds.
+///
+/// # Examples
+/// ```arandu
+/// let mut v = vec.new<int>()
+/// vec.push<int>(v, 10)
+/// vec.put<int>(v, 0, 20) // true
+/// vec.put<int>(v, 5, 20) // false
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func put<T>(v: mut ref Vec<T>, index: uint, value: T): bool {
     let maxCap: uint = 2147483647
     if index >= v.len || index > maxCap {
@@ -150,34 +221,90 @@ public func put<T>(v: mut ref Vec<T>, index: uint, value: T): bool {
     return true
 }
 
-/// Number of elements.
+/// Returns the number of elements contained in the vector.
+///
+/// # Examples
+/// ```arandu
+/// let mut v = vec.new<int>()
+/// vec.len<int>(v) // 0
+/// vec.push<int>(v, 1)
+/// vec.len<int>(v) // 1
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func len<T>(v: ref Vec<T>): uint {
     return v.len
 }
 
-/// Allocated capacity (element slots).
+/// Returns the total number of elements the vector can hold without reallocating.
+///
+/// # Examples
+/// ```arandu
+/// let v = vec.withCapacity<int>(32)
+/// vec.capacity<int>(v) // >= 32
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func capacity<T>(v: ref Vec<T>): uint {
     return v.capacity
 }
 
-/// `true` if `len == 0`.
+/// Returns `true` if the vector contains no elements (`len == 0`).
+///
+/// # Examples
+/// ```arandu
+/// let mut v = vec.new<int>()
+/// vec.isEmpty<int>(v) // true
+/// vec.push<int>(v, 1)
+/// vec.isEmpty<int>(v) // false
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func isEmpty<T>(v: ref Vec<T>): bool {
     return v.len == 0
 }
 
-/// Shared zero-copy view of the initialized prefix.
+/// Returns a shared borrowed view `[]T` of the initialized elements.
+///
+/// # Examples
+/// ```arandu
+/// let mut v = vec.new<int>()
+/// vec.push<int>(v, 10)
+/// let s = vec.asSlice<int>(v)
+/// slice.len<int>(s) // 1
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func asSlice<T>(v: ref Vec<T>): []T {
     unsafe {
         return intrinsics.sliceFromRaw<Vec<T>, T>(v, v.data, v.len)
     }
 }
 
-/// Drop length to zero (capacity retained).
+/// Clears the vector, removing all values but retaining allocated capacity.
+///
+/// # Examples
+/// ```arandu
+/// let mut v = vec.new<int>()
+/// vec.push<int>(v, 10)
+/// vec.clear<int>(v)
+/// vec.len<int>(v) // 0
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func clear<T>(v: mut ref Vec<T>): void {
     v.len = 0
 }
 
-/// Deallocate the buffer and reset to empty.
+/// Deallocates the heap buffer and resets the vector to empty.
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func destroy<T>(v: mut ref Vec<T>): void {
     if v.capacity > 0 {
         let size = v.capacity * mem.sizeOf<T>()
@@ -192,56 +319,57 @@ public func destroy<T>(v: mut ref Vec<T>): void {
 
 // ── Method-style surface ───────────────────────────────────────────────────
 
-/// Method form of [`push`].
+/// Appends `value` to the back of the vector.
 public func Vec.push<T>(self: mut ref Vec<T>, value: T): void {
     push(self, value)
 }
 
-/// Method form of [`pop`].
+/// Removes and returns the last element, or `Option.None` if empty.
 public func Vec.pop<T>(self: mut ref Vec<T>): Option<T> {
     return pop(self)
 }
 
-/// Method form of [`get`].
+/// Returns the element at `index`, or `Option.None` if out of bounds.
 public func Vec.get<T>(self: ref Vec<T>, index: uint): Option<T> {
     return get(self, index)
 }
 
-/// Method form of [`put`].
+/// Overwrites the element at `index`, returning `false` if out of bounds.
 public func Vec.put<T>(self: mut ref Vec<T>, index: uint, value: T): bool {
     return put(self, index, value)
 }
 
-/// Method form of [`len`].
+/// Returns the number of elements in the vector.
 public func Vec.len<T>(self: ref Vec<T>): uint {
     return len(self)
 }
 
-/// Method form of [`capacity`].
+/// Returns the allocated capacity of the vector.
 public func Vec.capacity<T>(self: ref Vec<T>): uint {
     return capacity(self)
 }
 
-/// Method form of [`isEmpty`].
+/// Returns `true` if the vector contains no elements.
 public func Vec.isEmpty<T>(self: ref Vec<T>): bool {
     return isEmpty(self)
 }
 
+/// Returns a shared borrowed slice view of the vector elements.
 public func Vec.asSlice<T>(self: ref Vec<T>): []T {
     return asSlice<T>(self)
 }
 
-/// Method form of [`reserve`].
+/// Reserves capacity for at least `additional` more elements.
 public func Vec.reserve<T>(self: mut ref Vec<T>, additional: uint): void {
     reserve(self, additional)
 }
 
-/// Method form of [`clear`].
+/// Clears the vector, keeping allocated memory.
 public func Vec.clear<T>(self: mut ref Vec<T>): void {
     clear(self)
 }
 
-/// Method form of [`destroy`].
+/// Frees the heap buffer upon destruction.
 @Destructor
 public func Vec.destroy<T>(self: own Vec<T>): void {
     destroy(self)

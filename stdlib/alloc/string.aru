@@ -19,35 +19,73 @@ extern "C" {
     func ar_string_push_str(s: mut ref String, value: str): bool
 }
 
-/// Shared UTF-8 view. The String allocation remains the owner.
+/// Returns a shared UTF-8 string view (`str`) borrowing the String's data.
+///
+/// # Examples
+/// ```arandu
+/// let s = strings.from("hello")
+/// strings.asStr(s) // "hello"
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func asStr(s: ref String): ref str {
     unsafe {
         return intrinsics.strView<String>(s)
     }
 }
 
-/// Shared byte view of the initialized UTF-8 storage.
+/// Returns a shared byte slice `[]u8` viewing the underlying UTF-8 storage.
+///
+/// # Examples
+/// ```arandu
+/// let s = strings.from("abc")
+/// let bytes = strings.asBytes(s)
+/// slice.len<u8>(bytes) // 3
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func asBytes(s: ref String): []u8 {
     unsafe {
         return intrinsics.sliceFromRaw<String, u8>(s, s.data, s.len)
     }
 }
 
-/// Append UTF-8 bytes, returning `false` on allocation failure.
+/// Appends a UTF-8 string slice to the back of the String, returning `false` on allocation failure.
+///
+/// # Examples
+/// ```arandu
+/// let mut s = strings.new()
+/// strings.pushStr(s, "arandu")
+/// s.len() // 6
+/// ```
+///
+/// # Complexity
+/// Time: O(m) where m is length of `value` | Space: O(m)
 public func pushStr(s: mut ref String, value: str): bool {
     unsafe {
         return ar_string_push_str(s, value)
     }
 }
 
-/// Owned UTF-8 string.
+/// Owned UTF-8 string buffer.
 public struct String {
     data: ptr[u8]
     len: uint
     capacity: uint
 }
 
-/// Create a new empty String.
+/// Creates a new empty `String` without heap allocation.
+///
+/// # Examples
+/// ```arandu
+/// let s = strings.new()
+/// strings.len(s) // 0
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func new(): String {
     return String {
         data: nil,
@@ -56,14 +94,32 @@ public func new(): String {
     }
 }
 
-/// Create a new String with preallocated capacity in bytes.
+/// Creates a new empty `String` with preallocated byte capacity.
+///
+/// # Examples
+/// ```arandu
+/// let s = strings.withCapacity(32)
+/// strings.capacity(s) // >= 32
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(cap)
 public func withCapacity(cap: uint): String {
     let mut s = new()
     ensureCapacity(s, cap)
     return s
 }
 
-/// Create a new owned String initialized with a copy of the UTF-8 bytes of `value`.
+/// Creates a new owned `String` initialized with a copy of `value`.
+///
+/// # Examples
+/// ```arandu
+/// let s = strings.from("arandu")
+/// strings.len(s) // 6
+/// ```
+///
+/// # Complexity
+/// Time: O(n) | Space: O(n) where n is length of `value`
 public func from(value: str): String {
     let mut s = new()
     let _ = pushStr(s, value)
@@ -103,22 +159,59 @@ func ensureCapacity(s: mut ref String, minCap: uint): void {
     }
 }
 
-/// Byte length.
+/// Returns the byte length of the String.
+///
+/// # Examples
+/// ```arandu
+/// let s = strings.from("arandu")
+/// strings.len(s) // 6
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func len(s: ref String): uint {
     return s.len
 }
 
-/// Allocated byte capacity.
+/// Returns the total byte capacity allocated for the String.
+///
+/// # Examples
+/// ```arandu
+/// let s = strings.withCapacity(64)
+/// strings.capacity(s) // >= 64
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func capacity(s: ref String): uint {
     return s.capacity
 }
 
-/// True if length is 0.
+/// Returns `true` if the String contains no bytes (`len == 0`).
+///
+/// # Examples
+/// ```arandu
+/// strings.isEmpty(strings.new())          // true
+/// strings.isEmpty(strings.from("text"))   // false
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func isEmpty(s: ref String): bool {
     return s.len == 0
 }
 
-/// Reserve additional bytes.
+/// Reserves capacity for at least `additional` more bytes beyond `len`.
+///
+/// # Examples
+/// ```arandu
+/// let mut s = strings.new()
+/// strings.reserve(s, 16)
+/// strings.capacity(s) // >= 16
+/// ```
+///
+/// # Complexity
+/// Time: O(n) reallocation | Space: O(capacity)
 public func reserve(s: mut ref String, additional: uint): void {
     if additional > maxBufferCapacity() - s.len {
         unsafe {
@@ -129,7 +222,18 @@ public func reserve(s: mut ref String, additional: uint): void {
     ensureCapacity(s, need)
 }
 
-/// Append an ASCII or Unicode scalar character.
+/// Appends a single Unicode scalar value (`char`) encoded as UTF-8 bytes (1 to 4 bytes).
+///
+/// # Examples
+/// ```arandu
+/// let mut s = strings.new()
+/// strings.pushScalar(s, 'a')
+/// strings.pushScalar(s, 'é')
+/// strings.len(s) // 3 bytes ('a'=1, 'é'=2)
+/// ```
+///
+/// # Complexity
+/// Time: Amortized O(1) | Space: O(1)
 public func pushScalar(s: mut ref String, c: char): void {
     let clen = chars.lenUtf8(c) as uint
     if clen > maxBufferCapacity() - s.len {
@@ -181,12 +285,25 @@ public func pushScalar(s: mut ref String, c: char): void {
     s.len = s.len + clen
 }
 
-/// Reset length to 0 (capacity retained).
+/// Clears the String, resetting length to 0 while keeping allocated capacity.
+///
+/// # Examples
+/// ```arandu
+/// let mut s = strings.from("hello")
+/// strings.clear(s)
+/// strings.len(s) // 0
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func clear(s: mut ref String): void {
     s.len = 0
 }
 
-/// Deallocate buffer.
+/// Deallocates the heap buffer and resets the String to empty.
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func destroy(s: mut ref String): void {
     if s.capacity > 0 {
         unsafe {
@@ -200,46 +317,57 @@ public func destroy(s: mut ref String): void {
 
 // ── Method-style surface ───────────────────────────────────────────────────
 
+/// Creates a new owned String initialized from `value`.
 public func String.from(value: str): String {
     return from(value)
 }
 
+/// Returns the byte length of the String.
 public func String.len(self: ref String): uint {
     return len(self)
 }
 
+/// Returns the allocated byte capacity.
 public func String.capacity(self: ref String): uint {
     return capacity(self)
 }
 
+/// Returns `true` if the String is empty.
 public func String.isEmpty(self: ref String): bool {
     return isEmpty(self)
 }
 
+/// Reserves capacity for at least `additional` more bytes.
 public func String.reserve(self: mut ref String, additional: uint): void {
     reserve(self, additional)
 }
 
+/// Appends a Unicode scalar value (`char`) to the String.
 public func String.pushScalar(self: mut ref String, c: char): void {
     pushScalar(self, c)
 }
 
+/// Returns a shared UTF-8 string view (`str`).
 public func String.asStr(self: ref String): ref str {
     return asStr(self)
 }
 
+/// Returns a shared byte slice view `[]u8`.
 public func String.asBytes(self: ref String): []u8 {
     return asBytes(self)
 }
 
+/// Appends UTF-8 bytes to the String.
 public func String.pushStr(self: mut ref String, value: str): bool {
     return pushStr(self, value)
 }
 
+/// Clears the String, retaining capacity.
 public func String.clear(self: mut ref String): void {
     clear(self)
 }
 
+/// Frees the heap buffer upon destruction.
 @Destructor
 public func String.destroy(self: own String): void {
     destroy(self)
