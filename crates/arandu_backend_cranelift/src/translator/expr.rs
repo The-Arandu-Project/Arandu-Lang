@@ -694,8 +694,8 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                     ArType::Ptr(inner) => self.type_info.resolve_type_id(*inner),
                     other => other.clone(),
                 };
-                let elem_ty = match deref_ty {
-                    ArType::Array(_, elem) => self.type_info.resolve_type_id(elem),
+                let elem_ty = match &deref_ty {
+                    ArType::Array(_, elem) => self.type_info.resolve_type_id(*elem),
                     ArType::Slice(elem) => {
                         ptr_val = self.builder.ins().load(
                             self.ptr_type,
@@ -703,7 +703,20 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                             ptr_val,
                             0,
                         );
-                        self.type_info.resolve_type_id(elem)
+                        self.type_info.resolve_type_id(*elem)
+                    }
+                    ArType::Named(sym_id, args)
+                        if (self.symbol_table.get(*sym_id).name == "Vec"
+                            || self.symbol_table.get(*sym_id).name.ends_with(".Vec"))
+                            && args.len() == 1 =>
+                    {
+                        ptr_val = self.builder.ins().load(
+                            self.ptr_type,
+                            cranelift_codegen::ir::MemFlagsData::new(),
+                            ptr_val,
+                            0,
+                        );
+                        self.type_info.resolve_type_id(args[0])
                     }
                     _ => ArType::Error,
                 };

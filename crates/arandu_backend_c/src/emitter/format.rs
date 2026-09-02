@@ -213,12 +213,21 @@ impl<'a> CEmitter<'a> {
                     current_ty = field_ty;
                 }
                 AmirProjection::Index(index_op) => {
+                    let is_vec = match &current_ty {
+                        ArType::Named(sym_id, args) => {
+                            (self.symbols.get(*sym_id).name == "Vec"
+                                || self.symbols.get(*sym_id).name.ends_with(".Vec"))
+                                && args.len() == 1
+                        }
+                        _ => false,
+                    };
                     let elem_ty = match &current_ty {
                         ArType::Array(_, inner)
                         | ArType::Slice(inner)
                         | ArType::Ptr(inner)
                         | ArType::Ref(inner)
                         | ArType::RefMut(inner) => self.interner.resolve(*inner),
+                        ArType::Named(_, args) if is_vec => self.interner.resolve(args[0]),
                         _ => ArType::Error,
                     };
                     let elem_c_ty = self.format_type(&elem_ty);
@@ -229,7 +238,7 @@ impl<'a> CEmitter<'a> {
                         ArType::Ptr(_) | ArType::Ref(_) | ArType::RefMut(_)
                     ) {
                         path = format!("(({}*){})[{}]", elem_c_ty, path, index_str);
-                    } else if matches!(current_ty, ArType::Slice(_)) {
+                    } else if matches!(current_ty, ArType::Slice(_)) || is_vec {
                         path = format!(
                             "(( {}* )(*(void**)((uint8_t*)&{} + 0)))[{}]",
                             elem_c_ty, path, index_str

@@ -709,6 +709,22 @@ impl<'a> Parser<'a> {
             let mut fields = Vec::new();
             if !self.at_kind_name("RBRACE") {
                 loop {
+                    if self.eat_name("RANGE_EXCLUSIVE") {
+                        // Struct update syntax: `{ ..base }` or `{ field: val, ..base }`
+                        let base_expr = self.parse_expr(0)?;
+                        let base_span = self.pool.expr_span(base_expr);
+                        let init = FieldInit {
+                            span: base_span,
+                            name: SmolStr::new(".."),
+                            value: base_expr,
+                        };
+                        let init_id = self.pool.alloc_field_init(init);
+                        fields.push(init_id);
+                        if self.eat_name("COMMA") {
+                            // optional trailing comma after ..base
+                        }
+                        break;
+                    }
                     let field_start = self.mark();
                     let name = self.expect_ident_value()?;
                     let value = if self.eat_name("COLON") {

@@ -203,6 +203,7 @@ Fase 2 — A Construção da Infraestrutura & Execução (v0.2) · [FECHADA no c
    └─ [x] A10.d  AnalysisRevision / LspSymbolId — stale-safety de análise por revisão de snapshot
                   (não generation em SymbolId); ver `arandu_query::analysis`
 [x] A11    Token & String Storage Engine (packed tokens, SSO via smol_str, string interning)
+[ ] A12    Deterministic CTFE & Comptime Engine (AMIR VM, Salsa queries puras, fuel budget)
 [x] BC     Backend Cranelift (Dev/Debug com compilador em memória)
    ├─ [x] BC.1   Fat Pointer String JIT (tratar String como ptr + len na convenção de chamadas do Cranelift)
    ├─ [x] BC.2   Implementar EnumPayload & Discriminant no Cranelift JIT (Garantia estática contra double-free depende de M2; atualmente mitigado via poison-check em debug)
@@ -466,7 +467,7 @@ Source (.aru)
 
 ### Fase A — Compiler Infrastructure & Core Subsystems (v0.2)
 
-Antes de expandir as capacidades de otimização, o compilador do Arandu constrói sua fundação infraestrutural. A Fase A cubre tanto a semântica e efeitos da linguagem (A1–A4) quanto a **arquitetura de execução** do compilador em si (A5–A11).
+Antes de expandir as capacidades de otimização, o compilador do Arandu constrói sua fundação infraestrutural. A Fase A cubre tanto a semântica e efeitos da linguagem (A1–A4) quanto a **arquitetura de execução** do compilador em si (A5–A12).
 
 #### A1 — Query System (Incremental Semantic Database via Salsa)
 
@@ -565,9 +566,9 @@ Um subsistema dedicado a rearranjar dados na pilha e na memória física para ga
 
 ---
 
-### Fase A (cont.) — Execution Architecture (A5–A11)
+### Fase A (cont.) — Execution Architecture (A5–A12)
 
-Os subsistemas A5–A11 definem **como o compilador em si executa**: como os dados fluem pela CPU, como evitar stalls de pipeline, como paralelismo escala e como cada traversal acontece. Isso é o que separa um compilador acadêmico de um compilador industrial.
+Os subsistemas A5–A12 definem **como o compilador em si executa**: como os dados fluem pela CPU, como evitar stalls de pipeline, como paralelismo escala e como cada traversal acontece. Isso é o que separa um compilador acadêmico de um compilador industrial.
 
 #### A5 — Data-Oriented Layout Engine
 
@@ -718,6 +719,37 @@ O frontend textual evita alocações individuais de tokens e strings, tratando o
 | **UTF-8 Validation** | Validação vetorizada (SIMD quando disponível, via A7) durante o scan do lexer | Custo amortizado: validação integrada ao scanning, sem segunda passada |
 | **Small-String Optimization (SSO)** | Identificadores ≤ 23 bytes armazenados inline sem alocação heap | ~95% dos identificadores reais cabem inline |
 | **Buffer Reuse** | Buffers temporários de diagnósticos e formatação são arenas scratch reutilizadas | Zero pressão sobre o alocador global |
+
+#### A12 — Deterministic CTFE & Comptime Engine (AMIR VM)
+
+O Arandu adota **Compile-Time Function Execution (CTFE)** e metaprogramação de primeira classe via **interpretador de AMIR desacoplado e determinístico**, superando as limitações históricas de **Miri (Rust)** e **Zig Comptime**.
+
+**Status:** `planned` (v0.3/v0.4).
+
+##### 1. O que aproveitamos de melhor (Miri & Zig)
+* **De Miri (Rust):**
+  * Execução sobre a representação intermediária (**AMIR**) em vez de AST bruta, garantindo que o código em tempo de compilação siga exatamente a mesma semântica (CFG, SSA, tipos densos) do runtime.
+  * Modelo de memória virtual tipada e segura com detecção rigorosa de bounds checking, *use-after-free* e *out-of-bounds* durante a compilação.
+* **Do Zig Comptime:**
+  * **Mesma Linguagem, Sem Macros:** O usuário programa metaprogramação usando a sintaxe e tipos regulares do Arandu (`comptime expr`, `comptime param: Type`), eliminando a necessidade de uma linguagem de macro separada ou compilação de crates externos (`proc-macros`).
+  * Introspecção e reflexão de tipos em tempo de compilação para geração natural de código de serialização, hashing e equivalentes ao `@derive`.
+
+##### 2. Onde superamos o Miri e o Zig
+* **Salsa-First & Early-Cutoff (Superando o Zig):**
+  * O Zig sofre com invalidações em cascata que reexecutam o comptime desnecessariamente.
+  * No Arandu, toda avaliação é uma **query Salsa pura e memoizada** (`eval_comptime(db, amir_func_id, args) -> Arc<ConstValue>`). Se a edição não alterar o valor resultante, o *early-cutoff* do Salsa impede a re-emissão de código downstream.
+* **Desempenho Orientado a Dados (Superando o Miri):**
+  * O Miri no `rustc` é pesado devido a camadas de abstração e rastreamento exaustivo de aliasing.
+  * A VM de AMIR do Arandu aproveita o layout denso de **A5** (`AmirStmtTable`, `DenseRange`, IDs inteiros contíguos), permitindo um interpretador *cache-aware* com dispatch por tabela O(1) e alocação via arena scratch.
+* **LSP & IDE Immunity (Resiliência contra Travamentos):**
+  * Toda execução de comptime roda sob um **orçamento estrito de passos (*fuel budget*)** e suporte a cancelamento cooperativo assíncrono. Laços infinitos em código incompleto digitado no editor são interrompidos com diagnósticos claros, sem nunca travar a thread do LSP.
+* **Cross-Compilation Exata:**
+  * A VM consulta o `DataLayout` e `TargetInfo` do alvo configurado (tamanho de ponteiro, endianness, padding de structs) e não o host onde o compilador roda.
+
+##### 3. Invariantes de Arquitetura
+1. **Pureza Absoluta:** O interpretador de AMIR proíbe I/O de rede, mutação global e acesso não sandboxado ao sistema de arquivos do host.
+2. **Determinismo Byte-a-Byte:** Executar o mesmo código comptime em Windows, Linux ou macOS produz idêntico `ConstValue`.
+3. **Erros Estruturados:** Falhas de execução viram diagnósticos `Txxx` reportáveis com spans precisos do código fonte.
 
 ---
 

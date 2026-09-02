@@ -6,6 +6,7 @@ use crate::hir::{
 use crate::passes::lowering::{require_def_symbol, require_type_symbol, require_value_symbol};
 use crate::passes::type_checker::types::{ArType, Primitive};
 use crate::{NodeKey, TypeCheckResult};
+use arandu_middle::SmolStr;
 use arandu_middle::types::{TypeId, TypeInterner};
 use arandu_parser::CatchHandler;
 use arandu_parser::ast_pool::{AstPool, ExprId, ExprKind};
@@ -453,15 +454,51 @@ pub(crate) fn lower_expr_raw(
             };
             let field_ids = pool.field_init_list(*fields).to_vec();
             let mut hir_fields = Vec::new();
+            let mut base_value_id = None;
+            let mut explicit_field_names = Vec::new();
+
             for fid in field_ids {
                 let f = pool.field_init(fid);
-                let value_id = lower_expr(type_check, pool, hir_pool, f.value)?;
-                hir_fields.push(HirFieldInit {
-                    span: f.span,
-                    name: f.name.clone(),
-                    value: value_id,
-                });
+                if f.name == ".." {
+                    base_value_id = Some(lower_expr(type_check, pool, hir_pool, f.value)?);
+                } else {
+                    let value_id = lower_expr(type_check, pool, hir_pool, f.value)?;
+                    explicit_field_names.push(f.name.clone());
+                    hir_fields.push(HirFieldInit {
+                        span: f.span,
+                        name: f.name.clone(),
+                        value: value_id,
+                    });
+                }
             }
+
+            if let Some(base_vid) = base_value_id
+                && let Some(defined_fields) = type_check
+                    .type_info
+                    .struct_fields
+                    .get(&struct_symbol)
+                    .cloned()
+            {
+                for (def_name, &def_tid) in defined_fields.iter() {
+                    let smol_name = SmolStr::new(def_name.as_str());
+                    if !explicit_field_names.contains(&smol_name) {
+                        let field_expr = hir_pool.alloc_expr(HirExpr {
+                            kind: HirExprKind::Field {
+                                base: base_vid,
+                                field: smol_name.clone(),
+                            },
+                            ty: def_tid,
+                            span,
+                        });
+                        hir_fields.push(HirFieldInit {
+                            span,
+                            name: smol_name,
+                            value: field_expr,
+                        });
+                    }
+                }
+            }
+
             let fields_range = hir_pool.alloc_field_init_list(&hir_fields);
             HirExprKind::StructLiteral {
                 struct_symbol,

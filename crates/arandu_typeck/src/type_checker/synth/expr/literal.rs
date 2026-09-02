@@ -259,8 +259,36 @@ pub(super) fn synth_literal_expr(
                 }
 
                 if let Some(fields_def) = field_map {
+                    let mut has_update_base = false;
                     for fid in &field_ids {
                         let field = checker.pool.field_init(*fid);
+                        if field.name == ".." {
+                            has_update_base = true;
+                            let base_ty_id = super::super::synth_expr_expected(
+                                checker,
+                                field.value,
+                                Some(struct_ty_id),
+                            );
+                            let base_ty = checker.resolve(base_ty_id);
+                            let expected_struct_ty = checker.resolve(struct_ty_id);
+                            if !types::unify(
+                                &expected_struct_ty,
+                                &base_ty,
+                                &checker.type_info.type_interner,
+                            ) {
+                                checker.add_constraint(
+                                    expected_struct_ty,
+                                    base_ty_id,
+                                    ConstraintOrigin::FieldInit {
+                                        struct_span: span,
+                                        field_name: "..".to_string(),
+                                        field_span: field.span,
+                                        value_span: checker.pool.expr_span(field.value),
+                                    },
+                                );
+                            }
+                            continue;
+                        }
                         let defined_field_ty_opt = fields_def.get(field.name.as_str()).cloned();
                         // `nil` in a field needs the field's expected type (`ptr[T]`, `T?`),
                         // not the enclosing function return (which produced bogus `int?` /
@@ -312,23 +340,25 @@ pub(super) fn synth_literal_expr(
                         }
                     }
 
-                    let mut missing_fields = Vec::new();
-                    for def_name in fields_def.keys() {
-                        if !seen_fields.iter().any(|(name, _)| name == def_name) {
-                            missing_fields.push(format!("`{def_name}`"));
+                    if !has_update_base {
+                        let mut missing_fields = Vec::new();
+                        for def_name in fields_def.keys() {
+                            if !seen_fields.iter().any(|(name, _)| name == def_name) {
+                                missing_fields.push(format!("`{def_name}`"));
+                            }
                         }
-                    }
-                    if !missing_fields.is_empty() {
-                        missing_fields.sort();
-                        let missing_str = missing_fields.join(", ");
-                        let struct_name = checker.symbols.get(symbol_id).name.clone();
-                        let diag = crate::Diagnostic::error(
-                            crate::DiagCode::T027MissingStructFields,
-                            format!("missing fields {missing_str} in struct initializer"),
-                            span,
-                        )
-                        .with_label(span, format!("instantiating struct '{struct_name}' here"));
-                        checker.diagnostics.push(diag);
+                        if !missing_fields.is_empty() {
+                            missing_fields.sort();
+                            let missing_str = missing_fields.join(", ");
+                            let struct_name = checker.symbols.get(symbol_id).name.clone();
+                            let diag = crate::Diagnostic::error(
+                                crate::DiagCode::T027MissingStructFields,
+                                format!("missing fields {missing_str} in struct initializer"),
+                                span,
+                            )
+                            .with_label(span, format!("instantiating struct '{struct_name}' here"));
+                            checker.diagnostics.push(diag);
+                        }
                     }
                 } else {
                     for fid in field_ids {

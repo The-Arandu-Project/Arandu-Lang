@@ -480,6 +480,21 @@ fn try_struct_lit_from_type_path(
     let mut fields = Vec::new();
     if cur.peek_kind() != Some(TokenKind::RBrace) {
         loop {
+            if cur.peek_kind() == Some(TokenKind::RangeExclusive) {
+                let dot_tok = cur.expect(TokenKind::RangeExclusive)?;
+                let value = try_hand_lower_expr(ctx, cur, 0)?;
+                let fend = ctx.pool.expr_span(value).end;
+                let init_id = ctx.pool.alloc_field_init(FieldInit {
+                    span: ctx.span(dot_tok.start, fend),
+                    name: SmolStr::new(".."),
+                    value,
+                });
+                fields.push(init_id);
+                if cur.eat(TokenKind::Comma) {
+                    // optional trailing comma
+                }
+                break;
+            }
             let name_tok = cur.peek()?;
             if !matches!(name_tok.kind, TokenKind::IdentValue | TokenKind::IdentType) {
                 return None;
@@ -487,8 +502,17 @@ fn try_struct_lit_from_type_path(
             let fname = SmolStr::new(ctx.text(name_tok)?);
             let fstart = name_tok.start;
             cur.bump();
-            cur.expect(TokenKind::Colon)?;
-            let value = try_hand_lower_expr(ctx, cur, 0)?;
+            let value = if cur.eat(TokenKind::Colon) {
+                try_hand_lower_expr(ctx, cur, 0)?
+            } else {
+                let fspan = ctx.span(fstart, name_tok.start + name_tok.len);
+                ctx.pool.alloc_expr(
+                    ExprKind::Path {
+                        path: smallvec::smallvec![fname.clone()],
+                    },
+                    fspan,
+                )
+            };
             let fend = ctx.pool.expr_span(value).end;
             let init_id = ctx.pool.alloc_field_init(FieldInit {
                 span: ctx.span(fstart, fend),

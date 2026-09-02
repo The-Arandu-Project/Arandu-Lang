@@ -1325,3 +1325,119 @@ fn test_array_literal_contextual_inference() {
         check_res.diagnostics
     );
 }
+
+#[test]
+fn test_vec_indexing_typecheck() {
+    let source = r#"
+    module test;
+    public struct Vec<T> {
+        data: ptr[T];
+        len: uint;
+        capacity: uint;
+    }
+    func test_indexing(v: Vec<int>): int {
+        return v[0];
+    }
+    func test_indexed_assign(v: mut ref Vec<int>) {
+        v[1] = 42;
+    }
+    "#;
+    let program = arandu_parser::parse(source).unwrap();
+    let res = arandu_resolve::resolve_for_test(0, &program);
+    let check_res = crate::type_check(res, &program, TargetInfo { pointer_width: 64 });
+    assert_eq!(
+        check_res.diagnostics.len(),
+        0,
+        "Vec<T> indexing and assignment should typecheck cleanly: {:?}",
+        check_res.diagnostics
+    );
+}
+
+#[test]
+fn test_option_try_and_null_coalesce_typecheck() {
+    let source = r#"
+    module test;
+    func unwrap_or_default(opt: Option<int>, default_val: int): int {
+        return opt ?? default_val;
+    }
+    func try_option(opt: Option<int>): Option<int> {
+        let val: int = opt?;
+        return .Some(val + 1);
+    }
+    "#;
+    let program = arandu_parser::parse(source).unwrap();
+    let res = arandu_resolve::resolve_for_test(0, &program);
+    let check_res = crate::type_check(res, &program, TargetInfo { pointer_width: 64 });
+    assert_eq!(
+        check_res.diagnostics.len(),
+        0,
+        "Option `?` and `??` should typecheck cleanly: {:?}",
+        check_res.diagnostics
+    );
+}
+
+#[test]
+fn test_range_slicing_typecheck() {
+    let source = r#"
+    module test;
+    public struct Vec<T> { data: ptr[T]; len: uint; capacity: uint; }
+    func test_slicing(v: Vec<int>, arr: [5]int): []int {
+        let s1: []int = v[1..4];
+        let s2: []int = arr[0..2];
+        return s1;
+    }
+    "#;
+    let program = arandu_parser::parse(source).unwrap();
+    let res = arandu_resolve::resolve_for_test(0, &program);
+    let check_res = crate::type_check(res, &program, TargetInfo { pointer_width: 64 });
+    assert_eq!(
+        check_res.diagnostics.len(),
+        0,
+        "Range slicing on Vec and Array should typecheck cleanly: {:?}",
+        check_res.diagnostics
+    );
+}
+
+#[test]
+fn test_option_safe_navigation_typecheck() {
+    let source = r#"
+    module test;
+    public struct Address { street: str; zip: int; }
+    public struct User { name: str; address: Address; }
+    func get_zip(user: Option<User>): Option<int> {
+        return user?.address?.zip;
+    }
+    "#;
+    let program = arandu_parser::parse(source).unwrap();
+    let res = arandu_resolve::resolve_for_test(0, &program);
+    let check_res = crate::type_check(res, &program, TargetInfo { pointer_width: 64 });
+    assert_eq!(
+        check_res.diagnostics.len(),
+        0,
+        "Safe navigation on Option should typecheck cleanly: {:?}",
+        check_res.diagnostics
+    );
+}
+
+#[test]
+fn test_struct_update_and_punning_typecheck() {
+    let source = r#"
+    module test;
+    public struct Config { host: str; port: int; debug: bool; }
+    func modify_config(original: Config, port: int): Config {
+        let debug = true;
+        let c1 = Config { host: "localhost", port, debug };
+        let c2 = Config { port: 9000, ..original };
+        return c2;
+    }
+    "#;
+    let program = arandu_parser::parse(source).unwrap();
+    let res = arandu_resolve::resolve_for_test(0, &program);
+    let check_res = crate::type_check(res, &program, TargetInfo { pointer_width: 64 });
+    assert_eq!(
+        check_res.diagnostics.len(),
+        0,
+        "Struct update and field punning should typecheck cleanly: {:?}",
+        check_res.diagnostics
+    );
+}

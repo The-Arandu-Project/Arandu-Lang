@@ -266,4 +266,60 @@ impl LowerCtx<'_> {
         self.emit_assign_temp(dest, AmirRvalue::Use(base));
         Ok(AmirOperand::Copy(dest))
     }
+
+    pub(crate) fn lower_try_option(
+        &mut self,
+        inner_id: HirExprId,
+        target: Option<TempId>,
+        expr_ty: crate::types::TypeId,
+        symbols: &SymbolTable,
+    ) -> Result<AmirOperand, Diagnostic> {
+        let base = self.lower_expr(inner_id, None, symbols)?;
+        if self.builder.current_block.is_none() {
+            let dest = target.unwrap_or_else(|| self.new_temp_id(expr_ty));
+            return Ok(AmirOperand::Copy(dest));
+        }
+
+        let tag_tmp = self.new_temp(ArType::Primitive(Primitive::Int));
+        self.emit_assign_temp(tag_tmp, AmirRvalue::Discriminant { value: base });
+
+        let zero_lit = self.intern_literal_int("0");
+        let cond_tmp = self.new_temp(ArType::Primitive(Primitive::Bool));
+        self.emit_assign_temp(
+            cond_tmp,
+            AmirRvalue::Binary {
+                op: BinaryOp::Equal,
+                left: AmirOperand::Copy(tag_tmp),
+                right: AmirOperand::Constant(zero_lit),
+            },
+        );
+
+        let bb_return_none = self.new_block();
+        let bb_continue = self.new_block();
+
+        self.set_bool_branch(AmirOperand::Copy(cond_tmp), bb_return_none, bb_continue);
+        self.seal_block(bb_return_none);
+        self.seal_block(bb_continue);
+
+        // None branch (tag == 0): return Option.None
+        self.builder.current_block = Some(bb_return_none);
+        self.exit_all_defer_frames(true, symbols)?;
+        let none_tmp = self.new_temp_id(self.func_return_type);
+        self.emit_assign_temp(
+            none_tmp,
+            AmirRvalue::EnumConstruct {
+                variant_tag: 0,
+                payload: None,
+            },
+        );
+        self.emit_assign_temp(TempId(0), AmirRvalue::Use(AmirOperand::Copy(none_tmp)));
+        self.set_terminator(AmirTerminator::Return);
+        self.builder.current_block = None;
+
+        // Some branch (tag == 1): extract payload
+        self.builder.current_block = Some(bb_continue);
+        let dest = target.unwrap_or_else(|| self.new_temp_id(expr_ty));
+        self.lower_result_ok_field(base, dest);
+        Ok(AmirOperand::Copy(dest))
+    }
 }

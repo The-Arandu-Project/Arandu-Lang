@@ -350,6 +350,23 @@ pub(crate) fn collect_signature_types(checker: &mut TypeChecker<'_>, program: &P
                     let func_ty = ArType::Func(param_types, ret_id);
                     let func_id = checker.intern(func_ty);
                     checker.record_decl_type(symbol_id, func_id);
+
+                    // Drop Elaboration: Check for @Destructor attribute
+                    let has_destructor_attr = func_decl
+                        .attrs
+                        .iter()
+                        .any(|attr| attr.name == "Destructor" || attr.name == "destructor");
+                    if has_destructor_attr
+                        && let arandu_parser::FuncName::Method { .. } = &func_decl.name
+                        && let Some(first_param) = func_decl.params.first()
+                        && first_param.is_receiver
+                    {
+                        let param_ty =
+                            checker.lower_type_expr(first_param.ty, checker.symbols.global_scope());
+                        if let ArType::Named(struct_id, _) = param_ty {
+                            checker.type_info.destructors.insert(struct_id, symbol_id);
+                        }
+                    }
                 }
             }
             TopLevelDecl::Extern(extern_decl) => {

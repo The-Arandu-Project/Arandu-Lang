@@ -123,8 +123,16 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 ) {
                     current_ty = unwrap_ptr_like(&current_ty, self);
                 }
+                let is_vec = match &current_ty {
+                    ArType::Named(sym_id, args) => {
+                        (self.symbol_table.get(*sym_id).name == "Vec"
+                            || self.symbol_table.get(*sym_id).name.ends_with(".Vec"))
+                            && args.len() == 1
+                    }
+                    _ => false,
+                };
                 let idx_val = self.translate_operand(op, Some(self.ptr_type));
-                if matches!(current_ty, ArType::Slice(_)) {
+                if matches!(current_ty, ArType::Slice(_)) || is_vec {
                     ptr_val = self.builder.ins().load(
                         self.ptr_type,
                         cranelift_codegen::ir::MemFlagsData::new(),
@@ -135,6 +143,7 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 let inner_ty_id = match &current_ty {
                     ArType::Ptr(inner) | ArType::Slice(inner) | ArType::Array(_, inner) => *inner,
                     ArType::Ref(inner) | ArType::RefMut(inner) => *inner,
+                    ArType::Named(_, args) if is_vec => args[0],
                     _ => {
                         self.record_ice(
                             "indexing non-indexable type in codegen",

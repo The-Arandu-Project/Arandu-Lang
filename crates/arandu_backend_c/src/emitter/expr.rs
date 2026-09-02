@@ -486,10 +486,25 @@ impl<'a> CEmitter<'a> {
                     AmirOperand::Copy(t) | AmirOperand::Move(t) => self.temp_ty(func, *t),
                     _ => ArType::Error,
                 };
-                let elem_ty = match &base_ty {
+                let deref_ty = match &base_ty {
+                    ArType::Ptr(inner) | ArType::Ref(inner) | ArType::RefMut(inner) => {
+                        self.interner.resolve(*inner)
+                    }
+                    other => other.clone(),
+                };
+                let is_vec = match &deref_ty {
+                    ArType::Named(sym_id, args) => {
+                        (self.symbols.get(*sym_id).name == "Vec"
+                            || self.symbols.get(*sym_id).name.ends_with(".Vec"))
+                            && args.len() == 1
+                    }
+                    _ => false,
+                };
+                let elem_ty = match &deref_ty {
                     ArType::Array(_, inner) | ArType::Slice(inner) | ArType::Ptr(inner) => {
                         self.interner.resolve(*inner)
                     }
+                    ArType::Named(_, args) if is_vec => self.interner.resolve(args[0]),
                     _ => ArType::Error,
                 };
                 let elem_c_ty = self.format_type(&elem_ty);
@@ -502,7 +517,7 @@ impl<'a> CEmitter<'a> {
                         "(({}*){})[{}]",
                         elem_c_ty, base_str, index_str
                     );
-                } else if matches!(base_ty, ArType::Slice(_)) {
+                } else if matches!(base_ty, ArType::Slice(_)) || is_vec {
                     let _ = write!(
                         &mut self.output,
                         "(({}*)(*(void**)((uint8_t*)&{} + 0)))[{}]",
