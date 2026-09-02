@@ -21,7 +21,11 @@ func main(): int {
 "#;
     let program = arandu_parser::parse(src).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     assert!(
         tc.diagnostics.is_empty(),
         "typeck diags: {:?}",
@@ -56,7 +60,11 @@ func main(): int {
 "#;
     let program = arandu_parser::parse(src).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     assert!(
         tc.diagnostics.is_empty(),
         "typeck diags: {:?}",
@@ -114,11 +122,15 @@ func main(): int {
 "#;
     let program = arandu_parser::parse(src).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     assert!(tc.diagnostics.is_empty(), "{:?}", tc.diagnostics);
     let mut hir = lower_to_hir(&mut tc, &program).expect("hir");
     monomorphize_program(&mut tc, &mut hir).expect("mono");
-    match arandu_semantics::lower_to_amir(&tc, &hir) {
+    match arandu_semantics::lower_to_amir(&tc, &hir, 64) {
         Ok(amir) => {
             assert!(!amir.funcs.is_empty(), "expected AMIR funcs");
             assert!(
@@ -157,12 +169,16 @@ func main(): int {
 "#;
     let program = arandu_parser::parse(src).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     assert!(tc.diagnostics.is_empty(), "typeck: {:?}", tc.diagnostics);
     let mut hir = lower_to_hir(&mut tc, &program).expect("hir");
     let n = monomorphize_program(&mut tc, &mut hir).expect("mono");
     assert!(n >= 1, "expected specialization, got {n}");
-    let amir = arandu_semantics::lower_to_amir(&tc, &hir).expect("amir");
+    let amir = arandu_semantics::lower_to_amir(&tc, &hir, 64).expect("amir");
     assert!(
         amir.funcs
             .iter()
@@ -191,7 +207,11 @@ func main(): int {
 "#;
     let program = arandu_parser::parse(src).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     assert!(tc.diagnostics.is_empty(), "typeck: {:?}", tc.diagnostics);
     let mut hir = lower_to_hir(&mut tc, &program).expect("hir");
     let n = monomorphize_program(&mut tc, &mut hir).expect("mono");
@@ -224,7 +244,11 @@ func main(): int {
 "#;
     let program = arandu_parser::parse(src).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     assert!(tc.diagnostics.is_empty(), "typeck: {:?}", tc.diagnostics);
     let mut hir = lower_to_hir(&mut tc, &program).expect("hir");
     let n = monomorphize_program(&mut tc, &mut hir).expect("mono");
@@ -232,7 +256,7 @@ func main(): int {
         n >= 2,
         "expected push_t + ensure_cap specializations, got {n}"
     );
-    let amir = arandu_semantics::lower_to_amir(&tc, &hir).expect("amir");
+    let amir = arandu_semantics::lower_to_amir(&tc, &hir, 64).expect("amir");
     let names: Vec<_> = amir
         .funcs
         .iter()
@@ -272,12 +296,16 @@ func main(): int {
 "#;
     let program = arandu_parser::parse(src).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     assert!(tc.diagnostics.is_empty(), "typeck: {:?}", tc.diagnostics);
     let mut hir = lower_to_hir(&mut tc, &program).expect("hir");
     let n = monomorphize_program(&mut tc, &mut hir).expect("mono");
     assert!(n >= 2, "expected int+str specializations, got {n}");
-    let amir = arandu_semantics::lower_to_amir(&tc, &hir).expect("amir");
+    let amir = arandu_semantics::lower_to_amir(&tc, &hir, 64).expect("amir");
     let mangled: Vec<_> = amir
         .funcs
         .iter()
@@ -312,7 +340,11 @@ func main(): void {
 "#;
     let program = arandu_parser::parse(src).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     assert!(tc.diagnostics.is_empty(), "typeck: {:?}", tc.diagnostics);
     let mut hir = lower_to_hir(&mut tc, &program).expect("hir");
     monomorphize_program(&mut tc, &mut hir).expect("mono");

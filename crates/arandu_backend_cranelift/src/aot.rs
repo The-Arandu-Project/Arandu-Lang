@@ -8,10 +8,33 @@
 use crate::jit::{AranduModule, codegen_ice};
 use arandu_semantics::amir::AmirProgram;
 use arandu_semantics::{Diagnostic, SymbolTable, TypeInfo};
+use std::str::FromStr;
+
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_module::default_libcall_names;
 use cranelift_object::{ObjectBuilder, ObjectModule};
-use target_lexicon::Triple;
+use target_lexicon::{OperatingSystem, Triple};
+
+/// AOT target triple for a data-layout pointer width (in bytes).
+///
+/// A width matching the host maps to [`Triple::host`]. Width `4` maps to the
+/// host OS's 32-bit x86 triple (i686). Returns `None` for widths that have no
+/// AOT encoding on this host OS (32-bit on macOS, or an exotic width).
+#[must_use]
+pub fn aot_triple_for_pointer_width(pointer_width: u64) -> Option<Triple> {
+    if pointer_width == std::mem::size_of::<*const ()>() as u64 {
+        return Some(Triple::host());
+    }
+    if pointer_width != 4 {
+        return None;
+    }
+    match Triple::host().operating_system {
+        OperatingSystem::Windows => Triple::from_str("i686-pc-windows-msvc").ok(),
+        OperatingSystem::Linux => Triple::from_str("i686-unknown-linux-gnu").ok(),
+        // macOS (and other hosts) dropped 32-bit ABIs; no cross target here.
+        _ => None,
+    }
+}
 
 /// A relocatable object emitted for a specific target triple.
 #[derive(Clone, Debug, PartialEq, Eq)]

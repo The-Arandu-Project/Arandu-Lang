@@ -14,10 +14,12 @@ use notify_debouncer_full::{DebounceEventResult, DebouncedEvent, new_debouncer};
 
 use crate::cli_error::{CliFailure, CliResult};
 use crate::project::{self, ProjectFlags};
+use arandu_middle::layout::DataLayout;
 
 /// Run package-mode watch until Ctrl-C / fatal error.
-pub fn cmd_watch(start: &Path, flags: &ProjectFlags) -> CliResult {
+pub fn cmd_watch(start: &Path, flags: &ProjectFlags, data_layout: DataLayout) -> CliResult {
     let (mut db, rebuild_log) = arandu_query::DatabaseImpl::with_rebuild_log();
+    db.set_target_config(data_layout);
     let ctx = match project::load_project(&mut db, start, flags) {
         Ok(c) => c,
         Err(e) => {

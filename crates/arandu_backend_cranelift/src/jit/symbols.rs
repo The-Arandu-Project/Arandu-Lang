@@ -292,7 +292,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
         }
 
         let mut one_ret = one_i64.clone();
-        one_ret.returns.push(AbiParam::new(I64));
+        one_ret.returns.push(AbiParam::new(ptr_type));
         let id = module
             .declare_function("ar_vec_len", Linkage::Import, &one_ret)
             .map_err(|err| codegen_ice(format!("failed to declare ar_vec_len: {err:?}")))?;

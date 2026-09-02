@@ -32,6 +32,7 @@ pub use arandu_mir::{
     optimize_amir, optimize_amir_checked, optimize_amir_checked_with_level,
 };
 pub use arandu_resolve::{resolve_for_test, resolve_imports_and_bodies, resolve_local};
+pub use arandu_typeck::type_checker::TargetInfo;
 pub use arandu_typeck::{
     TypeCheckResult, TypeChecker, TypeInfo, body_item_symbols, check_bodies, check_bodies_only,
     check_func_body_only, check_item_body_only, check_non_func_bodies_only, check_signatures,

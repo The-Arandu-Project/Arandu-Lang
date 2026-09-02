@@ -49,7 +49,11 @@ fn test_amir_golden_files() {
             panic!("failed to parse {name}: {err:?}");
         });
         let resolution = resolve_for_test(0, &program);
-        let mut tc = type_check(resolution, &program);
+        let mut tc = type_check(
+            resolution,
+            &program,
+            arandu_semantics::TargetInfo { pointer_width: 64 },
+        );
         let errors: Vec<_> = tc
             .diagnostics
             .iter()
@@ -62,7 +66,7 @@ fn test_amir_golden_files() {
         let hir = lower_to_hir(&mut tc, &program).expect("HIR lowering failed");
         hir.validate_invariants(&hir.pool, &tc.symbols)
             .unwrap_or_else(|err| panic!("HIR invariant validation failed for {name}: {err:?}"));
-        let amir = lower_to_amir(&tc, &hir).expect("AMIR lowering failed");
+        let amir = lower_to_amir(&tc, &hir, 64).expect("AMIR lowering failed");
         let amir_issues = validate_amir_program(&amir, &tc.symbols, &tc.type_info.type_interner);
         assert!(
             amir_issues.is_empty(),
@@ -89,7 +93,11 @@ func main() {
 "#;
     let program = arandu_parser::parse(src).expect("parse failed");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     let x_symbol = tc
         .symbols
         .iter()
@@ -97,7 +105,7 @@ func main() {
         .map(|symbol| symbol.id)
         .expect("missing field symbol");
     let hir = lower_to_hir(&mut tc, &program).expect("HIR lowering failed");
-    let amir = lower_to_amir(&tc, &hir).expect("AMIR lowering failed");
+    let amir = lower_to_amir(&tc, &hir, 64).expect("AMIR lowering failed");
 
     let func = &amir.funcs[0];
     let has_symbol_projection = func.blocks.iter().any(|block| {
@@ -129,10 +137,14 @@ func main() {
 "#;
     let program = arandu_parser::parse(src).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     assert!(tc.diagnostics.is_empty(), "{:?}", tc.diagnostics);
     let hir = lower_to_hir(&mut tc, &program).expect("HIR");
-    let amir = lower_to_amir(&tc, &hir).expect("AMIR");
+    let amir = lower_to_amir(&tc, &hir, 64).expect("AMIR");
 
     let destructor = tc.type_info.destructors.values().copied().next().unwrap();
     for func in &amir.funcs {
@@ -165,9 +177,13 @@ func main() {
 "#;
     let program = arandu_parser::parse(src).expect("parse failed");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     let hir = lower_to_hir(&mut tc, &program).expect("HIR lowering failed");
-    let diagnostics = lower_to_amir(&tc, &hir).expect_err("expected use after move diagnostic");
+    let diagnostics = lower_to_amir(&tc, &hir, 64).expect_err("expected use after move diagnostic");
 
     assert!(
         diagnostics
@@ -188,9 +204,13 @@ func main() {
 "#;
     let program = arandu_parser::parse(src).expect("parse failed");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     let hir = lower_to_hir(&mut tc, &program).expect("HIR lowering failed");
-    let amir = lower_to_amir(&tc, &hir).expect("AMIR lowering failed");
+    let amir = lower_to_amir(&tc, &hir, 64).expect("AMIR lowering failed");
     let pretty = amir.pretty_print(&tc.symbols, &tc.type_info.type_interner);
     assert!(
         !pretty.contains("move _"),
@@ -215,9 +235,13 @@ func main(cond: bool) {
 "#;
     let program = arandu_parser::parse(src).expect("parse failed");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     let hir = lower_to_hir(&mut tc, &program).expect("HIR lowering failed");
-    let diagnostics = lower_to_amir(&tc, &hir).expect_err("expected branch move diagnostic");
+    let diagnostics = lower_to_amir(&tc, &hir, 64).expect_err("expected branch move diagnostic");
 
     assert!(
         diagnostics
@@ -241,9 +265,13 @@ func main(cond: bool) {
 "#;
     let program = arandu_parser::parse(src).expect("parse failed");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     let hir = lower_to_hir(&mut tc, &program).expect("HIR lowering failed");
-    let amir = lower_to_amir(&tc, &hir).expect("OSSA lowering failed");
+    let amir = lower_to_amir(&tc, &hir, 64).expect("OSSA lowering failed");
 
     assert!(!amir.funcs.is_empty());
     let func = &amir.funcs[0];
@@ -819,9 +847,13 @@ fn temp_ids_are_dense_and_positional() {
             let src = std::fs::read_to_string(&path).unwrap();
             let program = arandu_parser::parse(&src).expect("Failed to parse");
             let resolution = resolve_for_test(0, &program);
-            let mut tc = type_check(resolution, &program);
+            let mut tc = type_check(
+                resolution,
+                &program,
+                arandu_semantics::TargetInfo { pointer_width: 64 },
+            );
             let hir = lower_to_hir(&mut tc, &program).expect("HIR lowering failed");
-            let amir = lower_to_amir(&tc, &hir).expect("AMIR lowering failed");
+            let amir = lower_to_amir(&tc, &hir, 64).expect("AMIR lowering failed");
 
             for func in &amir.funcs {
                 for (i, temp) in func.temps.iter().enumerate() {
@@ -858,7 +890,11 @@ func main(): int {
 "#;
     let program = arandu_parser::parse(src).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     assert!(
         tc.diagnostics
             .iter()
@@ -867,7 +903,7 @@ func main(): int {
         tc.diagnostics
     );
     let hir = lower_to_hir(&mut tc, &program).expect("hir");
-    let amir = lower_to_amir(&tc, &hir).expect("amir");
+    let amir = lower_to_amir(&tc, &hir, 64).expect("amir");
     let func = &amir.funcs[0];
     let x = func
         .locals

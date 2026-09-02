@@ -6,19 +6,28 @@ use std::path::{Path, PathBuf};
 
 use crate::cli_error::{CliFailure, CliResult, CliSuccess};
 use crate::pipeline::{
-    attach_stdlib, fail_operational, fail_usage, find_aru_files, finish, open_entry_file,
-    optimize_amir_or_exit, parse_and_check, pipeline_lower, print_diagnostics_and_exit,
-    print_genref_report, validate_hir_and_monomorphize,
+    attach_stdlib, ensure_host_jit_layout, fail_operational, fail_usage, find_aru_files, finish,
+    open_entry_file, optimize_amir_or_exit, parse_and_check, pipeline_lower,
+    print_diagnostics_and_exit, print_genref_report, validate_hir_and_monomorphize,
 };
 use crate::project::{self, ProjectFlags};
+use arandu_middle::layout::DataLayout;
 
-pub fn cmd_project_run(start: &Path, flags: &ProjectFlags, opt: bool, _debug: bool) -> CliResult {
+pub fn cmd_project_run(
+    start: &Path,
+    flags: &ProjectFlags,
+    opt: bool,
+    _debug: bool,
+    data_layout: DataLayout,
+) -> CliResult {
     if flags.release {
         return Err(CliFailure::usage(
             "`--release` is supported by `build`; `run` remains the interactive Cranelift JIT path",
         ));
     }
+    ensure_host_jit_layout(data_layout)?;
     let (mut db, rebuild_log) = arandu_query::DatabaseImpl::with_rebuild_log();
+    db.set_target_config(data_layout);
     let ctx = match project::load_project(&mut db, start, flags) {
         Ok(c) => c,
         Err(e) => {
@@ -193,6 +202,7 @@ pub fn cmd_single_file_dispatch(
         (arandu_query::db::DatabaseImpl::new(), None)
     };
     attach_stdlib(&mut db, project_flags.stdlib_path.clone());
+    db.set_target_config(data_layout);
     let mut registry = arandu_base::SourceRegistry::default();
 
     let mut source_files = Vec::new();
@@ -307,6 +317,9 @@ pub fn cmd_single_file_dispatch(
                 }
             }
             "run" => {
+                if let Err(failure) = ensure_host_jit_layout(data_layout) {
+                    finish(Err(failure));
+                }
                 let artifacts = pipeline_lower(&db, source_file, &filepath);
                 if genref_report {
                     print_genref_report(&filepath, &artifacts);
@@ -459,8 +472,10 @@ pub fn cmd_project_check(
     flags: &ProjectFlags,
     _opt: bool,
     _debug: bool,
+    data_layout: DataLayout,
 ) -> CliResult {
     let (mut db, rebuild_log) = arandu_query::DatabaseImpl::with_rebuild_log();
+    db.set_target_config(data_layout);
     let ctx = match project::load_project(&mut db, start, flags) {
         Ok(c) => c,
         Err(e) => {

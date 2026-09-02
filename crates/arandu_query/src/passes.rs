@@ -3,6 +3,7 @@ use crate::{ArandCompilerDb, SourceFile};
 use arandu_parser::Program;
 use arandu_resolve::ResolutionResult;
 use arandu_semantics::{amir::AmirProgram, TypeCheckResult};
+use arandu_typeck::type_checker::TargetInfo;
 use salsa::Accumulator;
 #[cfg(any(test, debug_assertions))]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -47,6 +48,17 @@ pub static TYPE_CHECK_EXEC_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Counts `item_body_typeck` body executions (P1 fine-grained).
 #[cfg(any(test, debug_assertions))]
 pub static ITEM_BODY_TYPECK_EXEC_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Explicit type-check target read from the Salsa [`crate::db::TargetConfig`]
+/// input (CLI `--layout=`, default host). Keeps typeck pure: the pointer width
+/// never hard-codes a 64-bit assumption inside a query.
+fn database_target_info(db: &dyn ArandCompilerDb) -> TargetInfo {
+    let layout = db.target_config().data_layout(db);
+    TargetInfo {
+        // `DataLayout` stores byte widths; `TargetInfo` expects bits.
+        pointer_width: (layout.pointer_width() * 8) as u8,
+    }
+}
 
 pub fn cycle_recover(
     _db: &dyn ArandCompilerDb,
@@ -235,8 +247,13 @@ pub fn module_signatures(db: &dyn ArandCompilerDb, file: SourceFile) -> ModuleSi
                 diagnostics,
                 ..
             } = std::sync::Arc::unwrap_or_clone(std::sync::Arc::clone(&resolved_arc.value));
-            let mut checker =
-                arandu_semantics::TypeChecker::new(symbols, resolved, diagnostics, &program.pool);
+            let mut checker = arandu_semantics::TypeChecker::new(
+                symbols,
+                resolved,
+                diagnostics,
+                &program.pool,
+                database_target_info(db),
+            );
 
             // Merge imported type info (path rewrite shared with resolve).
             // Each `module_signatures` is Salsa-memoized; merge_from is the cold cost.
@@ -448,8 +465,12 @@ pub fn item_body_typeck(
 
     let body_in = item_source_input(db, file, item_sym);
     let signatures = module_signatures(db, file);
-    let res =
-        arandu_semantics::check_item_body_only(signatures, body_in.program.as_ref(), item_sym);
+    let res = arandu_semantics::check_item_body_only(
+        signatures,
+        body_in.program.as_ref(),
+        item_sym,
+        database_target_info(db),
+    );
     HashEq::new(res)
 }
 
@@ -487,7 +508,8 @@ pub fn file_typeck_view(db: &dyn ArandCompilerDb, file: SourceFile) -> HashEq<Ty
     }
 
     // Residual for decls without primary keys (normally empty).
-    let residual = arandu_semantics::check_non_func_bodies_only(signatures, program);
+    let residual =
+        arandu_semantics::check_non_func_bodies_only(signatures, program, database_target_info(db));
     if !residual.diagnostics.is_empty()
         || residual.type_info.expr_types.iter().any(|s| s.is_some())
         || !residual.type_info.decl_types.is_empty()
@@ -727,7 +749,12 @@ pub fn lower_amir(db: &dyn ArandCompilerDb, file: SourceFile) -> HashEq<LowerAmi
 
     let amir = {
         arandu_base::time_pass!("lower-amir-body");
-        match arandu_semantics::lower_to_amir_with_interfaces(&mut type_check_result, &hir) {
+        let pointer_width = db.target_config().data_layout(db).pointer_width();
+        match arandu_semantics::lower_to_amir_with_interfaces(
+            &mut type_check_result,
+            &hir,
+            pointer_width,
+        ) {
             Ok(a) => a,
             Err(diags) => {
                 for diag in diags {

@@ -6,7 +6,11 @@ use arandu_semantics::{SymbolTable, lower_to_hir, resolve_for_test, type_check};
 fn lower(src: &str) -> (HirProgram, SymbolTable) {
     let program = arandu_parser::parse(src).expect("parse failed");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     assert!(
         tc.diagnostics.is_empty(),
         "type check errors: {:?}",
@@ -49,7 +53,11 @@ func Resource.close(own self): void {}
     )
     .expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     assert!(tc.diagnostics.is_empty(), "{:?}", tc.diagnostics);
     lower_to_hir(&mut tc, &program).expect("HIR lowering");
     assert_eq!(tc.type_info.destructors.len(), 1);
@@ -70,7 +78,11 @@ func Resource.close(mut self): void {}
     )
     .expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     let errors = lower_to_hir(&mut tc, &program).expect_err("invalid destructor");
     assert_eq!(
         errors[0].code,
@@ -117,7 +129,11 @@ func main() {
     )
     .expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let tc = type_check(resolution, &program);
+    let tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     let scope = tc.symbols.global_scope();
     assert!(
         tc.symbols.lookup_module(scope, "err").is_some(),
@@ -608,7 +624,11 @@ fn test_hir_golden_files() {
             panic!("failed to parse {name}: {err:?}");
         });
         let resolution = resolve_for_test(0, &program);
-        let mut tc = type_check(resolution, &program);
+        let mut tc = type_check(
+            resolution,
+            &program,
+            arandu_semantics::TargetInfo { pointer_width: 64 },
+        );
         assert!(
             tc.diagnostics.is_empty(),
             "type check failed for {}: {:?}",
@@ -662,7 +682,11 @@ fn test_cyclic_type_alias_safety() {
     "#;
     let program = arandu_parser::parse(src).expect("parse failed");
     let resolution = resolve_for_test(0, &program);
-    let tc = type_check(resolution, &program);
+    let tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     // Since X = Y = X is cyclic, it should result in a compiler error or poison, but not crash!
     assert!(!tc.diagnostics.is_empty() || tc.type_info.expr_types.iter().all(|s| s.is_none()));
 }

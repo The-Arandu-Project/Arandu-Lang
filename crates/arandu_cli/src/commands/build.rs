@@ -10,10 +10,18 @@ use crate::pipeline::{
     print_diagnostics_and_exit,
 };
 use crate::project::{self, ProjectFlags};
+use arandu_middle::layout::DataLayout;
 
-pub fn cmd_project_build(start: &Path, flags: &ProjectFlags, opt: bool, _debug: bool) -> CliResult {
+pub fn cmd_project_build(
+    start: &Path,
+    flags: &ProjectFlags,
+    opt: bool,
+    _debug: bool,
+    data_layout: DataLayout,
+) -> CliResult {
     let backend = project::BackendChoice::from_release_flag(flags.release);
     let (mut db, rebuild_log) = arandu_query::DatabaseImpl::with_rebuild_log();
+    db.set_target_config(data_layout);
     let ctx = match project::load_project(&mut db, start, flags) {
         Ok(c) => c,
         Err(e) => {
@@ -53,17 +61,39 @@ pub fn cmd_project_build(start: &Path, flags: &ProjectFlags, opt: bool, _debug: 
         None => &artifacts.amir,
     };
 
-    let backend_impl = match backend {
-        project::BackendChoice::CraneliftDev => {
-            arandu_backend_cranelift::CraneliftObjectBackend::host_baseline()
+    let backend_impl = {
+        let Some(target) =
+            arandu_backend_cranelift::aot_triple_for_pointer_width(data_layout.pointer_width())
+        else {
+            return Err(CliFailure::operational(
+                "select AOT target",
+                Some(format!("pointer-width={}", data_layout.pointer_width()).into()),
+                format!(
+                    "no Cranelift AOT target for pointer width {} (host is {}-bit); \
+                     32-bit Cranelift emission is unsupported — use a layout matching \
+                     the host or the C backend",
+                    data_layout.pointer_width(),
+                    std::mem::size_of::<usize>() * 8,
+                ),
+            ));
+        };
+        let optimization = match backend {
+            project::BackendChoice::CraneliftDev => {
+                arandu_backend_cranelift::AotOptimization::Baseline
+            }
+            project::BackendChoice::CraneliftRelease => {
+                arandu_backend_cranelift::AotOptimization::Speed
+            }
+        };
+        let backend_impl =
+            arandu_backend_cranelift::CraneliftObjectBackend::for_target_with_optimization(
+                target,
+                optimization,
+            );
+        match backend_impl {
+            Ok(b) => b,
+            Err(diag) => print_diagnostics_and_exit(std::iter::once(diag), &filepath),
         }
-        project::BackendChoice::CraneliftRelease => {
-            arandu_backend_cranelift::CraneliftObjectBackend::host_release()
-        }
-    };
-    let backend_impl = match backend_impl {
-        Ok(b) => b,
-        Err(diag) => print_diagnostics_and_exit(std::iter::once(diag), &filepath),
     };
     match backend_impl.compile(
         amir,

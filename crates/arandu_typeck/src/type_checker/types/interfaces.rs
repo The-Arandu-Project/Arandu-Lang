@@ -551,7 +551,13 @@ mod tests {
         let pool = AstPool::default();
         let symbols = SymbolTable::new(0);
         let resolved = ResolvedNames::default();
-        let mut checker = TypeChecker::new(symbols, resolved, Vec::new(), &pool);
+        let mut checker = TypeChecker::new(
+            symbols,
+            resolved,
+            Vec::new(),
+            &pool,
+            crate::type_checker::TargetInfo { pointer_width: 64 },
+        );
 
         let program = Program {
             span: Span::new(0, 0, 0),
@@ -620,7 +626,13 @@ mod tests {
         symbols.associated_members.insert(struct_sym_id, associated);
 
         let resolved = ResolvedNames::default();
-        let mut checker = TypeChecker::new(symbols, resolved, Vec::new(), &pool);
+        let mut checker = TypeChecker::new(
+            symbols,
+            resolved,
+            Vec::new(),
+            &pool,
+            crate::type_checker::TargetInfo { pointer_width: 64 },
+        );
 
         let self_type_id = checker.intern(ArType::Named(struct_sym_id, Vec::new()));
         let self_interface_type_id = checker.intern(ArType::Named(self_sym_id, Vec::new()));

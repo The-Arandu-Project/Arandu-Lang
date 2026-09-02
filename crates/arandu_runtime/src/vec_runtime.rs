@@ -57,13 +57,13 @@ pub unsafe extern "C" fn ar_vec_push(id: i64, value: i64) {
     slot.data.push(value);
 }
 
-/// Length of vector `id`, or `-1` if invalid.
+/// Length of vector `id`, or `usize::MAX` if invalid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ar_vec_len(id: i64) -> i64 {
+pub unsafe extern "C" fn ar_vec_len(id: i64) -> usize {
     let g = lock();
     match g.get(id as usize).and_then(|s| s.as_ref()) {
-        Some(slot) => slot.data.len() as i64,
-        None => -1,
+        Some(slot) => slot.data.len(),
+        None => usize::MAX, // sentinel para inválido
     }
 }
 
@@ -280,7 +280,7 @@ mod tests {
             assert_eq!(ar_vec_pop(id), 5);
             assert_eq!(ar_vec_len(id), 1);
             ar_vec_destroy(id);
-            assert_eq!(ar_vec_len(id), -1);
+            assert_eq!(ar_vec_len(id), usize::MAX);
         }
     }
 

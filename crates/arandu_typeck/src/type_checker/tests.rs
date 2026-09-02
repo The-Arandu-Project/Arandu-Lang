@@ -913,7 +913,13 @@ fn solver_logs_failed_constraints_in_generation_order() {
     let pool = AstPool::default();
     let symbols = SymbolTable::new(0);
     let resolved = ResolvedNames::default();
-    let mut checker = TypeChecker::new(symbols, resolved, Vec::new(), &pool);
+    let mut checker = TypeChecker::new(
+        symbols,
+        resolved,
+        Vec::new(),
+        &pool,
+        TargetInfo { pointer_width: 64 },
+    );
 
     let int_id = checker.intern(ArType::Primitive(Primitive::Int));
     let str_id = checker.intern(ArType::Primitive(Primitive::Str));
@@ -1128,7 +1134,7 @@ fn test_contextual_literal_overflow_diagnostic() {
     "#;
     let program = arandu_parser::parse(source).unwrap();
     let res = arandu_resolve::resolve_for_test(0, &program);
-    let check_res = crate::type_check(res, &program);
+    let check_res = crate::type_check(res, &program, TargetInfo { pointer_width: 64 });
     let overflow_diags: Vec<_> = check_res
         .diagnostics
         .iter()
@@ -1138,5 +1144,118 @@ fn test_contextual_literal_overflow_diagnostic() {
         overflow_diags.len(),
         2,
         "256 and 300 must be flagged as out-of-range for u8"
+    );
+}
+
+#[test]
+fn test_contextual_literal_uint_overflow() {
+    let source = r#"
+    module test;
+    func take(x: uint): uint { return x; }
+    func main(): uint {
+        let a: uint = 4_000_000_000;
+        let b: uint = 4_000_000_001;
+        return take(5_000_000_000);
+    }
+    "#;
+    let program = arandu_parser::parse(source).unwrap();
+    let res = arandu_resolve::resolve_for_test(0, &program);
+
+    // 64-bit target: todos os literais cabem em uint (< u64::MAX).
+    let check_res = crate::type_check(res, &program, TargetInfo { pointer_width: 64 });
+    let overflow_diags: Vec<_> = check_res
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == crate::DiagCode::T038IntegerLiteralOutOfRange)
+        .collect();
+    assert_eq!(
+        overflow_diags.len(),
+        0,
+        "4_000_000_000 / 4_000_000_001 / 5_000_000_000 devem caber em uint 64-bit"
+    );
+
+    // 32-bit target: valores acima de u32::MAX estouram uint.
+    let source = r#"
+    module test;
+    func take(x: uint): uint { return x; }
+    func main(): uint {
+        let a: uint = 4_294_967_296;
+        let b: uint = 7_000_000_000;
+        return take(8_000_000_000);
+    }
+    "#;
+    let program = arandu_parser::parse(source).unwrap();
+    let res = arandu_resolve::resolve_for_test(0, &program);
+    let check_res = crate::type_check(res, &program, TargetInfo { pointer_width: 32 });
+    let overflow_diags: Vec<_> = check_res
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == crate::DiagCode::T038IntegerLiteralOutOfRange)
+        .collect();
+    assert_eq!(
+        overflow_diags.len(),
+        3,
+        "4_294_967_296 / 7_000_000_000 / 8_000_000_000 devem estourar uint 32-bit"
+    );
+
+    // 32-bit target: valores <= u32::MAX continuam válidos.
+    let source = r#"
+    module test;
+    func main(): uint {
+        return 4_294_967_295;
+    }
+    "#;
+    let program = arandu_parser::parse(source).unwrap();
+    let res = arandu_resolve::resolve_for_test(0, &program);
+    let check_res = crate::type_check(res, &program, TargetInfo { pointer_width: 32 });
+    let overflow_diags: Vec<_> = check_res
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == crate::DiagCode::T038IntegerLiteralOutOfRange)
+        .collect();
+    assert_eq!(overflow_diags.len(), 0, "u32::MAX cabe em uint 32-bit");
+}
+
+#[test]
+fn test_impl_multiple_methods() {
+    let source = r#"
+    module test;
+    struct Point { x: float; y: float }
+    impl Point {
+        public func new(x: float, y: float): Point { return Point { x, y } }
+        public func getX(self: ref): float { return self.x }
+        public func setX(self: mut ref, x: float) { self.x = x }
+    }
+    func main(): float {
+        let p = Point.new(1.0, 2.0);
+        return p.getX()
+    }
+    "#;
+    let program = arandu_parser::parse(source).unwrap();
+    let res = arandu_resolve::resolve_for_test(0, &program);
+    let check_res = crate::type_check(res, &program, TargetInfo { pointer_width: 64 });
+    let names: Vec<_> = program
+        .decls
+        .iter()
+        .filter_map(|id| match program.pool.decl(*id) {
+            arandu_parser::TopLevelDecl::Func(func) => match &func.name {
+                arandu_parser::FuncName::Method { name, .. } => Some(name.as_str()),
+                arandu_parser::FuncName::Free { .. } => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        names.len(),
+        3,
+        "impl should have 3 methods: new, getX, setX"
+    );
+    assert!(names.contains(&"new"), "new should be present");
+    assert!(names.contains(&"getX"), "getX should be present");
+    assert!(names.contains(&"setX"), "setX should be present");
+    assert_eq!(
+        check_res.diagnostics.len(),
+        0,
+        "impl with multiple methods should have zero diagnostics"
     );
 }

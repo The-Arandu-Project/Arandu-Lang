@@ -72,12 +72,17 @@ impl TypeCheckResult {
 /// Runs both signature and body checks.
 #[must_use]
 #[tracing::instrument(level = "trace", target = "arandu_typeck", skip(resolution, program))]
-pub fn type_check(resolution: ResolutionResult, program: &Program) -> TypeCheckResult {
+pub fn type_check(
+    resolution: ResolutionResult,
+    program: &Program,
+    target_info: TargetInfo,
+) -> TypeCheckResult {
     let mut checker = TypeChecker::new(
         resolution.symbols,
         resolution.resolved,
         resolution.diagnostics,
         &program.pool,
+        target_info,
     );
     check::check_signatures(&mut checker, program);
     check::check_bodies(&mut checker, program);
@@ -87,12 +92,17 @@ pub fn type_check(resolution: ResolutionResult, program: &Program) -> TypeCheckR
 /// Runs ONLY the signature check phase, producing an initial TypeCheckResult.
 #[must_use]
 #[tracing::instrument(level = "trace", target = "arandu_typeck", skip(resolution, program))]
-pub fn check_signatures_only(resolution: ResolutionResult, program: &Program) -> TypeCheckResult {
+pub fn check_signatures_only(
+    resolution: ResolutionResult,
+    program: &Program,
+    target_info: TargetInfo,
+) -> TypeCheckResult {
     let mut checker = TypeChecker::new(
         resolution.symbols,
         resolution.resolved,
         resolution.diagnostics,
         &program.pool,
+        target_info,
     );
     check::check_signatures(&mut checker, program);
     checker.finish()
@@ -104,7 +114,11 @@ pub fn check_signatures_only(resolution: ResolutionResult, program: &Program) ->
 /// the three fields consumed by `TypeChecker` are cloned individually.
 #[must_use]
 #[tracing::instrument(level = "trace", target = "arandu_typeck", skip(signatures, program))]
-pub fn check_bodies_only(signatures: &TypeCheckResult, program: &Program) -> TypeCheckResult {
+pub fn check_bodies_only(
+    signatures: &TypeCheckResult,
+    program: &Program,
+    target_info: TargetInfo,
+) -> TypeCheckResult {
     // PERF.5: Arc clone is O(1); unwrap_or_clone only deep-copies when this
     // result is still shared with other Salsa consumers.
     let mut checker = TypeChecker::new(
@@ -112,6 +126,7 @@ pub fn check_bodies_only(signatures: &TypeCheckResult, program: &Program) -> Typ
         Arc::unwrap_or_clone(Arc::clone(&signatures.resolved)),
         signatures.diagnostics.clone(),
         &program.pool,
+        target_info,
     );
     checker.type_info = Arc::unwrap_or_clone(Arc::clone(&signatures.type_info));
 
@@ -146,6 +161,46 @@ pub struct TypeChecker<'a> {
     /// Scope for lowering type expressions inside the current function body.
     type_scope_id: Option<ScopeId>,
     pub pool: &'a AstPool,
+    pub target_info: TargetInfo,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TargetInfo {
+    pub pointer_width: u8,
+}
+
+impl TargetInfo {
+    /// Maximum value representable by `uint` (native-unsigned-width).
+    #[must_use]
+    pub const fn uint_max(&self) -> u128 {
+        match self.pointer_width {
+            32 => u32::MAX as u128,
+            64 => u64::MAX as u128,
+            // Unknown future width: keep the smallest tested range (32-bit) so
+            // the compiler never admits a value the target might reject.
+            _ => u32::MAX as u128,
+        }
+    }
+
+    /// Minimum value representable by `int` (native-signed-width).
+    #[must_use]
+    pub const fn int_min(&self) -> i128 {
+        match self.pointer_width {
+            32 => i32::MIN as i128,
+            64 => i64::MIN as i128,
+            _ => i32::MIN as i128,
+        }
+    }
+
+    /// Maximum value representable by `int` (native-signed-width).
+    #[must_use]
+    pub const fn int_max(&self) -> i128 {
+        match self.pointer_width {
+            32 => i32::MAX as i128,
+            64 => i64::MAX as i128,
+            _ => i32::MAX as i128,
+        }
+    }
 }
 
 impl<'a> TypeChecker<'a> {
@@ -155,8 +210,16 @@ impl<'a> TypeChecker<'a> {
         resolved: ResolvedNames,
         diagnostics: Vec<Diagnostic>,
         pool: &'a AstPool,
+        target_info: TargetInfo,
     ) -> Self {
-        Self::new_with_interner(symbols, resolved, diagnostics, pool, TypeInterner::new())
+        Self::new_with_interner(
+            symbols,
+            resolved,
+            diagnostics,
+            pool,
+            TypeInterner::new(),
+            target_info,
+        )
     }
 
     #[must_use]
@@ -166,6 +229,7 @@ impl<'a> TypeChecker<'a> {
         diagnostics: Vec<Diagnostic>,
         pool: &'a AstPool,
         type_interner: TypeInterner,
+        target_info: TargetInfo,
     ) -> Self {
         Self {
             symbols,
@@ -176,6 +240,7 @@ impl<'a> TypeChecker<'a> {
             solved_constraints: Vec::new(),
             type_scope_id: None,
             pool,
+            target_info,
         }
     }
 

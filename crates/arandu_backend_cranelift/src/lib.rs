@@ -23,7 +23,9 @@ pub use arandu_runtime::{
     supervisor_runtime, testing_runtime, to_str_runtime, vec_runtime, waker_runtime,
 };
 
-pub use crate::aot::{AotOptimization, CraneliftObjectBackend, ObjectArtifact};
+pub use crate::aot::{
+    AotOptimization, CraneliftObjectBackend, ObjectArtifact, aot_triple_for_pointer_width,
+};
 pub use crate::jit::CompiledModule;
 
 use crate::jit::AranduJit;

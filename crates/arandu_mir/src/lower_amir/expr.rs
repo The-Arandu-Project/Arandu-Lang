@@ -338,7 +338,7 @@ impl LowerCtx<'_> {
             }
 
             HirExprKind::Generic { callee, args } => {
-                // mem.sizeOf<T>() / mem.alignOf<T>() — fold to host layout constants so
+                // mem.sizeOf<T>() / mem.alignOf<T>() — fold to target layout constants so
                 // the JIT never needs a runtime `fn@sizeOf` symbol (L6.1 mem intrinsics).
                 if let Some(op) = self
                     .try_lower_mem_size_align_intrinsic(*callee, args, expr.ty, target, symbols)?
@@ -1044,7 +1044,7 @@ impl LowerCtx<'_> {
     }
 
     /// Fold `mem.sizeOf<T>()` / `mem.alignOf<T>()` (and bare `sizeOf`/`alignOf`)
-    /// to integer constants using [`LayoutEngine`] (host pointer width).
+    /// to integer constants using [`LayoutEngine`] (target pointer width).
     fn try_lower_mem_size_align_intrinsic(
         &mut self,
         callee: HirExprId,
@@ -1073,8 +1073,7 @@ impl LowerCtx<'_> {
         };
 
         let ty = self.resolve_ty(type_args[0]);
-        let pointer_width = std::mem::size_of::<usize>() as u64;
-        let engine = arandu_middle::layout::LayoutEngine::new(pointer_width);
+        let engine = arandu_middle::layout::LayoutEngine::new(self.pointer_width);
         let layout = engine
             .layout_of_type(
                 &ty,

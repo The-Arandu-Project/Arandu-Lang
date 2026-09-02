@@ -477,7 +477,13 @@ mod tests {
         resolved.define(span1, sym1);
         resolved.define(span2, sym2);
 
-        let checker = TypeChecker::new(symbols, resolved, Vec::new(), &pool);
+        let checker = TypeChecker::new(
+            symbols,
+            resolved,
+            Vec::new(),
+            &pool,
+            crate::type_checker::TargetInfo { pointer_width: 64 },
+        );
 
         let param1 = GenericParam {
             span: span1,
@@ -513,7 +519,13 @@ mod tests {
         symbols.register_imported_symbol(struct_sym);
 
         let resolved = ResolvedNames::default();
-        let mut checker = TypeChecker::new(symbols, resolved, Vec::new(), &pool);
+        let mut checker = TypeChecker::new(
+            symbols,
+            resolved,
+            Vec::new(),
+            &pool,
+            crate::type_checker::TargetInfo { pointer_width: 64 },
+        );
 
         let param_sym = SymbolId::new(1, 1);
         checker

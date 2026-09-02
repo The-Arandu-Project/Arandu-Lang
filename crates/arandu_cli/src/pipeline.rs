@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use crate::cli_error::{CliFailure, CliResult};
+use arandu_middle::layout::DataLayout;
 
 pub fn finish(result: CliResult) -> ! {
     let code = match result {
@@ -23,6 +24,21 @@ pub fn finish(result: CliResult) -> ! {
 
 pub fn fail_usage(message: impl Into<String>) -> ! {
     finish(Err(CliFailure::usage(message)))
+}
+
+/// Guards JIT execution, which runs inside the host process, against a
+/// non-host layout. Returns a usage error for `run`/`test`/`bench`.
+pub(crate) fn ensure_host_jit_layout(data_layout: DataLayout) -> Result<(), CliFailure> {
+    let host_width = std::mem::size_of::<usize>() as u64;
+    if data_layout.pointer_width() == host_width {
+        return Ok(());
+    }
+    Err(CliFailure::usage(format!(
+        "JIT execution requires the host layout (got pointer width {}, host is {}-bit); \
+         use `--layout=by-host` or the `build`/`emit-c` commands for non-host layouts",
+        data_layout.pointer_width(),
+        host_width * 8,
+    )))
 }
 
 pub fn fail_operational(

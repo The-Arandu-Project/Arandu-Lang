@@ -2,14 +2,17 @@
 use std::fs;
 
 use arandu_parser::parse;
-use arandu_semantics::{resolve_for_test, type_check};
+use arandu_semantics::{TargetInfo, resolve_for_test, type_check};
 use arandu_test_support::workspace_root;
+
+/// Default 64-bit target used by integration tests (mirrors host).
+const TEST_TARGET: TargetInfo = TargetInfo { pointer_width: 64 };
 
 fn assert_diagnostic_golden(name: &str) {
     let source = arandu_test_support::read_golden_text("ui/type_checker", name, "aru");
     let program = parse(&source).expect("Failed to parse");
     let resolution = resolve_for_test(0, &program);
-    let result = type_check(resolution, &program);
+    let result = type_check(resolution, &program, TEST_TARGET);
     arandu_test_support::assert_diagnostic_golden("ui/type_checker", name, &result.diagnostics);
 }
 
@@ -17,7 +20,7 @@ macro_rules! assert_type_errors {
     ($source:expr, [$($code:ident),*]) => {
         let program = parse($source).expect("Failed to parse");
         let resolution = resolve_for_test(0, &program);
-        let result = type_check(resolution, &program);
+        let result = type_check(resolution, &program, crate::TEST_TARGET);
 
         let expected_codes: Vec<arandu_semantics::DiagCode> = vec![$(arandu_semantics::DiagCode::$code),*];
         // Filter to only T-series diagnostics (type checker), ignoring N-series (name resolution)
@@ -74,7 +77,7 @@ fn test_result_ok() {
     let source = fs::read_to_string(root.join("tests/ui/type_checker/result_ok.aru")).unwrap();
     let program = parse(&source).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let result = type_check(resolution, &program);
+    let result = type_check(resolution, &program, crate::TEST_TARGET);
     assert!(
         result
             .diagnostics
@@ -91,7 +94,7 @@ fn test_result_err() {
     let source = fs::read_to_string(root.join("tests/ui/type_checker/result_err.aru")).unwrap();
     let program = parse(&source).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let result = type_check(resolution, &program);
+    let result = type_check(resolution, &program, crate::TEST_TARGET);
     assert!(
         result
             .diagnostics
@@ -109,7 +112,7 @@ fn test_result_propagation() {
         fs::read_to_string(root.join("tests/ui/type_checker/result_propagation.aru")).unwrap();
     let program = parse(&source).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let result = type_check(resolution, &program);
+    let result = type_check(resolution, &program, crate::TEST_TARGET);
     assert!(
         result
             .diagnostics
@@ -126,7 +129,7 @@ fn test_method_shared() {
     let source = fs::read_to_string(root.join("tests/ui/type_checker/method_shared.aru")).unwrap();
     let program = parse(&source).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let result = type_check(resolution, &program);
+    let result = type_check(resolution, &program, crate::TEST_TARGET);
     assert!(
         result
             .diagnostics
@@ -143,7 +146,7 @@ fn test_method_mut() {
     let source = fs::read_to_string(root.join("tests/ui/type_checker/method_mut.aru")).unwrap();
     let program = parse(&source).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let result = type_check(resolution, &program);
+    let result = type_check(resolution, &program, crate::TEST_TARGET);
     assert!(
         result
             .diagnostics
@@ -160,7 +163,7 @@ fn test_method_own() {
     let source = fs::read_to_string(root.join("tests/ui/type_checker/method_own.aru")).unwrap();
     let program = parse(&source).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let result = type_check(resolution, &program);
+    let result = type_check(resolution, &program, crate::TEST_TARGET);
     assert!(
         result
             .diagnostics
@@ -177,7 +180,7 @@ fn test_option_some() {
     let source = fs::read_to_string(root.join("tests/ui/type_checker/option_some.aru")).unwrap();
     let program = parse(&source).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let result = type_check(resolution, &program);
+    let result = type_check(resolution, &program, crate::TEST_TARGET);
     assert!(
         result
             .diagnostics
@@ -194,7 +197,7 @@ fn test_option_nil() {
     let source = fs::read_to_string(root.join("tests/ui/type_checker/option_nil.aru")).unwrap();
     let program = parse(&source).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let result = type_check(resolution, &program);
+    let result = type_check(resolution, &program, crate::TEST_TARGET);
     assert!(
         result
             .diagnostics
@@ -211,7 +214,7 @@ fn test_where_ok() {
     let source = fs::read_to_string(root.join("tests/ui/type_checker/where_ok.aru")).unwrap();
     let program = parse(&source).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let result = type_check(resolution, &program);
+    let result = type_check(resolution, &program, crate::TEST_TARGET);
     assert!(
         result
             .diagnostics
@@ -239,7 +242,7 @@ func main(): int {
 "#;
     let program = parse(source).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let result = type_check(resolution, &program);
+    let result = type_check(resolution, &program, crate::TEST_TARGET);
     assert!(
         result
             .diagnostics
@@ -423,7 +426,7 @@ fn test_expr_types_population() {
     ";
     let program = parse(source).expect("Failed to parse");
     let resolution = resolve_for_test(0, &program);
-    let result = type_check(resolution, &program);
+    let result = type_check(resolution, &program, crate::TEST_TARGET);
 
     // Check that expr_types contains populated expression types
     assert!(!result.type_info.expr_types.is_empty());
@@ -439,7 +442,7 @@ fn test_type_info_uses_interned_type_ids() {
     ";
     let program = parse(source).expect("Failed to parse");
     let resolution = resolve_for_test(0, &program);
-    let result = type_check(resolution, &program);
+    let result = type_check(resolution, &program, crate::TEST_TARGET);
 
     let mut int_ids = result.type_info.decl_types.values().filter_map(|type_id| {
         let ty = result.type_info.resolve_type_id(*type_id);
@@ -700,7 +703,7 @@ fn test_official_ok_suite() {
         let program = parse(&source)
             .unwrap_or_else(|err| panic!("failed to parse {}: {:?}", path.display(), err));
         let resolution = resolve_for_test(0, &program);
-        let result = type_check(resolution, &program);
+        let result = type_check(resolution, &program, crate::TEST_TARGET);
 
         let errors: Vec<String> = result
             .diagnostics
@@ -783,7 +786,7 @@ fn test_official_invalid_suite() {
         match parse(&source) {
             Ok(program) => {
                 let resolution = resolve_for_test(0, &program);
-                let result = type_check(resolution, &program);
+                let result = type_check(resolution, &program, crate::TEST_TARGET);
                 for diagnostic in &result.diagnostics {
                     actual.push_str(&diagnostic.format_for_cli(&registry));
                     actual.push('\n');
@@ -898,7 +901,7 @@ fn test_catch_result_ok_type() {
     "#;
     let program = parse(source).expect("Failed to parse");
     let resolution = resolve_for_test(0, &program);
-    let result = type_check(resolution, &program);
+    let result = type_check(resolution, &program, crate::TEST_TARGET);
     let t_errors: Vec<_> = result
         .diagnostics
         .iter()
@@ -1124,7 +1127,7 @@ fn test_type_checker_smart_suggestions() {
     ";
     let program = parse(source).expect("Failed to parse");
     let resolution = resolve_for_test(0, &program);
-    let result = type_check(resolution, &program);
+    let result = type_check(resolution, &program, crate::TEST_TARGET);
 
     let hints: Vec<String> = result
         .diagnostics
@@ -1169,7 +1172,7 @@ fn test_interface_missing_method_suggestions() {
     ";
     let program = parse(source).expect("Failed to parse");
     let resolution = resolve_for_test(0, &program);
-    let result = type_check(resolution, &program);
+    let result = type_check(resolution, &program, crate::TEST_TARGET);
 
     // Check that we got the expected error and spelling suggestion
     let mut found = false;
@@ -1199,7 +1202,7 @@ fn test_async_block_and_await_typecheck() {
     ";
     let program = parse(source).expect("Failed to parse");
     let resolution = resolve_for_test(0, &program);
-    let result = type_check(resolution, &program);
+    let result = type_check(resolution, &program, crate::TEST_TARGET);
     assert!(
         result.diagnostics.is_empty(),
         "Expected no type errors, but got {:?}",
@@ -1224,7 +1227,7 @@ fn test_poll_type_and_ctors() {
     "#;
     let program = parse(source).expect("Failed to parse");
     let resolution = resolve_for_test(0, &program);
-    let result = type_check(resolution, &program);
+    let result = type_check(resolution, &program, crate::TEST_TARGET);
     assert!(
         result.diagnostics.is_empty(),
         "Expected no type errors, got {:?}",
@@ -1246,7 +1249,7 @@ fn test_async_func_return_is_coroutine() {
     ";
     let program = parse(source).expect("Failed to parse");
     let resolution = resolve_for_test(0, &program);
-    let result = type_check(resolution, &program);
+    let result = type_check(resolution, &program, crate::TEST_TARGET);
     assert!(
         result.diagnostics.is_empty(),
         "Expected no type errors, but got {:?}",

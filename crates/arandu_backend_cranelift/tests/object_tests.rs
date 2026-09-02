@@ -9,9 +9,13 @@ use std::sync::Arc;
 fn compile_object(src: &str) -> arandu_backend_cranelift::ObjectArtifact {
     let program = arandu_parser::parse(src).expect("parse failed");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     let hir = lower_to_hir(&mut tc, &program).expect("HIR lowering failed");
-    let amir = lower_to_amir(&tc, &hir).expect("AMIR lowering failed");
+    let amir = lower_to_amir(&tc, &hir, 64).expect("AMIR lowering failed");
     let symbols = Arc::unwrap_or_clone(tc.symbols);
     let type_info = Arc::unwrap_or_clone(tc.type_info);
 
@@ -66,9 +70,13 @@ fn release_object_emission_is_byte_deterministic() {
     let src = "func add(a: int, b: int): int { return a + b; }";
     let program = arandu_parser::parse(src).expect("parse failed");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     let hir = lower_to_hir(&mut tc, &program).expect("HIR lowering failed");
-    let amir = lower_to_amir(&tc, &hir).expect("AMIR lowering failed");
+    let amir = lower_to_amir(&tc, &hir, 64).expect("AMIR lowering failed");
     let symbols = Arc::unwrap_or_clone(tc.symbols);
     let type_info = Arc::unwrap_or_clone(tc.type_info);
 

@@ -37,23 +37,33 @@ pub(crate) use func::lower_func;
 /// Returns `Err` immediately if `tc` already contains any [`Severity::Error`]
 /// diagnostics. Each function is lowered independently; partial errors are
 /// collected and returned together so the caller sees all failures at once.
+///
+/// `pointer_width` (in bytes) comes from the target
+/// [`arandu_middle::layout::DataLayout`]; it drives `mem.sizeOf`/`alignOf`
+/// constant folding (no host `usize` in the hot path).
 #[tracing::instrument(level = "trace", target = "arandu_mir::lower_amir", skip(tc, hir))]
 pub fn lower_to_amir(
     tc: &TypeCheckResult,
     hir: &HirProgram,
+    pointer_width: u64,
 ) -> Result<AmirProgram, Vec<Diagnostic>> {
     let mut owned = tc.clone();
-    lower_to_amir_with_interfaces(&mut owned, hir)
+    lower_to_amir_with_interfaces(&mut owned, hir, pointer_width)
 }
 
 /// Lower AMIR and publish flow-derived borrow interfaces back into `tc`.
 ///
 /// Query orchestration uses this entry point so the returned type-check bundle
 /// and the AMIR consumed by codegen share exactly the same public contracts.
+///
+/// `pointer_width` (in bytes) comes from the target
+/// [`arandu_middle::layout::DataLayout`]; it drives `mem.sizeOf`/`alignOf`
+/// constant folding (no host `usize` in the hot path).
 #[tracing::instrument(level = "trace", target = "arandu_mir::lower_amir", skip(tc, hir))]
 pub fn lower_to_amir_with_interfaces(
     tc: &mut TypeCheckResult,
     hir: &HirProgram,
+    pointer_width: u64,
 ) -> Result<AmirProgram, Vec<Diagnostic>> {
     if tc.diagnostics.iter().any(|d| d.severity == Severity::Error) {
         return Err(tc.diagnostics.clone());
@@ -87,6 +97,7 @@ pub fn lower_to_amir_with_interfaces(
                 &arg_modes,
                 &mut literal_pool,
                 &mut diagnostics,
+                pointer_width,
             ) {
                 Ok(amir_f) => {
                     funcs.push(amir_f);
@@ -303,6 +314,8 @@ pub(crate) struct LowerCtx<'a> {
     redirected_temps: FxHashMap<TempId, AmirOperand>,
     /// Span of the HIR construct currently being lowered (for `use_span` / diags).
     current_span: Span,
+    /// Target pointer width in bytes (drives `mem.sizeOf`/`alignOf` folding).
+    pointer_width: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

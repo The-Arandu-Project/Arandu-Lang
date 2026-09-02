@@ -8,6 +8,7 @@ use crate::hir::{HirBlockId, HirFunc, HirProgram};
 use crate::literal_pool::AmirLiteralPool;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_func(
     f: &HirFunc,
     body: HirBlockId,
@@ -16,6 +17,7 @@ pub(crate) fn lower_func(
     arg_modes: &CalleeArgModes,
     literal_pool: &mut AmirLiteralPool,
     func_diagnostics: &mut Vec<Diagnostic>,
+    pointer_width: u64,
 ) -> Result<AmirFunc, Diagnostic> {
     let mut ctx = LowerCtx {
         tc,
@@ -39,6 +41,7 @@ pub(crate) fn lower_func(
         incomplete_phis: FxHashMap::default(),
         redirected_temps: FxHashMap::default(),
         current_span: arandu_lexer::Span::new(0, 0, 0),
+        pointer_width,
     };
 
     // Return register is TempId(0) — span is the function header.

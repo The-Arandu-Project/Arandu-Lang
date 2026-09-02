@@ -15,9 +15,13 @@ fn compile_src(
 ) {
     let program = arandu_parser::parse(src).expect("parse failed");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     let hir = lower_to_hir(&mut tc, &program).expect("HIR lowering failed");
-    let amir = lower_to_amir(&tc, &hir).expect("AMIR lowering failed");
+    let amir = lower_to_amir(&tc, &hir, 64).expect("AMIR lowering failed");
     (
         amir,
         Arc::unwrap_or_clone(tc.symbols),
@@ -1507,4 +1511,141 @@ fn jit_gen_insert_get_copy_tuple() {
         f()
     };
     assert_eq!(result, 43);
+}
+
+/// Regression guard for the legacy Vec host ABI (`ar_vec_new` / `ar_vec_push` /
+/// `ar_vec_len`). The JIT declares these as imports in `jit/symbols.rs`; compile
+/// never sees the Rust runtime signature, so a declaration drift (wrong arity or
+/// return type) must fail here instead of silently calling a mismatched symbol.
+#[test]
+fn jit_vec_legacy_handle_len_abi() {
+    use arandu_base::span::Span;
+    use arandu_semantics::amir::{
+        AmirBasicBlock, AmirConstant, AmirFunc, AmirOperand, AmirProgram, AmirStmt, AmirStmtTable,
+        AmirTemp, AmirTerminator, BlockId, TempId,
+    };
+    use arandu_semantics::cfg::compute_cfg_edges;
+    use arandu_semantics::layout::DenseRange;
+    use arandu_semantics::literal_pool::AmirLiteralPool;
+    use arandu_semantics::types::{ArType, Primitive, TypeInterner};
+    use arandu_semantics::{SymbolKind, SymbolTable};
+
+    let interner = TypeInterner::new();
+    let int_ty = interner.intern(ArType::Primitive(Primitive::Int));
+
+    let mut symbols = SymbolTable::new(0);
+    let scope = symbols.global_scope();
+    let main_sym = symbols
+        .define(scope, "main", SymbolKind::Func, Span::new(0, 0, 0))
+        .expect("define main");
+    let vec_new_sym = symbols
+        .define(
+            scope,
+            "ar_vec_new",
+            SymbolKind::ExternFunc,
+            Span::new(0, 0, 0),
+        )
+        .expect("define ar_vec_new");
+    let vec_push_sym = symbols
+        .define(
+            scope,
+            "ar_vec_push",
+            SymbolKind::ExternFunc,
+            Span::new(0, 0, 0),
+        )
+        .expect("define ar_vec_push");
+    let vec_len_sym = symbols
+        .define(
+            scope,
+            "ar_vec_len",
+            SymbolKind::ExternFunc,
+            Span::new(0, 0, 0),
+        )
+        .expect("define ar_vec_len");
+
+    let mut pool = AmirLiteralPool::default();
+    let ten = pool.intern_int("10");
+    let twenty = pool.intern_int("20");
+
+    // t1 = ar_vec_new()
+    // ar_vec_push(t1, 10); ar_vec_push(t1, 20)
+    // t0 = ar_vec_len(t1)
+    // return t0
+    let mut stmts = AmirStmtTable::new();
+    stmts.push(AmirStmt::Call {
+        lhs: Some(TempId::from_usize(1)),
+        callee: AmirOperand::FunctionRef(vec_new_sym),
+        args: vec![].into(),
+        return_borrow: None,
+    });
+    stmts.push(AmirStmt::Call {
+        lhs: None,
+        callee: AmirOperand::FunctionRef(vec_push_sym),
+        args: vec![
+            AmirOperand::Copy(TempId::from_usize(1)),
+            AmirOperand::Constant(AmirConstant::Pool(ten)),
+        ]
+        .into(),
+        return_borrow: None,
+    });
+    stmts.push(AmirStmt::Call {
+        lhs: None,
+        callee: AmirOperand::FunctionRef(vec_push_sym),
+        args: vec![
+            AmirOperand::Copy(TempId::from_usize(1)),
+            AmirOperand::Constant(AmirConstant::Pool(twenty)),
+        ]
+        .into(),
+        return_borrow: None,
+    });
+    stmts.push(AmirStmt::Call {
+        lhs: Some(TempId::from_usize(0)),
+        callee: AmirOperand::FunctionRef(vec_len_sym),
+        args: vec![AmirOperand::Copy(TempId::from_usize(1))].into(),
+        return_borrow: None,
+    });
+    let block = AmirBasicBlock {
+        id: BlockId::from_usize(0),
+        statements: DenseRange::new(0, 4),
+        params: vec![],
+        terminator: AmirTerminator::Return,
+    };
+    let cfg = compute_cfg_edges(std::slice::from_ref(&block));
+    let temp = |id: usize| AmirTemp {
+        id: TempId::from_usize(id),
+        ty: int_ty,
+        is_copy: true,
+        is_nullable: false,
+        span: Span::new(0, 0, 0),
+    };
+    let func = AmirFunc {
+        symbol: main_sym,
+        return_type: int_ty,
+        receiver: None,
+        params: vec![],
+        locals: vec![],
+        temps: vec![temp(0), temp(1)],
+        blocks: vec![block],
+        stmts,
+        cfg,
+    };
+    let program = AmirProgram {
+        funcs: vec![func],
+        literal_pool: pool,
+        extern_funcs: Default::default(),
+    };
+    let type_info = {
+        let mut ti = arandu_semantics::TypeInfo::default();
+        ti.type_interner = interner;
+        ti
+    };
+    let backend = backend_for_test();
+    let module = backend
+        .compile(&program, &symbols, &type_info)
+        .expect("vec handle ABI JIT compile");
+    let result: i64 = unsafe {
+        let f: unsafe fn() -> i64 = module.get_fn("main").unwrap();
+        f()
+    };
+    assert_eq!(result, 2);
 }
