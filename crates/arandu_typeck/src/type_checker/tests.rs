@@ -1259,3 +1259,69 @@ fn test_impl_multiple_methods() {
         "impl with multiple methods should have zero diagnostics"
     );
 }
+
+#[test]
+fn test_binary_op_contextual_literal_inference() {
+    let source = r#"
+    module test;
+    func add_one(x: uint): uint {
+        return x + 1;
+    }
+    func one_plus(x: uint): uint {
+        return 1 + x;
+    }
+    func add_floats(x: f32): f32 {
+        return x + 2.5;
+    }
+    "#;
+    let program = arandu_parser::parse(source).unwrap();
+    let res = arandu_resolve::resolve_for_test(0, &program);
+    let check_res = crate::type_check(res, &program, TargetInfo { pointer_width: 64 });
+    assert_eq!(
+        check_res.diagnostics.len(),
+        0,
+        "x + 1, 1 + x, x + 2.5 should typecheck cleanly: {:?}",
+        check_res.diagnostics
+    );
+}
+
+#[test]
+fn test_int_literal_to_float_expected() {
+    let source = r#"
+    module test;
+    func main(): f32 {
+        let a: f32 = 10;
+        let b: f64 = 20;
+        return a;
+    }
+    "#;
+    let program = arandu_parser::parse(source).unwrap();
+    let res = arandu_resolve::resolve_for_test(0, &program);
+    let check_res = crate::type_check(res, &program, TargetInfo { pointer_width: 64 });
+    assert_eq!(
+        check_res.diagnostics.len(),
+        0,
+        "integer literals 10 and 20 under float context should synthesize cleanly as float: {:?}",
+        check_res.diagnostics
+    );
+}
+
+#[test]
+fn test_array_literal_contextual_inference() {
+    let source = r#"
+    module test;
+    func main(): uint {
+        let arr: [3]uint = [1, 2, 3];
+        return arr[0];
+    }
+    "#;
+    let program = arandu_parser::parse(source).unwrap();
+    let res = arandu_resolve::resolve_for_test(0, &program);
+    let check_res = crate::type_check(res, &program, TargetInfo { pointer_width: 64 });
+    assert_eq!(
+        check_res.diagnostics.len(),
+        0,
+        "array literal [1, 2, 3] under [3]uint context should synthesize elements as uint: {:?}",
+        check_res.diagnostics
+    );
+}

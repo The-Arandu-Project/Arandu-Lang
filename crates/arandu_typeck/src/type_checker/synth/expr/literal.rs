@@ -74,47 +74,55 @@ pub(super) fn synth_literal_expr(
         ExprKind::Int { value, .. } => {
             if let Some(exp_id) = expected
                 && let ArType::Primitive(p) = checker.resolve(exp_id)
-                && p.is_integer()
-                && let Some(parsed) = arandu_middle::literal_pool::parse_int_literal(value)
             {
-                let fits = match p {
-                    Primitive::I8 => (i8::MIN as i128..=i8::MAX as i128).contains(&parsed),
-                    Primitive::I16 => (i16::MIN as i128..=i16::MAX as i128).contains(&parsed),
-                    Primitive::I32 => (i32::MIN as i128..=i32::MAX as i128).contains(&parsed),
-                    Primitive::I64 => (i64::MIN as i128..=i64::MAX as i128).contains(&parsed),
-                    Primitive::Int => {
-                        // int é pointer-width signed; o range depende do target.
-                        (checker.target_info.int_min()..=checker.target_info.int_max())
-                            .contains(&parsed)
-                    }
-                    Primitive::U8 | Primitive::Byte => (0..=u8::MAX as i128).contains(&parsed),
-                    Primitive::U16 => (0..=u16::MAX as i128).contains(&parsed),
-                    Primitive::U32 => (0..=u32::MAX as i128).contains(&parsed),
-                    Primitive::U64 => parsed >= 0 && (parsed as u128 <= u64::MAX as u128),
-                    Primitive::Uint => {
-                        // uint é pointer-width unsigned; o range depende do target.
-                        parsed >= 0 && (parsed as u128 <= checker.target_info.uint_max())
-                    }
-                    _ => true,
-                };
-                if !fits {
-                    checker.diagnostics.push(
-                        crate::Diagnostic::error(
-                            crate::DiagCode::T038IntegerLiteralOutOfRange,
-                            format!("integer literal `{value}` does not fit in `{}`", p.as_str()),
-                            span,
-                        )
-                        .with_label(
-                            span,
-                            format!("value is outside the range of `{}`", p.as_str()),
-                        )
-                        .with_hint("use a wider integer type or change the literal value"),
-                    );
+                if p.is_float() {
+                    return Some(exp_id);
                 }
-                // Keep the contextual type after reporting. Falling back to
-                // `IntLiteral` would make generic literal unification accept
-                // the same out-of-range value silently.
-                return Some(exp_id);
+                if p.is_integer()
+                    && let Some(parsed) = arandu_middle::literal_pool::parse_int_literal(value)
+                {
+                    let fits = match p {
+                        Primitive::I8 => (i8::MIN as i128..=i8::MAX as i128).contains(&parsed),
+                        Primitive::I16 => (i16::MIN as i128..=i16::MAX as i128).contains(&parsed),
+                        Primitive::I32 => (i32::MIN as i128..=i32::MAX as i128).contains(&parsed),
+                        Primitive::I64 => (i64::MIN as i128..=i64::MAX as i128).contains(&parsed),
+                        Primitive::Int => {
+                            // int é pointer-width signed; o range depende do target.
+                            (checker.target_info.int_min()..=checker.target_info.int_max())
+                                .contains(&parsed)
+                        }
+                        Primitive::U8 | Primitive::Byte => (0..=u8::MAX as i128).contains(&parsed),
+                        Primitive::U16 => (0..=u16::MAX as i128).contains(&parsed),
+                        Primitive::U32 => (0..=u32::MAX as i128).contains(&parsed),
+                        Primitive::U64 => parsed >= 0 && (parsed as u128 <= u64::MAX as u128),
+                        Primitive::Uint => {
+                            // uint é pointer-width unsigned; o range depende do target.
+                            parsed >= 0 && (parsed as u128 <= checker.target_info.uint_max())
+                        }
+                        _ => true,
+                    };
+                    if !fits {
+                        checker.diagnostics.push(
+                            crate::Diagnostic::error(
+                                crate::DiagCode::T038IntegerLiteralOutOfRange,
+                                format!(
+                                    "integer literal `{value}` does not fit in `{}`",
+                                    p.as_str()
+                                ),
+                                span,
+                            )
+                            .with_label(
+                                span,
+                                format!("value is outside the range of `{}`", p.as_str()),
+                            )
+                            .with_hint("use a wider integer type or change the literal value"),
+                        );
+                    }
+                    // Keep the contextual type after reporting. Falling back to
+                    // `IntLiteral` would make generic literal unification accept
+                    // the same out-of-range value silently.
+                    return Some(exp_id);
+                }
             }
             Some(checker.intern(ArType::IntLiteral))
         }
@@ -339,11 +347,15 @@ pub(super) fn synth_literal_expr(
         }
         ExprKind::Array { items } => {
             let items_range = *items;
+            let expected_elem_id = expected.and_then(|exp_id| match checker.resolve(exp_id) {
+                ArType::Array(_, elem_id) | ArType::Slice(elem_id) => Some(elem_id),
+                _ => None,
+            });
             let error_id = checker.intern(ArType::Error);
-            let mut elem_ty_id = error_id;
+            let mut elem_ty_id = expected_elem_id.unwrap_or(error_id);
             let item_ids = checker.pool.expr_list(items_range).to_vec();
             for (i, item_id) in item_ids.iter().copied().enumerate() {
-                let item_ty_id = synth_expr(checker, item_id);
+                let item_ty_id = super::synth_expr_expected(checker, item_id, expected_elem_id);
                 if checker.resolve(elem_ty_id).is_error() {
                     elem_ty_id = item_ty_id;
                 } else {
