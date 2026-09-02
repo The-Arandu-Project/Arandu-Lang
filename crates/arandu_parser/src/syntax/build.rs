@@ -152,7 +152,7 @@ pub fn parse_syntax_arc(text: Arc<str>) -> SyntaxTree {
 
     let green =
         super::events::build_green_from_events(text.as_ref(), &events).unwrap_or_else(|| {
-            let spans = find_top_level_item_spans(&tokens, text.len() as u32);
+            let spans = find_top_level_item_spans(&text, &tokens, text.len() as u32);
             build_green(text.as_ref(), &tokens, &spans)
         });
 
@@ -281,7 +281,12 @@ fn build_green(source: &str, tokens: &[Token], item_spans: &[(u32, u32)]) -> Gre
 
 /// Classify top-level item from the first item-start keyword in range.
 #[must_use]
-pub fn classify_item_kind(tokens: &[Token], range_start: u32, range_end: u32) -> SyntaxKind {
+pub fn classify_item_kind(
+    source: &str,
+    tokens: &[Token],
+    range_start: u32,
+    range_end: u32,
+) -> SyntaxKind {
     for tok in tokens {
         if matches!(tok.kind, TokenKind::Eof | TokenKind::Error(_)) {
             continue;
@@ -290,7 +295,7 @@ pub fn classify_item_kind(tokens: &[Token], range_start: u32, range_end: u32) ->
         if te <= range_start || tok.start >= range_end {
             continue;
         }
-        if is_item_start_keyword(tok.kind) {
+        if is_item_start_keyword(tok.kind) || is_soft_from_tok(source, tok) {
             return match tok.kind {
                 TokenKind::KwModule => SyntaxKind::MODULE_ITEM,
                 TokenKind::KwImport | TokenKind::KwFrom => SyntaxKind::IMPORT_ITEM,
@@ -301,11 +306,20 @@ pub fn classify_item_kind(tokens: &[Token], range_start: u32, range_end: u32) ->
                 TokenKind::KwConst => SyntaxKind::CONST_ITEM,
                 TokenKind::KwType => SyntaxKind::TYPE_ALIAS_ITEM,
                 TokenKind::KwExtern => SyntaxKind::EXTERN_ITEM,
+                // `from` is a soft keyword: it only opens an import when found
+                // as a standalone identifier, never when a preceding `func` /
+                // `public` / receiver already consumed the name.
+                TokenKind::IdentValue if is_soft_from_tok(source, tok) => SyntaxKind::IMPORT_ITEM,
                 _ => SyntaxKind::ITEM,
             };
         }
     }
     SyntaxKind::ITEM
+}
+
+/// True when `tok` is the soft keyword `from` lexed as a plain identifier.
+fn is_soft_from_tok(source: &str, tok: &Token) -> bool {
+    tok.kind == TokenKind::IdentValue && tok.lexeme(source) == "from"
 }
 
 /// Emit one top-level item with optional nested [`SyntaxKind::BLOCK`] for `{…}`.
@@ -316,7 +330,7 @@ fn emit_structured_item(
     range_start: u32,
     range_end: u32,
 ) {
-    let item_kind = classify_item_kind(tokens, range_start, range_end);
+    let item_kind = classify_item_kind(source, tokens, range_start, range_end);
     builder.start_node(item_kind.into());
 
     // First `{` in this item range opens the body BLOCK (func/struct/enum/…).
@@ -491,7 +505,11 @@ pub fn build_item_green(item_text: &str, tokens: &[Token]) -> GreenNode {
 /// only when `{}` depth is 0 — so `func` methods inside `interface` / `extern`
 /// / `struct` are not treated as new top-level items.
 #[must_use]
-pub fn find_top_level_item_spans(tokens: &[Token], source_len: u32) -> Vec<(u32, u32)> {
+pub fn find_top_level_item_spans(
+    source: &str,
+    tokens: &[Token],
+    source_len: u32,
+) -> Vec<(u32, u32)> {
     let mut starts: Vec<u32> = Vec::new();
     let mut depth = 0i32;
     let mut i = 0;
@@ -507,7 +525,7 @@ pub fn find_top_level_item_spans(tokens: &[Token], source_len: u32) -> Vec<(u32,
         // Keyword check at current depth (before this token modifies depth).
         // Item openers: module/import/from/func/struct/… — not `async`/`public` alone
         // (those are prefixes). Leading `@attr` / `public` / `async` are folded left.
-        if depth == 0 && is_item_start_keyword(tok.kind) {
+        if depth == 0 && (is_item_start_keyword(tok.kind) || is_soft_from_tok(source, tok)) {
             if matches!(tok.kind, TokenKind::KwImport)
                 && matches!(last_item_kw, Some(TokenKind::KwFrom))
             {
@@ -515,7 +533,13 @@ pub fn find_top_level_item_spans(tokens: &[Token], source_len: u32) -> Vec<(u32,
             } else {
                 let start = expand_item_start_left(tokens, i);
                 starts.push(start);
-                last_item_kw = Some(tok.kind);
+                // `from` now lexes as `IdentValue`; re-tag it so the `from … import`
+                // suppression above still recognizes the pair.
+                last_item_kw = Some(if is_soft_from_tok(source, tok) {
+                    TokenKind::KwFrom
+                } else {
+                    tok.kind
+                });
                 i += 1;
                 continue;
             }

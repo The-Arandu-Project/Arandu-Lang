@@ -84,7 +84,6 @@ pub(crate) fn keyword_kind(text: &str) -> Option<TokenKind> {
         "type" => TokenKind::KwType,
         "module" => TokenKind::KwModule,
         "import" => TokenKind::KwImport,
-        "from" => TokenKind::KwFrom,
         "as" => TokenKind::KwAs,
         "public" => TokenKind::KwPublic,
         "extern" => TokenKind::KwExtern,

@@ -261,7 +261,7 @@ impl<'a> Parser<'a> {
             if self.at_kind_name("EOF") {
                 break;
             }
-            if self.at_kind_name("KW_IMPORT") || self.at_kind_name("KW_FROM") {
+            if self.at_kind_name("KW_IMPORT") || self.at_soft_keyword("from") {
                 self.start_node(SyntaxKind::IMPORT_ITEM);
                 match self.parse_import() {
                     Ok(import) => {
@@ -504,6 +504,12 @@ impl<'a> Parser<'a> {
 
     pub(super) fn at_kind_name(&self, name: &str) -> bool {
         self.current().kind.name() == name
+    }
+
+    /// Soft keywords lex as plain identifiers but keep a keyword meaning in
+    /// specific positions (e.g. `from` inside import syntax).
+    pub(super) fn at_soft_keyword(&self, word: &str) -> bool {
+        self.current().kind == TokenKind::IdentValue && self.token_text(self.current()) == word
     }
 
     pub(super) fn current(&self) -> &Token {

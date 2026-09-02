@@ -589,6 +589,14 @@ fn parse_primary(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>) -> Option<ExprId> 
             ))
         }
         TokenKind::IdentValue => {
+            // `mod.Type.method` pattern: identical check to RD parse_prefix
+            if cur.peek_at(1).is_some_and(|t| t.kind == TokenKind::Dot)
+                && cur
+                    .peek_at(2)
+                    .is_some_and(|t| t.kind == TokenKind::IdentType)
+            {
+                return parse_type_led(ctx, cur, start);
+            }
             let text = ctx.text(t)?;
             cur.bump();
             Some(ctx.pool.alloc_expr(

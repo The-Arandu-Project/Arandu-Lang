@@ -15,10 +15,10 @@ impl<'a> Parser<'a> {
             let last_segment_is_contextual = is_contextual_module_segment(&self.previous().kind);
             let next_starts_top_level = self.at_kind_name("EOF")
                 || self.at_kind_name("KW_IMPORT")
+                || self.at_soft_keyword("from")
                 || matches!(
                     self.current().kind,
-                    TokenKind::KwFrom
-                        | TokenKind::At
+                    TokenKind::At
                         | TokenKind::KwPublic
                         | TokenKind::KwConst
                         | TokenKind::KwType
@@ -56,7 +56,7 @@ impl<'a> Parser<'a> {
         let docs = self.take_pending_docs();
         let start = self.mark();
 
-        if self.at_kind_name("KW_FROM") {
+        if self.at_soft_keyword("from") {
             self.advance();
             if self.at_kind_name("STRING_START") {
                 let source = self.parse_string_literal()?;

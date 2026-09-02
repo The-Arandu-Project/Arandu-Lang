@@ -134,6 +134,39 @@ func escape(): []int {
 }
 
 #[test]
+fn jit_consumes_string_from_free_and_associated_ctor() {
+    // `from` is a soft keyword: it must work as both the stdlib free function
+    // (`strings.from`) and the associated constructor (`strings.String.from`).
+    let output = invoke(
+        "run",
+        r#"module tests.borrowed_views.string_from
+import std.alloc.string as strings
+
+func main(): int {
+    let a = strings.from("free")
+    let b = strings.String.from("associated")
+    let lenA = strings.len(a)
+    let lenB = strings.len(b)
+    if lenA != 4 {
+        return 10
+    }
+    if lenB != 10 {
+        return 11
+    }
+    return 12
+}
+"#,
+    );
+    let code = output.status.code();
+    assert_eq!(
+        code,
+        Some(12),
+        "JIT String.from (free/associated) failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn string_views_block_mutation() {
     let output = check(
         r#"module tests.borrowed_views.string

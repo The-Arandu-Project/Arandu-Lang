@@ -307,7 +307,14 @@ impl LowerCtx<'_> {
                     );
                     Ok(AmirOperand::Copy(dest))
                 } else {
-                    Ok(AmirOperand::GlobalRef(*member_symbol))
+                    let sym = symbols.get(*member_symbol);
+                    Ok(match sym.kind {
+                        SymbolKind::Func
+                        | SymbolKind::ExternFunc
+                        | SymbolKind::AssociatedFunc
+                        | SymbolKind::NamespaceMember => AmirOperand::FunctionRef(*member_symbol),
+                        _ => AmirOperand::GlobalRef(*member_symbol),
+                    })
                 }?;
                 if let Some(dest) = target {
                     let lookup_bare = symbols

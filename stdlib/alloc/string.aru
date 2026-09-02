@@ -63,6 +63,13 @@ public func withCapacity(cap: uint): String {
     return s
 }
 
+/// Create a new owned String initialized with a copy of the UTF-8 bytes of `value`.
+public func from(value: str): String {
+    let mut s = new()
+    let _ = pushStr(s, value)
+    return s
+}
+
 /// Ensure capacity in bytes ≥ `minCap`.
 func ensureCapacity(s: mut ref String, minCap: uint): void {
     let maxCap = maxBufferCapacity()
@@ -192,6 +199,10 @@ public func destroy(s: mut ref String): void {
 }
 
 // ── Method-style surface ───────────────────────────────────────────────────
+
+public func String.from(value: str): String {
+    return from(value)
+}
 
 public func String.len(self: ref String): uint {
     return len(self)
