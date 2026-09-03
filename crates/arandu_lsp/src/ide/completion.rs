@@ -6,6 +6,7 @@ use arandu_query::{AnalysisSnapshot, SourceFile};
 use lsp_types::{CompletionItem, CompletionItemKind, InsertTextFormat, Position};
 
 use super::presentation::{markdown_documentation, prefix_at, symbol_presentation, typecheck};
+use super::types::MAX_COMPLETION_ITEMS;
 use crate::conv::position_to_offset;
 
 #[must_use]
@@ -97,7 +98,7 @@ pub fn completions(
     }
     items.sort_by(|a, b| a.label.cmp(&b.label));
     items.dedup_by(|a, b| a.label == b.label);
-    items.truncate(200);
+    items.truncate(MAX_COMPLETION_ITEMS);
     items
 }
 

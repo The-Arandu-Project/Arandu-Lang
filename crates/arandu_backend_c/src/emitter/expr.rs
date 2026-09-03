@@ -470,7 +470,7 @@ impl<'a> CEmitter<'a> {
                 };
                 let elem_c = match expected_ar_type {
                     ArType::Slice(inner) => self.format_type(&self.interner.resolve(*inner)),
-                    _ => "uint8_t".to_string(),
+                    _ => std::borrow::Cow::Borrowed("uint8_t"),
                 };
                 let _ = write!(
                     &mut self.output,

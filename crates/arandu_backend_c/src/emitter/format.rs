@@ -1,9 +1,20 @@
+use std::borrow::Cow;
+
 use super::{CEmitter, sanitize_c_ident};
 use arandu_middle::amir::{AmirConstant, AmirFunc, AmirOperand, AmirPlace, AmirProjection};
 use arandu_middle::literal_pool::AmirLiteralEntry;
 use arandu_middle::types::{ArType, Primitive};
 
+const C_TRUE: &str = "true";
+const C_FALSE: &str = "false";
+const C_NULL: &str = "NULL";
+
 impl<'a> CEmitter<'a> {
+    #[inline]
+    pub(super) fn is_64bit_target(&self) -> bool {
+        self.layout.pointer_width() == 8
+    }
+
     pub(super) fn format_operand_str(&self, op: &AmirOperand) -> String {
         match op {
             AmirOperand::Copy(t) | AmirOperand::Move(t) => format!("t{}", t.as_usize()),
@@ -32,12 +43,12 @@ impl<'a> CEmitter<'a> {
                 },
                 AmirConstant::Bool(b) => {
                     if *b {
-                        "true".to_string()
+                        C_TRUE.to_string()
                     } else {
-                        "false".to_string()
+                        C_FALSE.to_string()
                     }
                 }
-                AmirConstant::Nil => "NULL".to_string(),
+                AmirConstant::Nil => C_NULL.to_string(),
             },
         }
     }
@@ -61,75 +72,80 @@ impl<'a> CEmitter<'a> {
         }
     }
 
-    pub(super) fn format_type(&self, ty: &ArType) -> String {
+    pub(super) fn format_type(&self, ty: &ArType) -> Cow<'static, str> {
         match ty {
-            ArType::Primitive(Primitive::I8) => "int8_t".to_string(),
-            ArType::Primitive(Primitive::I16) => "int16_t".to_string(),
-            ArType::Primitive(Primitive::I32) => "int32_t".to_string(),
-            ArType::Primitive(Primitive::I64) => "int64_t".to_string(),
+            ArType::Primitive(Primitive::I8) => Cow::Borrowed("int8_t"),
+            ArType::Primitive(Primitive::I16) => Cow::Borrowed("int16_t"),
+            ArType::Primitive(Primitive::I32) => Cow::Borrowed("int32_t"),
+            ArType::Primitive(Primitive::I64) => Cow::Borrowed("int64_t"),
             ArType::Primitive(Primitive::U8) | ArType::Primitive(Primitive::Byte) => {
-                "uint8_t".to_string()
+                Cow::Borrowed("uint8_t")
             }
-            ArType::Primitive(Primitive::U16) => "uint16_t".to_string(),
-            ArType::Primitive(Primitive::U32) => "uint32_t".to_string(),
-            ArType::Primitive(Primitive::U64) => "uint64_t".to_string(),
-            ArType::Primitive(Primitive::F32) => "float".to_string(),
-            ArType::Primitive(Primitive::F64) => "double".to_string(),
+            ArType::Primitive(Primitive::U16) => Cow::Borrowed("uint16_t"),
+            ArType::Primitive(Primitive::U32) => Cow::Borrowed("uint32_t"),
+            ArType::Primitive(Primitive::U64) => Cow::Borrowed("uint64_t"),
+            ArType::Primitive(Primitive::F32) => Cow::Borrowed("float"),
+            ArType::Primitive(Primitive::F64) => Cow::Borrowed("double"),
             ArType::Primitive(Primitive::Uint) => {
-                if self.layout.pointer_width() == 8 {
-                    "uint64_t".to_string()
+                if self.is_64bit_target() {
+                    Cow::Borrowed("uint64_t")
                 } else {
-                    "uint32_t".to_string()
+                    Cow::Borrowed("uint32_t")
                 }
             }
             ArType::IntLiteral => {
-                if self.layout.pointer_width() == 8 {
-                    "int64_t".to_string()
+                if self.is_64bit_target() {
+                    Cow::Borrowed("int64_t")
                 } else {
-                    "int32_t".to_string()
+                    Cow::Borrowed("int32_t")
                 }
             }
             ArType::Primitive(Primitive::Int) => {
-                if self.layout.pointer_width() == 8 {
-                    "int64_t".to_string()
+                if self.is_64bit_target() {
+                    Cow::Borrowed("int64_t")
                 } else {
-                    "int32_t".to_string()
+                    Cow::Borrowed("int32_t")
                 }
             }
-            ArType::Primitive(Primitive::Bool) => "bool".to_string(),
-            ArType::Primitive(Primitive::Char) => "uint32_t".to_string(),
-            ArType::Primitive(Primitive::Str) => "ArStr".to_string(),
-            ArType::Primitive(Primitive::Float) | ArType::FloatLiteral => "double".to_string(),
-            ArType::Void => "void".to_string(),
-            ArType::Ptr(inner) | ArType::Ref(inner) | ArType::RefMut(inner) => {
-                format!("{}*", self.format_type(&self.interner.resolve(*inner)))
-            }
-            ArType::GenRef => "int64_t".to_string(),
-            ArType::Named(id, _) => sanitize_c_ident(&self.symbols.get(*id).name),
+            ArType::Primitive(Primitive::Bool) => Cow::Borrowed("bool"),
+            ArType::Primitive(Primitive::Char) => Cow::Borrowed("uint32_t"),
+            ArType::Primitive(Primitive::Str) => Cow::Borrowed("ArStr"),
+            ArType::Primitive(Primitive::Float) | ArType::FloatLiteral => Cow::Borrowed("double"),
+            ArType::Void => Cow::Borrowed("void"),
+            ArType::Ptr(inner) | ArType::Ref(inner) | ArType::RefMut(inner) => Cow::Owned(format!(
+                "{}*",
+                self.format_type(&self.interner.resolve(*inner))
+            )),
+            ArType::GenRef => Cow::Borrowed("int64_t"),
+            ArType::Named(id, _) => Cow::Owned(sanitize_c_ident(&self.symbols.get(*id).name)),
             ArType::Slice(inner) => {
                 let inner_name = self.format_type(&self.interner.resolve(*inner));
-                format!("ArType_Slice_{}", sanitize_c_ident(&inner_name))
+                Cow::Owned(format!("ArType_Slice_{}", sanitize_c_ident(&inner_name)))
             }
             ArType::Array(len, inner) => {
                 let inner_name = self.format_type(&self.interner.resolve(*inner));
-                format!("ArType_Array_{}_{}", len, sanitize_c_ident(&inner_name))
+                Cow::Owned(format!(
+                    "ArType_Array_{}_{}",
+                    len,
+                    sanitize_c_ident(&inner_name)
+                ))
             }
             ArType::Nullable(inner) => {
                 let inner_name = self.format_type(&self.interner.resolve(*inner));
-                format!("ArType_Nullable_{}", sanitize_c_ident(&inner_name))
+                Cow::Owned(format!("ArType_Nullable_{}", sanitize_c_ident(&inner_name)))
             }
             ArType::Option(inner) => {
                 let inner_name = self.format_type(&self.interner.resolve(*inner));
-                format!("ArType_Option_{}", sanitize_c_ident(&inner_name))
+                Cow::Owned(format!("ArType_Option_{}", sanitize_c_ident(&inner_name)))
             }
             ArType::Result(ok, err) => {
                 let ok_name = self.format_type(&self.interner.resolve(*ok));
                 let err_name = self.format_type(&self.interner.resolve(*err));
-                format!(
+                Cow::Owned(format!(
                     "ArType_Result_{}_{}",
                     sanitize_c_ident(&ok_name),
                     sanitize_c_ident(&err_name)
-                )
+                ))
             }
             ArType::Tuple(tys) => {
                 let mut name = "ArType_Tuple".to_string();
@@ -137,7 +153,7 @@ impl<'a> CEmitter<'a> {
                     name.push('_');
                     name.push_str(&self.format_type(&self.interner.resolve(t)));
                 }
-                sanitize_c_ident(&name)
+                Cow::Owned(sanitize_c_ident(&name))
             }
             ArType::Func(params, ret) => {
                 let mut name = "ArFunc".to_string();
@@ -147,9 +163,9 @@ impl<'a> CEmitter<'a> {
                 }
                 name.push_str("_to_");
                 name.push_str(&self.format_type(&self.interner.resolve(*ret)));
-                sanitize_c_ident(&name)
+                Cow::Owned(sanitize_c_ident(&name))
             }
-            _ => format!("ArType_{}", sanitize_c_ident(&format!("{:?}", ty))),
+            _ => Cow::Owned(format!("ArType_{}", sanitize_c_ident(&format!("{:?}", ty)))),
         }
     }
 

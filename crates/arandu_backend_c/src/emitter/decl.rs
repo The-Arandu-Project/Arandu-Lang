@@ -61,7 +61,7 @@ impl<'a> CEmitter<'a> {
             return "int".to_string();
         }
         let ret = self.interner.resolve(func.return_type);
-        self.format_type(&ret)
+        self.format_type(&ret).into_owned()
     }
 
     pub(super) fn emit_str_literals(&mut self) {
@@ -94,9 +94,9 @@ impl<'a> CEmitter<'a> {
         }
         let name = self.format_type(ty);
         // Never redefine C/stdlib primitive types as blob structs (e.g. `double`).
-        if self.emitted_types.contains(&name)
+        if self.emitted_types.contains(name.as_ref())
             || matches!(
-                name.as_str(),
+                name.as_ref(),
                 "void"
                     | "bool"
                     | "float"
@@ -136,7 +136,7 @@ impl<'a> CEmitter<'a> {
                 "typedef {} (*{})({});",
                 ret_c_ty, name, params_str
             );
-            self.emitted_types.insert(name);
+            self.emitted_types.insert(name.into_owned());
             return;
         }
 
@@ -154,7 +154,7 @@ impl<'a> CEmitter<'a> {
                 name
             ); // C doesn't like zero sized structs sometimes
         }
-        self.emitted_types.insert(name);
+        self.emitted_types.insert(name.into_owned());
     }
 
     pub(super) fn emit_func_decl(&mut self, func: &AmirFunc) {

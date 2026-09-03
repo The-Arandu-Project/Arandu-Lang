@@ -85,7 +85,7 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                             return (self.poison_i32(), 0);
                         }
                     };
-                    let inner_ty = self.type_info.resolve_type_id(inner_ty_id).clone();
+                    let inner_ty = self.type_info.resolve_type_id(inner_ty_id);
                     current_ty = inner_ty;
 
                     let layout = self.checked_layout(&current_ty);
@@ -145,7 +145,7 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                         return (self.poison_i32(), 0);
                     }
                 };
-                let inner_ty = self.type_info.resolve_type_id(inner_ty_id).clone();
+                let inner_ty = self.type_info.resolve_type_id(inner_ty_id);
                 current_ty = inner_ty;
 
                 let layout = self.checked_layout(&current_ty);
@@ -203,7 +203,7 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
             other => other.clone(),
         };
 
-        let field_name = self.symbol_table.get(symbol_id).name.clone();
+        let field_name = &self.symbol_table.get(symbol_id).name;
         let field_idx = self
             .type_info
             .struct_field_indices

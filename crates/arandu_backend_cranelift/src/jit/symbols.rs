@@ -9,6 +9,11 @@ use rustc_hash::FxHashMap;
 
 use super::isa::codegen_ice;
 
+#[inline]
+fn insert_sym(func_ids: &mut FxHashMap<String, FuncId>, name: &str, id: FuncId) {
+    func_ids.insert(name.to_string(), id);
+}
+
 pub(crate) fn declare_runtime_imports<M: Module>(
     module: &mut M,
     func_ids: &mut FxHashMap<String, FuncId>,
@@ -22,7 +27,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
     let malloc_id = module
         .declare_function("malloc", Linkage::Import, &malloc_sig)
         .map_err(|err| codegen_ice(format!("failed to declare malloc: {err:?}")))?;
-    func_ids.insert("malloc".to_string(), malloc_id);
+    insert_sym(func_ids, "malloc", malloc_id);
 
     // Declare free as import
     let mut free_sig = Signature::new(default_call_conv);
@@ -30,17 +35,18 @@ pub(crate) fn declare_runtime_imports<M: Module>(
     let free_id = module
         .declare_function("free", Linkage::Import, &free_sig)
         .map_err(|err| codegen_ice(format!("failed to declare free: {err:?}")))?;
-    func_ids.insert("free".to_string(), free_id);
+    insert_sym(func_ids, "free", free_id);
 
     // Declare abort as import
     let abort_sig = Signature::new(default_call_conv);
     let abort_id = module
         .declare_function("abort", Linkage::Import, &abort_sig)
         .map_err(|err| codegen_ice(format!("failed to declare abort: {err:?}")))?;
-    func_ids.insert("abort".to_string(), abort_id);
-    func_ids.insert("std.core.intrinsics.abort".to_string(), abort_id);
-    func_ids.insert(
-        "std.core.intrinsics.abortGenerationalMismatch".to_string(),
+    insert_sym(func_ids, "abort", abort_id);
+    insert_sym(func_ids, "std.core.intrinsics.abort", abort_id);
+    insert_sym(
+        func_ids,
+        "std.core.intrinsics.abortGenerationalMismatch",
         abort_id,
     );
 
@@ -57,7 +63,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
         let id = module
             .declare_function(name, Linkage::Import, &signature)
             .map_err(|error| codegen_ice(format!("failed to declare {name}: {error:?}")))?;
-        func_ids.insert(name.to_string(), id);
+        insert_sym(func_ids, name, id);
     }
 
     // G4 raw ABI: pointers and layout widths follow the JIT target.
@@ -75,13 +81,12 @@ pub(crate) fn declare_runtime_imports<M: Module>(
     get_sig.returns.push(AbiParam::new(I8));
 
     let mut set_sig = Signature::new(default_call_conv);
+    let mut upsert_sig = Signature::new(default_call_conv);
     for ty in [I64, ptr_type, usize_ty, usize_ty, ptr_type] {
         set_sig.params.push(AbiParam::new(ty));
+        upsert_sig.params.push(AbiParam::new(ty));
     }
     set_sig.returns.push(AbiParam::new(I8));
-
-    let mut upsert_sig = set_sig.clone();
-    upsert_sig.returns.clear();
     upsert_sig.returns.push(AbiParam::new(I64));
 
     for (name, signature) in [
@@ -94,14 +99,14 @@ pub(crate) fn declare_runtime_imports<M: Module>(
         let id = module
             .declare_function(name, Linkage::Import, signature)
             .map_err(|err| codegen_ice(format!("failed to declare {name}: {err:?}")))?;
-        func_ids.insert(name.to_string(), id);
+        insert_sym(func_ids, name, id);
     }
 
     let shutdown_sig = Signature::new(default_call_conv);
     let shutdown_id = module
         .declare_function("ar_gen_shutdown_raw", Linkage::Import, &shutdown_sig)
         .map_err(|err| codegen_ice(format!("failed to declare ar_gen_shutdown_raw: {err:?}")))?;
-    func_ids.insert("ar_gen_shutdown_raw".to_string(), shutdown_id);
+    insert_sym(func_ids, "ar_gen_shutdown_raw", shutdown_id);
 
     // A3.6: block_on(state) -> i64
     let mut block_on_sig = Signature::new(default_call_conv);
@@ -110,7 +115,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
     let block_on_id = module
         .declare_function("ar_co_block_on_i64", Linkage::Import, &block_on_sig)
         .map_err(|err| codegen_ice(format!("failed to declare ar_co_block_on_i64: {err:?}")))?;
-    func_ids.insert("ar_co_block_on_i64".to_string(), block_on_id);
+    insert_sym(func_ids, "ar_co_block_on_i64", block_on_id);
 
     // A3.6: poll(state, *out) -> i32
     let mut poll_sig = Signature::new(default_call_conv);
@@ -120,7 +125,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
     let poll_id = module
         .declare_function("ar_co_poll_i64", Linkage::Import, &poll_sig)
         .map_err(|err| codegen_ice(format!("failed to declare ar_co_poll_i64: {err:?}")))?;
-    func_ids.insert("ar_co_poll_i64".to_string(), poll_id);
+    insert_sym(func_ids, "ar_co_poll_i64", poll_id);
 
     // A3.6 / SL_R tests: make_ready(payload:i64) -> *u8
     let mut make_ready_sig = Signature::new(default_call_conv);
@@ -129,7 +134,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
     let make_ready_id = module
         .declare_function("ar_co_make_ready_i64", Linkage::Import, &make_ready_sig)
         .map_err(|err| codegen_ice(format!("failed to declare ar_co_make_ready_i64: {err:?}")))?;
-    func_ids.insert("ar_co_make_ready_i64".to_string(), make_ready_id);
+    insert_sym(func_ids, "ar_co_make_ready_i64", make_ready_id);
 
     // SL_R.0 + SL_S path host imports
     let mut rt_block_sig = Signature::new(default_call_conv);
@@ -140,7 +145,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
             let id = module
                 .declare_function(name, Linkage::Import, &rt_block_sig)
                 .map_err(|err| codegen_ice(format!("failed to declare {name}: {err:?}")))?;
-            func_ids.insert(name.to_string(), id);
+            insert_sym(func_ids, name, id);
         }
     }
 
@@ -151,7 +156,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
     let id = module
         .declare_function(name, Linkage::Import, &rt_spawn_sig)
         .map_err(|err| codegen_ice(format!("failed to declare {name}: {err:?}")))?;
-    func_ids.insert(name.to_string(), id);
+    insert_sym(func_ids, name, id);
 
     let mut rt_join_sig = Signature::new(default_call_conv);
     rt_join_sig.params.push(AbiParam::new(I64));
@@ -160,14 +165,14 @@ pub(crate) fn declare_runtime_imports<M: Module>(
     let id = module
         .declare_function(name, Linkage::Import, &rt_join_sig)
         .map_err(|err| codegen_ice(format!("failed to declare {name}: {err:?}")))?;
-    func_ids.insert(name.to_string(), id);
+    insert_sym(func_ids, name, id);
 
     let mut rt_cancel_sig = Signature::new(default_call_conv);
     rt_cancel_sig.params.push(AbiParam::new(I64));
     let cancel_id = module
         .declare_function("ar_rt_cancel_i64", Linkage::Import, &rt_cancel_sig)
         .map_err(|err| codegen_ice(format!("failed to declare ar_rt_cancel_i64: {err:?}")))?;
-    func_ids.insert("ar_rt_cancel_i64".to_string(), cancel_id);
+    insert_sym(func_ids, "ar_rt_cancel_i64", cancel_id);
 
     let mut path_sig = Signature::new(default_call_conv);
     path_sig.params.push(AbiParam::new(ptr_type));
@@ -181,7 +186,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
         let id = module
             .declare_function(name, Linkage::Import, &path_sig)
             .map_err(|err| codegen_ice(format!("failed to declare {name}: {err:?}")))?;
-        func_ids.insert(name.to_string(), id);
+        insert_sym(func_ids, name, id);
     }
 
     // path join / file_name / str thin hosts
@@ -200,7 +205,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
         let id = module
             .declare_function("ar_path_join", Linkage::Import, &join_sig)
             .map_err(|err| codegen_ice(format!("failed to declare ar_path_join: {err:?}")))?;
-        func_ids.insert("ar_path_join".to_string(), id);
+        insert_sym(func_ids, "ar_path_join", id);
 
         let mut file_sig = Signature::new(default_call_conv);
         #[cfg(windows)]
@@ -214,7 +219,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
         let id = module
             .declare_function("ar_path_file_name", Linkage::Import, &file_sig)
             .map_err(|err| codegen_ice(format!("failed to declare ar_path_file_name: {err:?}")))?;
-        func_ids.insert("ar_path_file_name".to_string(), id);
+        insert_sym(func_ids, "ar_path_file_name", id);
 
         let mut len_sig = Signature::new(default_call_conv);
         len_sig.params.push(AbiParam::new(ptr_type));
@@ -223,12 +228,12 @@ pub(crate) fn declare_runtime_imports<M: Module>(
         let id = module
             .declare_function("ar_str_len", Linkage::Import, &len_sig)
             .map_err(|err| codegen_ice(format!("failed to declare ar_str_len: {err:?}")))?;
-        func_ids.insert("ar_str_len".to_string(), id);
+        insert_sym(func_ids, "ar_str_len", id);
 
         let id = module
             .declare_function("ar_str_concat", Linkage::Import, &join_sig)
             .map_err(|err| codegen_ice(format!("failed to declare ar_str_concat: {err:?}")))?;
-        func_ids.insert("ar_str_concat".to_string(), id);
+        insert_sym(func_ids, "ar_str_concat", id);
 
         let mut pref_sig = Signature::new(default_call_conv);
         for _ in 0..2 {
@@ -245,13 +250,13 @@ pub(crate) fn declare_runtime_imports<M: Module>(
             let id = module
                 .declare_function(name, Linkage::Import, &pref_sig)
                 .map_err(|err| codegen_ice(format!("failed to declare {name}: {err:?}")))?;
-            func_ids.insert(name.to_string(), id);
+            insert_sym(func_ids, name, id);
         }
 
         let id = module
             .declare_function("ar_str_split_last", Linkage::Import, &join_sig)
             .map_err(|err| codegen_ice(format!("failed to declare ar_str_split_last: {err:?}")))?;
-        func_ids.insert("ar_str_split_last".to_string(), id);
+        insert_sym(func_ids, "ar_str_split_last", id);
     }
 
     // Minimal OS: exit(void), monotonic_ns/args_len
@@ -261,7 +266,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
         let id = module
             .declare_function("ar_process_exit", Linkage::Import, &exit_sig)
             .map_err(|err| codegen_ice(format!("failed to declare ar_process_exit: {err:?}")))?;
-        func_ids.insert("ar_process_exit".to_string(), id);
+        insert_sym(func_ids, "ar_process_exit", id);
 
         let mut noarg_i64 = Signature::new(default_call_conv);
         noarg_i64.returns.push(AbiParam::new(I64));
@@ -269,7 +274,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
             let id = module
                 .declare_function(name, Linkage::Import, &noarg_i64)
                 .map_err(|err| codegen_ice(format!("failed to declare {name}: {err:?}")))?;
-            func_ids.insert(name.to_string(), id);
+            insert_sym(func_ids, name, id);
         }
     }
 
@@ -280,7 +285,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
         let id = module
             .declare_function("ar_vec_new", Linkage::Import, &noarg_i64)
             .map_err(|err| codegen_ice(format!("failed to declare ar_vec_new: {err:?}")))?;
-        func_ids.insert("ar_vec_new".to_string(), id);
+        insert_sym(func_ids, "ar_vec_new", id);
 
         let mut one_i64 = Signature::new(default_call_conv);
         one_i64.params.push(AbiParam::new(I64));
@@ -288,15 +293,16 @@ pub(crate) fn declare_runtime_imports<M: Module>(
             let id = module
                 .declare_function(name, Linkage::Import, &one_i64)
                 .map_err(|err| codegen_ice(format!("failed to declare {name}: {err:?}")))?;
-            func_ids.insert(name.to_string(), id);
+            insert_sym(func_ids, name, id);
         }
 
-        let mut one_ret = one_i64.clone();
+        let mut one_ret = Signature::new(default_call_conv);
+        one_ret.params.push(AbiParam::new(I64));
         one_ret.returns.push(AbiParam::new(ptr_type));
         let id = module
             .declare_function("ar_vec_len", Linkage::Import, &one_ret)
             .map_err(|err| codegen_ice(format!("failed to declare ar_vec_len: {err:?}")))?;
-        func_ids.insert("ar_vec_len".to_string(), id);
+        insert_sym(func_ids, "ar_vec_len", id);
 
         let mut two = Signature::new(default_call_conv);
         two.params.push(AbiParam::new(I64));
@@ -304,23 +310,28 @@ pub(crate) fn declare_runtime_imports<M: Module>(
         let id = module
             .declare_function("ar_vec_push", Linkage::Import, &two)
             .map_err(|err| codegen_ice(format!("failed to declare ar_vec_push: {err:?}")))?;
-        func_ids.insert("ar_vec_push".to_string(), id);
+        insert_sym(func_ids, "ar_vec_push", id);
 
-        let mut two_ret = two.clone();
+        let mut two_ret = Signature::new(default_call_conv);
+        two_ret.params.push(AbiParam::new(I64));
+        two_ret.params.push(AbiParam::new(I64));
         two_ret.returns.push(AbiParam::new(I64));
         for name in ["ar_vec_has", "ar_vec_get"] {
             let id = module
                 .declare_function(name, Linkage::Import, &two_ret)
                 .map_err(|err| codegen_ice(format!("failed to declare {name}: {err:?}")))?;
-            func_ids.insert(name.to_string(), id);
+            insert_sym(func_ids, name, id);
         }
 
-        let mut three_ret = two_ret.clone();
+        let mut three_ret = Signature::new(default_call_conv);
         three_ret.params.push(AbiParam::new(I64));
+        three_ret.params.push(AbiParam::new(I64));
+        three_ret.params.push(AbiParam::new(I64));
+        three_ret.returns.push(AbiParam::new(I64));
         let id = module
             .declare_function("ar_vec_put", Linkage::Import, &three_ret)
             .map_err(|err| codegen_ice(format!("failed to declare ar_vec_put: {err:?}")))?;
-        func_ids.insert("ar_vec_put".to_string(), id);
+        insert_sym(func_ids, "ar_vec_put", id);
 
         let mut pop_sig = Signature::new(default_call_conv);
         pop_sig.params.push(AbiParam::new(I64));
@@ -328,7 +339,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
         let id = module
             .declare_function("ar_vec_pop", Linkage::Import, &pop_sig)
             .map_err(|err| codegen_ice(format!("failed to declare ar_vec_pop: {err:?}")))?;
-        func_ids.insert("ar_vec_pop".to_string(), id);
+        insert_sym(func_ids, "ar_vec_pop", id);
     }
 
     // Raw buffer helpers for pure-Arandu Vec
@@ -339,7 +350,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
         let id = module
             .declare_function("ar_vec_malloc", Linkage::Import, &malloc_sig)
             .map_err(|err| codegen_ice(format!("failed to declare ar_vec_malloc: {err:?}")))?;
-        func_ids.insert("ar_vec_malloc".to_string(), id);
+        insert_sym(func_ids, "ar_vec_malloc", id);
 
         let mut free_sig = Signature::new(default_call_conv);
         free_sig.params.push(AbiParam::new(ptr_type));
@@ -347,7 +358,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
         let id = module
             .declare_function("ar_vec_buf_free", Linkage::Import, &free_sig)
             .map_err(|err| codegen_ice(format!("failed to declare ar_vec_buf_free: {err:?}")))?;
-        func_ids.insert("ar_vec_buf_free".to_string(), id);
+        insert_sym(func_ids, "ar_vec_buf_free", id);
 
         let mut realloc_sig = Signature::new(default_call_conv);
         realloc_sig.params.push(AbiParam::new(ptr_type));
@@ -357,7 +368,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
         let id = module
             .declare_function("ar_vec_realloc", Linkage::Import, &realloc_sig)
             .map_err(|err| codegen_ice(format!("failed to declare ar_vec_realloc: {err:?}")))?;
-        func_ids.insert("ar_vec_realloc".to_string(), id);
+        insert_sym(func_ids, "ar_vec_realloc", id);
 
         let mut push_str_sig = Signature::new(default_call_conv);
         push_str_sig.params.push(AbiParam::new(ptr_type));
@@ -369,7 +380,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
         let id = module
             .declare_function("ar_string_push_str", Linkage::Import, &push_str_sig)
             .map_err(|err| codegen_ice(format!("failed to declare ar_string_push_str: {err:?}")))?;
-        func_ids.insert("ar_string_push_str".to_string(), id);
+        insert_sym(func_ids, "ar_string_push_str", id);
     }
 
     // SL_R.2 reactor host imports
@@ -381,7 +392,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
             .map_err(|err| {
                 codegen_ice(format!("failed to declare ar_rt_reactor_create: {err:?}"))
             })?;
-        func_ids.insert("ar_rt_reactor_create".to_string(), id);
+        insert_sym(func_ids, "ar_rt_reactor_create", id);
 
         let mut destroy_sig = Signature::new(default_call_conv);
         destroy_sig.params.push(AbiParam::new(I64));
@@ -390,7 +401,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
             .map_err(|err| {
                 codegen_ice(format!("failed to declare ar_rt_reactor_destroy: {err:?}"))
             })?;
-        func_ids.insert("ar_rt_reactor_destroy".to_string(), id);
+        insert_sym(func_ids, "ar_rt_reactor_destroy", id);
 
         let mut two_i64_ret_i64 = Signature::new(default_call_conv);
         two_i64_ret_i64.params.push(AbiParam::new(I64));
@@ -408,7 +419,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
             let id = module
                 .declare_function(name, Linkage::Import, &two_i64_ret_i64)
                 .map_err(|err| codegen_ice(format!("failed to declare {name}: {err:?}")))?;
-            func_ids.insert(name.to_string(), id);
+            insert_sym(func_ids, name, id);
         }
 
         let mut sig = Signature::new(default_call_conv);
@@ -423,7 +434,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
                     "failed to declare ar_rt_reactor_register_socket: {err:?}"
                 ))
             })?;
-        func_ids.insert("ar_rt_reactor_register_socket".to_string(), id);
+        insert_sym(func_ids, "ar_rt_reactor_register_socket", id);
 
         let mut zero_ret = Signature::new(default_call_conv);
         zero_ret.returns.push(AbiParam::new(I64));
@@ -436,7 +447,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
                 let id = module
                     .declare_function(name, Linkage::Import, &zero_ret)
                     .map_err(|err| codegen_ice(format!("failed to declare {name}: {err:?}")))?;
-                func_ids.insert(name.to_string(), id);
+                insert_sym(func_ids, name, id);
             }
         }
 
@@ -451,7 +462,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
             let id = module
                 .declare_function(name, Linkage::Import, &void_sig)
                 .map_err(|err| codegen_ice(format!("failed to declare {name}: {err:?}")))?;
-            func_ids.insert(name.to_string(), id);
+            insert_sym(func_ids, name, id);
         }
 
         let mut ret_sig = Signature::new(default_call_conv);
@@ -461,7 +472,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
             let id = module
                 .declare_function(name, Linkage::Import, &ret_sig)
                 .map_err(|err| codegen_ice(format!("failed to declare {name}: {err:?}")))?;
-            func_ids.insert(name.to_string(), id);
+            insert_sym(func_ids, name, id);
         }
 
         let mut rw_sig = Signature::new(default_call_conv);
@@ -478,7 +489,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
             let id = module
                 .declare_function(name, Linkage::Import, &rw_sig)
                 .map_err(|err| codegen_ice(format!("failed to declare {name}: {err:?}")))?;
-            func_ids.insert(name.to_string(), id);
+            insert_sym(func_ids, name, id);
         }
 
         let mut two = Signature::new(default_call_conv);
@@ -492,7 +503,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
                     "failed to declare ar_rt_tcp_set_nonblocking: {err:?}"
                 ))
             })?;
-        func_ids.insert("ar_rt_tcp_set_nonblocking".to_string(), id);
+        insert_sym(func_ids, "ar_rt_tcp_set_nonblocking", id);
 
         let mut three = Signature::new(default_call_conv);
         for _ in 0..3 {
@@ -502,7 +513,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
         let id = module
             .declare_function("ar_rt_tcp_wait", Linkage::Import, &three)
             .map_err(|err| codegen_ice(format!("failed to declare ar_rt_tcp_wait: {err:?}")))?;
-        func_ids.insert("ar_rt_tcp_wait".to_string(), id);
+        insert_sym(func_ids, "ar_rt_tcp_wait", id);
 
         let mut four = Signature::new(default_call_conv);
         for _ in 0..4 {
@@ -514,7 +525,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
             .map_err(|err| {
                 codegen_ice(format!("failed to declare ar_rt_tcp_wait_wake: {err:?}"))
             })?;
-        func_ids.insert("ar_rt_tcp_wait_wake".to_string(), id);
+        insert_sym(func_ids, "ar_rt_tcp_wait_wake", id);
 
         let mut sup_sig = Signature::new(default_call_conv);
         sup_sig.params.push(AbiParam::new(I64));
@@ -526,7 +537,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
             let id = module
                 .declare_function(name, Linkage::Import, &sup_sig)
                 .map_err(|err| codegen_ice(format!("failed to declare {name}: {err:?}")))?;
-            func_ids.insert(name.to_string(), id);
+            insert_sym(func_ids, name, id);
         }
     }
 
@@ -538,7 +549,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
     let fmod_id = module
         .declare_function("fmod", Linkage::Import, &fmod_sig)
         .map_err(|err| codegen_ice(format!("failed to declare fmod: {err:?}")))?;
-    func_ids.insert("fmod".to_string(), fmod_id);
+    insert_sym(func_ids, "fmod", fmod_id);
 
     let mut memcpy_sig = Signature::new(default_call_conv);
     memcpy_sig.params.push(AbiParam::new(ptr_type));
@@ -548,7 +559,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
     let memcpy_id = module
         .declare_function("memcpy", Linkage::Import, &memcpy_sig)
         .map_err(|err| codegen_ice(format!("failed to declare memcpy: {err:?}")))?;
-    func_ids.insert("memcpy".to_string(), memcpy_id);
+    insert_sym(func_ids, "memcpy", memcpy_id);
 
     let mut memcmp_sig = Signature::new(default_call_conv);
     memcmp_sig.params.push(AbiParam::new(ptr_type));
@@ -558,7 +569,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
     let memcmp_id = module
         .declare_function("memcmp", Linkage::Import, &memcmp_sig)
         .map_err(|err| codegen_ice(format!("failed to declare memcmp: {err:?}")))?;
-    func_ids.insert("memcmp".to_string(), memcmp_id);
+    insert_sym(func_ids, "memcmp", memcmp_id);
 
     // ToStr v0.1 host helpers
     for (name, val_ty) in [
@@ -576,7 +587,7 @@ pub(crate) fn declare_runtime_imports<M: Module>(
         let id = module
             .declare_function(name, Linkage::Import, &sig)
             .map_err(|err| codegen_ice(format!("failed to declare {name}: {err:?}")))?;
-        func_ids.insert(name.to_string(), id);
+        insert_sym(func_ids, name, id);
     }
 
     Ok(())

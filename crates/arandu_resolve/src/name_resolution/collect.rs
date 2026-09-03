@@ -16,6 +16,7 @@ impl<'a> Resolver<'a> {
             ImportDecl::ModuleAlias { span, alias, .. } => {
                 // Import aliases are file-local (never re-exported via this name).
                 if let Some(sym) = self.define(scope, alias, SymbolKind::Module, *span) {
+                    // SmolStr::clone is O(1)
                     self.record_import_symbol(sym, alias.clone(), *span);
                 }
             }
@@ -28,6 +29,7 @@ impl<'a> Resolver<'a> {
                         SymbolKind::ImportValue
                     };
                     if let Some(sym) = self.define(scope, name, kind, item.span) {
+                        // SmolStr::clone is O(1)
                         self.record_import_symbol(sym, name.clone(), item.span);
                     }
                 }
@@ -38,8 +40,10 @@ impl<'a> Resolver<'a> {
                 alias,
             } => {
                 if let Some(sym) = self.define(scope, alias, SymbolKind::Module, *span) {
+                    // SmolStr::clone is O(1)
                     self.record_import_symbol(sym, alias.clone(), *span);
                 }
+                // SmolStr::clone is O(1)
                 self.import_aliases.insert(alias.clone(), source.clone());
             }
             ImportDecl::ExternalNamed { items, .. } => {

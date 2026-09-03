@@ -9,9 +9,9 @@ pub mod types;
 pub use discovery::resolve_cache_layout;
 pub use store::CacheStore;
 pub use types::{
-    CACHE_DIR_ENV, CacheInspect, CachePrune, CachePublish, CacheScanLimits, CacheStoreError,
-    CacheVerify, DEFAULT_SCAN_BYTES, DEFAULT_SCAN_ENTRIES, TreeLimits, TreeVerification,
-    parse_scan_flags,
+    CACHE_DIR_ENV, COPY_BUFFER_SIZE, CacheInspect, CachePrune, CachePublish, CacheScanLimits,
+    CacheStoreError, CacheVerify, DEFAULT_SCAN_BYTES, DEFAULT_SCAN_ENTRIES, TreeLimits,
+    TreeVerification, parse_scan_flags,
 };
 
 #[cfg(test)]

@@ -139,6 +139,7 @@ pub fn resolve_imports_and_bodies(
         // Collect aliases only after package policy accepts the import. A rejected
         // filesystem import must not leave a partially usable namespace behind.
         if let arandu_parser::ImportDecl::ExternalAlias { source, alias, .. } = import {
+            // SmolStr::clone is O(1)
             resolver
                 .import_aliases
                 .insert(alias.clone(), source.clone());

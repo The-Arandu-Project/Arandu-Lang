@@ -673,6 +673,7 @@ pub(crate) fn lower_expr_raw(
                 right: right_id,
             }
         }
+        // SmolStr::clone is O(1) (inline representation or Arc storage)
         ExprKind::Int { value } => HirExprKind::Int(value.clone()),
         ExprKind::Float { value } => HirExprKind::Float(value.clone()),
         ExprKind::Bool { value } => HirExprKind::Bool(*value),
