@@ -1,5 +1,5 @@
 use arandu_semantics::amir::{AmirPlace, AmirProjection};
-use arandu_semantics::passes::type_checker::types::ArType;
+use arandu_semantics::passes::type_checker::types::{ArType, is_vec_type};
 use cranelift_codegen::ir::{InstBuilder, Value};
 
 use super::FunctionTranslator;
@@ -123,14 +123,7 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 ) {
                     current_ty = unwrap_ptr_like(&current_ty, self);
                 }
-                let is_vec = match &current_ty {
-                    ArType::Named(sym_id, args) => {
-                        (self.symbol_table.get(*sym_id).name == "Vec"
-                            || self.symbol_table.get(*sym_id).name.ends_with(".Vec"))
-                            && args.len() == 1
-                    }
-                    _ => false,
-                };
+                let is_vec = is_vec_type(&current_ty, self.symbol_table);
                 let idx_val = self.translate_operand(op, Some(self.ptr_type));
                 if matches!(current_ty, ArType::Slice(_)) || is_vec {
                     ptr_val = self.builder.ins().load(

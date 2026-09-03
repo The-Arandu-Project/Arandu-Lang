@@ -1,6 +1,6 @@
 use arandu_semantics::amir::{AmirConstant, AmirOperand, AmirRvalue};
 use arandu_semantics::ops::UnaryOp;
-use arandu_semantics::passes::type_checker::types::{ArType, Primitive};
+use arandu_semantics::passes::type_checker::types::{ArType, Primitive, is_vec_type};
 use cranelift_codegen::ir::{InstBuilder, Type, Value};
 
 use super::FunctionTranslator;
@@ -705,11 +705,7 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                         );
                         self.type_info.resolve_type_id(*elem)
                     }
-                    ArType::Named(sym_id, args)
-                        if (self.symbol_table.get(*sym_id).name == "Vec"
-                            || self.symbol_table.get(*sym_id).name.ends_with(".Vec"))
-                            && args.len() == 1 =>
-                    {
+                    ArType::Named(_, args) if is_vec_type(&deref_ty, self.symbol_table) => {
                         ptr_val = self.builder.ins().load(
                             self.ptr_type,
                             cranelift_codegen::ir::MemFlagsData::new(),

@@ -875,10 +875,11 @@ impl LowerCtx<'_> {
                 let bb_join = self.new_block();
 
                 if base_is_option {
-                    // Option: tag 0 is None, tag 1 is Some
+                    // Option: tag OPTION_NONE_TAG is None, OPTION_SOME_TAG is Some
                     let tag_tmp = self.new_temp(ArType::Primitive(Primitive::Int));
                     self.emit_assign_temp(tag_tmp, AmirRvalue::Discriminant { value: base_op });
-                    let zero_lit = self.intern_literal_int("0");
+                    let zero_lit =
+                        self.intern_literal_int(arandu_middle::amir::OPTION_NONE_TAG.to_string());
                     let cond_tmp = self.new_temp(ArType::Primitive(Primitive::Bool));
                     self.emit_assign_temp(
                         cond_tmp,
@@ -896,7 +897,7 @@ impl LowerCtx<'_> {
                     self.emit_assign_temp(
                         dest,
                         AmirRvalue::EnumConstruct {
-                            variant_tag: 0,
+                            variant_tag: arandu_middle::amir::OPTION_NONE_TAG,
                             payload: None,
                         },
                     );
@@ -922,7 +923,7 @@ impl LowerCtx<'_> {
                     self.emit_assign_temp(
                         dest,
                         AmirRvalue::EnumConstruct {
-                            variant_tag: 1,
+                            variant_tag: arandu_middle::amir::OPTION_SOME_TAG,
                             payload: Some(AmirOperand::Copy(field_val_tmp)),
                         },
                     );
@@ -1031,10 +1032,11 @@ impl LowerCtx<'_> {
                 let bb_join = self.new_block();
 
                 if left_is_option {
-                    // Option: tag 1 is Some, tag 0 is None.
+                    // Option: tag OPTION_SOME_TAG is Some, OPTION_NONE_TAG is None.
                     let tag_tmp = self.new_temp(ArType::Primitive(Primitive::Int));
                     self.emit_assign_temp(tag_tmp, AmirRvalue::Discriminant { value: left_op });
-                    let one_lit = self.intern_literal_int("1");
+                    let one_lit =
+                        self.intern_literal_int(arandu_middle::amir::OPTION_SOME_TAG.to_string());
                     let cond_tmp = self.new_temp(ArType::Primitive(Primitive::Bool));
                     self.emit_assign_temp(
                         cond_tmp,

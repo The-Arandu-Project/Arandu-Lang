@@ -148,10 +148,8 @@ pub(crate) fn synth_place(checker: &mut TypeChecker<'_>, place: &arandu_parser::
                     ArType::Array(_, inner) | ArType::Slice(inner) => {
                         current_ty_id = *inner;
                     }
-                    ArType::Named(sym_id, args)
-                        if (checker.symbols.get(*sym_id).name == "Vec"
-                            || checker.symbols.get(*sym_id).name.ends_with(".Vec"))
-                            && args.len() == 1 =>
+                    ArType::Named(_, args)
+                        if arandu_middle::types::is_vec_type(&actual_base_ty, &checker.symbols) =>
                     {
                         current_ty_id = args[0];
                     }

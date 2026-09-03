@@ -249,10 +249,8 @@ pub(crate) fn resolve_index(
 
     let elem_ty_id = match &actual_base_ty {
         ArType::Array(_, inner) | ArType::Slice(inner) => *inner,
-        ArType::Named(sym_id, args)
-            if (checker.symbols.get(*sym_id).name == "Vec"
-                || checker.symbols.get(*sym_id).name.ends_with(".Vec"))
-                && args.len() == 1 =>
+        ArType::Named(_, args)
+            if arandu_middle::types::is_vec_type(&actual_base_ty, &checker.symbols) =>
         {
             args[0]
         }

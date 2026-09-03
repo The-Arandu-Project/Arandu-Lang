@@ -85,14 +85,7 @@ impl LowerCtx<'_> {
             HirExprKind::Index { base, index } => {
                 let mut place = self.lower_expr_to_place(*base, symbols)?;
                 let base_ty = self.resolve_ty(self.hir.pool.expr(*base).ty);
-                let is_vec = match &base_ty {
-                    ArType::Named(sym_id, args) => {
-                        (symbols.get(*sym_id).name == "Vec"
-                            || symbols.get(*sym_id).name.ends_with(".Vec"))
-                            && args.len() == 1
-                    }
-                    _ => false,
-                };
+                let is_vec = arandu_middle::types::is_vec_type(&base_ty, symbols);
                 if !matches!(base_ty, ArType::Array(_, _) | ArType::Slice(_)) && !is_vec {
                     return Err(self.move_diag(
                         "can only borrow an indexed place from an array, slice, or vector",

@@ -43,11 +43,23 @@ impl LowerCtx<'_> {
     }
 
     pub(crate) fn lower_result_ok_field(&mut self, base: AmirOperand, dest: TempId) {
-        self.emit_assign_temp(dest, AmirRvalue::FieldAccess { base, field: 1 });
+        self.emit_assign_temp(
+            dest,
+            AmirRvalue::FieldAccess {
+                base,
+                field: arandu_middle::amir::ENUM_PAYLOAD_FIELD,
+            },
+        );
     }
 
     pub(crate) fn lower_result_err_field(&mut self, base: AmirOperand, dest: TempId) {
-        self.emit_assign_temp(dest, AmirRvalue::FieldAccess { base, field: 1 });
+        self.emit_assign_temp(
+            dest,
+            AmirRvalue::FieldAccess {
+                base,
+                field: arandu_middle::amir::ENUM_PAYLOAD_FIELD,
+            },
+        );
     }
 
     pub(crate) fn lower_try_result(
@@ -283,7 +295,7 @@ impl LowerCtx<'_> {
         let tag_tmp = self.new_temp(ArType::Primitive(Primitive::Int));
         self.emit_assign_temp(tag_tmp, AmirRvalue::Discriminant { value: base });
 
-        let zero_lit = self.intern_literal_int("0");
+        let zero_lit = self.intern_literal_int(arandu_middle::amir::OPTION_NONE_TAG.to_string());
         let cond_tmp = self.new_temp(ArType::Primitive(Primitive::Bool));
         self.emit_assign_temp(
             cond_tmp,
@@ -308,7 +320,7 @@ impl LowerCtx<'_> {
         self.emit_assign_temp(
             none_tmp,
             AmirRvalue::EnumConstruct {
-                variant_tag: 0,
+                variant_tag: arandu_middle::amir::OPTION_NONE_TAG,
                 payload: None,
             },
         );
