@@ -35,9 +35,9 @@ impl SourceRegistry {
             return id;
         }
         let id = self.files.len() as u32;
-        let line_index = LineIndex::new(source);
         let path_arc: Arc<str> = Arc::from(path);
         let source_arc: Arc<str> = Arc::from(source);
+        let line_index = LineIndex::from_arc(source_arc.clone());
         self.files.push(SourceFile {
             path: path_arc.clone(),
             source: source_arc,

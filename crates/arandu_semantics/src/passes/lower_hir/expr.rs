@@ -74,8 +74,6 @@ fn expr_type_for_kind(
         HirExprKind::Char(_) => TypeInterner::preinterned_primitive(Primitive::Char),
         HirExprKind::Nil => {
             if fallback == error_ty() {
-                let interner =
-                    &mut std::sync::Arc::make_mut(&mut type_check.type_info).type_interner;
                 let err_id = interner.intern(ArType::Error);
                 interner.intern(ArType::Nullable(err_id))
             } else {

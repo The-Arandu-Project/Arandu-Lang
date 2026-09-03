@@ -818,7 +818,7 @@ impl std::error::Error for Diagnostic {}
 
 impl miette::Diagnostic for Diagnostic {
     fn code<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
-        Some(Box::new(self.code.to_string()))
+        Some(Box::new(self.code.as_str()))
     }
 
     fn severity(&self) -> Option<miette::Severity> {

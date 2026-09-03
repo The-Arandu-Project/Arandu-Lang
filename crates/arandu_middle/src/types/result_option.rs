@@ -51,8 +51,25 @@ pub fn result_ok_err_id(id: TypeId, interner: &TypeInterner) -> Option<(ArType, 
 }
 
 #[must_use]
-pub fn is_result_type(ty: &ArType, interner: &TypeInterner) -> bool {
-    result_ok_err(ty, interner).is_some()
+pub fn result_ok_err_ids(ty: &ArType) -> Option<(TypeId, TypeId)> {
+    match ty {
+        ArType::Result(ok, err) => Some((*ok, *err)),
+        _ => None,
+    }
+}
+
+/// Extract ok/err TypeIds from an interned `Result<T,E>` without allocating or cloning ArType trees.
+#[must_use]
+pub fn result_ok_err_id_fast(id: TypeId, interner: &TypeInterner) -> Option<(TypeId, TypeId)> {
+    interner.with_type(id, |ty| match ty {
+        ArType::Result(ok, err) => Some((*ok, *err)),
+        _ => None,
+    })
+}
+
+#[must_use]
+pub fn is_result_type(ty: &ArType, _interner: &TypeInterner) -> bool {
+    matches!(ty, ArType::Result(_, _))
 }
 
 #[must_use]
@@ -103,7 +120,8 @@ pub fn try_ok_type(ty: &ArType, interner: &TypeInterner) -> Option<ArType> {
 
 #[must_use]
 pub fn is_tryable_type(ty: &ArType, interner: &TypeInterner) -> bool {
-    try_ok_type(ty, interner).is_some()
+    matches!(ty, ArType::Result(_, _) | ArType::Option(_))
+        || (matches!(ty, ArType::Nullable(_)) && !is_err_type(ty, interner))
 }
 
 pub(crate) fn lower_builtin_generic(

@@ -95,7 +95,7 @@ pub fn parse_token_stream(
                 imports: Vec::new(),
                 decls: Vec::new(),
                 docs: Vec::new(),
-                pool: parser.pool.clone(),
+                pool: std::mem::take(&mut parser.pool),
             }
         }
     };

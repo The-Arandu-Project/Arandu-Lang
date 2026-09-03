@@ -265,10 +265,7 @@ impl<'a> TypeChecker<'a> {
 
     #[must_use]
     pub fn result_ok_err_ids(&self, id: TypeId) -> Option<(TypeId, TypeId)> {
-        match self.type_info.type_interner.resolve(id) {
-            ArType::Result(ok, err) => Some((ok, err)),
-            _ => None,
-        }
+        types::result_ok_err_id_fast(id, &self.type_info.type_interner)
     }
 
     #[must_use]
