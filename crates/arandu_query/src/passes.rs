@@ -5,8 +5,6 @@ use arandu_resolve::ResolutionResult;
 use arandu_semantics::{amir::AmirProgram, TypeCheckResult};
 use arandu_typeck::type_checker::TargetInfo;
 use salsa::Accumulator;
-#[cfg(any(test, debug_assertions))]
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use std::sync::Arc;
 
@@ -41,13 +39,6 @@ impl std::ops::Deref for ModuleSignatures {
         &self.value
     }
 }
-
-#[cfg(any(test, debug_assertions))]
-pub static TYPE_CHECK_EXEC_COUNT: AtomicUsize = AtomicUsize::new(0);
-
-/// Counts `item_body_typeck` body executions (P1 fine-grained).
-#[cfg(any(test, debug_assertions))]
-pub static ITEM_BODY_TYPECK_EXEC_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// Explicit type-check target read from the Salsa [`crate::db::TargetConfig`]
 /// input (CLI `--layout=`, default host). Keeps typeck pure: the pointer width
@@ -460,9 +451,6 @@ pub fn item_body_typeck(
     file: SourceFile,
     item_sym: arandu_middle::SymbolId,
 ) -> HashEq<TypeCheckResult> {
-    #[cfg(any(test, debug_assertions))]
-    ITEM_BODY_TYPECK_EXEC_COUNT.fetch_add(1, Ordering::Relaxed);
-
     let body_in = item_source_input(db, file, item_sym);
     let signatures = module_signatures(db, file);
     let res = arandu_semantics::check_item_body_only(
@@ -533,9 +521,6 @@ pub fn file_typeck_view(db: &dyn ArandCompilerDb, file: SourceFile) -> HashEq<Ty
     file = ?file.file_id(db),
 ))]
 pub fn type_check(db: &dyn ArandCompilerDb, file: SourceFile) -> HashEq<TypeCheckResult> {
-    #[cfg(any(test, debug_assertions))]
-    TYPE_CHECK_EXEC_COUNT.fetch_add(1, Ordering::Relaxed);
-
     // P1: compose per-function body checks (early cutoff across funcs).
     let res = file_typeck_view(db, file);
 

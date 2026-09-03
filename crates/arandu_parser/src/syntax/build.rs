@@ -733,55 +733,11 @@ pub fn map_token_kind(kind: TokenKind) -> SyntaxKind {
         | TypeU16 | TypeU32 | TypeU64 | TypeF32 | TypeF64 | TypeBool | TypeByte | TypeChar
         | TypeStr | TypeAny | TypeErr => SyntaxKind::TYPE_IDENT,
         BoolTrue | BoolFalse | Nil => SyntaxKind::KEYWORD,
-        k if is_keyword_kind(k) => SyntaxKind::KEYWORD,
+        k if k.is_keyword() => SyntaxKind::KEYWORD,
         Error(_) => SyntaxKind::ERROR_TOKEN,
         Eof => SyntaxKind::WHITESPACE,
         _ => SyntaxKind::PUNCT,
     }
-}
-
-fn is_keyword_kind(kind: TokenKind) -> bool {
-    matches!(
-        kind,
-        TokenKind::KwIf
-            | TokenKind::KwElse
-            | TokenKind::KwFor
-            | TokenKind::KwIn
-            | TokenKind::KwWhile
-            | TokenKind::KwMatch
-            | TokenKind::KwReturn
-            | TokenKind::KwBreak
-            | TokenKind::KwContinue
-            | TokenKind::KwFunc
-            | TokenKind::KwAsync
-            | TokenKind::KwAwait
-            | TokenKind::KwStruct
-            | TokenKind::KwEnum
-            | TokenKind::KwInterface
-            | TokenKind::KwConst
-            | TokenKind::KwType
-            | TokenKind::KwModule
-            | TokenKind::KwImport
-            | TokenKind::KwFrom
-            | TokenKind::KwAs
-            | TokenKind::KwPublic
-            | TokenKind::KwExtern
-            | TokenKind::KwUnsafe
-            | TokenKind::KwWhere
-            | TokenKind::KwCatch
-            | TokenKind::KwIs
-            | TokenKind::KwSet
-            | TokenKind::KwOwn
-            | TokenKind::KwMut
-            | TokenKind::KwShared
-            | TokenKind::KwRef
-            | TokenKind::KwPtr
-            | TokenKind::KwAlloc
-            | TokenKind::KwFree
-            | TokenKind::KwDefer
-            | TokenKind::KwErrdefer
-            | TokenKind::KwLet
-    )
 }
 
 #[must_use]

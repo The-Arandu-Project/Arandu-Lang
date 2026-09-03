@@ -57,10 +57,17 @@ pub fn ar_type_is_unsigned_integer(ty: &ArType) -> bool {
 /// the full slot list for ABI purposes.
 #[must_use]
 pub fn clif_type(ty: &ArType, ptr_type: Type) -> ClifType {
+    clif_type_with_float(ty, ptr_type, F64)
+}
+
+/// Maps an Arandu [`ArType`] to a single [`ClifType`], respecting the configured `float_type`
+/// from target layout (`F32` or `F64`).
+#[must_use]
+pub fn clif_type_with_float(ty: &ArType, ptr_type: Type, float_type: Type) -> ClifType {
     match ty {
         ArType::Primitive(p) => match p {
             Primitive::Int | Primitive::Uint => ClifType::Concrete(ptr_type),
-            Primitive::Float => ClifType::Concrete(F64),
+            Primitive::Float => ClifType::Concrete(float_type),
             Primitive::I8 | Primitive::U8 | Primitive::Byte => ClifType::Concrete(I8),
             Primitive::I16 | Primitive::U16 => ClifType::Concrete(I16),
             Primitive::I32 | Primitive::U32 => ClifType::Concrete(I32),
@@ -88,7 +95,7 @@ pub fn clif_type(ty: &ArType, ptr_type: Type) -> ClifType {
         ArType::Err => ClifType::Concrete(ptr_type),
         ArType::Void | ArType::Error => ClifType::Void,
         ArType::IntLiteral => ClifType::Concrete(ptr_type),
-        ArType::FloatLiteral => ClifType::Concrete(F64),
+        ArType::FloatLiteral => ClifType::Concrete(float_type),
         ArType::Named(_, _) => {
             // TODO: Named types (structs, enums) should use a proper multi-value ABI.
             // Currently mapped to a pointer for JIT passing.
@@ -114,9 +121,16 @@ pub fn clif_type(ty: &ArType, ptr_type: Type) -> ClifType {
 /// `[ptr_type, I64]` (pointer + length), matching the `ArStr` fat-pointer layout.
 #[must_use]
 pub fn clif_types(ty: &ArType, ptr_type: Type) -> Vec<Type> {
+    clif_types_with_float(ty, ptr_type, F64)
+}
+
+/// Maps an Arandu [`ArType`] to the full list of Cranelift [`Type`]s needed
+/// to represent it in an ABI slot, respecting the target `float_type`.
+#[must_use]
+pub fn clif_types_with_float(ty: &ArType, ptr_type: Type, float_type: Type) -> Vec<Type> {
     match ty {
         ArType::Primitive(Primitive::Str) | ArType::Slice(_) => vec![ptr_type, ptr_type],
-        _ => match clif_type(ty, ptr_type) {
+        _ => match clif_type_with_float(ty, ptr_type, float_type) {
             ClifType::Concrete(t) => vec![t],
             ClifType::Void => vec![],
         },

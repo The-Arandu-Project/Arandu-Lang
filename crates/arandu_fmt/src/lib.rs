@@ -262,7 +262,31 @@ pub struct CodeAction {
     pub edits: Vec<TextEdit>,
 }
 
+/// Constructs a structured single-character insertion code action at `offset`.
+#[must_use]
+pub fn actions_for_missing_char(insert_at: u32, ch: char) -> Option<CodeAction> {
+    let (title, new_text) = match ch {
+        ';' => ("Insert `;`", ";"),
+        '{' => ("Insert `{`", " {"),
+        '}' => ("Insert `}`", "}"),
+        ')' => ("Insert `)`", ")"),
+        ']' => ("Insert `]`", "]"),
+        _ => return None,
+    };
+    Some(CodeAction {
+        title,
+        edits: vec![TextEdit {
+            start: insert_at,
+            end: insert_at,
+            new_text: new_text.into(),
+        }],
+    })
+}
+
 /// Collect applicable quick-fixes for a single diagnostic.
+///
+/// Prefer [`actions_for_missing_char`] or structured replacements from compiler diagnostics
+/// when AST/CST error details are available.
 #[must_use]
 pub fn actions_for_diagnostic(start: u32, end: u32, message: &str) -> Vec<CodeAction> {
     let mut out = Vec::new();
@@ -270,50 +294,30 @@ pub fn actions_for_diagnostic(start: u32, end: u32, message: &str) -> Vec<CodeAc
     let insert_at = start.min(end);
 
     if msg.contains("semicolon") || msg.contains("statement terminator") || msg.contains("semi") {
-        out.push(CodeAction {
-            title: "Insert `;`",
-            edits: vec![TextEdit {
-                start: insert_at,
-                end: insert_at,
-                new_text: ";".into(),
-            }],
-        });
+        if let Some(act) = actions_for_missing_char(insert_at, ';') {
+            out.push(act);
+        }
     }
     if msg.contains("expected '{'")
         || msg.contains("expected lbrace")
         || msg.contains("expected \"{\"")
     {
-        out.push(CodeAction {
-            title: "Insert `{`",
-            edits: vec![TextEdit {
-                start: insert_at,
-                end: insert_at,
-                new_text: " {".into(),
-            }],
-        });
+        if let Some(act) = actions_for_missing_char(insert_at, '{') {
+            out.push(act);
+        }
     }
     if msg.contains("expected '}'")
         || msg.contains("expected rbrace")
         || msg.contains("expected \"}\"")
     {
-        out.push(CodeAction {
-            title: "Insert `}`",
-            edits: vec![TextEdit {
-                start: insert_at,
-                end: insert_at,
-                new_text: "}".into(),
-            }],
-        });
+        if let Some(act) = actions_for_missing_char(insert_at, '}') {
+            out.push(act);
+        }
     }
     if msg.contains("expected ')'") || msg.contains("expected rparen") {
-        out.push(CodeAction {
-            title: "Insert `)`",
-            edits: vec![TextEdit {
-                start: insert_at,
-                end: insert_at,
-                new_text: ")".into(),
-            }],
-        });
+        if let Some(act) = actions_for_missing_char(insert_at, ')') {
+            out.push(act);
+        }
     }
     out
 }

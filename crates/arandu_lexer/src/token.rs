@@ -210,6 +210,54 @@ impl fmt::Display for TokenKind {
 impl TokenKind {
     pub const COUNT: usize = 133;
 
+    /// Returns `true` if this token kind represents a language keyword.
+    #[must_use]
+    pub const fn is_keyword(self) -> bool {
+        matches!(
+            self,
+            TokenKind::KwIf
+                | TokenKind::KwElse
+                | TokenKind::KwFor
+                | TokenKind::KwIn
+                | TokenKind::KwWhile
+                | TokenKind::KwMatch
+                | TokenKind::KwReturn
+                | TokenKind::KwBreak
+                | TokenKind::KwContinue
+                | TokenKind::KwFunc
+                | TokenKind::KwAsync
+                | TokenKind::KwAwait
+                | TokenKind::KwStruct
+                | TokenKind::KwEnum
+                | TokenKind::KwInterface
+                | TokenKind::KwConst
+                | TokenKind::KwType
+                | TokenKind::KwModule
+                | TokenKind::KwImport
+                | TokenKind::KwFrom
+                | TokenKind::KwAs
+                | TokenKind::KwPublic
+                | TokenKind::KwExtern
+                | TokenKind::KwUnsafe
+                | TokenKind::KwWhere
+                | TokenKind::KwCatch
+                | TokenKind::KwIs
+                | TokenKind::KwSet
+                | TokenKind::KwOwn
+                | TokenKind::KwMut
+                | TokenKind::KwShared
+                | TokenKind::KwRef
+                | TokenKind::KwSelf
+                | TokenKind::KwPtr
+                | TokenKind::KwAlloc
+                | TokenKind::KwFree
+                | TokenKind::KwDefer
+                | TokenKind::KwErrdefer
+                | TokenKind::KwLet
+                | TokenKind::KwImpl
+        )
+    }
+
     #[must_use]
     pub const fn index(&self) -> usize {
         match self {
