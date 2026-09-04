@@ -159,9 +159,8 @@ impl fmt::Display for CacheStoreError {
 impl std::error::Error for CacheStoreError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::DigestMismatch { .. } => None,
             Self::Io { source, .. } => Some(source),
-            Self::LimitExceeded(_) | Self::MalformedCache(_) => None,
+            _ => None,
         }
     }
 }

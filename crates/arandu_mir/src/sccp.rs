@@ -215,9 +215,8 @@ fn meet(a: LatticeVal, b: LatticeVal) -> LatticeVal {
     use LatticeVal::*;
     match (a, b) {
         (Undefined, x) | (x, Undefined) => x,
-        (Overdefined, _) | (_, Overdefined) => Overdefined,
         (Constant(a), Constant(b)) if a == b => Constant(a),
-        (Constant(_), Constant(_)) => Overdefined,
+        _ => Overdefined,
     }
 }
 
@@ -542,7 +541,6 @@ fn fold_unary(
             let val = const_as_i128(&v, pool)?;
             Some(AmirConstant::Pool(pool.intern_int((!val).to_string())))
         }
-        (UnaryOp::Await | UnaryOp::Ref | UnaryOp::RefMut | UnaryOp::Deref, _) => None,
         _ => None,
     }
 }

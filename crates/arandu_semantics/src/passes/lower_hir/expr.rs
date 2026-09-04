@@ -144,7 +144,7 @@ pub(crate) fn lower_expr_raw(
         }
         ExprKind::VariantSugar { name, args, .. } => {
             // T2.2: lower like Result/Option/Poll ctors from the recorded expr type.
-            let arg_ids = pool.expr_list(*args).to_vec();
+            let arg_ids = pool.expr_list(*args);
             let variant = crate::hir::ResultCtorVariant::from_name(name.as_str());
             if let Some(variant) = variant {
                 if arg_ids.len() == 1 {
@@ -205,7 +205,7 @@ pub(crate) fn lower_expr_raw(
                     path_kind
                 } else {
                     let mut lowered_args = Vec::with_capacity(arg_ids.len());
-                    for arg_id in arg_ids {
+                    for &arg_id in arg_ids {
                         lowered_args.push(lower_expr(type_check, pool, hir_pool, arg_id)?);
                     }
                     let callee_ty = type_check
@@ -267,9 +267,9 @@ pub(crate) fn lower_expr_raw(
         ExprKind::Generic { callee, args, .. } => {
             let callee_id = lower_expr(type_check, pool, hir_pool, *callee)?;
             let mut hir_args = Vec::new();
-            let arg_ids = pool.type_expr_list(*args).to_vec();
+            let arg_ids = pool.type_expr_list(*args);
             let interner = &mut std::sync::Arc::make_mut(&mut type_check.type_info).type_interner;
-            for arg_id in arg_ids {
+            for &arg_id in arg_ids {
                 let ar = crate::passes::type_checker::types::lower_type_expr(
                     arg_id,
                     pool,
@@ -342,7 +342,7 @@ pub(crate) fn lower_expr_raw(
             ..
         } => {
             let callee_id = *callee;
-            let arg_ids = pool.expr_list(*args).to_vec();
+            let arg_ids = pool.expr_list(*args);
             if let Some(callee_sym) = get_resolved_value_ref(type_check, callee_id)
                 && Some(callee_sym) == type_check.symbols.builtin_alloc
             {
@@ -425,7 +425,7 @@ pub(crate) fn lower_expr_raw(
             if let Some(base_id) = method_base {
                 hir_args.push(lower_expr(type_check, pool, hir_pool, base_id)?);
             }
-            for arg_id in arg_ids {
+            for &arg_id in arg_ids {
                 hir_args.push(lower_expr(type_check, pool, hir_pool, arg_id)?);
             }
             let hir_trailing = trailing_block
@@ -450,12 +450,12 @@ pub(crate) fn lower_expr_raw(
                     ));
                 }
             };
-            let field_ids = pool.field_init_list(*fields).to_vec();
+            let field_ids = pool.field_init_list(*fields);
             let mut hir_fields = Vec::new();
             let mut base_value_id = None;
             let mut explicit_field_names = Vec::new();
 
-            for fid in field_ids {
+            for &fid in field_ids {
                 let f = pool.field_init(fid);
                 if f.name == ".." {
                     base_value_id = Some(lower_expr(type_check, pool, hir_pool, f.value)?);
@@ -504,9 +504,9 @@ pub(crate) fn lower_expr_raw(
             }
         }
         ExprKind::Array { items, .. } => {
-            let item_ids = pool.expr_list(*items).to_vec();
+            let item_ids = pool.expr_list(*items);
             let mut hir_items = Vec::new();
-            for i in item_ids {
+            for &i in item_ids {
                 hir_items.push(lower_expr(type_check, pool, hir_pool, i)?);
             }
             let items_range = hir_pool.alloc_expr_list(&hir_items);
@@ -514,8 +514,8 @@ pub(crate) fn lower_expr_raw(
         }
         ExprKind::Lambda { params, body, .. } => {
             let mut hir_params = Vec::new();
-            let param_ids = pool.lambda_param_list(*params).to_vec();
-            for pid in param_ids {
+            let param_ids = pool.lambda_param_list(*params);
+            for &pid in param_ids {
                 let p = pool.lambda_param(pid);
                 let symbol = require_def_symbol(&type_check.resolved, p.span)?;
                 let p_ty = type_check
@@ -578,10 +578,9 @@ pub(crate) fn lower_expr_raw(
             )?,
         },
         ExprKind::Match { value, arms, .. } => {
-            let arm_ids = pool.match_arm_list(*arms).to_vec();
+            let arm_ids = pool.match_arm_list(*arms);
             let value_id = lower_expr(type_check, pool, hir_pool, *value)?;
-            let arms_range =
-                super::pattern::lower_match_arms(type_check, pool, hir_pool, &arm_ids)?;
+            let arms_range = super::pattern::lower_match_arms(type_check, pool, hir_pool, arm_ids)?;
             HirExprKind::Match {
                 value: value_id,
                 arms: arms_range,
@@ -679,10 +678,10 @@ pub(crate) fn lower_expr_raw(
         ExprKind::Bool { value } => HirExprKind::Bool(*value),
         ExprKind::Char { value } => HirExprKind::Char(value.clone()),
         ExprKind::InterpolatedString { parts } => {
-            let part_ids = pool.string_part_list(*parts).to_vec();
+            let part_ids = pool.string_part_list(*parts);
             let mut hir_parts = Vec::with_capacity(part_ids.len());
             let mut has_expr = false;
-            for part_id in part_ids {
+            for &part_id in part_ids {
                 match pool.string_part(part_id) {
                     arandu_parser::StringPart::Text { text, .. } => {
                         // AST already holds SmolStr — clone is cheap (inline/refcount).

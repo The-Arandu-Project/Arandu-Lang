@@ -658,4 +658,42 @@ mod tests {
             panic!("expected Assign");
         }
     }
+
+    #[test]
+    fn sroa_resolves_tuple_field_access() {
+        let mut f = func(
+            vec![
+                // _1 = Tuple { items: [_2, _0] }
+                AmirStmt::Assign {
+                    lhs: TempId::from_usize(1),
+                    rhs: AmirRvalue::Tuple {
+                        items: vec![
+                            AmirOperand::Copy(TempId::from_usize(2)),
+                            AmirOperand::Copy(TempId::from_usize(0)),
+                        ],
+                    },
+                },
+                // _0 = _1.1
+                AmirStmt::Assign {
+                    lhs: TempId::from_usize(0),
+                    rhs: AmirRvalue::FieldAccess {
+                        base: AmirOperand::Copy(TempId::from_usize(1)),
+                        field: 1,
+                    },
+                },
+            ],
+            vec![int_temp(0), int_temp(1), int_temp(2)],
+        );
+
+        assert!(crate::sroa::sroa(&mut f));
+        if let AmirStmt::Assign { lhs, rhs } = f.stmt(crate::amir::InstrId::from_usize(1)) {
+            assert_eq!(lhs.as_usize(), 0);
+            assert!(matches!(
+                rhs,
+                AmirRvalue::Use(AmirOperand::Copy(t)) if t.as_usize() == 0
+            ));
+        } else {
+            panic!("expected Assign");
+        }
+    }
 }

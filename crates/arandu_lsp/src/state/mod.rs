@@ -8,8 +8,6 @@ pub mod types;
 pub mod vfs_ops;
 
 pub use discovery::discover_aru_files;
-#[allow(unused_imports)]
-pub use types::PackageState;
 pub use types::{DocInfo, ServerState};
 
 #[cfg(test)]

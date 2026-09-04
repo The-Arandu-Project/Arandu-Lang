@@ -12,6 +12,8 @@
 //!     .with_hint("add an explicit type annotation")
 //! ```
 
+pub mod registry;
+
 pub use arandu_base::source_registry::SourceRegistry;
 pub use arandu_base::span::Span;
 use std::fmt;
@@ -599,9 +601,6 @@ pub struct Diagnostic {
     pub hints: Vec<Hint>,
 }
 
-pub mod registry;
-pub use arandu_base::index_vec;
-
 impl Diagnostic {
     /// Creates a user-facing error diagnostic.
     pub fn error(code: DiagCode, message: impl Into<String>, span: Span) -> Self {
@@ -859,7 +858,7 @@ impl miette::Diagnostic for Diagnostic {
             let hints_str = self
                 .hints
                 .iter()
-                .map(|h| h.message.clone())
+                .map(|h| h.message.as_str())
                 .collect::<Vec<_>>()
                 .join("\n");
             Some(Box::new(hints_str))

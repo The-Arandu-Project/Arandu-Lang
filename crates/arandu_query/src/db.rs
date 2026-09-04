@@ -528,7 +528,10 @@ impl arandu_middle::db::SourceDatabase for DatabaseImpl {
 impl ArandCompilerDb for DatabaseImpl {
     /// O(1) lookup by FileId via the reverse index.
     fn source_text(&self, file: FileId) -> Arc<str> {
-        let reg = self.files.read().unwrap_or_else(|e| e.into_inner());
+        let reg = self
+            .files
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         reg.by_id
             .get(&file)
             .map(|f| f.text(self.as_source_db()).clone())
@@ -537,7 +540,10 @@ impl ArandCompilerDb for DatabaseImpl {
 
     /// O(1) lookup by FileId via the reverse index.
     fn file_path(&self, file: FileId) -> Arc<PathBuf> {
-        let reg = self.files.read().unwrap_or_else(|e| e.into_inner());
+        let reg = self
+            .files
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         reg.by_id
             .get(&file)
             .map(|f| f.path(self.as_source_db()).clone())
