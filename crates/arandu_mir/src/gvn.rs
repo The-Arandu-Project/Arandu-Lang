@@ -5,18 +5,16 @@
 //! operations, and immutable struct field accesses.
 
 use crate::amir::{
-    AmirConstant, AmirFunc, AmirOperand, AmirRvalue, AmirStmt, BlockId, Dominators, InstrId, TempId,
+    AmirFunc, AmirOperand, AmirRvalue, AmirStmt, BlockId, Dominators, InstrId, TempId,
 };
 use crate::ops::{BinaryOp, UnaryOp};
 use rustc_hash::FxHashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum ValueExpr {
-    Constant(AmirConstant),
     Unary(UnaryOp, TempId),
     Binary(BinaryOp, TempId, TempId),
     FieldAccess(TempId, usize),
-    Use(TempId),
 }
 
 /// Applies Global Value Numbering to `func`.
@@ -66,6 +64,11 @@ pub fn gvn(func: &mut AmirFunc) -> bool {
         for stmt_id in stmt_ids {
             let stmt = func.stmt(stmt_id).clone();
             if let AmirStmt::Assign { lhs, rhs } = stmt {
+                if let AmirRvalue::Use(op) = &rhs
+                    && let Some(t) = canonicalize_temp(op, &temp_leader)
+                {
+                    temp_leader[lhs.as_usize()] = t;
+                }
                 let expr = match to_value_expr(&rhs, &temp_leader) {
                     Some(e) => e,
                     None => continue,
@@ -131,11 +134,7 @@ fn canonicalize_temp(op: &AmirOperand, temp_leader: &[TempId]) -> Option<TempId>
 
 fn to_value_expr(rvalue: &AmirRvalue, temp_leader: &[TempId]) -> Option<ValueExpr> {
     match rvalue {
-        AmirRvalue::Use(AmirOperand::Constant(c)) => Some(ValueExpr::Constant(*c)),
-        AmirRvalue::Use(op) => {
-            let t = canonicalize_temp(op, temp_leader)?;
-            Some(ValueExpr::Use(t))
-        }
+        AmirRvalue::Use(_) => None,
         AmirRvalue::Unary { op, operand } => {
             // Only pure unary operators (deref and await are impure)
             if matches!(op, UnaryOp::Neg | UnaryOp::Not) {
