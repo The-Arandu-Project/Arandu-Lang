@@ -11,6 +11,28 @@ use crate::cli_error::CliFailure;
 
 const TARGET_MARKER: &str = ".arandu-target-v1";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeProfile {
+    Dev,
+    Release,
+}
+
+impl NativeProfile {
+    fn directory(self) -> &'static str {
+        match self {
+            Self::Dev => "dev",
+            Self::Release => "release",
+        }
+    }
+
+    fn backend(self) -> &'static str {
+        match self {
+            Self::Dev => "cranelift-aot",
+            Self::Release => "cranelift-aot-speed",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ArtifactLayout {
     pub target_root: PathBuf,
@@ -70,10 +92,11 @@ pub fn publish_native_artifact(
     project_root: &Path,
     package: &str,
     version: &str,
+    profile: NativeProfile,
     object: &[u8],
     link: impl FnOnce(&Path, &Path) -> Result<&'static str, CliFailure>,
 ) -> Result<PathBuf, CliFailure> {
-    let layout = layout(project_root, "dev");
+    let layout = layout(project_root, profile.directory());
     for directory in [&layout.bin, &layout.deps, &layout.incremental] {
         fs::create_dir_all(directory)
             .map_err(|error| failure("create artifact layout", directory, error))?;
@@ -143,9 +166,9 @@ pub fn publish_native_artifact(
         schema: 2,
         package,
         version,
-        profile: "dev",
+        profile: profile.directory(),
         target: &layout.triple,
-        backend: "cranelift-aot",
+        backend: profile.backend(),
         artifact_digest: &executable_digest,
         compiler_version: crate::project::ARANDU_VERSION,
         artifact: &relative,
@@ -276,8 +299,10 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), CliFailure> {
 pub(crate) fn atomic_replace(path: &Path, bytes: &[u8]) -> Result<(), CliFailure> {
     let staging = write_staging(path, bytes)?;
     if fs::symlink_metadata(path).is_err() {
-        return fs::rename(&staging, path)
-            .map_err(|error| failure("publish build state", path, error));
+        return fs::rename(&staging, path).map_err(|error| {
+            let _ = fs::remove_file(&staging);
+            failure("publish build state", path, error)
+        });
     }
     atomic_platform_replace(path, &staging)
 }

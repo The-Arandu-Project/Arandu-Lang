@@ -6,20 +6,10 @@ use rowan::NodeOrToken;
 #[must_use]
 pub fn highlight_spans(tree: &SyntaxTree) -> Vec<(u32, u32, &'static str)> {
     let mut out = Vec::new();
-    let root = tree.root();
-    for event in root.preorder_with_tokens() {
-        let rowan::WalkEvent::Enter(el) = event else {
-            continue;
-        };
-        let NodeOrToken::Token(tok) = el else {
-            continue;
-        };
-        let Some(class) = tok.kind().highlight_class() else {
-            continue;
-        };
+    for_each_highlight_token(tree, |tok, class| {
         let r = tok.text_range();
         out.push((u32::from(r.start()), u32::from(r.end()), class));
-    }
+    });
     out
 }
 

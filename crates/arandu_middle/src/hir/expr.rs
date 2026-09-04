@@ -30,6 +30,22 @@ pub enum ResultCtorVariant {
     PollPending,
 }
 
+impl ResultCtorVariant {
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        let bare = name.rsplit('.').next().unwrap_or(name);
+        match bare {
+            "Ok" => Some(Self::Ok),
+            "Err" => Some(Self::Err),
+            "Some" => Some(Self::Some),
+            "None" => Some(Self::None),
+            "Ready" => Some(Self::PollReady),
+            "Pending" => Some(Self::PollPending),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum HirExprKind {
     Path {

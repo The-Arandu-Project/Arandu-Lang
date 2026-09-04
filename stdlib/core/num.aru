@@ -1,0 +1,132 @@
+module std.core.num
+
+import std.core.option as option
+
+func intMax(): int {
+    return ((-1 as uint) >> 1) as int
+}
+
+func intMin(): int {
+    return -intMax() - 1
+}
+
+/// Checked integer addition.
+///
+/// Returns `Option.Some(a + b)` if the operation does not overflow the target integer bounds,
+/// or `Option.None` on arithmetic overflow or underflow.
+///
+/// # Examples
+/// ```arandu
+/// num.checkedAdd(10, 20) // Some(30)
+/// num.checkedAdd(-5, 2)  // Some(-3)
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func checkedAdd(a: int, b: int): Option<int> {
+    if (b > 0 && a > intMax() - b) || (b < 0 && a < intMin() - b) {
+        return Option.None
+    }
+    return Option.Some(a + b)
+}
+
+/// Checked integer subtraction.
+///
+/// Returns `Option.Some(a - b)` if the operation does not overflow or underflow,
+/// or `Option.None` on arithmetic overflow.
+///
+/// # Examples
+/// ```arandu
+/// num.checkedSub(20, 10) // Some(10)
+/// num.checkedSub(5, 10)  // Some(-5)
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func checkedSub(a: int, b: int): Option<int> {
+    if (b > 0 && a < intMin() + b) || (b < 0 && a > intMax() + b) {
+        return Option.None
+    }
+    return Option.Some(a - b)
+}
+
+/// Checked integer multiplication.
+///
+/// Returns `Option.Some(a * b)` if the operation does not overflow,
+/// or `Option.None` on arithmetic overflow.
+///
+/// # Examples
+/// ```arandu
+/// num.checkedMul(6, 7) // Some(42)
+/// num.checkedMul(0, 100) // Some(0)
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func checkedMul(a: int, b: int): Option<int> {
+    if a == 0 || b == 0 {
+        return Option.Some(0)
+    }
+    let max = intMax()
+    let min = intMin()
+    if (a == -1 && b == min) || (b == -1 && a == min) {
+        return Option.None
+    }
+    if (a > 0 && b > 0 && a > max / b)
+        || (a > 0 && b < 0 && b < min / a)
+        || (a < 0 && b > 0 && a < min / b)
+        || (a < 0 && b < 0 && a < max / b) {
+        return Option.None
+    }
+    return Option.Some(a * b)
+}
+
+/// Saturating integer addition.
+///
+/// Computes `a + b`, clamping to `intMax()` on positive overflow or `intMin()` on negative overflow.
+///
+/// # Examples
+/// ```arandu
+/// num.saturatingAdd(10, 20) // 30
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func saturatingAdd(a: int, b: int): int {
+    match checkedAdd(a, b) {
+        Some(v) => {
+            return v
+        }
+        None => {
+            if b > 0 {
+                return intMax()
+            }
+            return intMin()
+        }
+    }
+}
+
+/// Saturating integer subtraction.
+///
+/// Computes `a - b`, clamping to `intMax()` on positive overflow or `intMin()` on negative underflow.
+///
+/// # Examples
+/// ```arandu
+/// num.saturatingSub(20, 10) // 10
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func saturatingSub(a: int, b: int): int {
+    match checkedSub(a, b) {
+        Some(v) => {
+            return v
+        }
+        None => {
+            if b > 0 {
+                return intMin()
+            }
+            return intMax()
+        }
+    }
+}

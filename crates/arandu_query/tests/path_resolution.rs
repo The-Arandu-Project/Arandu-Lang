@@ -10,13 +10,13 @@ fn test_database_module_path_resolution() {
     // A module path like ["std", "core", "math"] should resolve to std/core/math.aru or something similar.
 
     let path1 = "std/core/math.aru".to_string();
-    let file1 = db.new_file(path1.clone(), "fn add() {}".to_string());
+    let file1 = db.new_file(path1, "fn add() {}".to_string());
 
     let path2 = "app/utils.aru".to_string();
-    let file2 = db.new_file(path2.clone(), "fn log() {}".to_string());
+    let file2 = db.new_file(path2, "fn log() {}".to_string());
 
     let path3 = "app/models/user.aru".to_string();
-    let file3 = db.new_file(path3.clone(), "struct User {}".to_string());
+    let file3 = db.new_file(path3, "struct User {}".to_string());
 
     // 1. Resolve flat path
     let resolved = db.resolve_module_path("app/utils.aru");

@@ -8,8 +8,6 @@ pub mod types;
 pub mod vfs_ops;
 
 pub use discovery::discover_aru_files;
-#[allow(unused_imports)]
-pub use types::PackageState;
 pub use types::{DocInfo, ServerState};
 
 #[cfg(test)]
@@ -143,7 +141,7 @@ mod tests {
             "import editor_gold.util as util\n",
             "import std.path as path\n",
             "func main(): int {\n",
-            "    if path.is_empty(\"\") { return util.answer() }\n",
+            "    if path.isEmpty(\"\") { return util.answer() }\n",
             "    return 0\n",
             "}\n",
         );
@@ -365,7 +363,7 @@ mod tests {
                     &snap,
                     &[crate::ide::DocSnap {
                         source,
-                        path: Arc::new(path.clone()),
+                        path: Arc::new(path),
                         uri: uri.clone(),
                     }],
                     "overlay",

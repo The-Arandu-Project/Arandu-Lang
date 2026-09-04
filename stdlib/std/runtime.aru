@@ -84,30 +84,30 @@ public struct TaskHandle {
     id: int
 }
 
-public func new_sync_executor(): SyncExecutor {
+public func newSyncExecutor(): SyncExecutor {
     return SyncExecutor { flags: 0 }
 }
 
 // Low-level ptr[u8] surface
-public func block_on_i64(shared ex: SyncExecutor, state: ptr[u8]): int {
+public func blockOnI64(ex: ref SyncExecutor, state: ptr[u8]): int {
     unsafe {
         return ar_rt_block_on_i64(state)
     }
 }
 
-public func spawn_i64(shared ex: SyncExecutor, state: ptr[u8]): int {
+public func spawnI64(ex: ref SyncExecutor, state: ptr[u8]): int {
     unsafe {
         return ar_rt_spawn_i64(state)
     }
 }
 
-public func join_i64(shared ex: SyncExecutor, handle: int): int {
+public func joinI64(ex: ref SyncExecutor, handle: int): int {
     unsafe {
         return ar_rt_join_i64(handle)
     }
 }
 
-public func cancel_i64(shared ex: SyncExecutor, handle: int): void {
+public func cancelI64(ex: ref SyncExecutor, handle: int): void {
     unsafe {
         ar_rt_cancel_i64(handle)
     }
@@ -117,7 +117,7 @@ public func cancel_i64(shared ex: SyncExecutor, handle: int): void {
 // Host payload is i64 bits; `as T` is the ABI bridge for type params.
 
 /// Drive `job` to completion; returns payload as `T` (i64-sized host MVP).
-public func block_on<T>(shared ex: SyncExecutor, job: Coroutine<T>): T {
+public func blockOn<T>(ex: ref SyncExecutor, job: Coroutine<T>): T {
     unsafe {
         let v = ar_rt_block_on_i64(job as ptr[u8])
         return v as T
@@ -125,7 +125,7 @@ public func block_on<T>(shared ex: SyncExecutor, job: Coroutine<T>): T {
 }
 
 /// Spawn `job`; join with `join<T>`.
-public func spawn<T>(shared ex: SyncExecutor, job: Coroutine<T>): TaskHandle {
+public func spawn<T>(ex: ref SyncExecutor, job: Coroutine<T>): TaskHandle {
     unsafe {
         let id = ar_rt_spawn_i64(job as ptr[u8])
         return TaskHandle { id: id }
@@ -133,14 +133,14 @@ public func spawn<T>(shared ex: SyncExecutor, job: Coroutine<T>): TaskHandle {
 }
 
 /// Join handle from `spawn`; returns payload as `T`.
-public func join<T>(shared ex: SyncExecutor, handle: TaskHandle): T {
+public func join<T>(ex: ref SyncExecutor, handle: TaskHandle): T {
     unsafe {
         let v = ar_rt_join_i64(handle.id)
         return v as T
     }
 }
 
-public func cancel(shared ex: SyncExecutor, handle: TaskHandle): void {
+public func cancel(ex: ref SyncExecutor, handle: TaskHandle): void {
     unsafe {
         ar_rt_cancel_i64(handle.id)
     }
@@ -148,26 +148,26 @@ public func cancel(shared ex: SyncExecutor, handle: TaskHandle): void {
 
 // Concrete int surface (always linked; no mono required across modules).
 // Prefer these for multi-file until mono specializes imported generics into AMIR.
-public func block_on_int(shared ex: SyncExecutor, job: Coroutine<int>): int {
+public func blockOnInt(ex: ref SyncExecutor, job: Coroutine<int>): int {
     unsafe {
         return ar_rt_block_on_i64(job as ptr[u8])
     }
 }
 
-public func spawn_int(shared ex: SyncExecutor, job: Coroutine<int>): TaskHandle {
+public func spawnInt(ex: ref SyncExecutor, job: Coroutine<int>): TaskHandle {
     unsafe {
         let id = ar_rt_spawn_i64(job as ptr[u8])
         return TaskHandle { id: id }
     }
 }
 
-public func join_int(shared ex: SyncExecutor, handle: TaskHandle): int {
+public func joinInt(ex: ref SyncExecutor, handle: TaskHandle): int {
     unsafe {
         return ar_rt_join_i64(handle.id)
     }
 }
 
-public func cancel_int(shared ex: SyncExecutor, handle: TaskHandle): void {
+public func cancelInt(ex: ref SyncExecutor, handle: TaskHandle): void {
     unsafe {
         ar_rt_cancel_i64(handle.id)
     }
@@ -183,43 +183,43 @@ public struct EpollReactor {
 }
 
 /// 0 = portable, 1 = epoll, 2 = io_uring (runtime detect).
-public func reactor_backend(): int {
+public func reactorBackend(): int {
     unsafe {
         return ar_rt_reactor_backend()
     }
 }
 
-public func new_epoll_reactor(): EpollReactor {
+public func newEpollReactor(): EpollReactor {
     unsafe {
         return EpollReactor { id: ar_rt_reactor_create() }
     }
 }
 
-public func destroy_reactor(shared r: EpollReactor): void {
+public func destroyReactor(r: ref EpollReactor): void {
     unsafe {
         ar_rt_reactor_destroy(r.id)
     }
 }
 
-public func reactor_sleep_ms(shared r: EpollReactor, ms: int): int {
+public func reactorSleepMs(r: ref EpollReactor, ms: int): int {
     unsafe {
         return ar_rt_reactor_sleep_ms(r.id, ms)
     }
 }
 
-public func reactor_arm_timer_ms(shared r: EpollReactor, ms: int): int {
+public func reactorArmTimerMs(r: ref EpollReactor, ms: int): int {
     unsafe {
         return ar_rt_reactor_arm_timer_ms(r.id, ms)
     }
 }
 
-public func reactor_poll_ms(shared r: EpollReactor, timeout_ms: int): int {
+public func reactorPollMs(r: ref EpollReactor, timeoutMs: int): int {
     unsafe {
-        return ar_rt_reactor_poll_ms(r.id, timeout_ms)
+        return ar_rt_reactor_poll_ms(r.id, timeoutMs)
     }
 }
 
-public func reactor_register_socket(shared r: EpollReactor, shared s: TcpStream, events: int, shared w: Waker): int {
+public func reactorRegisterSocket(r: ref EpollReactor, s: ref TcpStream, events: int, w: ref Waker): int {
     unsafe {
         return ar_rt_reactor_register_socket(r.id, s.id, events, w.id)
     }
@@ -239,32 +239,32 @@ public struct Context {
     waker: Waker
 }
 
-public func new_waker(): Waker {
+public func newWaker(): Waker {
     unsafe {
         return Waker { id: ar_rt_waker_create() }
     }
 }
 
-public func waker_wake(shared w: Waker): void {
+public func wakerWake(w: ref Waker): void {
     unsafe {
         ar_rt_waker_wake(w.id)
     }
 }
 
 /// Wait until woken or timeout. 1 = woken, 0 = timeout, -1 = error.
-public func waker_wait(shared w: Waker, timeout_ms: int): int {
+public func wakerWait(w: ref Waker, timeoutMs: int): int {
     unsafe {
-        return ar_rt_waker_wait(w.id, timeout_ms)
+        return ar_rt_waker_wait(w.id, timeoutMs)
     }
 }
 
-public func destroy_waker(shared w: Waker): void {
+public func destroyWaker(w: ref Waker): void {
     unsafe {
         ar_rt_waker_destroy(w.id)
     }
 }
 
-public func new_context(w: Waker): Context {
+public func newContext(w: Waker): Context {
     return Context { waker: w }
 }
 
@@ -282,86 +282,86 @@ public struct TcpStream {
     id: int
 }
 
-/// Wait flags for `tcp_wait` / `tcp_wait_wake` (bit0=read, bit1=write).
-public func tcp_wait_read_flag(): int {
+/// Wait flags for `tcpWait` / `tcpWaitWake` (bit0=read, bit1=write).
+public func tcpWaitReadFlag(): int {
     return 1
 }
 
-public func tcp_wait_write_flag(): int {
+public func tcpWaitWriteFlag(): int {
     return 2
 }
 
-public func tcp_listen(port: int): TcpListener {
+public func tcpListen(port: int): TcpListener {
     unsafe {
         return TcpListener { id: ar_rt_tcp_listen(port) }
     }
 }
 
-public func tcp_accept(shared l: TcpListener): TcpStream {
+public func tcpAccept(l: ref TcpListener): TcpStream {
     unsafe {
         return TcpStream { id: ar_rt_tcp_accept(l.id) }
     }
 }
 
-public func tcp_connect(port: int): TcpStream {
+public func tcpConnect(port: int): TcpStream {
     unsafe {
         return TcpStream { id: ar_rt_tcp_connect(port) }
     }
 }
 
-public func tcp_read(shared s: TcpStream, buf: ptr[u8], len: int): int {
+public func tcpRead(s: ref TcpStream, buf: ptr[u8], len: int): int {
     unsafe {
         return ar_rt_tcp_read(s.id, buf, len)
     }
 }
 
-public func tcp_write(shared s: TcpStream, buf: ptr[u8], len: int): int {
+public func tcpWrite(s: ref TcpStream, buf: ptr[u8], len: int): int {
     unsafe {
         return ar_rt_tcp_write(s.id, buf, len)
     }
 }
 
-/// Prefer io_uring when `reactor_backend() == 2`, else blocking/host read.
-public func tcp_read_async(shared s: TcpStream, buf: ptr[u8], len: int): int {
+/// Prefer io_uring when `reactorBackend() == 2`, else blocking/host read.
+public func tcpReadAsync(s: ref TcpStream, buf: ptr[u8], len: int): int {
     unsafe {
         return ar_rt_tcp_read_async(s.id, buf, len)
     }
 }
 
-public func tcp_write_async(shared s: TcpStream, buf: ptr[u8], len: int): int {
+public func tcpWriteAsync(s: ref TcpStream, buf: ptr[u8], len: int): int {
     unsafe {
         return ar_rt_tcp_write_async(s.id, buf, len)
     }
 }
 
 /// `flag != 0` → nonblocking (WouldBlock returns -2 from read/write).
-public func tcp_set_nonblocking(shared s: TcpStream, flag: int): int {
+public func tcpSetNonblocking(s: ref TcpStream, flag: int): int {
     unsafe {
         return ar_rt_tcp_set_nonblocking(s.id, flag)
     }
 }
 
 /// Wait for readiness. Returns ready event bits, 0 timeout, -1 error.
-public func tcp_wait(shared s: TcpStream, events: int, timeout_ms: int): int {
+public func tcpWait(s: ref TcpStream, events: int, timeoutMs: int): int {
     unsafe {
-        return ar_rt_tcp_wait(s.id, events, timeout_ms)
+        return ar_rt_tcp_wait(s.id, events, timeoutMs)
     }
 }
 
 /// Wait then wake `w` if ready (async + Waker bridge).
-public func tcp_wait_wake(shared s: TcpStream, events: int, timeout_ms: int, shared w: Waker): int {
+public func tcpWaitWake(s: ref TcpStream, events: int, timeoutMs: int, w: ref Waker): int {
     unsafe {
-        return ar_rt_tcp_wait_wake(s.id, events, timeout_ms, w.id)
+        return ar_rt_tcp_wait_wake(s.id, events, timeoutMs, w.id)
     }
 }
 
-public func tcp_close_listener(shared l: TcpListener): void {
+public func tcpCloseListener(l: ref TcpListener): void {
     unsafe {
         ar_rt_tcp_close(l.id)
     }
 }
 
-public func tcp_close_stream(shared s: TcpStream): void {
+public func tcpCloseStream(s: ref TcpStream): void {
     unsafe {
         ar_rt_tcp_close(s.id)
     }
@@ -383,27 +383,23 @@ public struct WorkerHandle {
     id: int
 }
 
-public func new_supervisor(): Supervisor {
+public func newSupervisor(): Supervisor {
     unsafe {
         return Supervisor { id: ar_rt_supervisor_create() }
     }
 }
 
-public func destroy_supervisor(shared s: Supervisor): void {
+public func destroySupervisor(s: ref Supervisor): void {
     unsafe {
         ar_rt_supervisor_destroy(s.id)
     }
 }
 
-/// Spawn `path` as a worker. `max_restarts` allows automatic restart on exit.
+/// Spawn `path` as a worker. `maxRestarts` allows automatic restart on exit.
 /// Path is a fat `str` (ptr+len ABI).
-public func supervisor_spawn(shared s: Supervisor, path: str, max_restarts: int): WorkerHandle {
+public func supervisorSpawn(s: ref Supervisor, path: str, maxRestarts: int): WorkerHandle {
     unsafe {
-        // Fat str: host expects ptr + len; language str lowers to two slots.
-        // We pass via pointer helpers — host spawn takes ptr/len of path bytes.
-        // Until str field destructure exists, use path as opaque via cast of
-        // first-class str through temporary stack (compiler lowers str as ptr+len).
-        return WorkerHandle { id: ar_rt_supervisor_spawn_str(s.id, path, max_restarts) }
+        return WorkerHandle { id: ar_rt_supervisor_spawn_str(s.id, path, maxRestarts) }
     }
 }
 
@@ -412,19 +408,19 @@ extern "C" {
     func ar_rt_supervisor_spawn_str(sup: int, path: str, max_restarts: int): int
 }
 
-public func supervisor_poll(shared s: Supervisor, w: WorkerHandle): int {
+public func supervisorPoll(s: ref Supervisor, w: WorkerHandle): int {
     unsafe {
         return ar_rt_supervisor_poll(s.id, w.id)
     }
 }
 
-public func supervisor_wait(shared s: Supervisor, w: WorkerHandle): int {
+public func supervisorWait(s: ref Supervisor, w: WorkerHandle): int {
     unsafe {
         return ar_rt_supervisor_wait(s.id, w.id)
     }
 }
 
-public func supervisor_kill(shared s: Supervisor, w: WorkerHandle): int {
+public func supervisorKill(s: ref Supervisor, w: WorkerHandle): int {
     unsafe {
         return ar_rt_supervisor_kill(s.id, w.id)
     }

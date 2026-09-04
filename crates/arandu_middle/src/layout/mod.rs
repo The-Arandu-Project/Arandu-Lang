@@ -278,11 +278,7 @@ impl LayoutEngine {
     ) -> Result<TypeLayout, LayoutError> {
         Ok(match ty {
             ArType::Primitive(p) => match p {
-                Primitive::I8
-                | Primitive::U8
-                | Primitive::Byte
-                | Primitive::Bool
-                | Primitive::Char => TypeLayout {
+                Primitive::I8 | Primitive::U8 | Primitive::Byte | Primitive::Bool => TypeLayout {
                     size: 1,
                     align: 1,
                     field_offsets: Vec::new(),
@@ -293,6 +289,11 @@ impl LayoutEngine {
                     field_offsets: Vec::new(),
                 },
                 Primitive::I32 | Primitive::U32 | Primitive::F32 => TypeLayout {
+                    size: 4,
+                    align: 4,
+                    field_offsets: Vec::new(),
+                },
+                Primitive::Char => TypeLayout {
                     size: 4,
                     align: 4,
                     field_offsets: Vec::new(),

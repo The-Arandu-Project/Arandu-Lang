@@ -9,17 +9,10 @@ pub mod reporters;
 pub mod statistics;
 pub mod types;
 
-#[allow(unused_imports)]
 pub use benchmark::run_benchmarks;
-#[allow(unused_imports)]
 pub use ipc::{send_benchmark_child_event, send_child_event};
-#[allow(unused_imports)]
-pub use process::{atomic_write_file, deterministic_shuffle, install_ctrlc_handler, run_cases};
-#[allow(unused_imports)]
-pub use types::{
-    BenchmarkBaselineMode, BenchmarkRunOutcome, BenchmarkRunnerOptions, RunnerOptions,
-    TestOutputFormat,
-};
+pub use process::{install_ctrlc_handler, run_cases};
+pub use types::{BenchmarkBaselineMode, BenchmarkRunnerOptions, RunnerOptions, TestOutputFormat};
 
 #[cfg(test)]
 mod tests {

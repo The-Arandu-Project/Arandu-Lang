@@ -6,19 +6,28 @@ use std::path::{Path, PathBuf};
 
 use crate::cli_error::{CliFailure, CliResult, CliSuccess};
 use crate::pipeline::{
-    attach_stdlib, fail_operational, fail_usage, find_aru_files, finish, open_entry_file,
-    optimize_amir_or_exit, parse_and_check, pipeline_lower, print_diagnostics_and_exit,
-    print_genref_report, validate_hir_and_monomorphize,
+    attach_stdlib, ensure_host_jit_layout, fail_operational, fail_usage, find_aru_files, finish,
+    open_entry_file, optimize_amir_or_exit, parse_and_check, pipeline_lower,
+    print_diagnostics_and_exit, print_genref_report, validate_hir_and_monomorphize,
 };
 use crate::project::{self, ProjectFlags};
+use arandu_middle::layout::DataLayout;
 
-pub fn cmd_project_run(start: &Path, flags: &ProjectFlags, opt: bool, _debug: bool) -> CliResult {
+pub fn cmd_project_run(
+    start: &Path,
+    flags: &ProjectFlags,
+    opt: bool,
+    _debug: bool,
+    data_layout: DataLayout,
+) -> CliResult {
     if flags.release {
         return Err(CliFailure::usage(
-            "`run --release` (LLVM) is not implemented yet; use `run` for Cranelift JIT",
+            "`--release` is supported by `build`; `run` remains the interactive Cranelift JIT path",
         ));
     }
+    ensure_host_jit_layout(data_layout)?;
     let (mut db, rebuild_log) = arandu_query::DatabaseImpl::with_rebuild_log();
+    db.set_target_config(data_layout);
     let ctx = match project::load_project(&mut db, start, flags) {
         Ok(c) => c,
         Err(e) => {
@@ -48,7 +57,7 @@ pub fn cmd_project_run(start: &Path, flags: &ProjectFlags, opt: bool, _debug: bo
         None => &artifacts.amir,
     };
 
-    use arandu_semantics::{CodegenBackend, CompiledCode};
+    use arandu_semantics::CodegenBackend;
     let output = {
         let backend = match arandu_backend_cranelift::CraneliftBackend::try_new() {
             Ok(b) => b,
@@ -65,40 +74,56 @@ pub fn cmd_project_run(start: &Path, flags: &ProjectFlags, opt: bool, _debug: bo
         }
     };
 
-    let main_is_void = amir.funcs.iter().any(|f| {
-        let name = type_check.symbols.get(f.symbol).name.as_str();
-        name == "main"
-            && matches!(
+    execute_jit_main(&output, amir, type_check, ctx.entry_path, "run project")
+}
+
+fn execute_jit_main(
+    output: &impl arandu_semantics::CompiledCode,
+    amir: &arandu_semantics::amir::AmirProgram,
+    type_check: &arandu_semantics::TypeCheckResult,
+    context_path: PathBuf,
+    action: &'static str,
+) -> Result<CliSuccess, CliFailure> {
+    use arandu_semantics::CompiledCode;
+
+    let mut has_main = false;
+    let mut main_is_void = false;
+
+    for f in &amir.funcs {
+        if type_check.symbols.get(f.symbol).name.as_str() == "main" {
+            has_main = true;
+            main_is_void = matches!(
                 type_check.type_info.type_interner.resolve(f.return_type),
                 arandu_semantics::types::ArType::Void
-            )
-    });
-    let has_main = amir
-        .funcs
-        .iter()
-        .any(|f| type_check.symbols.get(f.symbol).name.as_str() == "main");
+            );
+            break;
+        }
+    }
+
     if !has_main {
         return Err(CliFailure::operational(
-            "run project",
-            Some(ctx.entry_path),
+            action,
+            Some(context_path),
             "'main' function not found in compiled program",
         ));
     }
 
     unsafe {
         if main_is_void {
-            if let Some(main_fn) = CompiledCode::get_fn::<unsafe fn()>(&output, "main") {
+            if let Some(main_fn) = CompiledCode::get_fn::<unsafe fn()>(output, "main") {
                 main_fn();
                 return Ok(CliSuccess::Done);
             }
-        } else if let Some(main_fn) = CompiledCode::get_fn::<unsafe fn() -> i32>(&output, "main") {
-            return Ok(CliSuccess::ProgramExit(main_fn()));
+        } else if let Some(main_fn) = CompiledCode::get_fn::<unsafe fn() -> i32>(output, "main") {
+            let code = main_fn();
+            return Ok(CliSuccess::ProgramExit(code));
         }
     }
+
     Err(CliFailure::operational(
-        "run project",
-        Some(ctx.entry_path),
-        "compiled entry point could not be loaded",
+        action,
+        Some(context_path),
+        "compiled module does not export a callable 'main' function",
     ))
 }
 
@@ -177,6 +202,7 @@ pub fn cmd_single_file_dispatch(
         (arandu_query::db::DatabaseImpl::new(), None)
     };
     attach_stdlib(&mut db, project_flags.stdlib_path.clone());
+    db.set_target_config(data_layout);
     let mut registry = arandu_base::SourceRegistry::default();
 
     let mut source_files = Vec::new();
@@ -291,6 +317,9 @@ pub fn cmd_single_file_dispatch(
                 }
             }
             "run" => {
+                if let Err(failure) = ensure_host_jit_layout(data_layout) {
+                    finish(Err(failure));
+                }
                 let artifacts = pipeline_lower(&db, source_file, &filepath);
                 if genref_report {
                     print_genref_report(&filepath, &artifacts);
@@ -317,7 +346,7 @@ pub fn cmd_single_file_dispatch(
                     None => &artifacts.amir,
                 };
 
-                use arandu_semantics::{CodegenBackend, CompiledCode};
+                use arandu_semantics::CodegenBackend;
                 let output = {
                     let backend = {
                         arandu_base::time_pass!("codegen-init");
@@ -341,47 +370,14 @@ pub fn cmd_single_file_dispatch(
                 };
                 tracing::info!("Machine code generated (Cranelift JIT backend)");
 
-                let main_is_void = amir.funcs.iter().any(|f| {
-                    let name = type_check.symbols.get(f.symbol).name.as_str();
-                    if name != "main" {
-                        return false;
-                    }
-                    matches!(
-                        type_check.type_info.type_interner.resolve(f.return_type),
-                        arandu_semantics::types::ArType::Void
-                    )
-                });
-                let has_main = amir
-                    .funcs
-                    .iter()
-                    .any(|f| type_check.symbols.get(f.symbol).name.as_str() == "main");
-                if !has_main {
-                    fail_operational(
-                        "run program",
-                        Some(PathBuf::from(&filepath)),
-                        "'main' function not found in compiled program",
-                    );
-                }
-
-                unsafe {
-                    if main_is_void {
-                        if let Some(main_fn) = CompiledCode::get_fn::<unsafe fn()>(&output, "main")
-                        {
-                            main_fn();
-                            finish(Ok(CliSuccess::Done));
-                        }
-                    } else if let Some(main_fn) =
-                        CompiledCode::get_fn::<unsafe fn() -> i32>(&output, "main")
-                    {
-                        let code = main_fn();
-                        finish(Ok(CliSuccess::ProgramExit(code)));
-                    }
-                    fail_operational(
-                        "run program",
-                        Some(PathBuf::from(&filepath)),
-                        "compiled module does not export a callable 'main' function",
-                    );
-                }
+                let result = execute_jit_main(
+                    &output,
+                    amir,
+                    type_check,
+                    PathBuf::from(&filepath),
+                    "run program",
+                );
+                finish(result);
             }
             "emit-c" => {
                 let artifacts = pipeline_lower(&db, source_file, &filepath);
@@ -476,8 +472,10 @@ pub fn cmd_project_check(
     flags: &ProjectFlags,
     _opt: bool,
     _debug: bool,
+    data_layout: DataLayout,
 ) -> CliResult {
     let (mut db, rebuild_log) = arandu_query::DatabaseImpl::with_rebuild_log();
+    db.set_target_config(data_layout);
     let ctx = match project::load_project(&mut db, start, flags) {
         Ok(c) => c,
         Err(e) => {

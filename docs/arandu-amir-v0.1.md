@@ -172,7 +172,7 @@ Todo pass que lê ou escreve AMIR deve preservar estas regras. O validador `vali
 |----|------------|
 | OSSA-1 | `move dst ← src` invalida `src` para usos posteriores no mesmo caminho (checado por move checker). |
 | OSSA-2 | `destroy` só em valores **own** no fim de escopo ou após move não propagado. |
-| OSSA-3 | `copy` só em tipos **Copy** (primitivos, `shared` ref — lista no plano estratégico). |
+| OSSA-3 | `copy` só em tipos **Copy** (primitivos, `ref` compartilhado — lista no plano estratégico). |
 | OSSA-4 | Instruções OSSA não aparecem no AHIR — só no AMIR. |
 
 ### Tipagem

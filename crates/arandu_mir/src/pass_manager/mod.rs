@@ -301,12 +301,18 @@ mod tests {
     #[test]
     fn pipelines_share_core_simplification_above_o0() {
         assert!(PassManager::for_level(OptLevel::O0).pass_names().is_empty());
-        for level in [OptLevel::O1, OptLevel::O2, OptLevel::Os] {
-            assert_eq!(
-                PassManager::for_level(level).pass_names(),
-                vec!["sccp", "mark_sweep_dce", "simplify_cfg"]
-            );
-        }
+        assert_eq!(
+            PassManager::for_level(OptLevel::O1).pass_names(),
+            vec!["sccp", "mark_sweep_dce", "simplify_cfg"]
+        );
+        assert_eq!(
+            PassManager::for_level(OptLevel::Os).pass_names(),
+            vec!["sccp", "mark_sweep_dce", "simplify_cfg"]
+        );
+        assert_eq!(
+            PassManager::for_level(OptLevel::O2).pass_names(),
+            vec!["sroa", "gvn", "sccp", "mark_sweep_dce", "simplify_cfg"]
+        );
     }
 
     /// Regression (roadmap 1.3): the O1 pipeline must converge on pass

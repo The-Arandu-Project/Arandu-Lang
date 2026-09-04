@@ -95,7 +95,7 @@ pub fn parse_token_stream(
                 imports: Vec::new(),
                 decls: Vec::new(),
                 docs: Vec::new(),
-                pool: parser.pool.clone(),
+                pool: std::mem::take(&mut parser.pool),
             }
         }
     };
@@ -261,7 +261,7 @@ impl<'a> Parser<'a> {
             if self.at_kind_name("EOF") {
                 break;
             }
-            if self.at_kind_name("KW_IMPORT") || self.at_kind_name("KW_FROM") {
+            if self.at_kind_name("KW_IMPORT") || self.at_soft_keyword("from") {
                 self.start_node(SyntaxKind::IMPORT_ITEM);
                 match self.parse_import() {
                     Ok(import) => {
@@ -276,10 +276,12 @@ impl<'a> Parser<'a> {
                 }
                 continue;
             }
-            match self.parse_top_level_decl() {
-                Ok(decl) => {
-                    let decl_id = self.pool.alloc_decl(decl);
-                    decls.push(decl_id);
+            match self.parse_top_level_decls() {
+                Ok(parsed_decls) => {
+                    for decl in parsed_decls {
+                        let decl_id = self.pool.alloc_decl(decl);
+                        decls.push(decl_id);
+                    }
                 }
                 Err(err) => {
                     self.report_error(err);
@@ -410,6 +412,11 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Ok(name)
             }
+            kind if is_contextual_module_segment(kind) => {
+                let name = SmolStr::new(self.current_text());
+                self.advance();
+                Ok(name)
+            }
             _ => Err(ParseError::expected(
                 ParseErrorCode::ExpectedToken,
                 "expected identifier",
@@ -497,6 +504,12 @@ impl<'a> Parser<'a> {
 
     pub(super) fn at_kind_name(&self, name: &str) -> bool {
         self.current().kind.name() == name
+    }
+
+    /// Soft keywords lex as plain identifiers but keep a keyword meaning in
+    /// specific positions (e.g. `from` inside import syntax).
+    pub(super) fn at_soft_keyword(&self, word: &str) -> bool {
+        self.current().kind == TokenKind::IdentValue && self.token_text(self.current()) == word
     }
 
     pub(super) fn current(&self) -> &Token {
@@ -676,8 +689,15 @@ static TOKEN_INFO_TABLE: [TokenInfo; TokenKind::COUNT] = {
             TokenKind::TypeErr => Some("Err"),
             _ => None,
         };
-        let is_type =
-            prim.is_some() || matches!(kind, TokenKind::IdentType | TokenKind::IdentValue);
+        let is_type = prim.is_some()
+            || matches!(
+                kind,
+                TokenKind::IdentType
+                    | TokenKind::IdentValue
+                    | TokenKind::KwOwn
+                    | TokenKind::KwRef
+                    | TokenKind::KwMut
+            );
         let is_contextual = matches!(
             kind,
             TokenKind::IdentType
@@ -712,6 +732,7 @@ static TOKEN_INFO_TABLE: [TokenInfo; TokenKind::COUNT] = {
                 | TokenKind::KwOwn
                 | TokenKind::KwMut
                 | TokenKind::KwShared
+                | TokenKind::KwRef
                 | TokenKind::KwSelf
                 | TokenKind::KwPtr
                 | TokenKind::KwDefer
@@ -795,6 +816,10 @@ pub(super) fn merge_text_parts(parts: Vec<StringPart>) -> Vec<StringPart> {
 
 pub(super) fn is_contextual_module_segment(kind: &TokenKind) -> bool {
     TOKEN_INFO_TABLE[kind.index()].is_contextual_module_segment
+}
+
+pub(crate) fn is_primitive_type_token(kind: &TokenKind) -> bool {
+    TOKEN_INFO_TABLE[kind.index()].primitive_type_name.is_some()
 }
 
 pub(super) fn span_between(start: Span, end: Span) -> Span {

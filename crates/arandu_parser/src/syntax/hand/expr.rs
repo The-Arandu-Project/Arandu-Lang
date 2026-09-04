@@ -175,6 +175,34 @@ fn parse_unary_primary_post(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>) -> Opti
                     .alloc_expr(ExprKind::Unary { op, expr }, ctx.span(start, end)),
             )
         }
+        // Canonical `ref expr` / `mut ref expr` safe borrows.
+        TokenKind::KwRef => {
+            let start = t.start;
+            cur.bump();
+            let expr = try_hand_lower_expr(ctx, cur, 140)?;
+            let end = ctx.pool.expr_span(expr).end;
+            Some(ctx.pool.alloc_expr(
+                ExprKind::Unary {
+                    op: UnaryOp::Ref,
+                    expr,
+                },
+                ctx.span(start, end),
+            ))
+        }
+        TokenKind::KwMut if cur.peek_at(1).map(|token| token.kind) == Some(TokenKind::KwRef) => {
+            let start = t.start;
+            cur.bump();
+            cur.bump();
+            let expr = try_hand_lower_expr(ctx, cur, 140)?;
+            let end = ctx.pool.expr_span(expr).end;
+            Some(ctx.pool.alloc_expr(
+                ExprKind::Unary {
+                    op: UnaryOp::RefMut,
+                    expr,
+                },
+                ctx.span(start, end),
+            ))
+        }
         // `*expr` — deref (F2.0). Unary binds tighter than binary `*`/`+` (bp ≤ 130).
         TokenKind::Star => {
             let start = t.start;
@@ -452,6 +480,21 @@ fn try_struct_lit_from_type_path(
     let mut fields = Vec::new();
     if cur.peek_kind() != Some(TokenKind::RBrace) {
         loop {
+            if cur.peek_kind() == Some(TokenKind::RangeExclusive) {
+                let dot_tok = cur.expect(TokenKind::RangeExclusive)?;
+                let value = try_hand_lower_expr(ctx, cur, 0)?;
+                let fend = ctx.pool.expr_span(value).end;
+                let init_id = ctx.pool.alloc_field_init(FieldInit {
+                    span: ctx.span(dot_tok.start, fend),
+                    name: SmolStr::new(".."),
+                    value,
+                });
+                fields.push(init_id);
+                if cur.eat(TokenKind::Comma) {
+                    // optional trailing comma
+                }
+                break;
+            }
             let name_tok = cur.peek()?;
             if !matches!(name_tok.kind, TokenKind::IdentValue | TokenKind::IdentType) {
                 return None;
@@ -459,8 +502,17 @@ fn try_struct_lit_from_type_path(
             let fname = SmolStr::new(ctx.text(name_tok)?);
             let fstart = name_tok.start;
             cur.bump();
-            cur.expect(TokenKind::Colon)?;
-            let value = try_hand_lower_expr(ctx, cur, 0)?;
+            let value = if cur.eat(TokenKind::Colon) {
+                try_hand_lower_expr(ctx, cur, 0)?
+            } else {
+                let fspan = ctx.span(fstart, name_tok.start + name_tok.len);
+                ctx.pool.alloc_expr(
+                    ExprKind::Path {
+                        path: smallvec::smallvec![fname.clone()],
+                    },
+                    fspan,
+                )
+            };
             let fend = ctx.pool.expr_span(value).end;
             let init_id = ctx.pool.alloc_field_init(FieldInit {
                 span: ctx.span(fstart, fend),
@@ -561,6 +613,14 @@ fn parse_primary(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>) -> Option<ExprId> 
             ))
         }
         TokenKind::IdentValue => {
+            // `mod.Type.method` pattern: identical check to RD parse_prefix
+            if cur.peek_at(1).is_some_and(|t| t.kind == TokenKind::Dot)
+                && cur
+                    .peek_at(2)
+                    .is_some_and(|t| t.kind == TokenKind::IdentType)
+            {
+                return parse_type_led(ctx, cur, start);
+            }
             let text = ctx.text(t)?;
             cur.bump();
             Some(ctx.pool.alloc_expr(
@@ -712,11 +772,17 @@ fn parse_type_led(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>, start: u32) -> Op
         ));
     }
     // Type.member
-    if let TypeExpr::Named { name, args, .. } = ctx.pool.type_expr(ty)
-        && args.is_empty()
+    let named_info = match ctx.pool.type_expr(ty) {
+        TypeExpr::Named { name, args, .. } if args.is_empty() => Some(name.clone()),
+        TypeExpr::Primitive { span, name } => Some(TypeName {
+            span: *span,
+            path: smallvec::smallvec![name.clone()],
+        }),
+        _ => None,
+    };
+    if let Some(type_name) = named_info
         && cur.eat(TokenKind::Dot)
     {
-        let type_name = name.clone();
         let mem = cur.peek()?;
         if !matches!(mem.kind, TokenKind::IdentValue | TokenKind::IdentType) {
             return None;

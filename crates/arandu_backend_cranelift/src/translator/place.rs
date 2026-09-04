@@ -1,5 +1,5 @@
 use arandu_semantics::amir::{AmirPlace, AmirProjection};
-use arandu_semantics::passes::type_checker::types::ArType;
+use arandu_semantics::passes::type_checker::types::{ArType, is_vec_type};
 use cranelift_codegen::ir::{InstBuilder, Value};
 
 use super::FunctionTranslator;
@@ -64,6 +64,14 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 }
                 AmirProjection::Index(op) => {
                     let idx_val = self.translate_operand(op, Some(self.ptr_type));
+                    if matches!(current_ty, ArType::Slice(_)) {
+                        ptr_val = self.builder.ins().load(
+                            self.ptr_type,
+                            cranelift_codegen::ir::MemFlagsData::new(),
+                            ptr_val,
+                            0,
+                        );
+                    }
                     let inner_ty_id = match &current_ty {
                         ArType::Ptr(inner) | ArType::Slice(inner) | ArType::Array(_, inner) => {
                             *inner
@@ -77,7 +85,7 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                             return (self.poison_i32(), 0);
                         }
                     };
-                    let inner_ty = self.type_info.resolve_type_id(inner_ty_id).clone();
+                    let inner_ty = self.type_info.resolve_type_id(inner_ty_id);
                     current_ty = inner_ty;
 
                     let layout = self.checked_layout(&current_ty);
@@ -115,10 +123,20 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 ) {
                     current_ty = unwrap_ptr_like(&current_ty, self);
                 }
+                let is_vec = is_vec_type(&current_ty, self.symbol_table);
                 let idx_val = self.translate_operand(op, Some(self.ptr_type));
+                if matches!(current_ty, ArType::Slice(_)) || is_vec {
+                    ptr_val = self.builder.ins().load(
+                        self.ptr_type,
+                        cranelift_codegen::ir::MemFlagsData::new(),
+                        ptr_val,
+                        0,
+                    );
+                }
                 let inner_ty_id = match &current_ty {
                     ArType::Ptr(inner) | ArType::Slice(inner) | ArType::Array(_, inner) => *inner,
                     ArType::Ref(inner) | ArType::RefMut(inner) => *inner,
+                    ArType::Named(_, args) if is_vec => args[0],
                     _ => {
                         self.record_ice(
                             "indexing non-indexable type in codegen",
@@ -127,7 +145,7 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                         return (self.poison_i32(), 0);
                     }
                 };
-                let inner_ty = self.type_info.resolve_type_id(inner_ty_id).clone();
+                let inner_ty = self.type_info.resolve_type_id(inner_ty_id);
                 current_ty = inner_ty;
 
                 let layout = self.checked_layout(&current_ty);
@@ -185,7 +203,7 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
             other => other.clone(),
         };
 
-        let field_name = self.symbol_table.get(symbol_id).name.clone();
+        let field_name = &self.symbol_table.get(symbol_id).name;
         let field_idx = self
             .type_info
             .struct_field_indices
@@ -203,13 +221,12 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
         let offset = layout.field_offsets.get(field_idx).copied().unwrap_or(0) as i32;
 
         // Update current_ty to the field type for nested projections.
-        if let ArType::Named(sid, _) = &struct_ty {
-            if let Some(fields) = self.type_info.struct_fields.get(sid) {
-                if let Some(&tid) = fields.get(field_name.as_str()) {
-                    *current_ty = self.type_info.resolve_type_id(tid);
-                    return offset;
-                }
-            }
+        if let ArType::Named(sid, _) = &struct_ty
+            && let Some(fields) = self.type_info.struct_fields.get(sid)
+            && let Some(&tid) = fields.get(field_name.as_str())
+        {
+            *current_ty = self.type_info.resolve_type_id(tid);
+            return offset;
         }
         *current_ty = ArType::Error;
         offset

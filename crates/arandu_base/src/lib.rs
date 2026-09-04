@@ -2,7 +2,6 @@ pub mod bitset;
 pub mod index_vec;
 pub mod line_index;
 pub mod perf;
-pub mod scratch;
 pub mod source_registry;
 pub mod span;
 pub mod tracing_bridge;
@@ -15,7 +14,6 @@ pub use perf::{
     EXPLAIN_REBUILD, NO_GENERATIONAL_FALLBACK, any_debug_flag_active, build_tracing_config,
     init_z_flags, print_perf_summary, track_alloc, track_query_hit, track_query_miss,
 };
-pub use scratch::with_scratch;
 pub use source_registry::{SourceFile, SourceRegistry};
 pub use span::Span;
-pub use tracing_bridge::finalize_self_profile;
+pub use tracing_bridge::{TracingConfig, finalize_self_profile, init_tracing};

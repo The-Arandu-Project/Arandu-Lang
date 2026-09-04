@@ -8,10 +8,33 @@
 use crate::jit::{AranduModule, codegen_ice};
 use arandu_semantics::amir::AmirProgram;
 use arandu_semantics::{Diagnostic, SymbolTable, TypeInfo};
+use std::str::FromStr;
+
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_module::default_libcall_names;
 use cranelift_object::{ObjectBuilder, ObjectModule};
-use target_lexicon::Triple;
+use target_lexicon::{OperatingSystem, Triple};
+
+/// AOT target triple for a data-layout pointer width (in bytes).
+///
+/// A width matching the host maps to [`Triple::host`]. Width `4` maps to the
+/// host OS's 32-bit x86 triple (i686). Returns `None` for widths that have no
+/// AOT encoding on this host OS (32-bit on macOS, or an exotic width).
+#[must_use]
+pub fn aot_triple_for_pointer_width(pointer_width: u64) -> Option<Triple> {
+    if pointer_width == std::mem::size_of::<*const ()>() as u64 {
+        return Some(Triple::host());
+    }
+    if pointer_width != 4 {
+        return None;
+    }
+    match Triple::host().operating_system {
+        OperatingSystem::Windows => Triple::from_str("i686-pc-windows-msvc").ok(),
+        OperatingSystem::Linux => Triple::from_str("i686-unknown-linux-gnu").ok(),
+        // macOS (and other hosts) dropped 32-bit ABIs; no cross target here.
+        _ => None,
+    }
+}
 
 /// A relocatable object emitted for a specific target triple.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,6 +66,25 @@ pub struct CraneliftObjectBackend {
     compiler: AranduModule<ObjectModule>,
 }
 
+/// Code-generation policy for native object emission.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AotOptimization {
+    /// Minimize compiler latency for the edit/build cycle.
+    #[default]
+    Baseline,
+    /// Ask Cranelift to optimize generated machine code for execution speed.
+    Speed,
+}
+
+impl AotOptimization {
+    fn cranelift_value(self) -> &'static str {
+        match self {
+            Self::Baseline => "none",
+            Self::Speed => "speed",
+        }
+    }
+}
+
 impl CraneliftObjectBackend {
     /// Creates a baseline backend for the current Rust host target.
     ///
@@ -53,11 +95,24 @@ impl CraneliftObjectBackend {
         Self::for_target(Triple::host())
     }
 
+    /// Creates a speed-optimized backend for release builds on the host.
+    pub fn host_release() -> Result<Self, Diagnostic> {
+        Self::for_target_with_optimization(Triple::host(), AotOptimization::Speed)
+    }
+
     /// Creates a baseline backend for `target`.
     ///
     /// A target is accepted only when this Cranelift build contains its ISA.
     /// Linking and target runtime selection are intentionally later stages.
     pub fn for_target(target: Triple) -> Result<Self, Diagnostic> {
+        Self::for_target_with_optimization(target, AotOptimization::Baseline)
+    }
+
+    /// Creates a backend for `target` using an explicit code-generation policy.
+    pub fn for_target_with_optimization(
+        target: Triple,
+        optimization: AotOptimization,
+    ) -> Result<Self, Diagnostic> {
         let mut flag_builder = settings::builder();
         for (key, value) in [
             ("enable_verifier", "true"),
@@ -70,7 +125,7 @@ impl CraneliftObjectBackend {
                     "true"
                 },
             ),
-            ("opt_level", "none"),
+            ("opt_level", optimization.cranelift_value()),
             ("preserve_frame_pointers", "true"),
         ] {
             flag_builder.set(key, value).map_err(|err| {

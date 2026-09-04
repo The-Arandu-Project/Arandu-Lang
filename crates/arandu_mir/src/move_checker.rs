@@ -5,8 +5,6 @@
 //! base local and moves are recovered from `Load(place)` followed by consuming
 //! `Move(temp)` operands.
 
-#![allow(clippy::collapsible_if)]
-
 use crate::amir::{
     AmirFunc, AmirOperand, AmirPlace, AmirRvalue, AmirStmt, AmirTerminator, BlockId, LocalId,
     TempId, for_each_rvalue_operand, for_each_rvalue_place,
@@ -211,7 +209,8 @@ fn compute_move_in<'bump>(
     }
 
     let mut iterations = 0;
-    let sanity_limit = num_blocks * num_locals * 2 + 1000;
+    let sanity_limit =
+        num_blocks * num_locals * 2 + crate::analysis_limits::DATAFLOW_FIXPOINT_HEADROOM;
 
     while let Some(bid) = worklist.pop_front() {
         iterations += 1;
@@ -278,11 +277,11 @@ fn temp_origins<'bump>(
                         }
                         _ => {}
                     }
-                    if let Some(loc) = found_origin {
-                        if origins[lhs.as_usize()].is_none() {
-                            origins[lhs.as_usize()] = Some(loc);
-                            changed = true;
-                        }
+                    if let Some(loc) = found_origin
+                        && origins[lhs.as_usize()].is_none()
+                    {
+                        origins[lhs.as_usize()] = Some(loc);
+                        changed = true;
                     }
                 }
             }
@@ -338,12 +337,33 @@ fn apply_block(
             ..
         } => {
             check_operand_read(condition, func, temp_origins, state, &mut diagnostics);
+            let mut true_state = state.clone();
+            let mut false_state = state.clone();
+
             for arg in true_args {
-                consume_operand(arg, func, temp_origins, state, &mut diagnostics, false);
+                consume_operand(
+                    arg,
+                    func,
+                    temp_origins,
+                    &mut true_state,
+                    &mut diagnostics,
+                    false,
+                );
             }
             for arg in false_args {
-                consume_operand(arg, func, temp_origins, state, &mut diagnostics, false);
+                consume_operand(
+                    arg,
+                    func,
+                    temp_origins,
+                    &mut false_state,
+                    &mut diagnostics,
+                    false,
+                );
             }
+            *state = MoveState::join_predecessors(
+                [&true_state, &false_state].into_iter(),
+                func.locals.len(),
+            );
         }
         AmirTerminator::SwitchInt {
             discriminant,
@@ -352,14 +372,36 @@ fn apply_block(
             ..
         } => {
             check_operand_read(discriminant, func, temp_origins, state, &mut diagnostics);
+            let mut arm_states = Vec::with_capacity(targets.len() + 1);
+
             for (_, _, args) in targets {
+                let mut arm_state = state.clone();
                 for arg in args {
-                    consume_operand(arg, func, temp_origins, state, &mut diagnostics, false);
+                    consume_operand(
+                        arg,
+                        func,
+                        temp_origins,
+                        &mut arm_state,
+                        &mut diagnostics,
+                        false,
+                    );
                 }
+                arm_states.push(arm_state);
             }
+            let mut otherwise_state = state.clone();
             for arg in &otherwise.1 {
-                consume_operand(arg, func, temp_origins, state, &mut diagnostics, false);
+                consume_operand(
+                    arg,
+                    func,
+                    temp_origins,
+                    &mut otherwise_state,
+                    &mut diagnostics,
+                    false,
+                );
             }
+            arm_states.push(otherwise_state);
+
+            *state = MoveState::join_predecessors(arm_states.iter(), func.locals.len());
         }
         AmirTerminator::Goto { args, .. } => {
             for arg in args {
@@ -568,10 +610,10 @@ fn local_diag_span(local: LocalId, func: &AmirFunc, symbols: &SymbolTable) -> Sp
     let Some(l) = func.locals.get(local.as_usize()) else {
         return Span::new(0, 0, 0);
     };
-    if let Some(u) = l.use_span {
-        if u.start != u.end {
-            return u;
-        }
+    if let Some(u) = l.use_span
+        && u.start != u.end
+    {
+        return u;
     }
     if l.span.start != l.span.end {
         return l.span;

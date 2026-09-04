@@ -5,7 +5,6 @@ use crate::amir::{
 };
 use crate::diagnostics::Diagnostic;
 use crate::hir::HirBlock;
-use crate::literal_pool::AmirLiteralEntry;
 use crate::passes::type_checker::types::{ArType, Primitive};
 use crate::{SymbolId, SymbolTable};
 use arandu_lexer::Span;
@@ -17,11 +16,6 @@ impl LowerCtx<'_> {
 
     pub(crate) fn next_temp_id(&self) -> TempId {
         TempId::from_usize(self.temps.len())
-    }
-
-    #[allow(dead_code)] // general entry point; call sites prefer typed intern_literal_* helpers
-    pub(crate) fn intern_literal(&mut self, entry: AmirLiteralEntry) -> AmirConstant {
-        AmirConstant::Pool(self.literal_pool.intern(entry))
     }
 
     #[inline]

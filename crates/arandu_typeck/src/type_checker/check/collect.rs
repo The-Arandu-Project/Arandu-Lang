@@ -5,9 +5,9 @@ use crate::type_checker::types::ArType;
 
 /// Wrap a receiver's bare type with the ownership qualifier.
 ///
-/// - `shared self: T` → `&T`
-/// - `mut self: T` → `&mut T`
-/// - `own self: T` / bare → `T`
+/// Legacy receiver prefixes are lowered to the canonical `ref T` / `mut ref T`
+/// types. Canonical type-qualified parameters already arrive wrapped and pass
+/// through unchanged.
 #[inline]
 pub(crate) fn apply_receiver_ownership(
     checker: &mut TypeChecker<'_>,
@@ -266,10 +266,12 @@ pub(crate) fn collect_signature_types(checker: &mut TypeChecker<'_>, program: &P
                         && first_param.is_receiver
                         && let Some(first_ty_id) = param_types.first_mut()
                     {
-                        // Peel ownership for receiver generic expand, then re-wrap.
-                        let bare_id = match checker.resolve(*first_ty_id) {
-                            ArType::Ref(inner) | ArType::RefMut(inner) => inner,
-                            _ => *first_ty_id,
+                        // Peel the receiver for generic expansion, then restore
+                        // either the canonical type wrapper or a legacy prefix.
+                        let (bare_id, effective_ownership) = match checker.resolve(*first_ty_id) {
+                            ArType::Ref(inner) => (inner, Some(Ownership::Shared)),
+                            ArType::RefMut(inner) => (inner, Some(Ownership::Mut)),
+                            _ => (*first_ty_id, first_param.ownership),
                         };
                         let lowered_first_ty = checker.resolve(bare_id);
                         if let ArType::Named(struct_id, ref args) = lowered_first_ty
@@ -286,7 +288,7 @@ pub(crate) fn collect_signature_types(checker: &mut TypeChecker<'_>, program: &P
                             let new_first_ty = ArType::Named(struct_id, new_args);
                             let bare_inst = checker.intern(new_first_ty);
                             *first_ty_id =
-                                apply_receiver_ownership(checker, bare_inst, first_param.ownership);
+                                apply_receiver_ownership(checker, bare_inst, effective_ownership);
                             struct_params_for_mono = Some(struct_params);
                         }
                     }
@@ -310,9 +312,61 @@ pub(crate) fn collect_signature_types(checker: &mut TypeChecker<'_>, program: &P
                             .insert(symbol_id, std::sync::Arc::new(all_params));
                     }
                     let ret_id = checker.intern(ret_ty);
+                    let return_kind = match checker.resolve(ret_id) {
+                        ArType::Ref(_) => Some(arandu_middle::types::BorrowKind::Shared),
+                        ArType::RefMut(_) => Some(arandu_middle::types::BorrowKind::Exclusive),
+                        _ => None,
+                    };
+                    if let Some(kind) = return_kind {
+                        let candidates = param_types
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, parameter)| {
+                                matches!(
+                                    (kind, checker.resolve(**parameter)),
+                                    (
+                                        arandu_middle::types::BorrowKind::Shared,
+                                        ArType::Ref(_) | ArType::RefMut(_),
+                                    ) | (
+                                        arandu_middle::types::BorrowKind::Exclusive,
+                                        ArType::RefMut(_),
+                                    )
+                                )
+                            })
+                            .map(|(index, _)| index)
+                            .collect::<Vec<_>>();
+                        if let [parameter_index] = candidates.as_slice()
+                            && let Ok(parameter_index) = u32::try_from(*parameter_index)
+                        {
+                            checker.type_info.return_borrow_summaries.insert(
+                                symbol_id,
+                                arandu_middle::types::ReturnBorrowSummary::direct(
+                                    parameter_index,
+                                    kind,
+                                ),
+                            );
+                        }
+                    }
                     let func_ty = ArType::Func(param_types, ret_id);
                     let func_id = checker.intern(func_ty);
                     checker.record_decl_type(symbol_id, func_id);
+
+                    // Drop Elaboration: Check for @Destructor attribute
+                    let has_destructor_attr = func_decl
+                        .attrs
+                        .iter()
+                        .any(|attr| attr.name == "Destructor" || attr.name == "destructor");
+                    if has_destructor_attr
+                        && let arandu_parser::FuncName::Method { .. } = &func_decl.name
+                        && let Some(first_param) = func_decl.params.first()
+                        && first_param.is_receiver
+                    {
+                        let param_ty =
+                            checker.lower_type_expr(first_param.ty, checker.symbols.global_scope());
+                        if let ArType::Named(struct_id, _) = param_ty {
+                            checker.type_info.destructors.insert(struct_id, symbol_id);
+                        }
+                    }
                 }
             }
             TopLevelDecl::Extern(extern_decl) => {
@@ -333,6 +387,61 @@ pub(crate) fn collect_signature_types(checker: &mut TypeChecker<'_>, program: &P
                     let name_key = crate::NodeKey::from(member.span);
                     if let Some(symbol_id) = checker.resolved.definitions.get(&name_key).copied() {
                         let ret_id = checker.intern(ret_ty);
+                        // Signature-only intrinsics cannot be inspected by the
+                        // AMIR solver. Publish a borrow interface only when the
+                        // signature has one unambiguous borrow-bearing input.
+                        // This covers stdlib view constructors without adding
+                        // names, addresses, or lifetimes to the stable contract.
+                        if let Ok(result_paths) = checker.type_info.borrow_paths(ret_id)
+                            && !result_paths.is_empty()
+                        {
+                            let candidates = param_types
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(index, parameter)| {
+                                    let paths = checker.type_info.borrow_paths(*parameter).ok()?;
+                                    (!paths.is_empty()).then_some((index, paths))
+                                })
+                                .collect::<Vec<_>>();
+                            if let [(parameter_index, parameter_paths)] = candidates.as_slice()
+                                && let Ok(parameter_index) = u32::try_from(*parameter_index)
+                            {
+                                let mut summary =
+                                    arandu_middle::types::ReturnBorrowSummary::default();
+                                for (result_path, kind) in result_paths {
+                                    let sources = parameter_paths
+                                        .iter()
+                                        .filter(|(_, source_kind)| {
+                                            kind == arandu_middle::types::BorrowKind::Shared
+                                                || *source_kind
+                                                    == arandu_middle::types::BorrowKind::Exclusive
+                                        })
+                                        .map(|(parameter_path, _)| {
+                                            arandu_middle::types::BorrowSource {
+                                                parameter_index,
+                                                parameter_path: parameter_path.clone(),
+                                            }
+                                        })
+                                        .collect::<Vec<_>>();
+                                    if !sources.is_empty() {
+                                        summary.dependencies.push(
+                                            arandu_middle::types::ReturnBorrowDependency {
+                                                result_path,
+                                                sources,
+                                                kind,
+                                            },
+                                        );
+                                    }
+                                }
+                                summary.canonicalize();
+                                if !summary.dependencies.is_empty() {
+                                    checker
+                                        .type_info
+                                        .return_borrow_summaries
+                                        .insert(symbol_id, summary);
+                                }
+                            }
+                        }
                         let func_ty = ArType::Func(param_types, ret_id);
                         let func_id = checker.intern(func_ty);
                         checker.record_decl_type(symbol_id, func_id);

@@ -105,11 +105,11 @@ pub unsafe extern "C" fn ar_rt_cancel_i64(handle: i64) {
     }
     let idx = handle as usize;
     let mut guard = TASKS.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(slot) = guard.get_mut(idx).and_then(|s| s.take()) {
-        if !slot.state.is_null() {
-            unsafe {
-                ar_co_free(slot.state);
-            }
+    if let Some(slot) = guard.get_mut(idx).and_then(|s| s.take())
+        && !slot.state.is_null()
+    {
+        unsafe {
+            ar_co_free(slot.state);
         }
     }
 }
@@ -122,7 +122,7 @@ pub unsafe extern "C" fn ar_rt_cancel_i64(handle: i64) {
 /// # Safety
 /// `ptr`/`len` fat string from Arandu JIT.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ar_path_is_absolute(ptr: *const u8, len: i64) -> i64 {
+pub unsafe extern "C" fn ar_path_is_absolute(ptr: *const u8, len: isize) -> isize {
     if len <= 0 || ptr.is_null() {
         return 0;
     }
@@ -130,7 +130,7 @@ pub unsafe extern "C" fn ar_path_is_absolute(ptr: *const u8, len: i64) -> i64 {
     let Ok(text) = std::str::from_utf8(s) else {
         return 0;
     };
-    i64::from(std::path::Path::new(text).is_absolute())
+    isize::from(std::path::Path::new(text).is_absolute())
 }
 
 /// Path empty check.
@@ -138,8 +138,8 @@ pub unsafe extern "C" fn ar_path_is_absolute(ptr: *const u8, len: i64) -> i64 {
 /// # Safety
 /// Fat string ABI.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ar_path_is_empty(_ptr: *const u8, len: i64) -> i64 {
-    i64::from(len <= 0)
+pub unsafe extern "C" fn ar_path_is_empty(_ptr: *const u8, len: isize) -> isize {
+    isize::from(len <= 0)
 }
 
 /// Fat `str` return for path hosts (matches LayoutEngine / Cranelift multi-value).
@@ -149,18 +149,18 @@ pub unsafe extern "C" fn ar_path_is_empty(_ptr: *const u8, len: i64) -> i64 {
 #[repr(C)]
 pub struct ArFatStr {
     pub ptr: *mut u8,
-    pub len: i64,
+    pub len: isize,
 }
 
 pub(crate) fn fat_str_from_string(s: String) -> ArFatStr {
-    let len = s.len() as i64;
+    let len = s.len() as isize;
     // Process-lifetime leak (same policy as ToStr / string interp).
     let boxed = s.into_boxed_str();
     let ptr = Box::into_raw(boxed) as *mut u8;
     ArFatStr { ptr, len }
 }
 
-fn path_from_fat(ptr: *const u8, len: i64) -> Option<std::path::PathBuf> {
+fn path_from_fat(ptr: *const u8, len: isize) -> Option<std::path::PathBuf> {
     if len < 0 || (len > 0 && ptr.is_null()) {
         return None;
     }
@@ -178,9 +178,9 @@ fn path_from_fat(ptr: *const u8, len: i64) -> Option<std::path::PathBuf> {
 /// Fat string ABI for both inputs; returns malloc-style owned buffer.
 unsafe fn ar_path_join_impl(
     a_ptr: *const u8,
-    a_len: i64,
+    a_len: isize,
     b_ptr: *const u8,
-    b_len: i64,
+    b_len: isize,
 ) -> ArFatStr {
     let a = path_from_fat(a_ptr, a_len).unwrap_or_default();
     let b = path_from_fat(b_ptr, b_len).unwrap_or_default();
@@ -192,7 +192,7 @@ unsafe fn ar_path_join_impl(
 ///
 /// # Safety
 /// Fat string ABI.
-unsafe fn ar_path_file_name_impl(ptr: *const u8, len: i64) -> ArFatStr {
+unsafe fn ar_path_file_name_impl(ptr: *const u8, len: isize) -> ArFatStr {
     let Some(path) = path_from_fat(ptr, len) else {
         return fat_str_from_string(String::new());
     };
@@ -202,7 +202,7 @@ unsafe fn ar_path_file_name_impl(ptr: *const u8, len: i64) -> ArFatStr {
     }
 }
 
-fn slice_from_fat(ptr: *const u8, len: i64) -> &'static [u8] {
+fn slice_from_fat(ptr: *const u8, len: isize) -> &'static [u8] {
     if len <= 0 || ptr.is_null() {
         return b"";
     }
@@ -214,7 +214,7 @@ fn slice_from_fat(ptr: *const u8, len: i64) -> &'static [u8] {
 /// # Safety
 /// Fat string ABI.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ar_str_len(_ptr: *const u8, len: i64) -> i64 {
+pub unsafe extern "C" fn ar_str_len(_ptr: *const u8, len: isize) -> isize {
     len.max(0)
 }
 
@@ -224,16 +224,16 @@ pub unsafe extern "C" fn ar_str_len(_ptr: *const u8, len: i64) -> i64 {
 /// Fat string ABI for both inputs.
 unsafe fn ar_str_concat_impl(
     a_ptr: *const u8,
-    a_len: i64,
+    a_len: isize,
     b_ptr: *const u8,
-    b_len: i64,
+    b_len: isize,
 ) -> ArFatStr {
     let a = slice_from_fat(a_ptr, a_len);
     let b = slice_from_fat(b_ptr, b_len);
     let mut out = Vec::with_capacity(a.len() + b.len());
     out.extend_from_slice(a);
     out.extend_from_slice(b);
-    let len = out.len() as i64;
+    let len = out.len() as isize;
     let ptr = Box::into_raw(out.into_boxed_slice()) as *mut u8;
     ArFatStr { ptr, len }
 }
@@ -245,13 +245,13 @@ unsafe fn ar_str_concat_impl(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_str_starts_with(
     s_ptr: *const u8,
-    s_len: i64,
+    s_len: isize,
     p_ptr: *const u8,
-    p_len: i64,
-) -> i64 {
+    p_len: isize,
+) -> isize {
     let s = slice_from_fat(s_ptr, s_len);
     let p = slice_from_fat(p_ptr, p_len);
-    i64::from(s.starts_with(p))
+    isize::from(s.starts_with(p))
 }
 
 /// Suffix check (byte-wise).
@@ -261,13 +261,55 @@ pub unsafe extern "C" fn ar_str_starts_with(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_str_ends_with(
     s_ptr: *const u8,
-    s_len: i64,
+    s_len: isize,
     p_ptr: *const u8,
-    p_len: i64,
-) -> i64 {
+    p_len: isize,
+) -> isize {
     let s = slice_from_fat(s_ptr, s_len);
     let p = slice_from_fat(p_ptr, p_len);
-    i64::from(s.ends_with(p))
+    isize::from(s.ends_with(p))
+}
+
+/// Contains check (byte-wise).
+///
+/// # Safety
+/// Fat string ABI.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ar_str_contains(
+    s_ptr: *const u8,
+    s_len: isize,
+    needle_ptr: *const u8,
+    needle_len: isize,
+) -> isize {
+    let s = slice_from_fat(s_ptr, s_len);
+    let needle = slice_from_fat(needle_ptr, needle_len);
+    if needle.is_empty() {
+        return 1;
+    }
+    isize::from(s.windows(needle.len()).any(|w| w == needle))
+}
+
+/// Find index of needle (byte-wise); returns -1 if not found.
+///
+/// # Safety
+/// Fat string ABI.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ar_str_find(
+    s_ptr: *const u8,
+    s_len: isize,
+    needle_ptr: *const u8,
+    needle_len: isize,
+) -> isize {
+    let s = slice_from_fat(s_ptr, s_len);
+    let needle = slice_from_fat(needle_ptr, needle_len);
+    if needle.is_empty() {
+        return 0;
+    }
+    if let Some(pos) = s.windows(needle.len()).position(|w| w == needle) {
+        pos as isize
+    } else {
+        -1
+    }
 }
 
 /// Bytes after the last occurrence of `sep` (byte-wise). Empty sep → full `s`.
@@ -276,9 +318,9 @@ pub unsafe extern "C" fn ar_str_ends_with(
 /// Fat string ABI.
 unsafe fn ar_str_split_last_impl(
     s_ptr: *const u8,
-    s_len: i64,
+    s_len: isize,
     sep_ptr: *const u8,
-    sep_len: i64,
+    sep_len: isize,
 ) -> ArFatStr {
     let s = slice_from_fat(s_ptr, s_len);
     let sep = slice_from_fat(sep_ptr, sep_len);
@@ -304,9 +346,9 @@ unsafe fn ar_str_split_last_impl(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_path_join(
     a_ptr: *const u8,
-    a_len: i64,
+    a_len: isize,
     b_ptr: *const u8,
-    b_len: i64,
+    b_len: isize,
 ) -> ArFatStr {
     unsafe { ar_path_join_impl(a_ptr, a_len, b_ptr, b_len) }
 }
@@ -319,9 +361,9 @@ pub unsafe extern "C" fn ar_path_join(
 #[unsafe(no_mangle)]
 pub unsafe extern "sysv64" fn ar_path_join(
     a_ptr: *const u8,
-    a_len: i64,
+    a_len: isize,
     b_ptr: *const u8,
-    b_len: i64,
+    b_len: isize,
 ) -> ArFatStr {
     unsafe { ar_path_join_impl(a_ptr, a_len, b_ptr, b_len) }
 }
@@ -332,7 +374,7 @@ pub unsafe extern "sysv64" fn ar_path_join(
 /// # Safety
 /// `ptr` and `len` must satisfy the fat-string ABI.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ar_path_file_name(ptr: *const u8, len: i64) -> ArFatStr {
+pub unsafe extern "C" fn ar_path_file_name(ptr: *const u8, len: isize) -> ArFatStr {
     unsafe { ar_path_file_name_impl(ptr, len) }
 }
 
@@ -342,7 +384,7 @@ pub unsafe extern "C" fn ar_path_file_name(ptr: *const u8, len: i64) -> ArFatStr
 /// # Safety
 /// `ptr` and `len` must satisfy the fat-string ABI.
 #[unsafe(no_mangle)]
-pub unsafe extern "sysv64" fn ar_path_file_name(ptr: *const u8, len: i64) -> ArFatStr {
+pub unsafe extern "sysv64" fn ar_path_file_name(ptr: *const u8, len: isize) -> ArFatStr {
     unsafe { ar_path_file_name_impl(ptr, len) }
 }
 
@@ -354,9 +396,9 @@ pub unsafe extern "sysv64" fn ar_path_file_name(ptr: *const u8, len: i64) -> ArF
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_str_concat(
     a_ptr: *const u8,
-    a_len: i64,
+    a_len: isize,
     b_ptr: *const u8,
-    b_len: i64,
+    b_len: isize,
 ) -> ArFatStr {
     unsafe { ar_str_concat_impl(a_ptr, a_len, b_ptr, b_len) }
 }
@@ -369,9 +411,9 @@ pub unsafe extern "C" fn ar_str_concat(
 #[unsafe(no_mangle)]
 pub unsafe extern "sysv64" fn ar_str_concat(
     a_ptr: *const u8,
-    a_len: i64,
+    a_len: isize,
     b_ptr: *const u8,
-    b_len: i64,
+    b_len: isize,
 ) -> ArFatStr {
     unsafe { ar_str_concat_impl(a_ptr, a_len, b_ptr, b_len) }
 }
@@ -384,9 +426,9 @@ pub unsafe extern "sysv64" fn ar_str_concat(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_str_split_last(
     s_ptr: *const u8,
-    s_len: i64,
+    s_len: isize,
     sep_ptr: *const u8,
-    sep_len: i64,
+    sep_len: isize,
 ) -> ArFatStr {
     unsafe { ar_str_split_last_impl(s_ptr, s_len, sep_ptr, sep_len) }
 }
@@ -399,9 +441,9 @@ pub unsafe extern "C" fn ar_str_split_last(
 #[unsafe(no_mangle)]
 pub unsafe extern "sysv64" fn ar_str_split_last(
     s_ptr: *const u8,
-    s_len: i64,
+    s_len: isize,
     sep_ptr: *const u8,
-    sep_len: i64,
+    sep_len: isize,
 ) -> ArFatStr {
     unsafe { ar_str_split_last_impl(s_ptr, s_len, sep_ptr, sep_len) }
 }
@@ -426,7 +468,7 @@ mod tests {
             let current_dir = std::env::current_dir().unwrap();
             let current_dir = current_dir.to_string_lossy();
             assert_eq!(
-                ar_path_is_absolute(current_dir.as_ptr(), current_dir.len() as i64),
+                ar_path_is_absolute(current_dir.as_ptr(), current_dir.len() as isize),
                 1
             );
             assert_eq!(ar_path_is_absolute(b"rel".as_ptr(), 3), 0);

@@ -480,6 +480,19 @@ impl LowerCtx<'_> {
             AmirRvalue::Len(value) => {
                 *value = Self::resolve_operand(redirected_temps, *value);
             }
+            AmirRvalue::SliceView { owner, data, len } => {
+                *owner = Self::resolve_operand(redirected_temps, *owner);
+                *data = Self::resolve_operand(redirected_temps, *data);
+                *len = Self::resolve_operand(redirected_temps, *len);
+            }
+            AmirRvalue::SliceSubslice { slice, start, len } => {
+                *slice = Self::resolve_operand(redirected_temps, *slice);
+                *start = Self::resolve_operand(redirected_temps, *start);
+                *len = Self::resolve_operand(redirected_temps, *len);
+            }
+            AmirRvalue::StrView { owner } => {
+                *owner = Self::resolve_operand(redirected_temps, *owner);
+            }
             AmirRvalue::Alloc(value) => {
                 *value = Self::resolve_operand(redirected_temps, *value);
             }
@@ -539,6 +552,7 @@ impl LowerCtx<'_> {
                 lhs: _,
                 callee,
                 args,
+                ..
             } => {
                 *callee = Self::resolve_operand(redirected_temps, *callee);
                 for arg in args {

@@ -3,8 +3,6 @@
 //! Thin process adapter delegating command parsing, pipeline execution,
 //! and process status code resolution to modular subsystems.
 
-#![allow(clippy::collapsible_if)]
-
 mod args;
 mod artifact;
 mod cli_error;

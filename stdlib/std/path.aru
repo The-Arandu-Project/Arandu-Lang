@@ -1,21 +1,14 @@
 module std.path
 
-/// Minimal 0.1 — **IN optional** path helpers (PROMOTE-L4 complete for thin path).
+/// Minimal 0.1 — path helpers.
 ///
 /// | Function      | Status |
 /// |---------------|--------|
-/// | `is_empty`    | pure |
-/// | `is_absolute` | host `std::path::Path::is_absolute` |
+/// | `isEmpty`     | pure |
+/// | `isAbsolute`  | host `std::path::Path::is_absolute` |
 /// | `join`        | host `Path::join` (OS separator / absolute replace) |
-/// | `file_name`   | host `Path::file_name` (empty when none) |
-///
-/// Absolute / join / file_name rules follow the **host OS**.
-/// Gold suite asserts Unix-style paths on Linux CI.
-///
-/// Returned strings from `join` / `file_name` are malloc-backed (process
-/// lifetime, same policy as ToStr / string interp) — not in default template.
+/// | `fileName`    | host `Path::file_name` (empty when none) |
 
-// Host: fat-str ABI (ptr + len) — same as other std path helpers in the JIT.
 extern "C" {
     func ar_path_is_absolute(p: str): int
     func ar_path_join(a: str, b: str): str
@@ -23,12 +16,12 @@ extern "C" {
 }
 
 /// True when the path has zero length.
-public func is_empty(p: str): bool {
+public func isEmpty(p: str): bool {
     return p == ""
 }
 
 /// True when `p` is absolute on the host OS. Empty is never absolute.
-public func is_absolute(p: str): bool {
+public func isAbsolute(p: str): bool {
     if p == "" {
         return false
     }
@@ -37,18 +30,15 @@ public func is_absolute(p: str): bool {
     }
 }
 
-/// Join two path segments with host path semantics.
-///
-/// On Unix, `join("/tmp", "x")` → `"/tmp/x"`; an absolute `b` replaces
-/// (same family as Rust `Path::join`).
+/// Join two path segments.
 public func join(a: str, b: str): str {
     unsafe {
         return ar_path_join(a, b)
     }
 }
 
-/// Final path component, or empty string when none (trailing slash, `.`, `..`).
-public func file_name(p: str): str {
+/// Final path component, or empty string when none.
+public func fileName(p: str): str {
     unsafe {
         return ar_path_file_name(p)
     }

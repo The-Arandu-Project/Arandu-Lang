@@ -233,7 +233,7 @@ fn test_import_generic_spawn_infer_from_coroutine() {
         import std.runtime as rt
         async func answer(): int { return 42 }
         func main(): int {
-            let ex = rt.new_sync_executor()
+            let ex = rt.newSyncExecutor()
             let h = rt.spawn(ex, answer())
             return rt.join(ex, h)
         }

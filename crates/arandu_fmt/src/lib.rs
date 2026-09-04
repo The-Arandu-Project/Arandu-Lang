@@ -124,8 +124,11 @@ fn format_from_tree(tree: &SyntaxTree) -> String {
         }
     }
     // Preserve leading module-less files; strip excess leading blanks.
-    while out.starts_with('\n') && out.len() > 1 {
-        out.remove(0);
+    if out.starts_with('\n') && out.len() > 1 {
+        let non_nl = out
+            .find(|c| c != '\n')
+            .unwrap_or(out.len().saturating_sub(1));
+        out.drain(..non_nl);
     }
     if !out.ends_with('\n') {
         out.push('\n');
@@ -135,22 +138,17 @@ fn format_from_tree(tree: &SyntaxTree) -> String {
 
 /// Reindent a top-level item: 4 spaces per `{}` depth; trim line ends.
 fn reindent_item(item_src: &str) -> String {
-    let unified = item_src.replace("\r\n", "\n").replace('\r', "\n");
-    let lines: Vec<&str> = unified
-        .strip_suffix('\n')
-        .unwrap_or(&unified)
-        .split('\n')
-        .collect();
     let mut out = String::with_capacity(item_src.len() + 16);
     let mut depth: i32 = 0;
     let mut in_string = false;
     let mut in_char = false;
     let mut escaped = false;
 
-    for (li, line) in lines.iter().enumerate() {
+    let mut lines_iter = item_src.lines().peekable();
+    while let Some(line) = lines_iter.next() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
-            if li + 1 < lines.len() {
+            if lines_iter.peek().is_some() {
                 out.push('\n');
             }
             continue;
@@ -221,19 +219,9 @@ fn reindent_item(item_src: &str) -> String {
 }
 
 fn normalize_whitespace(source: &str) -> String {
-    let unified = source.replace("\r\n", "\n").replace('\r', "\n");
-    let lines: Vec<&str> = if unified.is_empty() {
-        Vec::new()
-    } else {
-        unified
-            .strip_suffix('\n')
-            .unwrap_or(&unified)
-            .split('\n')
-            .collect()
-    };
-    let mut out = String::with_capacity(unified.len() + 1);
+    let mut out = String::with_capacity(source.len() + 1);
     let mut blank_run = 0u32;
-    for line in lines {
+    for line in source.lines() {
         let trimmed = line.trim_end();
         if trimmed.is_empty() {
             blank_run += 1;
@@ -249,8 +237,11 @@ fn normalize_whitespace(source: &str) -> String {
     if out.is_empty() {
         out.push('\n');
     }
-    while out.starts_with('\n') && out.len() > 1 {
-        out.remove(0);
+    if out.starts_with('\n') && out.len() > 1 {
+        let non_nl = out
+            .find(|c| c != '\n')
+            .unwrap_or(out.len().saturating_sub(1));
+        out.drain(..non_nl);
     }
     out
 }
@@ -262,7 +253,31 @@ pub struct CodeAction {
     pub edits: Vec<TextEdit>,
 }
 
+/// Constructs a structured single-character insertion code action at `offset`.
+#[must_use]
+pub fn actions_for_missing_char(insert_at: u32, ch: char) -> Option<CodeAction> {
+    let (title, new_text) = match ch {
+        ';' => ("Insert `;`", ";"),
+        '{' => ("Insert `{`", " {"),
+        '}' => ("Insert `}`", "}"),
+        ')' => ("Insert `)`", ")"),
+        ']' => ("Insert `]`", "]"),
+        _ => return None,
+    };
+    Some(CodeAction {
+        title,
+        edits: vec![TextEdit {
+            start: insert_at,
+            end: insert_at,
+            new_text: new_text.into(),
+        }],
+    })
+}
+
 /// Collect applicable quick-fixes for a single diagnostic.
+///
+/// Prefer [`actions_for_missing_char`] or structured replacements from compiler diagnostics
+/// when AST/CST error details are available.
 #[must_use]
 pub fn actions_for_diagnostic(start: u32, end: u32, message: &str) -> Vec<CodeAction> {
     let mut out = Vec::new();
@@ -270,55 +285,35 @@ pub fn actions_for_diagnostic(start: u32, end: u32, message: &str) -> Vec<CodeAc
     let insert_at = start.min(end);
 
     if msg.contains("semicolon") || msg.contains("statement terminator") || msg.contains("semi") {
-        out.push(CodeAction {
-            title: "Insert `;`",
-            edits: vec![TextEdit {
-                start: insert_at,
-                end: insert_at,
-                new_text: ";".into(),
-            }],
-        });
+        if let Some(act) = actions_for_missing_char(insert_at, ';') {
+            out.push(act);
+        }
     }
     if msg.contains("expected '{'")
         || msg.contains("expected lbrace")
         || msg.contains("expected \"{\"")
     {
-        out.push(CodeAction {
-            title: "Insert `{`",
-            edits: vec![TextEdit {
-                start: insert_at,
-                end: insert_at,
-                new_text: " {".into(),
-            }],
-        });
+        if let Some(act) = actions_for_missing_char(insert_at, '{') {
+            out.push(act);
+        }
     }
     if msg.contains("expected '}'")
         || msg.contains("expected rbrace")
         || msg.contains("expected \"}\"")
     {
-        out.push(CodeAction {
-            title: "Insert `}`",
-            edits: vec![TextEdit {
-                start: insert_at,
-                end: insert_at,
-                new_text: "}".into(),
-            }],
-        });
+        if let Some(act) = actions_for_missing_char(insert_at, '}') {
+            out.push(act);
+        }
     }
     if msg.contains("expected ')'") || msg.contains("expected rparen") {
-        out.push(CodeAction {
-            title: "Insert `)`",
-            edits: vec![TextEdit {
-                start: insert_at,
-                end: insert_at,
-                new_text: ")".into(),
-            }],
-        });
+        if let Some(act) = actions_for_missing_char(insert_at, ')') {
+            out.push(act);
+        }
     }
     out
 }
 
-/// @deprecated path — use [`actions_for_diagnostic`].
+#[deprecated(since = "0.1.0", note = "use actions_for_diagnostic instead")]
 #[must_use]
 pub fn actions_for_expected_semicolon(start: u32, end: u32, message: &str) -> Option<CodeAction> {
     actions_for_diagnostic(start, end, message)
@@ -431,6 +426,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn semicolon_action() {
         let a = actions_for_expected_semicolon(10, 11, "expected SEMICOLON").unwrap();
         assert_eq!(a.edits[0].new_text, ";");

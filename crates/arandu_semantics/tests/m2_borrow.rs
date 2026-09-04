@@ -16,7 +16,11 @@ func main(): int {
 "#;
     let program = arandu_parser::parse(src).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     let errors: Vec<_> = tc
         .diagnostics
         .iter()
@@ -24,7 +28,7 @@ func main(): int {
         .collect();
     assert!(errors.is_empty(), "typeck errors: {errors:?}");
     let hir = lower_to_hir(&mut tc, &program).expect("hir");
-    let result = lower_to_amir(&tc, &hir);
+    let result = lower_to_amir(&tc, &hir, 64);
     match result {
         Ok(_) => panic!("expected O003 from lower_to_amir"),
         Err(diags) => {
@@ -48,7 +52,11 @@ func bad(): &int {
 "#;
     let program = arandu_parser::parse(src).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     let errors: Vec<_> = tc
         .diagnostics
         .iter()
@@ -56,7 +64,7 @@ func bad(): &int {
         .collect();
     assert!(errors.is_empty(), "typeck errors: {errors:?}");
     let hir = lower_to_hir(&mut tc, &program).expect("hir");
-    let result = lower_to_amir(&tc, &hir);
+    let result = lower_to_amir(&tc, &hir, 64);
     match result {
         Ok(_) => panic!("expected O010 from lower_to_amir"),
         Err(diags) => {
@@ -90,7 +98,11 @@ func main(): int {
 "#;
     let program = arandu_parser::parse(src).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     assert!(
         !tc.diagnostics
             .iter()
@@ -99,6 +111,6 @@ func main(): int {
         tc.diagnostics
     );
     let hir = lower_to_hir(&mut tc, &program).expect("hir");
-    let amir = lower_to_amir(&tc, &hir).expect("sequential borrows should lower");
+    let amir = lower_to_amir(&tc, &hir, 64).expect("sequential borrows should lower");
     assert!(!amir.funcs.is_empty());
 }

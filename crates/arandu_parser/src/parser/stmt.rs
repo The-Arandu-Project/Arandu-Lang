@@ -313,19 +313,30 @@ impl<'a> Parser<'a> {
 
     pub(super) fn parse_condition(&mut self) -> Result<Condition, ParseError> {
         let start = self.mark();
-        let expr = self.parse_expr_without_block_calls(0)?;
-        if self.eat_name("KW_IS") {
+        if self.eat_name("KW_LET") {
             let pattern = self.parse_pattern()?;
+            self.expect_name("EQUAL")?;
+            let expr = self.parse_expr_without_block_calls(0)?;
             Ok(Condition::Is {
                 span: self.span_from_mark(start),
                 expr,
                 pattern,
             })
         } else {
-            Ok(Condition::Expr {
-                span: self.span_from_mark(start),
-                expr,
-            })
+            let expr = self.parse_expr_without_block_calls(0)?;
+            if self.eat_name("KW_IS") {
+                let pattern = self.parse_pattern()?;
+                Ok(Condition::Is {
+                    span: self.span_from_mark(start),
+                    expr,
+                    pattern,
+                })
+            } else {
+                Ok(Condition::Expr {
+                    span: self.span_from_mark(start),
+                    expr,
+                })
+            }
         }
     }
 

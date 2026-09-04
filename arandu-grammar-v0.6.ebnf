@@ -85,6 +85,9 @@ import_decl        = "import" ( module_path | named_import ) stmt_end ;
 
 named_import       = "{" import_item { "," import_item } [ "," ] "}"
                      "from" module_path ;
+(* NOTE: `from` is a soft keyword. The lexer produces an identifier for it;
+   the parser treats a `from` identifier in import position as the keyword.
+   `func from(...)` / `String.from` are therefore legal declarations.      *)
 
 import_item        = ( value_identifier | type_identifier )
                      [ "as" ( value_identifier | type_identifier ) ] ;

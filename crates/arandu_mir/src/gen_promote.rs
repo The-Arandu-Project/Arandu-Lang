@@ -568,7 +568,10 @@ mod tests {
         apply_gen_promotion(
             &mut strict_func,
             &interner,
-            EscapeCheckOptions { no_fallback: true },
+            EscapeCheckOptions {
+                no_fallback: true,
+                ..EscapeCheckOptions::default()
+            },
         );
         assert_eq!(strict_func.temps[1].ty, ref_ty);
         assert!(
@@ -632,7 +635,7 @@ mod tests {
         let mut stmts = AmirStmtTable::new();
         stmts.push(AmirStmt::Assign {
             lhs: temp(0),
-            rhs: AmirRvalue::Borrow(projected_place.clone()),
+            rhs: AmirRvalue::Borrow(projected_place),
         });
         stmts.push(AmirStmt::Store {
             lhs: AmirPlace {

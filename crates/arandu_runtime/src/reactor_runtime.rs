@@ -1,7 +1,6 @@
 //! SL_R.2 / SL_R.3 — cooperative reactor host (epoll + timerfd; io_uring when available).
 // All `pub unsafe extern "C"` fns here are ABI host functions called only from JIT-compiled
 // Arandu code. Safety invariants are enforced by the compiler and JIT symbol resolution.
-#![allow(clippy::missing_safety_doc)]
 
 #[cfg(target_os = "linux")]
 use std::collections::HashMap;
@@ -18,10 +17,8 @@ pub const BACKEND_IO_URING: i64 = 2;
 /// Opaque reactor id (>= 0). Invalid / closed = negative.
 type ReactorId = i64;
 
-#[allow(dead_code)]
+#[cfg(target_os = "linux")]
 struct RegisteredSocket {
-    fd: i32,
-    events: i64,
     waker_id: i64,
 }
 
@@ -73,6 +70,10 @@ fn try_io_uring_setup() -> bool {
     }
 }
 
+/// Queries the active reactor backend.
+///
+/// # Safety
+/// Safe to call from any thread; queries and caches the detected host backend.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_rt_reactor_backend() -> i64 {
     use std::sync::OnceLock;
@@ -80,6 +81,10 @@ pub unsafe extern "C" fn ar_rt_reactor_backend() -> i64 {
     *CACHED.get_or_init(probe_backend)
 }
 
+/// Creates a new reactor instance. Returns reactor ID or -1 on error.
+///
+/// # Safety
+/// Safe to call from any thread; allocates reactor slot in synchronized table.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_rt_reactor_create() -> ReactorId {
     #[cfg(target_os = "linux")]
@@ -123,6 +128,10 @@ pub unsafe extern "C" fn ar_rt_reactor_create() -> ReactorId {
     }
 }
 
+/// Destroys a reactor instance and closes its associated resources.
+///
+/// # Safety
+/// `id` must be a valid reactor ID created by [`ar_rt_reactor_create`], or negative no-op.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_rt_reactor_destroy(id: ReactorId) {
     if id < 0 {
@@ -143,9 +152,16 @@ pub unsafe extern "C" fn ar_rt_reactor_destroy(id: ReactorId) {
             let _ = libc::close(slot.epoll_fd);
         }
     }
-    let _ = slot;
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = slot;
+    }
 }
 
+/// Sleeps for `ms` milliseconds using the reactor.
+///
+/// # Safety
+/// `id` must be a valid reactor ID created by [`ar_rt_reactor_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_rt_reactor_sleep_ms(id: ReactorId, ms: i64) -> i64 {
     if id < 0 || ms < 0 {
@@ -155,10 +171,10 @@ pub unsafe extern "C" fn ar_rt_reactor_sleep_ms(id: ReactorId, ms: i64) -> i64 {
     {
         if unsafe { ar_rt_reactor_backend() } == BACKEND_IO_URING {
             let mut guard = lock_reactors();
-            if let Some(Some(slot)) = guard.get_mut(id as usize) {
-                if unsafe { sleep_ms_io_uring(slot, ms as u64) } {
-                    return 0;
-                }
+            if let Some(Some(slot)) = guard.get_mut(id as usize)
+                && unsafe { sleep_ms_io_uring(slot, ms as u64) }
+            {
+                return 0;
             }
         }
     }
@@ -192,6 +208,10 @@ unsafe fn sleep_ms_io_uring(slot: &mut ReactorSlot, ms: u64) -> bool {
     cq.next().is_some()
 }
 
+/// Arms a timer in the reactor for `ms` milliseconds.
+///
+/// # Safety
+/// `id` must be a valid reactor ID created by [`ar_rt_reactor_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_rt_reactor_arm_timer_ms(id: ReactorId, ms: i64) -> i64 {
     if id < 0 || ms < 0 {
@@ -259,6 +279,10 @@ pub unsafe extern "C" fn ar_rt_reactor_arm_timer_ms(id: ReactorId, ms: i64) -> i
     0
 }
 
+/// Polls the reactor for pending events up to `timeout_ms` milliseconds.
+///
+/// # Safety
+/// `id` must be a valid reactor ID created by [`ar_rt_reactor_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_rt_reactor_poll_ms(id: ReactorId, timeout_ms: i64) -> i64 {
     if id < 0 {
@@ -295,11 +319,11 @@ pub unsafe extern "C" fn ar_rt_reactor_poll_ms(id: ReactorId, timeout_ms: i64) -
                     std::thread::sleep(Duration::from_millis(wait_ms as u64));
                 }
                 let mut guard = lock_reactors();
-                if let Some(Some(slot)) = guard.get_mut(id as usize) {
-                    if slot.deadline.is_some_and(|d| Instant::now() >= d) {
-                        slot.deadline = None;
-                        return 1;
-                    }
+                if let Some(Some(slot)) = guard.get_mut(id as usize)
+                    && slot.deadline.is_some_and(|d| Instant::now() >= d)
+                {
+                    slot.deadline = None;
+                    return 1;
                 }
                 return 0;
             }
@@ -348,11 +372,11 @@ pub unsafe extern "C" fn ar_rt_reactor_poll_ms(id: ReactorId, timeout_ms: i64) -
                         None
                     }
                 };
-                if let Some(waker_id) = waker_to_wake {
-                    if waker_id >= 0 {
-                        unsafe {
-                            crate::waker_runtime::ar_rt_waker_wake(waker_id);
-                        }
+                if let Some(waker_id) = waker_to_wake
+                    && waker_id >= 0
+                {
+                    unsafe {
+                        crate::waker_runtime::ar_rt_waker_wake(waker_id);
                     }
                 }
             }
@@ -422,6 +446,10 @@ pub unsafe extern "C" fn ar_rt_reactor_poll_ms(id: ReactorId, timeout_ms: i64) -
     }
 }
 
+/// Registers a socket with the reactor.
+///
+/// # Safety
+/// `reactor_id`, `sock_id`, and `waker_id` must be valid descriptors.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_rt_reactor_register_socket(
     reactor_id: i64,
@@ -444,14 +472,8 @@ pub unsafe extern "C" fn ar_rt_reactor_register_socket(
             return -1;
         };
 
-        slot.sockets.insert(
-            fd as i64,
-            RegisteredSocket {
-                fd,
-                events,
-                waker_id,
-            },
-        );
+        slot.sockets
+            .insert(fd as i64, RegisteredSocket { waker_id });
 
         let mut ev: libc::epoll_event = unsafe { std::mem::zeroed() };
         if events & crate::socket_runtime::WAIT_READ != 0 {

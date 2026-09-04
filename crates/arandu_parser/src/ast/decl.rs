@@ -255,6 +255,42 @@ pub struct ExternDecl {
     pub members: Vec<FuncSignature>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AbiKind {
+    C,
+    AranduIntrinsic,
+    Rust,
+    Other,
+}
+
+impl AbiKind {
+    #[must_use]
+    pub fn from_abi_str(abi: &str) -> Self {
+        match abi.trim_matches('"') {
+            "C" => Self::C,
+            "arandu-intrinsic" => Self::AranduIntrinsic,
+            "Rust" => Self::Rust,
+            _ => Self::Other,
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::C => "C",
+            Self::AranduIntrinsic => "arandu-intrinsic",
+            Self::Rust => "Rust",
+            Self::Other => "other",
+        }
+    }
+}
+
+impl std::fmt::Display for AbiKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
     pub span: Span,

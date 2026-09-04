@@ -1199,7 +1199,7 @@ fn stdio_package_imports_refresh_completion_goto_and_diagnostics() {
         "import editor_gold.util as util\n",
         "import std.path as path\n",
         "func main(): int {\n",
-        "    if path.is_empty(\"\") { return util.answer() }\n",
+        "    if path.isEmpty(\"\") { return util.answer() }\n",
         "    return 0\n",
         "}\n",
     );
@@ -1294,7 +1294,7 @@ fn stdio_package_imports_refresh_completion_goto_and_diagnostics() {
         "goto must target the newly created module: {goto}"
     );
 
-    let std_call = missing_source.find("path.is_empty").expect("stdlib call");
+    let std_call = missing_source.find("path.isEmpty").expect("stdlib call");
     lsp.send(&json!({
         "jsonrpc": "2.0", "id": 6, "method": "textDocument/definition",
         "params": {
@@ -1647,6 +1647,97 @@ fn stdio_diagnostics_preserve_context_and_structured_quick_fix() {
     assert_eq!(republished.pointer("/params/version"), Some(&json!(8)));
 
     lsp.shutdown(4);
+}
+
+#[test]
+fn stdio_borrow_diagnostics_preserve_context_and_drop_stale_revisions() {
+    let fixture = FixtureDir::new();
+    let document = fixture.path().join("borrow-diagnostic.aru");
+    let uri = file_uri(&document);
+    let mut lsp = LspProcess::spawn();
+    lsp.initialize(fixture.path(), 1);
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didOpen",
+        "params": {
+            "textDocument": {
+                "uri": uri,
+                "languageId": "arandu",
+                "version": 1,
+                "text": "func borrowValue(value: ref int): ref int { return value }\nfunc main(): int { let mut value = 42; let borrowed = borrowValue(value); value = 43; return *borrowed }\n"
+            }
+        }
+    }));
+    let conflicting = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && message.pointer("/params/uri").and_then(Value::as_str) == Some(uri.as_str())
+            && message.pointer("/params/version") == Some(&json!(1))
+            && message
+                .pointer("/params/diagnostics")
+                .and_then(Value::as_array)
+                .is_some_and(|diagnostics| {
+                    diagnostics
+                        .iter()
+                        .any(|diagnostic| diagnostic.get("code") == Some(&json!("O003")))
+                })
+    });
+    let diagnostic = conflicting
+        .pointer("/params/diagnostics")
+        .and_then(Value::as_array)
+        .and_then(|diagnostics| {
+            diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.get("code") == Some(&json!("O003")))
+        })
+        .expect("O003 diagnostic");
+    assert!(
+        diagnostic
+            .get("relatedInformation")
+            .and_then(Value::as_array)
+            .is_some_and(|labels| !labels.is_empty()),
+        "ownership labels must remain structured: {diagnostic}"
+    );
+    assert!(
+        diagnostic
+            .pointer("/data/notes")
+            .and_then(Value::as_array)
+            .is_some_and(|notes| !notes.is_empty()),
+        "ownership notes must remain structured: {diagnostic}"
+    );
+
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didChange",
+        "params": {
+            "textDocument": { "uri": uri, "version": 2 },
+            "contentChanges": [{
+                "text": "func borrowValue(value: ref int): ref int { return value }\nfunc main(): int { let mut value = 42; let borrowed = borrowValue(value); return *borrowed }\n"
+            }]
+        }
+    }));
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "textDocument/completion",
+        "params": {
+            "textDocument": { "uri": uri },
+            "position": { "line": 1, "character": 4 }
+        }
+    }));
+    let cleared = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && message.pointer("/params/uri").and_then(Value::as_str) == Some(uri.as_str())
+            && message.pointer("/params/version") == Some(&json!(2))
+    });
+    assert!(
+        cleared
+            .pointer("/params/diagnostics")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty),
+        "the current revision must clear O003 instead of publishing stale ownership data: {cleared}"
+    );
+
+    lsp.shutdown(3);
 }
 
 #[test]

@@ -1,5 +1,6 @@
 import * as childProcess from 'node:child_process';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import {
     downloadAndUnzipVSCode,
@@ -24,8 +25,9 @@ async function main(): Promise<void> {
     const aranduCliPath = process.env.ARANDU_CLI_TEST_PATH
         ? path.resolve(process.env.ARANDU_CLI_TEST_PATH)
         : path.join(repositoryRoot, 'target', 'debug', cliName);
-    const userDataPath = path.join(extensionRoot, '.vscode-test', `installed-user-${process.pid}`);
-    const extensionsPath = path.join(extensionRoot, '.vscode-test', `installed-extensions-${process.pid}`);
+    const profileRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'arandu-vscode-installed-'));
+    const userDataPath = path.join(profileRoot, 'user-data');
+    const extensionsPath = path.join(profileRoot, 'extensions');
 
     if (!fs.existsSync(vsixPath)) {
         throw new Error(`packaged extension missing: ${vsixPath}`);
@@ -82,12 +84,16 @@ async function main(): Promise<void> {
                 ARANDU_LSP_TEST_PATH: serverPath,
                 ARANDU_CLI_TEST_PATH: aranduCliPath,
                 ARANDU_LSP_TEST_ALLOW_CRASH: '1',
-                ARANDU_EXPECT_INSTALLED_EXTENSION: '1'
+                ARANDU_EXPECT_INSTALLED_EXTENSION: '1',
+                ARANDU_INSTALLED_EXTENSIONS_ROOT: extensionsPath
             }
         });
     } finally {
-        fs.rmSync(userDataPath, { recursive: true, force: true });
-        fs.rmSync(extensionsPath, { recursive: true, force: true });
+        if (process.env.ARANDU_KEEP_VSCODE_TEST_PROFILE === '1') {
+            console.error(`Preserved Extension Host profile at ${profileRoot}`);
+        } else {
+            fs.rmSync(profileRoot, { recursive: true, force: true });
+        }
     }
 }
 

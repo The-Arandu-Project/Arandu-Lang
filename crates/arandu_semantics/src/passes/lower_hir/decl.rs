@@ -2,7 +2,7 @@ use crate::TypeCheckResult;
 use crate::diagnostics::Diagnostic;
 use crate::hir::{
     HirConst, HirDecl, HirEnum, HirEnumVariant, HirExtern, HirFunc, HirFuncSignature, HirInterface,
-    HirParam, HirStruct, HirStructField, HirTypeAlias,
+    HirParam, HirStruct, HirStructField, HirTypeAlias, ReceiverKind,
 };
 use crate::passes::lowering::require_def_symbol;
 use crate::passes::type_checker::types::ArType;
@@ -73,7 +73,7 @@ pub(crate) fn lower_decl(
                     ty: p_ty,
                     span: p.span,
                     is_receiver: p.is_receiver,
-                    receiver_kind: p.ownership.map(super::stmt::ownership_to_receiver_kind),
+                    receiver_kind: receiver_kind(type_check, p.is_receiver, p.ownership, p_ty),
                 });
             }
             let params = hir_pool.alloc_param_list(&params);
@@ -89,7 +89,7 @@ pub(crate) fn lower_decl(
                 let valid_shape = matches!(d.name, FuncName::Method { .. })
                     && d.params.len() == 1
                     && d.params[0].is_receiver
-                    && d.params[0].ownership == Some(arandu_parser::Ownership::Own)
+                    && hir_pool.params_list(params)[0].receiver_kind == Some(ReceiverKind::Own)
                     && matches!(
                         type_check.type_info.type_interner.resolve(return_type),
                         ArType::Void
@@ -98,7 +98,7 @@ pub(crate) fn lower_decl(
                 if !valid_shape {
                     return Err(Diagnostic::error(
                         crate::DiagCode::T035InvalidDestructor,
-                        "@Destructor requires a synchronous method `func Type.name(own self): void` with no additional parameters",
+                        "@Destructor requires a synchronous consuming method `func Type.name(self: own Type): void` with no additional parameters",
                         d.span,
                     ));
                 }
@@ -254,7 +254,7 @@ pub(crate) fn lower_decl(
                         ty: p_ty,
                         span: p.span,
                         is_receiver: p.is_receiver,
-                        receiver_kind: p.ownership.map(super::stmt::ownership_to_receiver_kind),
+                        receiver_kind: receiver_kind(type_check, p.is_receiver, p.ownership, p_ty),
                     });
                 }
                 let params = hir_pool.alloc_param_list(&params);
@@ -267,11 +267,31 @@ pub(crate) fn lower_decl(
             }
             let members = hir_pool.alloc_func_signature_list(&members);
             Ok(Some(HirDecl::Extern(HirExtern {
-                abi: d.abi.to_string(),
+                abi: arandu_parser::AbiKind::from_abi_str(&d.abi),
                 members,
                 span: d.span,
             })))
         }
         TopLevelDecl::Error(_) => Ok(None),
     }
+}
+
+fn receiver_kind(
+    type_check: &TypeCheckResult,
+    is_receiver: bool,
+    ownership: Option<arandu_parser::Ownership>,
+    ty: arandu_middle::types::TypeId,
+) -> Option<ReceiverKind> {
+    if !is_receiver {
+        return None;
+    }
+    ownership
+        .map(super::stmt::ownership_to_receiver_kind)
+        .or_else(|| {
+            Some(match type_check.type_info.type_interner.resolve(ty) {
+                ArType::Ref(_) => ReceiverKind::Shared,
+                ArType::RefMut(_) => ReceiverKind::Mut,
+                _ => ReceiverKind::Own,
+            })
+        })
 }

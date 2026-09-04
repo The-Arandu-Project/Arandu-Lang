@@ -71,8 +71,70 @@ pub(super) fn synth_literal_expr(
     expected: Option<TypeId>,
 ) -> Option<TypeId> {
     match kind {
-        ExprKind::Int { .. } => Some(checker.intern(ArType::IntLiteral)),
-        ExprKind::Float { .. } => Some(checker.intern(ArType::FloatLiteral)),
+        ExprKind::Int { value, .. } => {
+            if let Some(exp_id) = expected
+                && let ArType::Primitive(p) = checker.resolve(exp_id)
+            {
+                if p.is_float() {
+                    return Some(exp_id);
+                }
+                if p.is_integer()
+                    && let Some(parsed) = arandu_middle::literal_pool::parse_int_literal(value)
+                {
+                    let fits = match p {
+                        Primitive::I8 => (i8::MIN as i128..=i8::MAX as i128).contains(&parsed),
+                        Primitive::I16 => (i16::MIN as i128..=i16::MAX as i128).contains(&parsed),
+                        Primitive::I32 => (i32::MIN as i128..=i32::MAX as i128).contains(&parsed),
+                        Primitive::I64 => (i64::MIN as i128..=i64::MAX as i128).contains(&parsed),
+                        Primitive::Int => {
+                            // int é pointer-width signed; o range depende do target.
+                            (checker.target_info.int_min()..=checker.target_info.int_max())
+                                .contains(&parsed)
+                        }
+                        Primitive::U8 | Primitive::Byte => (0..=u8::MAX as i128).contains(&parsed),
+                        Primitive::U16 => (0..=u16::MAX as i128).contains(&parsed),
+                        Primitive::U32 => (0..=u32::MAX as i128).contains(&parsed),
+                        Primitive::U64 => parsed >= 0 && (parsed as u128 <= u64::MAX as u128),
+                        Primitive::Uint => {
+                            // uint é pointer-width unsigned; o range depende do target.
+                            parsed >= 0 && (parsed as u128 <= checker.target_info.uint_max())
+                        }
+                        _ => true,
+                    };
+                    if !fits {
+                        checker.diagnostics.push(
+                            crate::Diagnostic::error(
+                                crate::DiagCode::T038IntegerLiteralOutOfRange,
+                                format!(
+                                    "integer literal `{value}` does not fit in `{}`",
+                                    p.as_str()
+                                ),
+                                span,
+                            )
+                            .with_label(
+                                span,
+                                format!("value is outside the range of `{}`", p.as_str()),
+                            )
+                            .with_hint("use a wider integer type or change the literal value"),
+                        );
+                    }
+                    // Keep the contextual type after reporting. Falling back to
+                    // `IntLiteral` would make generic literal unification accept
+                    // the same out-of-range value silently.
+                    return Some(exp_id);
+                }
+            }
+            Some(checker.intern(ArType::IntLiteral))
+        }
+        ExprKind::Float { .. } => {
+            if let Some(exp_id) = expected
+                && let ArType::Primitive(p) = checker.resolve(exp_id)
+                && p.is_float()
+            {
+                return Some(exp_id);
+            }
+            Some(checker.intern(ArType::FloatLiteral))
+        }
         ExprKind::Bool { .. } => Some(checker.intern(ArType::Primitive(Primitive::Bool))),
         ExprKind::Char { .. } => Some(checker.intern(ArType::Primitive(Primitive::Char))),
         ExprKind::InterpolatedString { parts } => {
@@ -137,7 +199,7 @@ pub(super) fn synth_literal_expr(
             let struct_ty = checker.lower_type_expr(ty_id, checker.type_scope());
             let mut struct_ty_id = checker.intern(struct_ty);
             let struct_info = match checker.resolve(struct_ty_id) {
-                ArType::Named(symbol_id, generic_args) => Some((symbol_id, generic_args.clone())),
+                ArType::Named(symbol_id, generic_args) => Some((symbol_id, generic_args)),
                 _ => None,
             };
             if let Some((symbol_id, mut generic_args)) = struct_info {
@@ -197,21 +259,55 @@ pub(super) fn synth_literal_expr(
                 }
 
                 if let Some(fields_def) = field_map {
+                    let mut has_update_base = false;
                     for fid in &field_ids {
                         let field = checker.pool.field_init(*fid);
+                        if field.name == ".." {
+                            has_update_base = true;
+                            let base_ty_id = super::super::synth_expr_expected(
+                                checker,
+                                field.value,
+                                Some(struct_ty_id),
+                            );
+                            let base_ty = checker.resolve(base_ty_id);
+                            let expected_struct_ty = checker.resolve(struct_ty_id);
+                            if !types::unify(
+                                &expected_struct_ty,
+                                &base_ty,
+                                &checker.type_info.type_interner,
+                            ) {
+                                checker.add_constraint(
+                                    expected_struct_ty,
+                                    base_ty_id,
+                                    ConstraintOrigin::FieldInit {
+                                        struct_span: span,
+                                        field_name: "..".to_string(),
+                                        field_span: field.span,
+                                        value_span: checker.pool.expr_span(field.value),
+                                    },
+                                );
+                            }
+                            continue;
+                        }
                         let defined_field_ty_opt = fields_def.get(field.name.as_str()).cloned();
                         // `nil` in a field needs the field's expected type (`ptr[T]`, `T?`),
                         // not the enclosing function return (which produced bogus `int?` /
                         // `Vec?` for `data: nil` in Vec / BoxG).
+                        let expected_id_opt = defined_field_ty_opt
+                            .as_ref()
+                            .map(|ty| checker.intern(ty.clone()));
                         let field_val_ty_id =
                             if matches!(checker.pool.expr(field.value), ExprKind::Nil)
-                                && let Some(ref expected) = defined_field_ty_opt
+                                && let Some(expected_id) = expected_id_opt
                             {
-                                let expected_id = checker.intern(expected.clone());
                                 checker.type_info.record_expr_type(field.value, expected_id);
                                 expected_id
                             } else {
-                                synth_expr(checker, field.value)
+                                super::super::synth_expr_expected(
+                                    checker,
+                                    field.value,
+                                    expected_id_opt,
+                                )
                             };
                         if let Some(defined_field_ty) = defined_field_ty_opt {
                             let field_val_ty = checker.resolve(field_val_ty_id);
@@ -244,23 +340,25 @@ pub(super) fn synth_literal_expr(
                         }
                     }
 
-                    let mut missing_fields = Vec::new();
-                    for def_name in fields_def.keys() {
-                        if !seen_fields.iter().any(|(name, _)| name == def_name) {
-                            missing_fields.push(format!("`{def_name}`"));
+                    if !has_update_base {
+                        let mut missing_fields = Vec::new();
+                        for def_name in fields_def.keys() {
+                            if !seen_fields.iter().any(|(name, _)| name == def_name) {
+                                missing_fields.push(format!("`{def_name}`"));
+                            }
                         }
-                    }
-                    if !missing_fields.is_empty() {
-                        missing_fields.sort();
-                        let missing_str = missing_fields.join(", ");
-                        let struct_name = checker.symbols.get(symbol_id).name.clone();
-                        let diag = crate::Diagnostic::error(
-                            crate::DiagCode::T027MissingStructFields,
-                            format!("missing fields {missing_str} in struct initializer"),
-                            span,
-                        )
-                        .with_label(span, format!("instantiating struct '{struct_name}' here"));
-                        checker.diagnostics.push(diag);
+                        if !missing_fields.is_empty() {
+                            missing_fields.sort();
+                            let missing_str = missing_fields.join(", ");
+                            let struct_name = checker.symbols.get(symbol_id).name.clone();
+                            let diag = crate::Diagnostic::error(
+                                crate::DiagCode::T027MissingStructFields,
+                                format!("missing fields {missing_str} in struct initializer"),
+                                span,
+                            )
+                            .with_label(span, format!("instantiating struct '{struct_name}' here"));
+                            checker.diagnostics.push(diag);
+                        }
                     }
                 } else {
                     for fid in field_ids {
@@ -279,11 +377,15 @@ pub(super) fn synth_literal_expr(
         }
         ExprKind::Array { items } => {
             let items_range = *items;
+            let expected_elem_id = expected.and_then(|exp_id| match checker.resolve(exp_id) {
+                ArType::Array(_, elem_id) | ArType::Slice(elem_id) => Some(elem_id),
+                _ => None,
+            });
             let error_id = checker.intern(ArType::Error);
-            let mut elem_ty_id = error_id;
+            let mut elem_ty_id = expected_elem_id.unwrap_or(error_id);
             let item_ids = checker.pool.expr_list(items_range).to_vec();
             for (i, item_id) in item_ids.iter().copied().enumerate() {
-                let item_ty_id = synth_expr(checker, item_id);
+                let item_ty_id = super::synth_expr_expected(checker, item_id, expected_elem_id);
                 if checker.resolve(elem_ty_id).is_error() {
                     elem_ty_id = item_ty_id;
                 } else {

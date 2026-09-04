@@ -9,10 +9,11 @@ use crate::cli_error::{CliFailure, CliResult, CliSuccess};
 use crate::commands::test::{
     DiscoveryCase, DiscoveryReport, discovery_path, discovery_position, project_test_sources,
 };
-use crate::pipeline::{open_entry_file, pipeline_lower};
+use crate::pipeline::{ensure_host_jit_layout, open_entry_file, pipeline_lower};
 use crate::project::{self, ProjectFlags};
 use crate::test_runner;
 
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_project_bench(
     start: &Path,
     flags: &ProjectFlags,
@@ -21,8 +22,10 @@ pub fn cmd_project_bench(
     filter: Option<&str>,
     harness_child: bool,
     runner: &test_runner::BenchmarkRunnerOptions,
+    data_layout: arandu_middle::layout::DataLayout,
 ) -> CliResult {
     let mut db = arandu_query::DatabaseImpl::new();
+    db.set_target_config(data_layout);
     let ctx = project::load_project(&mut db, start, flags).map_err(|error| {
         CliFailure::operational("load benchmark project", Some(start.to_path_buf()), error)
     })?;
@@ -137,7 +140,7 @@ pub fn cmd_project_bench(
                 .unwrap_or(runner.config.samples),
         };
         arandu_runtime::testing_runtime::init_benchmark_context(exact, sequence, config.clone());
-        let execution = run_exact_benchmark(&ctx, exact);
+        let execution = run_exact_benchmark(&ctx, exact, data_layout);
         let mut event = arandu_runtime::testing_runtime::finish_benchmark_context().unwrap_or(
             arandu_codegen::testing::BenchmarkEventV1 {
                 sequence,
@@ -178,7 +181,11 @@ pub fn cmd_project_bench(
     Ok(CliSuccess::ProgramExit(outcome.exit_code()))
 }
 
-pub fn run_exact_benchmark(ctx: &project::ProjectContext, exact: &str) -> CliResult {
+pub fn run_exact_benchmark(
+    ctx: &project::ProjectContext,
+    exact: &str,
+    data_layout: arandu_middle::layout::DataLayout,
+) -> CliResult {
     let function = exact.rsplit("::").next().unwrap_or_default();
     let sources = project_test_sources(ctx).map_err(|error| {
         CliFailure::operational("discover benchmark sources", Some(ctx.root.clone()), error)
@@ -189,11 +196,13 @@ pub fn run_exact_benchmark(ctx: &project::ProjectContext, exact: &str) -> CliRes
             continue;
         }
         let mut db = arandu_query::DatabaseImpl::new();
+        db.set_target_config(data_layout);
         db.set_stdlib_root(ctx.stdlib.path.clone());
         crate::pipeline::register_stdlib_sources(&mut db, &ctx.stdlib.path);
         let (file, filepath) =
             open_entry_file(&db, &mut arandu_base::SourceRegistry::default(), &path);
         let artifacts = pipeline_lower(&db, file, &filepath);
+        ensure_host_jit_layout(data_layout)?;
         let backend = arandu_backend_cranelift::CraneliftBackend::try_new()
             .map_err(|diagnostic| CliFailure::diagnostics([diagnostic], Some(path.clone())))?;
         let output = arandu_semantics::CodegenBackend::compile(

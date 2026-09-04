@@ -12,6 +12,8 @@
 //!     .with_hint("add an explicit type annotation")
 //! ```
 
+pub mod registry;
+
 pub use arandu_base::source_registry::SourceRegistry;
 pub use arandu_base::span::Span;
 use std::fmt;
@@ -191,6 +193,8 @@ pub enum DiagCode {
     T036InvalidTestContract,
     /// Invalid signature for a function marked with `@Benchmark`.
     T037InvalidBenchmarkContract,
+    /// Integer literal cannot be represented by its contextual integer type.
+    T038IntegerLiteralOutOfRange,
 
     // ── Lowering (L) ──
     L001LoweringUnresolvedSymbol,
@@ -314,6 +318,7 @@ impl DiagCode {
             T035InvalidDestructor,
             T036InvalidTestContract,
             T037InvalidBenchmarkContract,
+            T038IntegerLiteralOutOfRange,
             L001LoweringUnresolvedSymbol,
             G001GenericInstantiationCycle,
             G002GenericInstantiationLimit,
@@ -351,12 +356,10 @@ impl DiagCode {
         ]
     };
 
-    /// User-facing codes that require `docs/errors/{as_str()}.md`.
-    ///
-    /// ICE codes are internal and are documented elsewhere (if at all).
+    /// Returns `true` if this diagnostic code represents an Internal Compiler Error (ICE).
     #[must_use]
-    pub fn requires_error_doc(self) -> bool {
-        !matches!(
+    pub fn is_ice(self) -> bool {
+        matches!(
             self,
             DiagCode::ICELX001
                 | DiagCode::ICEP001
@@ -367,6 +370,14 @@ impl DiagCode {
                 | DiagCode::ICEGEN001
                 | DiagCode::ICEGEN002
         )
+    }
+
+    /// User-facing codes that require `docs/errors/{as_str()}.md`.
+    ///
+    /// ICE codes are internal and are documented elsewhere (if at all).
+    #[must_use]
+    pub fn requires_error_doc(self) -> bool {
+        !self.is_ice()
     }
 
     /// File stem for `docs/errors/{stem}.md` (same as [`Self::as_str`] for user codes).
@@ -438,6 +449,7 @@ impl DiagCode {
             DiagCode::T035InvalidDestructor => "T035",
             DiagCode::T036InvalidTestContract => "T036",
             DiagCode::T037InvalidBenchmarkContract => "T037",
+            DiagCode::T038IntegerLiteralOutOfRange => "T038",
             DiagCode::L001LoweringUnresolvedSymbol => "L001",
             DiagCode::G001GenericInstantiationCycle => "G001",
             DiagCode::G002GenericInstantiationLimit => "G002",
@@ -589,9 +601,6 @@ pub struct Diagnostic {
     pub hints: Vec<Hint>,
 }
 
-pub mod registry;
-pub use arandu_base::index_vec;
-
 impl Diagnostic {
     /// Creates a user-facing error diagnostic.
     pub fn error(code: DiagCode, message: impl Into<String>, span: Span) -> Self {
@@ -649,6 +658,12 @@ impl Diagnostic {
         }
     }
 
+    /// Returns `true` if this diagnostic represents an Internal Compiler Error (ICE).
+    #[must_use]
+    pub fn is_ice(&self) -> bool {
+        self.kind == DiagnosticKind::InternalCompilerError || self.code.is_ice()
+    }
+
     /// Creates an Internal Compiler Error (ICE) diagnostic.
     ///
     /// ICEs indicate a bug in the compiler itself, not in the user's code.
@@ -664,6 +679,24 @@ impl Diagnostic {
             notes: Vec::new(),
             hints: Vec::new(),
         }
+    }
+
+    /// Creates an Internal Compiler Error (ICE) diagnostic with optional item context and phase note.
+    pub fn ice_with_context(
+        code: DiagCode,
+        message: impl Into<String>,
+        span: Span,
+        item_name: Option<&str>,
+        phase_note: Option<&str>,
+    ) -> Self {
+        let mut diag = Self::ice(code, message, span);
+        if let Some(item) = item_name {
+            diag = diag.with_note(format!("while compiling item `{item}`"));
+        }
+        if let Some(note) = phase_note {
+            diag = diag.with_note(format!("compiler state note: {note}"));
+        }
+        diag
     }
 
     /// Attaches a secondary source label to this diagnostic.
@@ -784,7 +817,7 @@ impl std::error::Error for Diagnostic {}
 
 impl miette::Diagnostic for Diagnostic {
     fn code<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
-        Some(Box::new(self.code.to_string()))
+        Some(Box::new(self.code.as_str()))
     }
 
     fn severity(&self) -> Option<miette::Severity> {
@@ -797,25 +830,23 @@ impl miette::Diagnostic for Diagnostic {
     }
 
     fn labels(&self) -> Option<Box<dyn Iterator<Item = miette::LabeledSpan> + '_>> {
-        let mut spans = vec![miette::LabeledSpan::new_primary_with_span(
+        let primary = std::iter::once(miette::LabeledSpan::new_primary_with_span(
             None,
             miette::SourceSpan::new(
                 (self.span.start as usize).into(),
                 (self.span.end - self.span.start) as usize,
             ),
-        )];
-
-        for label in &self.labels {
-            spans.push(miette::LabeledSpan::new_with_span(
+        ));
+        let secondary = self.labels.iter().map(|label| {
+            miette::LabeledSpan::new_with_span(
                 Some(label.message.clone()),
                 miette::SourceSpan::new(
                     (label.span.start as usize).into(),
                     (label.span.end - label.span.start) as usize,
                 ),
-            ));
-        }
-
-        Some(Box::new(spans.into_iter()))
+            )
+        });
+        Some(Box::new(primary.chain(secondary)))
     }
 
     fn help<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
@@ -825,7 +856,7 @@ impl miette::Diagnostic for Diagnostic {
             let hints_str = self
                 .hints
                 .iter()
-                .map(|h| h.message.clone())
+                .map(|h| h.message.as_str())
                 .collect::<Vec<_>>()
                 .join("\n");
             Some(Box::new(hints_str))

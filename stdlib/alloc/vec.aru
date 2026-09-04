@@ -1,96 +1,148 @@
 module std.alloc.vec
 
-/// Minimal 0.1 — **IN optional** growable array (`Vec<T>`).
+/// Minimal 0.1 — growable array (`Vec<T>`).
 ///
-/// # Design (PROMOTE-L6 complete for Vec thin)
+/// # Design
 /// Contiguous pure-buffer storage: host raw allocators
 /// (`ar_vec_malloc` / `ar_vec_realloc` / `ar_vec_buf_free`) + typed access via
 /// mem intrinsics (`sizeOf` / `ptrOffset` / `ptrRead` / `ptrWrite`).
 ///
-/// **Free-function API** (product surface for Minimal; method-style `v.push`
-/// remains post-L6 / method mono). Nested free-func mono uses worklist
-/// specialization (`push` → `ensure_capacity`).
-///
-/// Growth: geometric factor 2, minimum capacity 8 (classic dynamic-array
-/// amortised O(1) append; same family as Rust `Vec` / C++ `vector`).
-///
-/// Mut-ref field stores through free-func params need AMIR
-/// `mark_local_materialized` (prune must keep the base bind).
-///
-/// **Not** in default `arandu new` template (optional import).
-/// Sibling IN optional: `gen_arena`, `allocator_api`, method-style `v.push` (same module).
+/// Growth: geometric factor 2, minimum capacity 8 (amortised O(1) append).
 
 import std.core.mem as mem
+import std.core.intrinsics as intrinsics
 
 extern "C" {
-    func ar_vec_malloc(size: u64): ptr[u8]
-    func ar_vec_buf_free(p: ptr[u8], size: u64): void
-    func ar_vec_realloc(p: ptr[u8], oldSize: u64, newSize: u64): ptr[u8]
-    func abort(): void
+    func ar_vec_malloc(size: uint): ptr[u8]
+    func ar_vec_buf_free(p: ptr[u8], size: uint): void
+    func ar_vec_realloc(p: ptr[u8], oldSize: uint, newSize: uint): ptr[u8]
 }
 
 /// Growable contiguous buffer of `T`.
 public struct Vec<T> {
     data: ptr[T]
-    len: u64
-    capacity: u64
+    len: uint
+    capacity: uint
 }
 
-/// Empty vector (no allocation until first `push` or `reserve` / `with_capacity`).
+/// Creates a new empty `Vec<T>` without heap allocation.
+///
+/// # Examples
+/// ```arandu
+/// let v = vec.new<int>()
+/// vec.len<int>(v) // 0
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
 public func new<T>(): Vec<T> {
     return Vec<T> {
         data: nil,
-        len: 0 as u64,
-        capacity: 0 as u64,
+        len: 0,
+        capacity: 0,
     }
 }
 
-/// Empty vector with room for at least `cap` elements (may over-allocate).
-public func with_capacity<T>(cap: u64): Vec<T> {
+/// Creates an empty `Vec<T>` preallocated with room for at least `cap` elements.
+///
+/// # Examples
+/// ```arandu
+/// let v = vec.withCapacity<int>(16)
+/// vec.capacity<int>(v) // >= 16
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(cap)
+public func withCapacity<T>(cap: uint): Vec<T> {
     let mut v = new<T>()
-    ensure_capacity<T>(v, cap)
+    ensureCapacity<T>(v, cap)
     return v
 }
 
-/// Ensure absolute capacity ≥ `minCap` (internal; used by push / with_capacity).
-func ensure_capacity<T>(mut v: Vec<T>, minCap: u64): void {
+/// Ensure absolute capacity ≥ `minCap`.
+func ensureCapacity<T>(v: mut ref Vec<T>, minCap: uint): void {
     if v.capacity >= minCap {
         return
     }
-    let mut newCap: u64 = v.capacity
+    let maxCap: uint = 2147483647
+    if minCap > maxCap {
+        unsafe {
+            intrinsics.abort()
+        }
+    }
+    let mut newCap: uint = v.capacity
     if newCap == 0 {
-        newCap = 8 as u64
+        newCap = 8
     }
     while newCap < minCap {
-        newCap = newCap * 2
+        if newCap > maxCap / 2 {
+            newCap = maxCap
+        } else {
+            newCap = newCap * 2
+        }
     }
     let elem = mem.sizeOf<T>()
+    if elem > 0 && newCap > (maxCap / elem) {
+        unsafe {
+            intrinsics.abort()
+        }
+    }
     let oldBytes = v.capacity * elem
     let newBytes = newCap * elem
     unsafe {
         let nullp: ptr[u8] = nil
         let p = ar_vec_realloc(v.data as ptr[u8], oldBytes, newBytes)
         if p == nullp {
-            abort()
+            intrinsics.abort()
         }
         v.data = p as ptr[T]
         v.capacity = newCap
     }
 }
 
-/// Reserve room for at least `additional` more elements beyond `len`.
+/// Reserves capacity for at least `additional` more elements beyond current `len`.
 ///
-/// Mirrors Rust `Vec::reserve`: ensures `capacity >= len + additional`.
-public func reserve<T>(mut v: Vec<T>, additional: u64): void {
+/// # Examples
+/// ```arandu
+/// let mut v = vec.new<int>()
+/// vec.reserve<int>(v, 10)
+/// vec.capacity<int>(v) // >= 10
+/// ```
+///
+/// # Complexity
+/// Time: O(n) reallocation | Space: O(capacity)
+public func reserve<T>(v: mut ref Vec<T>, additional: uint): void {
+    let maxCap: uint = 2147483647
+    if additional > maxCap - v.len {
+        unsafe {
+            intrinsics.abort()
+        }
+    }
     let need = v.len + additional
-    ensure_capacity<T>(v, need)
+    ensureCapacity<T>(v, need)
 }
 
-/// Append `value` (amortized O(1)).
-public func push<T>(mut v: Vec<T>, value: T): void {
+/// Appends `value` to the end of the vector.
+///
+/// # Examples
+/// ```arandu
+/// let mut v = vec.new<int>()
+/// vec.push<int>(v, 42)
+/// vec.len<int>(v) // 1
+/// ```
+///
+/// # Complexity
+/// Time: Amortized O(1) | Space: O(1)
+public func push<T>(v: mut ref Vec<T>, value: T): void {
+    let maxCap: uint = 2147483647
+    if v.len >= maxCap {
+        unsafe {
+            intrinsics.abort()
+        }
+    }
     let need = v.len + 1
     if v.capacity < need {
-        ensure_capacity<T>(v, need)
+        ensureCapacity<T>(v, need)
     }
     unsafe {
         let dest = mem.ptrOffset<T>(v.data, v.len as i32)
@@ -99,8 +151,19 @@ public func push<T>(mut v: Vec<T>, value: T): void {
     v.len = v.len + 1
 }
 
-/// Remove last element, or `None` if empty.
-public func pop<T>(mut v: Vec<T>): Option<T> {
+/// Removes and returns the last element, or `Option.None` if the vector is empty.
+///
+/// # Examples
+/// ```arandu
+/// let mut v = vec.new<int>()
+/// vec.push<int>(v, 10)
+/// vec.pop<int>(v) // Some(10)
+/// vec.pop<int>(v) // None
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func pop<T>(v: mut ref Vec<T>): Option<T> {
     if v.len == 0 {
         return Option.None
     }
@@ -111,9 +174,21 @@ public func pop<T>(mut v: Vec<T>): Option<T> {
     }
 }
 
-/// Element at `index`, or `None` if out of range.
-public func get<T>(shared v: Vec<T>, index: u64): Option<T> {
-    if index >= v.len {
+/// Returns a copy of the element at `index`, or `Option.None` if out of bounds.
+///
+/// # Examples
+/// ```arandu
+/// let mut v = vec.new<int>()
+/// vec.push<int>(v, 100)
+/// vec.get<int>(v, 0) // Some(100)
+/// vec.get<int>(v, 5) // None
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func get<T>(v: ref Vec<T>, index: uint): Option<T> {
+    let maxCap: uint = 2147483647
+    if index >= v.len || index > maxCap {
         return Option.None
     }
     unsafe {
@@ -122,9 +197,21 @@ public func get<T>(shared v: Vec<T>, index: u64): Option<T> {
     }
 }
 
-/// Overwrite index; `false` if out of range.
-public func put<T>(mut v: Vec<T>, index: u64, value: T): bool {
-    if index >= v.len {
+/// Overwrites the element at `index` with `value`, returning `false` if out of bounds.
+///
+/// # Examples
+/// ```arandu
+/// let mut v = vec.new<int>()
+/// vec.push<int>(v, 10)
+/// vec.put<int>(v, 0, 20) // true
+/// vec.put<int>(v, 5, 20) // false
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func put<T>(v: mut ref Vec<T>, index: uint, value: T): bool {
+    let maxCap: uint = 2147483647
+    if index >= v.len || index > maxCap {
         return false
     }
     unsafe {
@@ -134,92 +221,156 @@ public func put<T>(mut v: Vec<T>, index: u64, value: T): bool {
     return true
 }
 
-/// Number of elements.
-public func len<T>(shared v: Vec<T>): u64 {
+/// Returns the number of elements contained in the vector.
+///
+/// # Examples
+/// ```arandu
+/// let mut v = vec.new<int>()
+/// vec.len<int>(v) // 0
+/// vec.push<int>(v, 1)
+/// vec.len<int>(v) // 1
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func len<T>(v: ref Vec<T>): uint {
     return v.len
 }
 
-/// Allocated capacity (element slots).
-public func capacity<T>(shared v: Vec<T>): u64 {
+/// Returns the total number of elements the vector can hold without reallocating.
+///
+/// # Examples
+/// ```arandu
+/// let v = vec.withCapacity<int>(32)
+/// vec.capacity<int>(v) // >= 32
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func capacity<T>(v: ref Vec<T>): uint {
     return v.capacity
 }
 
-/// `true` if `len == 0`.
-public func is_empty<T>(shared v: Vec<T>): bool {
+/// Returns `true` if the vector contains no elements (`len == 0`).
+///
+/// # Examples
+/// ```arandu
+/// let mut v = vec.new<int>()
+/// vec.isEmpty<int>(v) // true
+/// vec.push<int>(v, 1)
+/// vec.isEmpty<int>(v) // false
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func isEmpty<T>(v: ref Vec<T>): bool {
     return v.len == 0
 }
 
-/// Drop length to zero (capacity retained).
-public func clear<T>(mut v: Vec<T>): void {
-    v.len = 0 as u64
+/// Returns a shared borrowed view `[]T` of the initialized elements.
+///
+/// # Examples
+/// ```arandu
+/// let mut v = vec.new<int>()
+/// vec.push<int>(v, 10)
+/// let s = vec.asSlice<int>(v)
+/// slice.len<int>(s) // 1
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func asSlice<T>(v: ref Vec<T>): []T {
+    unsafe {
+        return intrinsics.sliceFromRaw<Vec<T>, T>(v, v.data, v.len)
+    }
 }
 
-/// Deallocate the buffer and reset to empty.
+/// Clears the vector, removing all values but retaining allocated capacity.
 ///
-/// Named `destroy` (not `free`) to avoid the reserved builtin `free`.
-public func destroy<T>(mut v: Vec<T>): void {
+/// # Examples
+/// ```arandu
+/// let mut v = vec.new<int>()
+/// vec.push<int>(v, 10)
+/// vec.clear<int>(v)
+/// vec.len<int>(v) // 0
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func clear<T>(v: mut ref Vec<T>): void {
+    v.len = 0
+}
+
+/// Deallocates the heap buffer and resets the vector to empty.
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func destroy<T>(v: mut ref Vec<T>): void {
     if v.capacity > 0 {
         let size = v.capacity * mem.sizeOf<T>()
         unsafe {
             ar_vec_buf_free(v.data as ptr[u8], size)
         }
         v.data = nil
-        v.capacity = 0 as u64
-        v.len = 0 as u64
+        v.capacity = 0
+        v.len = 0
     }
 }
 
-// ── Method-style surface (receiver mono; same bodies as free-funcs) ─────────
-// Restated type params on methods (`Vec.push<T>`) share SymbolIds with the
-// struct; monomorphize peels `Vec<int>` receiver → specialize without `.push<int>`.
+// ── Method-style surface ───────────────────────────────────────────────────
 
-/// Method form of [`push`].
-public func Vec.push<T>(mut self, value: T): void {
+/// Appends `value` to the back of the vector.
+public func Vec.push<T>(self: mut ref Vec<T>, value: T): void {
     push(self, value)
 }
 
-/// Method form of [`pop`].
-public func Vec.pop<T>(mut self): Option<T> {
+/// Removes and returns the last element, or `Option.None` if empty.
+public func Vec.pop<T>(self: mut ref Vec<T>): Option<T> {
     return pop(self)
 }
 
-/// Method form of [`get`].
-public func Vec.get<T>(shared self, index: u64): Option<T> {
+/// Returns the element at `index`, or `Option.None` if out of bounds.
+public func Vec.get<T>(self: ref Vec<T>, index: uint): Option<T> {
     return get(self, index)
 }
 
-/// Method form of [`put`].
-public func Vec.put<T>(mut self, index: u64, value: T): bool {
+/// Overwrites the element at `index`, returning `false` if out of bounds.
+public func Vec.put<T>(self: mut ref Vec<T>, index: uint, value: T): bool {
     return put(self, index, value)
 }
 
-/// Method form of [`len`].
-public func Vec.len<T>(shared self): u64 {
+/// Returns the number of elements in the vector.
+public func Vec.len<T>(self: ref Vec<T>): uint {
     return len(self)
 }
 
-/// Method form of [`capacity`].
-public func Vec.capacity<T>(shared self): u64 {
+/// Returns the allocated capacity of the vector.
+public func Vec.capacity<T>(self: ref Vec<T>): uint {
     return capacity(self)
 }
 
-/// Method form of [`is_empty`].
-public func Vec.is_empty<T>(shared self): bool {
-    return is_empty(self)
+/// Returns `true` if the vector contains no elements.
+public func Vec.isEmpty<T>(self: ref Vec<T>): bool {
+    return isEmpty(self)
 }
 
-/// Method form of [`reserve`].
-public func Vec.reserve<T>(mut self, additional: u64): void {
+/// Returns a shared borrowed slice view of the vector elements.
+public func Vec.asSlice<T>(self: ref Vec<T>): []T {
+    return asSlice<T>(self)
+}
+
+/// Reserves capacity for at least `additional` more elements.
+public func Vec.reserve<T>(self: mut ref Vec<T>, additional: uint): void {
     reserve(self, additional)
 }
 
-/// Method form of [`clear`].
-public func Vec.clear<T>(mut self): void {
+/// Clears the vector, keeping allocated memory.
+public func Vec.clear<T>(self: mut ref Vec<T>): void {
     clear(self)
 }
 
-/// Method form of [`destroy`].
+/// Frees the heap buffer upon destruction.
 @Destructor
-public func Vec.destroy<T>(own self): void {
+public func Vec.destroy<T>(self: own Vec<T>): void {
     destroy(self)
 }

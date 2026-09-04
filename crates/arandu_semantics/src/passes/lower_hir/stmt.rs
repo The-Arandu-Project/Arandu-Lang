@@ -184,10 +184,10 @@ fn lower_stmt_raw(
             let expr_id = *expr;
             match pool.expr(expr_id) {
                 ExprKind::Match { value, arms } => {
-                    let arm_ids = pool.match_arm_list(*arms).to_vec();
+                    let arm_ids = pool.match_arm_list(*arms);
                     let vid = super::expr::lower_expr(type_check, pool, hir_pool, *value)?;
                     let arms_range =
-                        super::pattern::lower_match_arms(type_check, pool, hir_pool, &arm_ids)?;
+                        super::pattern::lower_match_arms(type_check, pool, hir_pool, arm_ids)?;
                     HirStmtKind::Match {
                         value: vid,
                         arms: arms_range,

@@ -112,6 +112,7 @@ pub enum TokenKind {
     KwOwn,
     KwMut,
     KwShared,
+    KwRef,
     KwSelf,
     KwPtr,
     KwAlloc,
@@ -119,6 +120,7 @@ pub enum TokenKind {
     KwDefer,
     KwErrdefer,
     KwLet,
+    KwImpl,
     TypeInt,
     TypeUint,
     TypeFloat,
@@ -206,7 +208,55 @@ impl fmt::Display for TokenKind {
 }
 
 impl TokenKind {
-    pub const COUNT: usize = 131;
+    pub const COUNT: usize = 133;
+
+    /// Returns `true` if this token kind represents a language keyword.
+    #[must_use]
+    pub const fn is_keyword(self) -> bool {
+        matches!(
+            self,
+            TokenKind::KwIf
+                | TokenKind::KwElse
+                | TokenKind::KwFor
+                | TokenKind::KwIn
+                | TokenKind::KwWhile
+                | TokenKind::KwMatch
+                | TokenKind::KwReturn
+                | TokenKind::KwBreak
+                | TokenKind::KwContinue
+                | TokenKind::KwFunc
+                | TokenKind::KwAsync
+                | TokenKind::KwAwait
+                | TokenKind::KwStruct
+                | TokenKind::KwEnum
+                | TokenKind::KwInterface
+                | TokenKind::KwConst
+                | TokenKind::KwType
+                | TokenKind::KwModule
+                | TokenKind::KwImport
+                | TokenKind::KwFrom
+                | TokenKind::KwAs
+                | TokenKind::KwPublic
+                | TokenKind::KwExtern
+                | TokenKind::KwUnsafe
+                | TokenKind::KwWhere
+                | TokenKind::KwCatch
+                | TokenKind::KwIs
+                | TokenKind::KwSet
+                | TokenKind::KwOwn
+                | TokenKind::KwMut
+                | TokenKind::KwShared
+                | TokenKind::KwRef
+                | TokenKind::KwSelf
+                | TokenKind::KwPtr
+                | TokenKind::KwAlloc
+                | TokenKind::KwFree
+                | TokenKind::KwDefer
+                | TokenKind::KwErrdefer
+                | TokenKind::KwLet
+                | TokenKind::KwImpl
+        )
+    }
 
     #[must_use]
     pub const fn index(&self) -> usize {
@@ -267,6 +317,8 @@ impl TokenKind {
             TokenKind::KwDefer => 53,
             TokenKind::KwErrdefer => 54,
             TokenKind::KwLet => 129,
+            TokenKind::KwRef => 130,
+            TokenKind::KwImpl => 131,
             TokenKind::TypeInt => 55,
             TokenKind::TypeUint => 56,
             TokenKind::TypeFloat => 57,
@@ -341,7 +393,7 @@ impl TokenKind {
             TokenKind::Ellipsis => 126,
             TokenKind::Arrow => 127,
             TokenKind::Eof => 128,
-            TokenKind::Error(_) => 130,
+            TokenKind::Error(_) => 132,
         }
     }
 
@@ -478,6 +530,8 @@ impl TokenKind {
             127 => TokenKind::Arrow,
             128 => TokenKind::Eof,
             129 => TokenKind::KwLet,
+            130 => TokenKind::KwRef,
+            131 => TokenKind::KwImpl,
             _ => TokenKind::Error(crate::LexErrorCode::InvalidChar),
         }
     }
@@ -505,8 +559,142 @@ impl TokenKind {
     }
 
     #[must_use]
-    pub fn name(&self) -> &'static str {
-        crate::token_name::name(self)
+    pub const fn name(&self) -> &'static str {
+        match self {
+            TokenKind::IdentValue => "IDENT_VALUE",
+            TokenKind::IdentType => "IDENT_TYPE",
+            TokenKind::DocComment => "DOC_COMMENT",
+            TokenKind::IntDec => "INT_DEC",
+            TokenKind::IntHex => "INT_HEX",
+            TokenKind::IntBin => "INT_BIN",
+            TokenKind::IntOct => "INT_OCT",
+            TokenKind::Float => "FLOAT",
+            TokenKind::StringStart => "STRING_START",
+            TokenKind::StringText => "STRING_TEXT",
+            TokenKind::StringEscape => "STRING_ESCAPE",
+            TokenKind::InterpStart => "INTERP_START",
+            TokenKind::InterpEnd => "INTERP_END",
+            TokenKind::StringEnd => "STRING_END",
+            TokenKind::RawString => "RAW_STRING",
+            TokenKind::MultilineStringStart => "MULTILINE_STRING_START",
+            TokenKind::MultilineStringEnd => "MULTILINE_STRING_END",
+            TokenKind::Char => "CHAR",
+            TokenKind::KwIf => "KW_IF",
+            TokenKind::KwElse => "KW_ELSE",
+            TokenKind::KwFor => "KW_FOR",
+            TokenKind::KwIn => "KW_IN",
+            TokenKind::KwWhile => "KW_WHILE",
+            TokenKind::KwMatch => "KW_MATCH",
+            TokenKind::KwReturn => "KW_RETURN",
+            TokenKind::KwBreak => "KW_BREAK",
+            TokenKind::KwContinue => "KW_CONTINUE",
+            TokenKind::KwFunc => "KW_FUNC",
+            TokenKind::KwAsync => "KW_ASYNC",
+            TokenKind::KwAwait => "KW_AWAIT",
+            TokenKind::KwStruct => "KW_STRUCT",
+            TokenKind::KwEnum => "KW_ENUM",
+            TokenKind::KwInterface => "KW_INTERFACE",
+            TokenKind::KwConst => "KW_CONST",
+            TokenKind::KwType => "KW_TYPE",
+            TokenKind::KwModule => "KW_MODULE",
+            TokenKind::KwImport => "KW_IMPORT",
+            TokenKind::KwFrom => "KW_FROM",
+            TokenKind::KwAs => "KW_AS",
+            TokenKind::KwPublic => "KW_PUBLIC",
+            TokenKind::KwExtern => "KW_EXTERN",
+            TokenKind::KwUnsafe => "KW_UNSAFE",
+            TokenKind::KwWhere => "KW_WHERE",
+            TokenKind::KwCatch => "KW_CATCH",
+            TokenKind::KwIs => "KW_IS",
+            TokenKind::KwSet => "KW_SET",
+            TokenKind::KwOwn => "KW_OWN",
+            TokenKind::KwMut => "KW_MUT",
+            TokenKind::KwShared => "KW_SHARED",
+            TokenKind::KwRef => "KW_REF",
+            TokenKind::KwSelf => "KW_SELF",
+            TokenKind::KwPtr => "KW_PTR",
+            TokenKind::KwAlloc => "KW_ALLOC",
+            TokenKind::KwFree => "KW_FREE",
+            TokenKind::KwDefer => "KW_DEFER",
+            TokenKind::KwErrdefer => "KW_ERRDEFER",
+            TokenKind::KwLet => "KW_LET",
+            TokenKind::KwImpl => "KW_IMPL",
+            TokenKind::TypeInt => "TYPE_INT",
+            TokenKind::TypeUint => "TYPE_UINT",
+            TokenKind::TypeFloat => "TYPE_FLOAT",
+            TokenKind::TypeI8 => "TYPE_I8",
+            TokenKind::TypeI16 => "TYPE_I16",
+            TokenKind::TypeI32 => "TYPE_I32",
+            TokenKind::TypeI64 => "TYPE_I64",
+            TokenKind::TypeU8 => "TYPE_U8",
+            TokenKind::TypeU16 => "TYPE_U16",
+            TokenKind::TypeU32 => "TYPE_U32",
+            TokenKind::TypeU64 => "TYPE_U64",
+            TokenKind::TypeF32 => "TYPE_F32",
+            TokenKind::TypeF64 => "TYPE_F64",
+            TokenKind::TypeBool => "TYPE_BOOL",
+            TokenKind::TypeByte => "TYPE_BYTE",
+            TokenKind::TypeChar => "TYPE_CHAR",
+            TokenKind::TypeStr => "TYPE_STR",
+            TokenKind::TypeAny => "TYPE_ANY",
+            TokenKind::TypeErr => "TYPE_ERR",
+            TokenKind::BoolTrue => "BOOL_TRUE",
+            TokenKind::BoolFalse => "BOOL_FALSE",
+            TokenKind::Nil => "NIL",
+            TokenKind::LParen => "LPAREN",
+            TokenKind::RParen => "RPAREN",
+            TokenKind::LBracket => "LBRACKET",
+            TokenKind::RBracket => "RBRACKET",
+            TokenKind::LBrace => "LBRACE",
+            TokenKind::RBrace => "RBRACE",
+            TokenKind::Comma => "COMMA",
+            TokenKind::Dot => "DOT",
+            TokenKind::Colon => "COLON",
+            TokenKind::Semicolon => "SEMICOLON",
+            TokenKind::At => "AT",
+            TokenKind::Plus => "PLUS",
+            TokenKind::Minus => "MINUS",
+            TokenKind::Star => "STAR",
+            TokenKind::Slash => "SLASH",
+            TokenKind::Percent => "PERCENT",
+            TokenKind::Amp => "AMP",
+            TokenKind::Pipe => "PIPE",
+            TokenKind::Caret => "CARET",
+            TokenKind::Lt => "LT",
+            TokenKind::Gt => "GT",
+            TokenKind::Equal => "EQUAL",
+            TokenKind::Bang => "BANG",
+            TokenKind::Tilde => "TILDE",
+            TokenKind::Question => "QUESTION",
+            TokenKind::SafeDot => "SAFE_DOT",
+            TokenKind::SafeIndexStart => "SAFE_INDEX_START",
+            TokenKind::NullCoalesce => "NULL_COALESCE",
+            TokenKind::LogicalOr => "LOGICAL_OR",
+            TokenKind::LogicalAnd => "LOGICAL_AND",
+            TokenKind::FatArrow => "FAT_ARROW",
+            TokenKind::PlusEqual => "PLUS_EQUAL",
+            TokenKind::MinusEqual => "MINUS_EQUAL",
+            TokenKind::StarEqual => "STAR_EQUAL",
+            TokenKind::SlashEqual => "SLASH_EQUAL",
+            TokenKind::PercentEqual => "PERCENT_EQUAL",
+            TokenKind::AmpEqual => "AMP_EQUAL",
+            TokenKind::PipeEqual => "PIPE_EQUAL",
+            TokenKind::CaretEqual => "CARET_EQUAL",
+            TokenKind::ShiftLeftEqual => "SHIFT_LEFT_EQUAL",
+            TokenKind::ShiftRightEqual => "SHIFT_RIGHT_EQUAL",
+            TokenKind::ShiftLeft => "SHIFT_LEFT",
+            TokenKind::ShiftRight => "SHIFT_RIGHT",
+            TokenKind::EqualEqual => "EQUAL_EQUAL",
+            TokenKind::BangEqual => "BANG_EQUAL",
+            TokenKind::LtEqual => "LT_EQUAL",
+            TokenKind::GtEqual => "GT_EQUAL",
+            TokenKind::RangeInclusive => "RANGE_INCLUSIVE",
+            TokenKind::RangeExclusive => "RANGE_EXCLUSIVE",
+            TokenKind::Ellipsis => "ELLIPSIS",
+            TokenKind::Arrow => "ARROW",
+            TokenKind::Eof => "EOF",
+            TokenKind::Error(_) => "ERROR",
+        }
     }
 
     #[must_use]
@@ -526,13 +714,13 @@ struct TokenFlags {
     prevents: bool,
 }
 
-static TOKEN_FLAGS_TABLE: [TokenFlags; 131] = {
+static TOKEN_FLAGS_TABLE: [TokenFlags; TokenKind::COUNT] = {
     let mut table = [TokenFlags {
         can_end: false,
         prevents: false,
-    }; 131];
+    }; TokenKind::COUNT];
     let mut i = 0;
-    while i < 131 {
+    while i < TokenKind::COUNT {
         let kind = TokenKind::index_to_token_kind(i);
         let can_end = matches!(
             kind,

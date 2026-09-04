@@ -4,34 +4,34 @@ module examples.minimal.m10_path_empty_windows
 import std.path as path
 
 func main(): int {
-    if !path.is_empty("") {
+    if !path.isEmpty("") {
         return 1
     }
-    if path.is_empty("x") {
+    if path.isEmpty("x") {
         return 2
     }
 
-    if !path.is_absolute("C:\\") {
+    if !path.isAbsolute("C:\\") {
         return 3
     }
-    if path.is_absolute("rel") {
+    if path.isAbsolute("rel") {
         return 4
     }
-    if path.is_absolute(".\\x") {
+    if path.isAbsolute(".\\x") {
         return 5
     }
 
-    if path.file_name(path.join("a", "b")) != "b" {
+    if path.fileName(path.join("a", "b")) != "b" {
         return 6
     }
-    if path.file_name(path.join("C:\\tmp", "x")) != "x" {
+    if path.fileName(path.join("C:\\tmp", "x")) != "x" {
         return 7
     }
-    if path.file_name(path.join("C:\\tmp", "C:\\abs")) != "abs" {
+    if path.fileName(path.join("C:\\tmp", "C:\\abs")) != "abs" {
         return 8
     }
 
-    if path.file_name("C:\\tmp\\leaf") != "leaf" {
+    if path.fileName("C:\\tmp\\leaf") != "leaf" {
         return 9
     }
     return 0

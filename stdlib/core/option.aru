@@ -1,23 +1,112 @@
 module std.core.option
 
-extern "C" {
-    func abort(): void
-}
+import std.core.intrinsics as intrinsics
 
+/// Algebraic data type representing either the presence (`Some`) or absence (`None`) of a value.
+///
+/// Replaces the use of null pointers (`nil`) with static, compile-time type safety.
+///
+/// # Examples
+/// ```arandu
+/// let a = Option.Some(42)
+/// let b: Option<int> = Option.None
+///
+/// if a.isSome() {
+///     let val = a.unwrapOr(0) // 42
+/// }
+/// ```
 public enum Option<T> {
+    /// Contains the payload value `T`.
     Some(T),
+    /// Represents the absence of a value.
     None,
 }
 
-/// Unwrap Some or abort.
-public func Option.expectOrAbort<T>(shared self, reason: str): T {
+/// Returns `true` if the option is the `Some` variant.
+///
+/// # Examples
+/// ```arandu
+/// Option.Some(10).isSome() // true
+/// Option.None.isSome()     // false
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func Option.isSome<T>(self: ref Option): bool {
+    match self {
+        Some(_) => {
+            return true
+        }
+        None => {
+            return false
+        }
+    }
+}
+
+/// Returns `true` if the option is the `None` variant.
+///
+/// # Examples
+/// ```arandu
+/// Option.None.isNone()     // true
+/// Option.Some(10).isNone() // false
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func Option.isNone<T>(self: ref Option): bool {
+    match self {
+        Some(_) => {
+            return false
+        }
+        None => {
+            return true
+        }
+    }
+}
+
+/// Unwraps the value contained in `Some`, or returns the provided `defaultVal` if `None`.
+///
+/// Consumes `self` by move.
+///
+/// # Examples
+/// ```arandu
+/// Option.Some(42).unwrapOr(0) // 42
+/// Option.None.unwrapOr(100)   // 100
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func Option.unwrapOr<T>(self: own Option, defaultVal: T): T {
+    match self {
+        Some(v) => {
+            return v
+        }
+        None => {
+            return defaultVal
+        }
+    }
+}
+
+/// Unwraps the value contained in `Some`, or aborts the program with a fatal trap if `None`.
+///
+/// # Traps / Abort
+/// If `self` is `None`, execution is terminated immediately and deterministically (`intrinsics.abort`).
+///
+/// # Examples
+/// ```arandu
+/// let v = Option.Some(42).expectOrAbort("expected value") // 42
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func Option.expectOrAbort<T>(self: own Option, reason: str): T {
     match self {
         Some(v) => {
             return v
         }
         None => {
             unsafe {
-                abort()
+                intrinsics.abort()
             }
         }
     }

@@ -50,6 +50,55 @@ fn parse_error_reports_expected_tokens_and_found_token() {
 }
 
 #[test]
+fn import_aliases_reject_reserved_keywords() {
+    let alias = "module tests.alias\nimport std.core.char as if\nfunc main(): void {}\n";
+    assert!(
+        parse(alias).is_err(),
+        "reserved control-flow keyword became an alias"
+    );
+
+    let named = "module tests.alias\nfrom std.core.char import { lenUtf8 as return }\nfunc main(): void {}\n";
+    assert!(
+        parse(named).is_err(),
+        "reserved control-flow keyword became a named alias"
+    );
+}
+
+#[test]
+fn canonical_borrow_syntax_is_uniform_in_parameters_returns_and_expressions() {
+    let source = r#"module tests.borrow_syntax
+func borrowValue(value: ref int): ref int {
+    return value
+}
+func replace(value: mut ref int): void {
+    let borrowed = mut ref value
+}
+func consume(value: own int): int {
+    let borrowed = ref value
+    return *borrowed
+}
+"#;
+
+    let dump = parse_to_string(source).expect("canonical borrow syntax should parse");
+    assert!(
+        dump.contains("value Ref "),
+        "missing shared reference type: {dump}"
+    );
+    assert!(
+        dump.contains("value RefMut "),
+        "missing exclusive reference type: {dump}"
+    );
+    assert!(
+        dump.contains("(ref , Path"),
+        "missing shared borrow expression: {dump}"
+    );
+    assert!(
+        dump.contains("(mut ref , Path"),
+        "missing exclusive borrow expression: {dump}"
+    );
+}
+
+#[test]
 fn ast_program_span_covers_source_before_eof() {
     let source = "module tests.spans\nfunc main() {\n    let value = add(1, 2)\n}\n";
     let program = parse(source).expect("parser should succeed");
@@ -421,4 +470,45 @@ fn test_new_project_template_parses_cleanly() {
             template.display()
         )
     });
+}
+
+#[test]
+fn test_impl_block_parsing() {
+    let source = r#"
+    module test;
+
+    struct Point {
+        x: float;
+        y: float;
+    }
+
+    impl Point {
+        public func new(x: float, y: float): Point {
+            return Point { x, y };
+        }
+
+        public func get_x(self: ref): float {
+            return self.x
+        }
+
+        public func set_x(self: mut ref, x: float) {
+            self.x = x
+        }
+    }
+    "#;
+
+    let program = arandu_parser::parse(source).expect("impl block should parse successfully");
+    assert_eq!(program.decls.len(), 4, "struct plus every impl member");
+    let names: Vec<_> = program
+        .decls
+        .iter()
+        .filter_map(|id| match program.pool.decl(*id) {
+            arandu_parser::TopLevelDecl::Func(func) => match &func.name {
+                arandu_parser::FuncName::Method { name, .. } => Some(name.as_str()),
+                arandu_parser::FuncName::Free { .. } => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(names, ["new", "get_x", "set_x"]);
 }

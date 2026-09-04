@@ -214,6 +214,33 @@ fn type_info_pod_struct_is_copy_vec_like_is_not() {
 
     // Bare ptr remains copy (cheap handle)
     assert!(info.is_copy(ptr_ty));
+
+    // Borrow carriers preserve the permission contract structurally: shared
+    // refs may be copied, exclusive refs must move.
+    let shared_ref = info.type_interner.intern(ArType::Ref(int_ty));
+    let exclusive_ref = info.type_interner.intern(ArType::RefMut(int_ty));
+    assert!(info.is_copy(shared_ref));
+    assert!(!info.is_copy(exclusive_ref));
+
+    let view_sym = SymbolId::new(0, 13);
+    let mut view_fields = FxHashMap::default();
+    view_fields.insert("value".into(), shared_ref);
+    info.struct_fields.insert(view_sym, Arc::new(view_fields));
+    let view_ty = info.type_interner.intern(ArType::Named(view_sym, vec![]));
+    assert!(info.is_copy(view_ty), "shared-ref carrier should be copy");
+
+    let mut_view_sym = SymbolId::new(0, 14);
+    let mut mut_view_fields = FxHashMap::default();
+    mut_view_fields.insert("value".into(), exclusive_ref);
+    info.struct_fields
+        .insert(mut_view_sym, Arc::new(mut_view_fields));
+    let mut_view_ty = info
+        .type_interner
+        .intern(ArType::Named(mut_view_sym, vec![]));
+    assert!(
+        !info.is_copy(mut_view_ty),
+        "exclusive-ref carrier must remain move-only"
+    );
 }
 
 #[test]
@@ -886,7 +913,13 @@ fn solver_logs_failed_constraints_in_generation_order() {
     let pool = AstPool::default();
     let symbols = SymbolTable::new(0);
     let resolved = ResolvedNames::default();
-    let mut checker = TypeChecker::new(symbols, resolved, Vec::new(), &pool);
+    let mut checker = TypeChecker::new(
+        symbols,
+        resolved,
+        Vec::new(),
+        &pool,
+        TargetInfo { pointer_width: 64 },
+    );
 
     let int_id = checker.intern(ArType::Primitive(Primitive::Int));
     let str_id = checker.intern(ArType::Primitive(Primitive::Str));
@@ -1086,4 +1119,325 @@ fn field_init_diagnostic_carries_struct_context_label() {
     let diag = constraint_to_diagnostic(&constraint, &empty_symbols(), &TypeInfo::new());
     assert_eq!(diag.labels.len(), 3);
     assert!(diag.labels[0].message.contains("initializing field 'name'"));
+}
+
+#[test]
+fn test_contextual_literal_overflow_diagnostic() {
+    let source = r#"
+    module test;
+    func take(x: u8): u8 { return x; }
+    func main(): u8 {
+        let a: u8 = 255;
+        let b: u8 = 256;
+        return take(300);
+    }
+    "#;
+    let program = arandu_parser::parse(source).unwrap();
+    let res = arandu_resolve::resolve_for_test(0, &program);
+    let check_res = crate::type_check(res, &program, TargetInfo { pointer_width: 64 });
+    let overflow_diags: Vec<_> = check_res
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == crate::DiagCode::T038IntegerLiteralOutOfRange)
+        .collect();
+    assert_eq!(
+        overflow_diags.len(),
+        2,
+        "256 and 300 must be flagged as out-of-range for u8"
+    );
+}
+
+#[test]
+fn test_contextual_literal_uint_overflow() {
+    let source = r#"
+    module test;
+    func take(x: uint): uint { return x; }
+    func main(): uint {
+        let a: uint = 4_000_000_000;
+        let b: uint = 4_000_000_001;
+        return take(5_000_000_000);
+    }
+    "#;
+    let program = arandu_parser::parse(source).unwrap();
+    let res = arandu_resolve::resolve_for_test(0, &program);
+
+    // 64-bit target: todos os literais cabem em uint (< u64::MAX).
+    let check_res = crate::type_check(res, &program, TargetInfo { pointer_width: 64 });
+    let overflow_diags: Vec<_> = check_res
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == crate::DiagCode::T038IntegerLiteralOutOfRange)
+        .collect();
+    assert_eq!(
+        overflow_diags.len(),
+        0,
+        "4_000_000_000 / 4_000_000_001 / 5_000_000_000 devem caber em uint 64-bit"
+    );
+
+    // 32-bit target: valores acima de u32::MAX estouram uint.
+    let source = r#"
+    module test;
+    func take(x: uint): uint { return x; }
+    func main(): uint {
+        let a: uint = 4_294_967_296;
+        let b: uint = 7_000_000_000;
+        return take(8_000_000_000);
+    }
+    "#;
+    let program = arandu_parser::parse(source).unwrap();
+    let res = arandu_resolve::resolve_for_test(0, &program);
+    let check_res = crate::type_check(res, &program, TargetInfo { pointer_width: 32 });
+    let overflow_diags: Vec<_> = check_res
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == crate::DiagCode::T038IntegerLiteralOutOfRange)
+        .collect();
+    assert_eq!(
+        overflow_diags.len(),
+        3,
+        "4_294_967_296 / 7_000_000_000 / 8_000_000_000 devem estourar uint 32-bit"
+    );
+
+    // 32-bit target: valores <= u32::MAX continuam válidos.
+    let source = r#"
+    module test;
+    func main(): uint {
+        return 4_294_967_295;
+    }
+    "#;
+    let program = arandu_parser::parse(source).unwrap();
+    let res = arandu_resolve::resolve_for_test(0, &program);
+    let check_res = crate::type_check(res, &program, TargetInfo { pointer_width: 32 });
+    let overflow_diags: Vec<_> = check_res
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == crate::DiagCode::T038IntegerLiteralOutOfRange)
+        .collect();
+    assert_eq!(overflow_diags.len(), 0, "u32::MAX cabe em uint 32-bit");
+}
+
+#[test]
+fn test_impl_multiple_methods() {
+    let source = r#"
+    module test;
+    struct Point { x: float; y: float }
+    impl Point {
+        public func new(x: float, y: float): Point { return Point { x, y } }
+        public func getX(self: ref): float { return self.x }
+        public func setX(self: mut ref, x: float) { self.x = x }
+    }
+    func main(): float {
+        let p = Point.new(1.0, 2.0);
+        return p.getX()
+    }
+    "#;
+    let program = arandu_parser::parse(source).unwrap();
+    let res = arandu_resolve::resolve_for_test(0, &program);
+    let check_res = crate::type_check(res, &program, TargetInfo { pointer_width: 64 });
+    let names: Vec<_> = program
+        .decls
+        .iter()
+        .filter_map(|id| match program.pool.decl(*id) {
+            arandu_parser::TopLevelDecl::Func(func) => match &func.name {
+                arandu_parser::FuncName::Method { name, .. } => Some(name.as_str()),
+                arandu_parser::FuncName::Free { .. } => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        names.len(),
+        3,
+        "impl should have 3 methods: new, getX, setX"
+    );
+    assert!(names.contains(&"new"), "new should be present");
+    assert!(names.contains(&"getX"), "getX should be present");
+    assert!(names.contains(&"setX"), "setX should be present");
+    assert_eq!(
+        check_res.diagnostics.len(),
+        0,
+        "impl with multiple methods should have zero diagnostics"
+    );
+}
+
+#[test]
+fn test_binary_op_contextual_literal_inference() {
+    let source = r#"
+    module test;
+    func add_one(x: uint): uint {
+        return x + 1;
+    }
+    func one_plus(x: uint): uint {
+        return 1 + x;
+    }
+    func add_floats(x: f32): f32 {
+        return x + 2.5;
+    }
+    "#;
+    let program = arandu_parser::parse(source).unwrap();
+    let res = arandu_resolve::resolve_for_test(0, &program);
+    let check_res = crate::type_check(res, &program, TargetInfo { pointer_width: 64 });
+    assert_eq!(
+        check_res.diagnostics.len(),
+        0,
+        "x + 1, 1 + x, x + 2.5 should typecheck cleanly: {:?}",
+        check_res.diagnostics
+    );
+}
+
+#[test]
+fn test_int_literal_to_float_expected() {
+    let source = r#"
+    module test;
+    func main(): f32 {
+        let a: f32 = 10;
+        let b: f64 = 20;
+        return a;
+    }
+    "#;
+    let program = arandu_parser::parse(source).unwrap();
+    let res = arandu_resolve::resolve_for_test(0, &program);
+    let check_res = crate::type_check(res, &program, TargetInfo { pointer_width: 64 });
+    assert_eq!(
+        check_res.diagnostics.len(),
+        0,
+        "integer literals 10 and 20 under float context should synthesize cleanly as float: {:?}",
+        check_res.diagnostics
+    );
+}
+
+#[test]
+fn test_array_literal_contextual_inference() {
+    let source = r#"
+    module test;
+    func main(): uint {
+        let arr: [3]uint = [1, 2, 3];
+        return arr[0];
+    }
+    "#;
+    let program = arandu_parser::parse(source).unwrap();
+    let res = arandu_resolve::resolve_for_test(0, &program);
+    let check_res = crate::type_check(res, &program, TargetInfo { pointer_width: 64 });
+    assert_eq!(
+        check_res.diagnostics.len(),
+        0,
+        "array literal [1, 2, 3] under [3]uint context should synthesize elements as uint: {:?}",
+        check_res.diagnostics
+    );
+}
+
+#[test]
+fn test_vec_indexing_typecheck() {
+    let source = r#"
+    module test;
+    public struct Vec<T> {
+        data: ptr[T];
+        len: uint;
+        capacity: uint;
+    }
+    func test_indexing(v: Vec<int>): int {
+        return v[0];
+    }
+    func test_indexed_assign(v: mut ref Vec<int>) {
+        v[1] = 42;
+    }
+    "#;
+    let program = arandu_parser::parse(source).unwrap();
+    let res = arandu_resolve::resolve_for_test(0, &program);
+    let check_res = crate::type_check(res, &program, TargetInfo { pointer_width: 64 });
+    assert_eq!(
+        check_res.diagnostics.len(),
+        0,
+        "Vec<T> indexing and assignment should typecheck cleanly: {:?}",
+        check_res.diagnostics
+    );
+}
+
+#[test]
+fn test_option_try_and_null_coalesce_typecheck() {
+    let source = r#"
+    module test;
+    func unwrap_or_default(opt: Option<int>, default_val: int): int {
+        return opt ?? default_val;
+    }
+    func try_option(opt: Option<int>): Option<int> {
+        let val: int = opt?;
+        return .Some(val + 1);
+    }
+    "#;
+    let program = arandu_parser::parse(source).unwrap();
+    let res = arandu_resolve::resolve_for_test(0, &program);
+    let check_res = crate::type_check(res, &program, TargetInfo { pointer_width: 64 });
+    assert_eq!(
+        check_res.diagnostics.len(),
+        0,
+        "Option `?` and `??` should typecheck cleanly: {:?}",
+        check_res.diagnostics
+    );
+}
+
+#[test]
+fn test_range_slicing_typecheck() {
+    let source = r#"
+    module test;
+    public struct Vec<T> { data: ptr[T]; len: uint; capacity: uint; }
+    func test_slicing(v: Vec<int>, arr: [5]int): []int {
+        let s1: []int = v[1..4];
+        let s2: []int = arr[0..2];
+        return s1;
+    }
+    "#;
+    let program = arandu_parser::parse(source).unwrap();
+    let res = arandu_resolve::resolve_for_test(0, &program);
+    let check_res = crate::type_check(res, &program, TargetInfo { pointer_width: 64 });
+    assert_eq!(
+        check_res.diagnostics.len(),
+        0,
+        "Range slicing on Vec and Array should typecheck cleanly: {:?}",
+        check_res.diagnostics
+    );
+}
+
+#[test]
+fn test_option_safe_navigation_typecheck() {
+    let source = r#"
+    module test;
+    public struct Address { street: str; zip: int; }
+    public struct User { name: str; address: Address; }
+    func get_zip(user: Option<User>): Option<int> {
+        return user?.address?.zip;
+    }
+    "#;
+    let program = arandu_parser::parse(source).unwrap();
+    let res = arandu_resolve::resolve_for_test(0, &program);
+    let check_res = crate::type_check(res, &program, TargetInfo { pointer_width: 64 });
+    assert_eq!(
+        check_res.diagnostics.len(),
+        0,
+        "Safe navigation on Option should typecheck cleanly: {:?}",
+        check_res.diagnostics
+    );
+}
+
+#[test]
+fn test_struct_update_and_punning_typecheck() {
+    let source = r#"
+    module test;
+    public struct Config { host: str; port: int; debug: bool; }
+    func modify_config(original: Config, port: int): Config {
+        let debug = true;
+        let c1 = Config { host: "localhost", port, debug };
+        let c2 = Config { port: 9000, ..original };
+        return c2;
+    }
+    "#;
+    let program = arandu_parser::parse(source).unwrap();
+    let res = arandu_resolve::resolve_for_test(0, &program);
+    let check_res = crate::type_check(res, &program, TargetInfo { pointer_width: 64 });
+    assert_eq!(
+        check_res.diagnostics.len(),
+        0,
+        "Struct update and field punning should typecheck cleanly: {:?}",
+        check_res.diagnostics
+    );
 }

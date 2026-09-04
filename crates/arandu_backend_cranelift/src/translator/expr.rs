@@ -1,6 +1,6 @@
 use arandu_semantics::amir::{AmirConstant, AmirOperand, AmirRvalue};
 use arandu_semantics::ops::UnaryOp;
-use arandu_semantics::passes::type_checker::types::{ArType, Primitive};
+use arandu_semantics::passes::type_checker::types::{ArType, Primitive, is_vec_type};
 use cranelift_codegen::ir::{InstBuilder, Type, Value};
 
 use super::FunctionTranslator;
@@ -107,6 +107,34 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
 
         match rvalue {
             AmirRvalue::Use(op) => self.translate_operand(op, expected_ty),
+            AmirRvalue::SliceView { data, len, .. } => {
+                let data = self.translate_operand(data, Some(self.ptr_type));
+                let len = self.translate_operand(len, Some(self.ptr_type));
+                self.materialize_slice_descriptor(data, len)
+            }
+            AmirRvalue::SliceSubslice { slice, start, len } => {
+                let descriptor = self.translate_operand(slice, Some(self.ptr_type));
+                let data = self.builder.ins().load(
+                    self.ptr_type,
+                    cranelift_codegen::ir::MemFlagsData::new(),
+                    descriptor,
+                    0,
+                );
+                let start = self.translate_operand(start, Some(self.ptr_type));
+                let elem_size = match expected_ar_type {
+                    Some(ArType::Slice(inner)) => {
+                        let element = self.type_info.type_interner.resolve(*inner);
+                        self.checked_layout(&element).size
+                    }
+                    _ => 1,
+                };
+                let width = self.builder.ins().iconst(self.ptr_type, elem_size as i64);
+                let offset = self.builder.ins().imul(start, width);
+                let data = self.builder.ins().iadd(data, offset);
+                let len = self.translate_operand(len, Some(self.ptr_type));
+                self.materialize_slice_descriptor(data, len)
+            }
+            AmirRvalue::StrView { owner } => self.translate_operand(owner, Some(self.ptr_type)),
             AmirRvalue::BlackBox { value, .. } => {
                 let input = self.translate_operand(value, expected_ty);
                 let input_ty = self.builder.func.dfg.value_type(input);
@@ -633,13 +661,13 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                         .get(variant)
                         .copied()
                         .unwrap_or(0);
-                    if let Some(variant_shape) = variants.get(tag) {
-                        if let Some(payload_ty_id) = variant_shape.payload_ty {
-                            let payload_ty = self.type_info.resolve_type_id(payload_ty_id);
-                            let payload_layout = self.checked_layout(&payload_ty);
-                            if *index < payload_layout.field_offsets.len() {
-                                payload_offset = payload_layout.field_offsets[*index] as i32;
-                            }
+                    if let Some(variant_shape) = variants.get(tag)
+                        && let Some(payload_ty_id) = variant_shape.payload_ty
+                    {
+                        let payload_ty = self.type_info.resolve_type_id(payload_ty_id);
+                        let payload_layout = self.checked_layout(&payload_ty);
+                        if *index < payload_layout.field_offsets.len() {
+                            payload_offset = payload_layout.field_offsets[*index] as i32;
                         }
                     }
                 }
@@ -654,11 +682,11 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 )
             }
             AmirRvalue::IndexAccess { base, index } => {
-                let ptr_val = self.translate_operand(base, Some(self.ptr_type));
+                let mut ptr_val = self.translate_operand(base, Some(self.ptr_type));
                 let mut idx_val = self.translate_operand(index, None);
                 let idx_ty = self.builder.func.dfg.value_type(idx_val);
                 if idx_ty != self.ptr_type {
-                    idx_val = self.builder.ins().uextend(self.ptr_type, idx_val);
+                    idx_val = self.cast_int_width(idx_val, self.ptr_type);
                 }
 
                 let base_ty = self.get_operand_ar_type(base);
@@ -666,9 +694,26 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                     ArType::Ptr(inner) => self.type_info.resolve_type_id(*inner),
                     other => other.clone(),
                 };
-                let elem_ty = match deref_ty {
-                    ArType::Array(_, elem) => self.type_info.resolve_type_id(elem),
-                    ArType::Slice(elem) => self.type_info.resolve_type_id(elem),
+                let elem_ty = match &deref_ty {
+                    ArType::Array(_, elem) => self.type_info.resolve_type_id(*elem),
+                    ArType::Slice(elem) => {
+                        ptr_val = self.builder.ins().load(
+                            self.ptr_type,
+                            cranelift_codegen::ir::MemFlagsData::new(),
+                            ptr_val,
+                            0,
+                        );
+                        self.type_info.resolve_type_id(*elem)
+                    }
+                    ArType::Named(_, args) if is_vec_type(&deref_ty, self.symbol_table) => {
+                        ptr_val = self.builder.ins().load(
+                            self.ptr_type,
+                            cranelift_codegen::ir::MemFlagsData::new(),
+                            ptr_val,
+                            0,
+                        );
+                        self.type_info.resolve_type_id(args[0])
+                    }
                     _ => ArType::Error,
                 };
 
@@ -988,7 +1033,7 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 let base = self.translate_operand(op, Some(self.ptr_type));
                 let len_off = self.ptr_type.bytes() as i32;
                 let len_val = self.builder.ins().load(
-                    i64_ty,
+                    self.ptr_type,
                     cranelift_codegen::ir::MemFlagsData::new(),
                     base,
                     len_off,
@@ -1018,7 +1063,7 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
         self.builder.inst_results(call)[0]
     }
 
-    fn cast_int_width(&mut self, val: Value, target: Type) -> Value {
+    pub(crate) fn cast_int_width(&mut self, val: Value, target: Type) -> Value {
         let src = self.builder.func.dfg.value_type(val);
         if src == target {
             return val;

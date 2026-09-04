@@ -23,6 +23,14 @@ pub(super) fn cast_types_compatible(
     if found.is_numeric() && target.is_numeric() {
         return true;
     }
+    // `char` is a Unicode scalar value with a canonical u32 representation.
+    // This direction is lossless; the inverse requires scalar validation and
+    // therefore remains outside the general cast operator.
+    if matches!(found, ArType::Primitive(Primitive::Char))
+        && matches!(target, ArType::Primitive(Primitive::U32))
+    {
+        return true;
+    }
     if matches!(found, ArType::Ptr(_)) && matches!(target, ArType::Ptr(_)) {
         return true;
     }
@@ -252,8 +260,18 @@ pub(super) fn synth_binary_unary_expr(
         ExprKind::Binary { op, left, right } => {
             let left_id = *left;
             let right_id = *right;
-            let left_ty_id = synth_expr(checker, left_id);
-            let right_ty_id = synth_expr(checker, right_id);
+            let mut left_ty_id = synth_expr(checker, left_id);
+            let left_ty = checker.resolve(left_ty_id);
+            let right_expected = if !left_ty.is_literal() && left_ty.is_numeric() {
+                Some(left_ty_id)
+            } else {
+                None
+            };
+            let right_ty_id = super::super::synth_expr_expected(checker, right_id, right_expected);
+            let right_ty = checker.resolve(right_ty_id);
+            if left_ty.is_literal() && !right_ty.is_literal() && right_ty.is_numeric() {
+                left_ty_id = super::super::synth_expr_expected(checker, left_id, Some(right_ty_id));
+            }
             let interner = &checker.type_info.type_interner;
             let left_ty = interner.resolve(left_ty_id);
             let right_ty = interner.resolve(right_ty_id);

@@ -1,0 +1,19 @@
+module codegen.borrowed_views_bv3
+import std.alloc.vec as vec
+import std.core.slice as slice
+
+func main(): int {
+    let mut values = vec.new<int>()
+    vec.push<int>(values, 5)
+    vec.push<int>(values, 8)
+    let view = vec.asSlice<int>(values)
+    match slice.subslice<int>(view, 1, 1) {
+        Some(tail) => {
+            match slice.first<int>(tail) {
+                Some(item) => { return *item }
+                None => { return 2 }
+            }
+        }
+        None => { return 3 }
+    }
+}

@@ -307,7 +307,14 @@ impl LowerCtx<'_> {
                     );
                     Ok(AmirOperand::Copy(dest))
                 } else {
-                    Ok(AmirOperand::GlobalRef(*member_symbol))
+                    let sym = symbols.get(*member_symbol);
+                    Ok(match sym.kind {
+                        SymbolKind::Func
+                        | SymbolKind::ExternFunc
+                        | SymbolKind::AssociatedFunc
+                        | SymbolKind::NamespaceMember => AmirOperand::FunctionRef(*member_symbol),
+                        _ => AmirOperand::GlobalRef(*member_symbol),
+                    })
                 }?;
                 if let Some(dest) = target {
                     let lookup_bare = symbols
@@ -338,7 +345,7 @@ impl LowerCtx<'_> {
             }
 
             HirExprKind::Generic { callee, args } => {
-                // mem.sizeOf<T>() / mem.alignOf<T>() — fold to host layout constants so
+                // mem.sizeOf<T>() / mem.alignOf<T>() — fold to target layout constants so
                 // the JIT never needs a runtime `fn@sizeOf` symbol (L6.1 mem intrinsics).
                 if let Some(op) = self
                     .try_lower_mem_size_align_intrinsic(*callee, args, expr.ty, target, symbols)?
@@ -395,7 +402,8 @@ impl LowerCtx<'_> {
                 };
                 if black_box_symbol.is_some_and(|symbol| {
                     let name = symbols.get(symbol).name.as_str();
-                    name == "blackBox" || name.ends_with(".blackBox")
+                    arandu_middle::IntrinsicKind::from_name(name)
+                        == Some(arandu_middle::IntrinsicKind::BlackBox)
                 }) {
                     let args_slice = self.hir.pool.expr_list(*args);
                     if let Some(&argument) = args_slice.first() {
@@ -560,6 +568,13 @@ impl LowerCtx<'_> {
                 let callee_symbol = method_target.or(match &callee_expr.kind {
                     HirExprKind::Path { symbol } => Some(*symbol),
                     HirExprKind::TypePath { member_symbol, .. } => Some(*member_symbol),
+                    HirExprKind::Generic { callee, .. } => {
+                        match &self.hir.pool.expr(*callee).kind {
+                            HirExprKind::Path { symbol } => Some(*symbol),
+                            HirExprKind::TypePath { member_symbol, .. } => Some(*member_symbol),
+                            _ => None,
+                        }
+                    }
                     _ => None,
                 });
                 if let Some(callee_symbol) = callee_symbol {
@@ -598,6 +613,7 @@ impl LowerCtx<'_> {
                             lhs: None,
                             callee: AmirOperand::FunctionRef(set_span_id),
                             args: smallvec::smallvec![file_id, start, end],
+                            return_borrow: None,
                         });
                     }
                 }
@@ -658,10 +674,45 @@ impl LowerCtx<'_> {
                 } else {
                     Some(target.unwrap_or_else(|| self.new_temp_id(expr.ty)))
                 };
+                if let Some(symbol) = callee_symbol {
+                    let name = symbols.get(symbol).name.as_str();
+                    let kind = arandu_middle::IntrinsicKind::from_name(name);
+                    let intrinsic = match (kind, arg_ops.as_slice()) {
+                        (Some(arandu_middle::IntrinsicKind::SliceFromRaw), [owner, data, len]) => {
+                            Some(AmirRvalue::SliceView {
+                                owner: *owner,
+                                data: *data,
+                                len: *len,
+                            })
+                        }
+                        (
+                            Some(arandu_middle::IntrinsicKind::SliceSubslice),
+                            [slice, start, len],
+                        ) => Some(AmirRvalue::SliceSubslice {
+                            slice: *slice,
+                            start: *start,
+                            len: *len,
+                        }),
+                        (Some(arandu_middle::IntrinsicKind::SliceLen), [slice]) => {
+                            Some(AmirRvalue::Len(*slice))
+                        }
+                        (Some(arandu_middle::IntrinsicKind::StrView), [owner]) => {
+                            Some(AmirRvalue::StrView { owner: *owner })
+                        }
+                        _ => None,
+                    };
+                    if let (Some(intrinsic), Some(dest)) = (intrinsic, dest) {
+                        self.emit_assign_temp(dest, intrinsic);
+                        return Ok(AmirOperand::Copy(dest));
+                    }
+                }
                 self.push_stmt(AmirStmt::Call {
                     lhs: dest,
                     callee: callee_op,
                     args: arg_ops.into(),
+                    return_borrow: callee_symbol
+                        .and_then(|symbol| self.tc.type_info.return_borrow_summaries.get(&symbol))
+                        .cloned(),
                 });
                 Ok(dest.map_or(AmirOperand::Constant(AmirConstant::Nil), AmirOperand::Copy))
             }
@@ -673,6 +724,11 @@ impl LowerCtx<'_> {
                 let mut field_ops = Vec::with_capacity(fields_slice.len());
                 for f in fields_slice {
                     field_ops.push((f.name.clone(), self.lower_expr(f.value, None, symbols)?));
+                }
+                if let Some(indices) = self.tc.type_info.struct_field_indices.get(struct_symbol) {
+                    field_ops.sort_by_key(|(name, _)| {
+                        indices.get(name.as_str()).copied().unwrap_or(usize::MAX)
+                    });
                 }
                 let dest = target.unwrap_or_else(|| self.new_temp_id(expr.ty));
                 self.emit_assign_temp(
@@ -802,9 +858,9 @@ impl LowerCtx<'_> {
                 let inner_expr = self.hir.pool.expr(*inner);
                 if result_ok_err_id(inner_expr.ty, &self.tc.type_info.type_interner).is_some() {
                     self.lower_try_result(*inner, target, expr.ty, symbols)
-                } else if self.with_ty(inner_expr.ty, is_option_type)
-                    || self.with_ty(inner_expr.ty, |t| matches!(t, ArType::Nullable(_)))
-                {
+                } else if self.with_ty(inner_expr.ty, is_option_type) {
+                    self.lower_try_option(*inner, target, expr.ty, symbols)
+                } else if self.with_ty(inner_expr.ty, |t| matches!(t, ArType::Nullable(_))) {
                     self.lower_try_nullable(*inner, target, expr.ty, symbols)
                 } else {
                     self.lower_try_result(*inner, target, expr.ty, symbols)
@@ -812,53 +868,107 @@ impl LowerCtx<'_> {
             }
             HirExprKind::SafeField { base, field } => {
                 let dest = target.unwrap_or_else(|| self.new_temp_id(expr.ty));
+                let base_expr = self.hir.pool.expr(*base);
+                let base_is_option = self.with_ty(base_expr.ty, is_option_type);
                 let base_op = self.lower_expr(*base, None, symbols)?;
                 if self.builder.current_block.is_none() {
                     return Ok(AmirOperand::Copy(dest));
                 }
 
-                let cond_tmp = self.new_temp(ArType::Primitive(Primitive::Bool));
-                self.emit_assign_temp(
-                    cond_tmp,
-                    AmirRvalue::Binary {
-                        op: BinaryOp::Equal,
-                        left: base_op,
-                        right: AmirOperand::Constant(AmirConstant::Nil),
-                    },
-                );
-
                 let bb_null = self.new_block();
                 let bb_access = self.new_block();
                 let bb_join = self.new_block();
 
-                self.set_bool_branch(AmirOperand::Copy(cond_tmp), bb_null, bb_access);
-                self.seal_block(bb_null);
-                self.seal_block(bb_access);
+                if base_is_option {
+                    // Option: tag OPTION_NONE_TAG is None, OPTION_SOME_TAG is Some
+                    let tag_tmp = self.new_temp(ArType::Primitive(Primitive::Int));
+                    self.emit_assign_temp(tag_tmp, AmirRvalue::Discriminant { value: base_op });
+                    let zero_lit =
+                        self.intern_literal_int(arandu_middle::amir::OPTION_NONE_TAG.to_string());
+                    let cond_tmp = self.new_temp(ArType::Primitive(Primitive::Bool));
+                    self.emit_assign_temp(
+                        cond_tmp,
+                        AmirRvalue::Binary {
+                            op: BinaryOp::Equal,
+                            left: AmirOperand::Copy(tag_tmp),
+                            right: AmirOperand::Constant(zero_lit),
+                        },
+                    );
+                    self.set_bool_branch(AmirOperand::Copy(cond_tmp), bb_null, bb_access);
+                    self.seal_block(bb_null);
+                    self.seal_block(bb_access);
 
-                self.builder.current_block = Some(bb_null);
-                self.emit_assign_temp(
-                    dest,
-                    AmirRvalue::Use(AmirOperand::Constant(AmirConstant::Nil)),
-                );
-                self.emit_goto(bb_join);
+                    self.builder.current_block = Some(bb_null);
+                    self.emit_assign_temp(
+                        dest,
+                        AmirRvalue::EnumConstruct {
+                            variant_tag: arandu_middle::amir::OPTION_NONE_TAG,
+                            payload: None,
+                        },
+                    );
+                    self.emit_goto(bb_join);
 
-                self.builder.current_block = Some(bb_access);
-                let base_expr = self.hir.pool.expr(*base);
-                // Materialize base into a typed temp so FieldAccess never takes a
-                // bare Constant(Nil) operand (pretty-print `nil.0` / ZST layout).
-                // Nullable bases are pointer handles; field load goes through that ptr.
-                let base_tmp = self.new_temp_id(base_expr.ty);
-                self.emit_assign_temp(base_tmp, AmirRvalue::Use(base_op));
-                let base_ty = self.resolve_ty(base_expr.ty);
-                let field_idx = self.resolve_field_index(&base_ty, field);
-                self.emit_assign_temp(
-                    dest,
-                    AmirRvalue::FieldAccess {
-                        base: AmirOperand::Copy(base_tmp),
-                        field: field_idx,
-                    },
-                );
-                self.emit_goto(bb_join);
+                    self.builder.current_block = Some(bb_access);
+                    let payload_ty = match self.resolve_ty(base_expr.ty) {
+                        ArType::Option(inner) => inner,
+                        _ => base_expr.ty,
+                    };
+                    let payload_tmp = self.new_temp_id(payload_ty);
+                    self.lower_result_ok_field(base_op, payload_tmp);
+                    let payload_resolved = self.resolve_ty(payload_ty);
+                    let field_idx = self.resolve_field_index(&payload_resolved, field);
+                    let field_val_tmp = self.new_temp(ArType::Error); // will be used as payload
+                    self.emit_assign_temp(
+                        field_val_tmp,
+                        AmirRvalue::FieldAccess {
+                            base: AmirOperand::Copy(payload_tmp),
+                            field: field_idx,
+                        },
+                    );
+                    self.emit_assign_temp(
+                        dest,
+                        AmirRvalue::EnumConstruct {
+                            variant_tag: arandu_middle::amir::OPTION_SOME_TAG,
+                            payload: Some(AmirOperand::Copy(field_val_tmp)),
+                        },
+                    );
+                    self.emit_goto(bb_join);
+                } else {
+                    let cond_tmp = self.new_temp(ArType::Primitive(Primitive::Bool));
+                    self.emit_assign_temp(
+                        cond_tmp,
+                        AmirRvalue::Binary {
+                            op: BinaryOp::Equal,
+                            left: base_op,
+                            right: AmirOperand::Constant(AmirConstant::Nil),
+                        },
+                    );
+
+                    self.set_bool_branch(AmirOperand::Copy(cond_tmp), bb_null, bb_access);
+                    self.seal_block(bb_null);
+                    self.seal_block(bb_access);
+
+                    self.builder.current_block = Some(bb_null);
+                    self.emit_assign_temp(
+                        dest,
+                        AmirRvalue::Use(AmirOperand::Constant(AmirConstant::Nil)),
+                    );
+                    self.emit_goto(bb_join);
+
+                    self.builder.current_block = Some(bb_access);
+                    let base_tmp = self.new_temp_id(base_expr.ty);
+                    self.emit_assign_temp(base_tmp, AmirRvalue::Use(base_op));
+                    let base_ty = self.resolve_ty(base_expr.ty);
+                    let field_idx = self.resolve_field_index(&base_ty, field);
+                    self.emit_assign_temp(
+                        dest,
+                        AmirRvalue::FieldAccess {
+                            base: AmirOperand::Copy(base_tmp),
+                            field: field_idx,
+                        },
+                    );
+                    self.emit_goto(bb_join);
+                }
 
                 self.seal_block(bb_join);
                 self.builder.current_block = Some(bb_join);
@@ -915,32 +1025,57 @@ impl LowerCtx<'_> {
             }
             HirExprKind::NullCoalesce { left, right } => {
                 let dest = target.unwrap_or_else(|| self.new_temp_id(expr.ty));
+                let left_expr = self.hir.pool.expr(*left);
+                let left_is_option = self.with_ty(left_expr.ty, is_option_type);
                 let left_op = self.lower_expr(*left, None, symbols)?;
                 if self.builder.current_block.is_none() {
                     return Ok(AmirOperand::Copy(dest));
                 }
 
-                let cond_tmp = self.new_temp(ArType::Primitive(Primitive::Bool));
-                self.emit_assign_temp(
-                    cond_tmp,
-                    AmirRvalue::Binary {
-                        op: BinaryOp::NotEqual,
-                        left: left_op,
-                        right: AmirOperand::Constant(AmirConstant::Nil),
-                    },
-                );
-
                 let bb_left = self.new_block();
                 let bb_right = self.new_block();
                 let bb_join = self.new_block();
 
-                self.set_bool_branch(AmirOperand::Copy(cond_tmp), bb_left, bb_right);
-                self.seal_block(bb_left);
-                self.seal_block(bb_right);
+                if left_is_option {
+                    // Option: tag OPTION_SOME_TAG is Some, OPTION_NONE_TAG is None.
+                    let tag_tmp = self.new_temp(ArType::Primitive(Primitive::Int));
+                    self.emit_assign_temp(tag_tmp, AmirRvalue::Discriminant { value: left_op });
+                    let one_lit =
+                        self.intern_literal_int(arandu_middle::amir::OPTION_SOME_TAG.to_string());
+                    let cond_tmp = self.new_temp(ArType::Primitive(Primitive::Bool));
+                    self.emit_assign_temp(
+                        cond_tmp,
+                        AmirRvalue::Binary {
+                            op: BinaryOp::Equal,
+                            left: AmirOperand::Copy(tag_tmp),
+                            right: AmirOperand::Constant(one_lit),
+                        },
+                    );
+                    self.set_bool_branch(AmirOperand::Copy(cond_tmp), bb_left, bb_right);
+                    self.seal_block(bb_left);
+                    self.seal_block(bb_right);
 
-                self.builder.current_block = Some(bb_left);
-                self.emit_assign_temp(dest, AmirRvalue::Use(left_op));
-                self.emit_goto(bb_join);
+                    self.builder.current_block = Some(bb_left);
+                    self.lower_result_ok_field(left_op, dest);
+                    self.emit_goto(bb_join);
+                } else {
+                    let cond_tmp = self.new_temp(ArType::Primitive(Primitive::Bool));
+                    self.emit_assign_temp(
+                        cond_tmp,
+                        AmirRvalue::Binary {
+                            op: BinaryOp::NotEqual,
+                            left: left_op,
+                            right: AmirOperand::Constant(AmirConstant::Nil),
+                        },
+                    );
+                    self.set_bool_branch(AmirOperand::Copy(cond_tmp), bb_left, bb_right);
+                    self.seal_block(bb_left);
+                    self.seal_block(bb_right);
+
+                    self.builder.current_block = Some(bb_left);
+                    self.emit_assign_temp(dest, AmirRvalue::Use(left_op));
+                    self.emit_goto(bb_join);
+                }
 
                 self.builder.current_block = Some(bb_right);
                 self.lower_expr(*right, Some(dest), symbols)?;
@@ -1000,7 +1135,7 @@ impl LowerCtx<'_> {
     }
 
     /// Fold `mem.sizeOf<T>()` / `mem.alignOf<T>()` (and bare `sizeOf`/`alignOf`)
-    /// to integer constants using [`LayoutEngine`] (host pointer width).
+    /// to integer constants using [`LayoutEngine`] (target pointer width).
     fn try_lower_mem_size_align_intrinsic(
         &mut self,
         callee: HirExprId,
@@ -1021,17 +1156,15 @@ impl LowerCtx<'_> {
             }
             _ => return Ok(None),
         };
-        // Accept bare or qualified names after import rewrite.
-        let bare = name.rsplit('.').next().unwrap_or(name);
-        let is_size = bare == "sizeOf" || bare == "size_of";
-        let is_align = bare == "alignOf" || bare == "align_of";
-        if !is_size && !is_align {
-            return Ok(None);
-        }
+        let kind = arandu_middle::IntrinsicKind::from_name(name);
+        let bare = match kind {
+            Some(arandu_middle::IntrinsicKind::SizeOf) => "sizeOf",
+            Some(arandu_middle::IntrinsicKind::AlignOf) => "alignOf",
+            _ => return Ok(None),
+        };
 
         let ty = self.resolve_ty(type_args[0]);
-        let pointer_width = std::mem::size_of::<usize>() as u64;
-        let engine = arandu_middle::layout::LayoutEngine::new(pointer_width);
+        let engine = arandu_middle::layout::LayoutEngine::new(self.pointer_width);
         let layout = engine
             .layout_of_type(
                 &ty,
@@ -1045,7 +1178,11 @@ impl LowerCtx<'_> {
                     callee_expr.span,
                 )
             })?;
-        let value = if is_size { layout.size } else { layout.align };
+        let value = if kind == Some(arandu_middle::IntrinsicKind::SizeOf) {
+            layout.size
+        } else {
+            layout.align
+        };
 
         let lit = self.intern_literal_int(value.to_string());
         let dest = target.unwrap_or_else(|| self.new_temp_id(result_ty));

@@ -51,6 +51,11 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                         clif_args.push(ptr_val);
                         clif_args.push(len_val);
                         clif_param_idx += 2;
+                    } else if matches!(arg_ty, ArType::Slice(_)) {
+                        let (data, len) = self.translate_slice_operand(arg);
+                        clif_args.push(data);
+                        clif_args.push(len);
+                        clif_param_idx += 2;
                     } else {
                         let expected = expected_tys.get(clif_param_idx).copied();
                         let val = self.translate_operand(arg, expected);
@@ -81,6 +86,14 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                         self.builder.def_var(var_len, res1);
                     }
                 }
+            } else if matches!(&lhs_ty, ArType::Slice(_)) {
+                let results = self.builder.inst_results(call_inst);
+                if results.len() >= 2 {
+                    let descriptor = self.materialize_slice_descriptor(results[0], results[1]);
+                    if let Some(&var) = self.temp_map.get(lhs_temp) {
+                        self.builder.def_var(var, descriptor);
+                    }
+                }
             } else if let Some(&var) = self.temp_map.get(lhs_temp) {
                 let results = self.builder.inst_results(call_inst);
                 if !results.is_empty() {
@@ -101,120 +114,96 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
         lhs: &Option<TempId>,
         args: &[AmirOperand],
     ) -> bool {
-        let is_ptr_read = bare == "ptrRead"
-            || bare == "ptr_read"
-            || full_name.starts_with("std.core.mem.ptr_read")
-            || full_name.contains("ptrRead");
-        let is_ptr_write = bare == "ptrWrite"
-            || bare == "ptr_write"
-            || full_name.starts_with("std.core.mem.ptr_write")
-            || full_name.contains("ptrWrite");
-        let is_ptr_offset = bare == "ptrOffset"
-            || bare == "ptr_offset"
-            || full_name.contains("ptrOffset")
-            || full_name.contains("ptr_offset");
-        let is_size_of = bare == "sizeOf" || bare == "size_of" || full_name.contains("sizeOf");
-        let is_align_of = bare == "alignOf" || bare == "align_of" || full_name.contains("alignOf");
+        let kind = arandu_semantics::IntrinsicKind::from_name(bare)
+            .or_else(|| arandu_semantics::IntrinsicKind::from_name(full_name));
 
-        if is_ptr_read {
-            if args.is_empty() {
-                return true;
-            }
-            let ptr_val = self.translate_operand(&args[0], Some(self.ptr_type));
-            let clif_ty = lhs
-                .and_then(|temp| self.get_temp_clif_type(temp))
-                .unwrap_or(self.ptr_type);
-            let loaded_val = self.builder.ins().load(
-                clif_ty,
-                cranelift_codegen::ir::MemFlagsData::new(),
-                ptr_val,
-                0,
-            );
-            if let Some(lhs_temp) = lhs {
-                if let Some(&var) = self.temp_map.get(lhs_temp) {
+        match kind {
+            Some(arandu_semantics::IntrinsicKind::PtrRead) => {
+                if args.is_empty() {
+                    return true;
+                }
+                let ptr_val = self.translate_operand(&args[0], Some(self.ptr_type));
+                let clif_ty = lhs
+                    .and_then(|temp| self.get_temp_clif_type(temp))
+                    .unwrap_or(self.ptr_type);
+                let loaded_val = self.builder.ins().load(
+                    clif_ty,
+                    cranelift_codegen::ir::MemFlagsData::new(),
+                    ptr_val,
+                    0,
+                );
+                if let Some(lhs_temp) = lhs
+                    && let Some(&var) = self.temp_map.get(lhs_temp)
+                {
                     self.builder.def_var(var, loaded_val);
                 }
+                true
             }
-            return true;
-        }
-
-        if is_ptr_write {
-            if args.len() < 2 {
-                return true;
-            }
-            let ptr_val = self.translate_operand(&args[0], Some(self.ptr_type));
-            let val_to_store = self.translate_operand(&args[1], None);
-            self.builder.ins().store(
-                cranelift_codegen::ir::MemFlagsData::new(),
-                val_to_store,
-                ptr_val,
-                0,
-            );
-            return true;
-        }
-
-        if is_ptr_offset {
-            if args.len() < 2 {
-                return true;
-            }
-            let base = self.translate_operand(&args[0], Some(self.ptr_type));
-            let idx = self.translate_operand(&args[1], Some(cranelift_codegen::ir::types::I32));
-            // Element size from pointer pointee type of the base operand.
-            let base_ty = self.get_operand_ar_type(&args[0]);
-            let elem_ty = match &base_ty {
-                ArType::Ptr(inner) | ArType::Ref(inner) | ArType::RefMut(inner) => {
-                    self.resolve_ty(*inner)
+            Some(arandu_semantics::IntrinsicKind::PtrWrite) => {
+                if args.len() < 2 {
+                    return true;
                 }
-                _ => {
-                    // Fallback: lhs is often ptr[T] after offset.
-                    lhs.map(|t| self.temp_ar_ty(t)).unwrap_or(ArType::Error)
+                let ptr_val = self.translate_operand(&args[0], Some(self.ptr_type));
+                let val_to_store = self.translate_operand(&args[1], None);
+                self.builder.ins().store(
+                    cranelift_codegen::ir::MemFlagsData::new(),
+                    val_to_store,
+                    ptr_val,
+                    0,
+                );
+                true
+            }
+            Some(arandu_semantics::IntrinsicKind::PtrOffset) => {
+                if args.len() < 2 {
+                    return true;
                 }
-            };
-            let elem_ty = match &elem_ty {
-                ArType::Ptr(inner) => self.resolve_ty(*inner),
-                other => other.clone(),
-            };
-            let layout = self.checked_layout(&elem_ty);
-            let elem_size = layout.size.max(1) as i64;
-            let size_val = self.builder.ins().iconst(self.ptr_type, elem_size);
-            let idx_ext = if self.ptr_type.bits() > 32 {
-                self.builder.ins().sextend(self.ptr_type, idx)
-            } else {
-                idx
-            };
-            let byte_off = self.builder.ins().imul(idx_ext, size_val);
-            let result = self.builder.ins().iadd(base, byte_off);
-            if let Some(lhs_temp) = lhs {
-                if let Some(&var) = self.temp_map.get(lhs_temp) {
+                let base = self.translate_operand(&args[0], Some(self.ptr_type));
+                let idx = self.translate_operand(&args[1], Some(cranelift_codegen::ir::types::I32));
+                // Element size from pointer pointee type of the base operand.
+                let base_ty = self.get_operand_ar_type(&args[0]);
+                let elem_ty = match &base_ty {
+                    ArType::Ptr(inner) | ArType::Ref(inner) | ArType::RefMut(inner) => {
+                        self.resolve_ty(*inner)
+                    }
+                    _ => ArType::Primitive(Primitive::Int),
+                };
+                let elem_layout = self.checked_layout(&elem_ty);
+                let elem_size = elem_layout.size.max(1) as i64;
+                let size_val = self.builder.ins().iconst(self.ptr_type, elem_size);
+                // Widen idx to pointer width if necessary.
+                let idx_ext = if self.ptr_type == cranelift_codegen::ir::types::I64 {
+                    self.builder.ins().sextend(self.ptr_type, idx)
+                } else {
+                    idx
+                };
+                let byte_off = self.builder.ins().imul(idx_ext, size_val);
+                let result = self.builder.ins().iadd(base, byte_off);
+                if let Some(lhs_temp) = lhs
+                    && let Some(&var) = self.temp_map.get(lhs_temp)
+                {
                     self.builder.def_var(var, result);
                 }
+                true
             }
-            return true;
-        }
-
-        if is_size_of || is_align_of {
-            // Residual bare sizeOf/alignOf (should be folded in lower_amir). Use
-            // pointer width for int-sized default; prefer lhs-driven layout when possible.
-            // Default to host `int` (pointer-sized) when type args were lost.
-            let ty = ArType::Primitive(Primitive::Int);
-            let layout = self.checked_layout(&ty);
-            let value = if is_size_of {
-                layout.size
-            } else {
-                layout.align
-            };
-            let clif_ty = lhs
-                .and_then(|t| self.get_temp_clif_type(t))
-                .unwrap_or(self.ptr_type);
-            let c = self.builder.ins().iconst(clif_ty, value as i64);
-            if let Some(lhs_temp) = lhs {
-                if let Some(&var) = self.temp_map.get(lhs_temp) {
+            Some(
+                arandu_semantics::IntrinsicKind::SizeOf | arandu_semantics::IntrinsicKind::AlignOf,
+            ) => {
+                let is_size = kind == Some(arandu_semantics::IntrinsicKind::SizeOf);
+                let ty = ArType::Primitive(Primitive::Int);
+                let layout = self.checked_layout(&ty);
+                let value = if is_size { layout.size } else { layout.align };
+                let clif_ty = lhs
+                    .and_then(|t| self.get_temp_clif_type(t))
+                    .unwrap_or(self.ptr_type);
+                let c = self.builder.ins().iconst(clif_ty, value as i64);
+                if let Some(lhs_temp) = lhs
+                    && let Some(&var) = self.temp_map.get(lhs_temp)
+                {
                     self.builder.def_var(var, c);
                 }
+                true
             }
-            return true;
+            _ => false,
         }
-
-        false
     }
 }

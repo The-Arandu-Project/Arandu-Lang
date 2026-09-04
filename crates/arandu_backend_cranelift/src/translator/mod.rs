@@ -65,6 +65,23 @@ pub struct FunctionTranslator<'a, 'b, M: Module> {
 }
 
 impl<'a, 'b, M: Module> FunctionTranslator<'a, 'b, M> {
+    pub(super) fn materialize_slice_descriptor(&mut self, data: Value, len: Value) -> Value {
+        let pointer_bytes = self.ptr_type.bytes();
+        let slot = self
+            .builder
+            .create_sized_stack_slot(cranelift_codegen::ir::StackSlotData {
+                kind: cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                size: pointer_bytes * 2,
+                align_shift: pointer_bytes.trailing_zeros() as u8,
+                key: None,
+            });
+        self.builder.ins().stack_store(self.ptr_type, data, slot, 0);
+        self.builder
+            .ins()
+            .stack_store(self.ptr_type, len, slot, pointer_bytes as i32);
+        self.builder.ins().stack_addr(self.ptr_type, slot, 0)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         builder: FunctionBuilder<'a>,
@@ -244,10 +261,10 @@ impl<'a, 'b, M: Module> FunctionTranslator<'a, 'b, M> {
                 },
             },
             AmirOperand::FunctionRef(_) | AmirOperand::GlobalRef(_) => {
-                if let AmirOperand::GlobalRef(symbol) = op {
-                    if let Some(ty) = self.type_info.decl_type(*symbol) {
-                        return ty.clone();
-                    }
+                if let AmirOperand::GlobalRef(symbol) = op
+                    && let Some(ty) = self.type_info.decl_type(*symbol)
+                {
+                    return ty;
                 }
                 ArType::Error
             }
@@ -385,6 +402,14 @@ impl<'a, 'b, M: Module> AmirVisitor for FunctionTranslator<'a, 'b, M> {
                         self.builder.def_var(var_ptr, ptr_val);
                         self.builder.def_var(var_len, len_val);
                     }
+                } else if matches!(&param_ty, ArType::Slice(_)) {
+                    let data = clif_params[clif_slot_idx];
+                    let len = clif_params[clif_slot_idx + 1];
+                    clif_slot_idx += 2;
+                    let descriptor = self.materialize_slice_descriptor(data, len);
+                    if let Some(&var) = self.temp_map.get(&param_temp_id) {
+                        self.builder.def_var(var, descriptor);
+                    }
                 } else if let ClifType::Concrete(_) = clif_type(&param_ty, self.ptr_type) {
                     let val = clif_params[clif_slot_idx];
                     clif_slot_idx += 1;
@@ -405,6 +430,14 @@ impl<'a, 'b, M: Module> AmirVisitor for FunctionTranslator<'a, 'b, M> {
                     if let Some(&(var_ptr, var_len)) = self.str_temp_map.get(&param.id) {
                         self.builder.def_var(var_ptr, ptr_val);
                         self.builder.def_var(var_len, len_val);
+                    }
+                } else if matches!(pty, ArType::Slice(_)) {
+                    let data = clif_params[clif_slot_idx];
+                    let len = clif_params[clif_slot_idx + 1];
+                    clif_slot_idx += 2;
+                    let descriptor = self.materialize_slice_descriptor(data, len);
+                    if let Some(&var) = self.temp_map.get(&param.id) {
+                        self.builder.def_var(var, descriptor);
                     }
                 } else if let ClifType::Concrete(_) = clif_type(&pty, self.ptr_type) {
                     let val = clif_params[clif_slot_idx];

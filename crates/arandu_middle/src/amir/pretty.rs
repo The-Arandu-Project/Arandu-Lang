@@ -177,7 +177,9 @@ impl AmirStmt {
                 out.push_str(" = ");
                 rhs.pretty_print_to(out, symbols, pool);
             }
-            AmirStmt::Call { lhs, callee, args } => {
+            AmirStmt::Call {
+                lhs, callee, args, ..
+            } => {
                 if let Some(l) = lhs {
                     out.push_str(&format!("_{} = ", l.0));
                 }
@@ -304,6 +306,28 @@ impl AmirRvalue {
             }
             AmirRvalue::Len(value) => {
                 out.push_str(&format!("len({})", value.to_pretty_string(symbols, pool)));
+            }
+            AmirRvalue::SliceView { owner, data, len } => {
+                out.push_str(&format!(
+                    "slice_view({}, {}, {})",
+                    owner.to_pretty_string(symbols, pool),
+                    data.to_pretty_string(symbols, pool),
+                    len.to_pretty_string(symbols, pool)
+                ));
+            }
+            AmirRvalue::SliceSubslice { slice, start, len } => {
+                out.push_str(&format!(
+                    "slice_subslice({}, {}, {})",
+                    slice.to_pretty_string(symbols, pool),
+                    start.to_pretty_string(symbols, pool),
+                    len.to_pretty_string(symbols, pool)
+                ));
+            }
+            AmirRvalue::StrView { owner } => {
+                out.push_str(&format!(
+                    "str_view({})",
+                    owner.to_pretty_string(symbols, pool)
+                ));
             }
             AmirRvalue::Alloc(value) => {
                 out.push_str(&format!("alloc({})", value.to_pretty_string(symbols, pool)));

@@ -78,8 +78,9 @@ O SDK inclui a biblioteca estática do runtime correspondente ao target.
   promessa de cross-compilation nem de executar um artefato em outro target.
 - A ABI da biblioteca estática do runtime é interna e versionada junto com o
   compilador; ela não é uma ABI pública para link manual.
-- `build --release`/LLVM, ABI estável, freestanding, self-hosting e debugger
-  estão fora do contrato.
+- LLVM/LTO/PGO, ABI estável, freestanding, self-hosting e debugger estão fora
+  do contrato. `build --release` usa AMIR O2 e Cranelift AOT otimizado para
+  velocidade; isso não promete paridade de qualidade com um futuro LLVM.
 - O backend C é experimental; gerar C não significa suporte ao ABI/toolchain
   MSVC.
 - Binários não prometem MSRV. A fonte só é validada com `rust-toolchain.toml`.

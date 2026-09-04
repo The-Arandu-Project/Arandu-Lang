@@ -28,7 +28,11 @@ fn c_compiler(cc: &str) -> Command {
 fn compile_src(src: &str) -> (AmirProgram, TypeCheckResult) {
     let program = arandu_parser::parse(src).expect("parse failed");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     assert!(
         tc.diagnostics.is_empty(),
         "type check failed: {:?}",
@@ -36,7 +40,7 @@ fn compile_src(src: &str) -> (AmirProgram, TypeCheckResult) {
     );
 
     let hir = lower_to_hir(&mut tc, &program).expect("HIR lowering failed");
-    let amir = lower_to_amir(&tc, &hir).expect("AMIR lowering failed");
+    let amir = lower_to_amir(&tc, &hir, 64).expect("AMIR lowering failed");
     (amir, tc)
 }
 
@@ -665,7 +669,8 @@ fn parity_to_str_int_interp() {
 
 #[test]
 fn parity_io_println_to_str() {
-    // println stub + ToStr; exit code only (stdout not compared).
+    // Exercise the official `io.println` lowering. This parity harness compares
+    // process status; stdout behavior has its own runtime contract tests.
     let src = r#"
     import io
     func main(): int {
@@ -755,6 +760,11 @@ fn c_emit_arstr_layout_32bit() {
         "expected 32-bit ArStr, headers:\n{}",
         c.lines().take(40).collect::<Vec<_>>().join("\n")
     );
+    assert!(c.contains("static void *ar_vec_malloc(uint32_t size)"));
+    assert!(c.contains(
+        "typedef struct { uint8_t *data; uint32_t len; uint32_t capacity; } ArOwnedStringRuntime;"
+    ));
+    assert!(c.contains("static int32_t ar_str_len(ArStr s)"));
 }
 
 #[test]

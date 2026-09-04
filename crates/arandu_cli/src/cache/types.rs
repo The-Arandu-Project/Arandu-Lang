@@ -9,6 +9,7 @@ pub const CACHE_DIR_ENV: &str = "ARANDU_CACHE_DIR";
 
 pub const DEFAULT_SCAN_ENTRIES: usize = 100_000;
 pub const DEFAULT_SCAN_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+pub const COPY_BUFFER_SIZE: usize = 32 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CacheScanLimits {
@@ -158,9 +159,8 @@ impl fmt::Display for CacheStoreError {
 impl std::error::Error for CacheStoreError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::DigestMismatch { .. } => None,
             Self::Io { source, .. } => Some(source),
-            Self::LimitExceeded(_) | Self::MalformedCache(_) => None,
+            _ => None,
         }
     }
 }

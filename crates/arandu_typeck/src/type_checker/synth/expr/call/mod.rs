@@ -129,7 +129,7 @@ pub(super) fn synth_call_expr(
                         }
                         crate::type_checker::EnumPayloadShape::Tuple(tids) => {
                             let enum_id = checker.intern(enum_ty);
-                            return Some(checker.intern(ArType::Func(tids.clone(), enum_id)));
+                            return Some(checker.intern(ArType::Func(tids, enum_id)));
                         }
                     }
                 }
@@ -204,6 +204,58 @@ pub(super) fn synth_call_expr(
                 );
                 checker.intern(ArType::Error)
             })
+        }
+        ExprKind::NullCoalesce { left, right } => {
+            let left_id = *left;
+            let right_id = *right;
+            let left_ty_id = synth_expr(checker, left_id);
+            let left_ty = checker.resolve(left_ty_id);
+            let unwrapped_ty = match left_ty {
+                ArType::Nullable(inner) => Some(checker.resolve(inner)),
+                ArType::Option(inner) => Some(checker.resolve(inner)),
+                _ => None,
+            };
+            let right_expected = unwrapped_ty.as_ref().map(|t| checker.intern(t.clone()));
+            let right_ty_id = synth_expr_expected(checker, right_id, right_expected);
+            let right_ty = checker.resolve(right_ty_id);
+
+            if let Some(target_ty) = unwrapped_ty {
+                let target_id = checker.intern(target_ty);
+                if !checker.unify_ids(target_id, right_ty_id)
+                    && !checker.is_assignable(right_ty_id, target_id)
+                {
+                    checker.add_constraint(
+                        target_id,
+                        right_ty_id,
+                        ConstraintOrigin::NullCoalesce {
+                            left_span: checker.pool.expr_span(left_id),
+                            right_span: checker.pool.expr_span(right_id),
+                        },
+                    );
+                }
+                Some(target_id)
+            } else if left_ty.is_error() || right_ty.is_error() {
+                Some(checker.intern(ArType::Error))
+            } else {
+                checker.diagnostics.push(
+                    crate::Diagnostic::error(
+                        crate::DiagCode::T005OperatorNotApplicable,
+                        format!(
+                            "left operand of `??` must be nullable or `Option`, found '{}'",
+                            left_ty.display(&checker.symbols, &checker.type_info.type_interner)
+                        ),
+                        span,
+                    )
+                    .with_label(
+                        checker.pool.expr_span(left_id),
+                        format!(
+                            "this has type '{}'",
+                            left_ty.display(&checker.symbols, &checker.type_info.type_interner)
+                        ),
+                    ),
+                );
+                Some(checker.intern(ArType::Error))
+            }
         }
         ExprKind::Call {
             callee,
@@ -294,7 +346,7 @@ pub(super) fn synth_call_expr(
                     let arg_ids = checker.pool.expr_list(args_range).to_vec();
                     let ns_ty = checker.resolve(ns_ty_id);
                     if let ArType::Func(params, ret) = ns_ty {
-                        let mut params = params.clone();
+                        let mut params = params;
                         let mut ret = ret;
                         // Multi-file generic free funcs (`rt.spawn(ex, job)`):
                         // same inference as Path callees — instantiate T from

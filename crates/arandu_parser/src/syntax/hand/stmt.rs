@@ -373,6 +373,27 @@ fn parse_condition(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>) -> Option<Condit
             .map(|t| t.start + t.len)
             .unwrap_or(cond_toks[0].start),
     );
+    if matches!(cond_toks[0].kind, TokenKind::KwLet)
+        && let Some(eq_idx) = cond_toks
+            .iter()
+            .position(|t| matches!(t.kind, TokenKind::Equal))
+    {
+        let mut pcur = Cursor::new(&cond_toks[1..eq_idx]);
+        let pattern = parse_pattern(ctx, &mut pcur)?;
+        if !pcur.at_end() {
+            return None;
+        }
+        let mut ecur = Cursor::new(&cond_toks[eq_idx + 1..]);
+        let expr = try_hand_lower_expr(ctx, &mut ecur, 0)?;
+        if !ecur.at_end() {
+            return None;
+        }
+        return Some(Condition::Is {
+            span,
+            expr,
+            pattern,
+        });
+    }
     if let Some(is_idx) = cond_toks
         .iter()
         .position(|t| matches!(t.kind, TokenKind::KwIs))

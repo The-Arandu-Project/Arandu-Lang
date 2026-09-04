@@ -4,3 +4,10 @@ import std.core.option as option
 import std.core.result as result
 import std.core.pointer as pointer
 import std.core.future as future
+import std.core.mem as mem
+import std.core.cmp as cmp
+import std.core.slice as slice
+import std.core.num as num
+import std.core.char as chars
+import std.core.ascii as ascii
+import std.core.str as strings

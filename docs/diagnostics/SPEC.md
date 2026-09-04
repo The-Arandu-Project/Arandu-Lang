@@ -276,6 +276,7 @@ Abaixo estão listados todos os diagnósticos mapeados para o compilador Arandu.
 | **T035** | `invalid @Destructor contract` | Error | `0.1.0` | O método anotado não é um destrutor consumidor válido ou o tipo já possui outro destrutor. |
 | **T036** | `invalid @Test contract` | Error | `0.1.0` | A função de teste não satisfaz o contrato síncrono, não genérico, sem parâmetros e com retorno `void` ou `Result<void, E>`. |
 | **T037** | `invalid @Benchmark contract` | Error | `0.1.0` | A função de benchmark não satisfaz o contrato síncrono, não genérico, com um contexto `mut testing.Benchmark` e retorno `void`. |
+| **T038** | `integer literal does not fit in the expected type` | Error | `0.1.0` | Um literal inteiro contextual excede o intervalo representável pelo tipo inteiro esperado. |
 
 ---
 
@@ -285,7 +286,7 @@ Abaixo estão listados todos os diagnósticos mapeados para o compilador Arandu.
 | :--- | :--- | :--- | :--- | :--- |
 | **O001** | `use of moved value: '{name}'` | Error | `0.1.0` | Tentativa de ler ou acessar uma variável cujo valor já foi movido (ownership transferida) em uma linha anterior. |
 | **O002** | `cannot move '{name}' while borrowed` | Error | `0.1.0` | Move/consume de valor com empréstimo ativo (M2). |
-| **O003** | `mutable borrow conflict on '{name}'` | Error | `0.1.0` | Empréstimos exclusivos sobrepostos (`&mut` vs qualquer) ou mutação sob empréstimo shared. Shared+shared é permitido. |
+| **O003** | `mutable borrow conflict on '{name}'` | Error | `0.1.0` | Empréstimos exclusivos sobrepostos (`mut ref` vs qualquer) ou mutação sob empréstimo compartilhado. Múltiplos `ref` compartilhados são permitidos. |
 | **O004** | `generational fallback: '{name}' escapes stack-limited borrow window` | Info | `0.1.0` | Nota de fallback geracional/escape (G2/F2.3) — **não** conflito shared. |
 | **O005** | `double free detected for '{name}'` | Error | `0.1.0` | Análise estática do CFG detectou que o mesmo objeto sob ownership exclusiva seria destruído ou liberado mais de uma vez. |
 | **O006** | `cannot destroy '{name}' while borrowed` | Error | `0.1.0` | Destroy/free/drop com empréstimo ainda ativo (double-free estático; M2). |

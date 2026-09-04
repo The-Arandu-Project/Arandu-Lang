@@ -29,7 +29,7 @@ identity, lockfile integrity and cache isolation are proven.
 | Project creation | transactional `new`/`init`, bin/lib targets, README, ignore file and VCS policy | lifecycle E2E remains in P7 |
 | Manifest | strict deterministic TOML with schema, edition, targets, path dependencies, exports, workspace members and compatibility validation | registry/Git origins and target-specific dependency features remain future work |
 | Incrementality | manifest fields and an authoritative `PackageModuleMap` are stable Salsa inputs, including live background LSP reload | remote resolver/cache inputs begin in P5/P6 |
-| Build | Cranelift emits a baseline host object, links the packaged runtime and atomically publishes a content-addressed executable | cross-target builds and LLVM release mode remain out of scope |
+| Build | Cranelift emits a baseline dev object or speed-oriented release object, links the packaged runtime and atomically publishes a content-addressed executable in its profile | cross-target builds and LLVM/LTO/PGO remain out of scope |
 | Dependencies | deterministic local workspace DAG, direct aliases, explicit exports and a semantic lockfile | verified global cache and remote resolver start in P5/P6 |
 | Imports | `self`, `std` and direct dependency roots are logical; private, transitive and quoted filesystem access fail closed | complete live CLI/LSP graph refresh and edition removal of the temporary bare-local migration |
 | Portability | installed SDK smoke is native on three OS families | generated projects are not yet exercised as a complete lifecycle outside checkout |

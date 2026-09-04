@@ -1,6 +1,7 @@
 use super::{
     BinaryOp, Block, CatchHandler, FieldInit, LambdaBody, LambdaParam, ParseError, ParseErrorCode,
-    Parser, Stmt, StringPart, TokenKind, TypeExpr, UnaryOp, merge_text_parts, span_between,
+    Parser, Stmt, StringPart, TokenKind, TypeExpr, TypeName, UnaryOp, is_primitive_type_token,
+    merge_text_parts, span_between,
 };
 use crate::ast::ast_pool::{ExprId, ExprKind};
 use smol_str::SmolStr;
@@ -293,6 +294,34 @@ impl<'a> Parser<'a> {
                     span,
                 ))
             }
+            TokenKind::KwRef => {
+                self.advance();
+                let expr = self.parse_expr(150)?;
+                let span = self.span_from_mark(start);
+                Ok(self.pool.alloc_expr(
+                    ExprKind::Unary {
+                        op: UnaryOp::Ref,
+                        expr,
+                    },
+                    span,
+                ))
+            }
+            TokenKind::KwMut
+                if self.tokens.get(self.pos + 1).map(|token| token.kind)
+                    == Some(TokenKind::KwRef) =>
+            {
+                self.advance();
+                self.advance();
+                let expr = self.parse_expr(150)?;
+                let span = self.span_from_mark(start);
+                Ok(self.pool.alloc_expr(
+                    ExprKind::Unary {
+                        op: UnaryOp::RefMut,
+                        expr,
+                    },
+                    span,
+                ))
+            }
             TokenKind::Star => {
                 self.advance();
                 let expr = self.parse_expr(150)?;
@@ -357,7 +386,9 @@ impl<'a> Parser<'a> {
                     ))
                 }
             }
-            TokenKind::IdentType => self.parse_type_led_expr(),
+            kind if matches!(kind, TokenKind::IdentType) || is_primitive_type_token(kind) => {
+                self.parse_type_led_expr()
+            }
             TokenKind::IntDec | TokenKind::IntHex | TokenKind::IntBin | TokenKind::IntOct => {
                 let value = SmolStr::new(self.current_text());
                 self.advance();
@@ -448,6 +479,7 @@ impl<'a> Parser<'a> {
                     Ok(self.pool.alloc_expr(ExprKind::Group { expr }, span))
                 }
             }
+            TokenKind::Pipe => self.parse_pipe_lambda(),
             TokenKind::LBracket => self.parse_array(),
             _ => Err(ParseError::new(
                 ParseErrorCode::ExpectedExpression,
@@ -616,6 +648,60 @@ impl<'a> Parser<'a> {
         ))
     }
 
+    pub(super) fn parse_pipe_lambda(&mut self) -> Result<ExprId, ParseError> {
+        let start = self.mark();
+        self.expect_name("PIPE")?;
+        let mut params = Vec::new();
+        if !self.at_kind_name("PIPE") {
+            loop {
+                let param_start = self.mark();
+                let name = self.expect_ident_value()?;
+                let ty = if self.can_start_type() {
+                    Some(self.parse_type()?)
+                } else {
+                    None
+                };
+                let param = LambdaParam {
+                    span: self.span_from_mark(param_start),
+                    name,
+                    ty,
+                };
+                let param_id = self.pool.alloc_lambda_param(param);
+                params.push(param_id);
+                if !self.eat_name("COMMA") {
+                    break;
+                }
+                if self.at_kind_name("PIPE") {
+                    break;
+                }
+            }
+        }
+        self.expect_name("PIPE")?;
+        let body = if self.at_kind_name("LBRACE") {
+            let block = self.parse_block()?;
+            LambdaBody::Block {
+                span: block.span,
+                block,
+            }
+        } else {
+            let body_start = self.mark();
+            let expr = self.parse_expr(0)?;
+            LambdaBody::Expr {
+                span: self.span_from_mark(body_start),
+                expr,
+            }
+        };
+        let range = self.pool.alloc_lambda_param_list(&params);
+        let span = self.span_from_mark(start);
+        Ok(self.pool.alloc_expr(
+            ExprKind::Lambda {
+                params: range,
+                body,
+            },
+            span,
+        ))
+    }
+
     pub(super) fn parse_type_led_expr(&mut self) -> Result<ExprId, ParseError> {
         let start = self.mark();
         let ty = self.parse_type()?;
@@ -623,10 +709,36 @@ impl<'a> Parser<'a> {
             let mut fields = Vec::new();
             if !self.at_kind_name("RBRACE") {
                 loop {
+                    if self.eat_name("RANGE_EXCLUSIVE") {
+                        // Struct update syntax: `{ ..base }` or `{ field: val, ..base }`
+                        let base_expr = self.parse_expr(0)?;
+                        let base_span = self.pool.expr_span(base_expr);
+                        let init = FieldInit {
+                            span: base_span,
+                            name: SmolStr::new(".."),
+                            value: base_expr,
+                        };
+                        let init_id = self.pool.alloc_field_init(init);
+                        fields.push(init_id);
+                        if self.eat_name("COMMA") {
+                            // optional trailing comma after ..base
+                        }
+                        break;
+                    }
                     let field_start = self.mark();
                     let name = self.expect_ident_value()?;
-                    self.expect_name("COLON")?;
-                    let value = self.parse_expr(0)?;
+                    let value = if self.eat_name("COLON") {
+                        self.parse_expr(0)?
+                    } else {
+                        // Field init shorthand: `{ x }` desugars to `{ x: x }`
+                        let field_span = self.span_from_mark(field_start);
+                        self.pool.alloc_expr(
+                            ExprKind::Path {
+                                path: smallvec::smallvec![name.clone()],
+                            },
+                            field_span,
+                        )
+                    };
                     let init = FieldInit {
                         span: self.span_from_mark(field_start),
                         name,
@@ -656,6 +768,10 @@ impl<'a> Parser<'a> {
         }
         let named_info = match self.pool.type_expr(ty) {
             TypeExpr::Named { name, args, .. } if args.is_empty() => Some(name.clone()),
+            TypeExpr::Primitive { span, name } => Some(TypeName {
+                span: *span,
+                path: smallvec::smallvec![name.clone()],
+            }),
             _ => None,
         };
         if let Some(type_name) = named_info

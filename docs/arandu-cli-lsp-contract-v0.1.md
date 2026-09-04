@@ -34,7 +34,7 @@ range of a program return value.
 | `run` | execute `main` | Cranelift host JIT | experimental | program return code |
 | `emit-c` | emit GNU C source | C | experimental; see backend contract | `0` |
 | `build` | publish a host-native package executable | Cranelift AOT object + native linker | stable project workflow | `0` |
-| `build --release` | reserved release pipeline | LLVM when implemented | unavailable | usage/unsupported exit `2` |
+| `build --release` | publish a speed-oriented host executable | AMIR O2 + Cranelift AOT `speed` | stable project workflow | `0` |
 | `new`, `doctor`, `watch`, `hash-file` | project/tooling operations | varies | partial | `0` |
 
 Backend and cross-target details are defined in

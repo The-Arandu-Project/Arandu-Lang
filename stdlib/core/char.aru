@@ -1,0 +1,77 @@
+module std.core.char
+
+import std.core.option as option
+
+/// Returns `true` if the character is within the ASCII range (`U+0000` to `U+007F`).
+///
+/// # Examples
+/// ```arandu
+/// char.isAscii('a') // true
+/// char.isAscii('9') // true
+/// char.isAscii('ç') // false
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func isAscii(c: char): bool {
+    let val = c as u32
+    return val <= 127 as u32
+}
+
+/// Returns the byte length of `c` when encoded as UTF-8 (1 to 4 bytes).
+///
+/// # Examples
+/// ```arandu
+/// char.lenUtf8('a') // 1
+/// char.lenUtf8('é') // 2
+/// char.lenUtf8('あ') // 3
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func lenUtf8(c: char): u32 {
+    let val = c as u32
+    if val <= 127 as u32 {
+        return 1 as u32
+    }
+    if val <= 2047 as u32 {
+        return 2 as u32
+    }
+    if val <= 65535 as u32 {
+        return 3 as u32
+    }
+    return 4 as u32
+}
+
+/// Converts a character to its corresponding numeric digit in the specified radix.
+///
+/// Supports decimal digits `0-9` (values 0 to 9) and letters `a-z` / `A-Z` (values 10 to 35).
+/// Returns `Option.Some(digit)` if the character is valid and strictly less than `radix`,
+/// or `Option.None` otherwise.
+///
+/// # Examples
+/// ```arandu
+/// char.toDigit('7', 10 as u32) // Some(7)
+/// char.toDigit('f', 16 as u32) // Some(15)
+/// char.toDigit('F', 16 as u32) // Some(15)
+/// char.toDigit('9', 8 as u32)  // None (9 is not valid in octal)
+/// char.toDigit('z', 10 as u32) // None
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func toDigit(c: char, radix: u32): Option<u32> {
+    let val = c as u32
+    let mut digit: u32 = 999 as u32
+    if val >= 48 as u32 && val <= 57 as u32 {
+        digit = val - 48 as u32
+    } else if val >= 97 as u32 && val <= 122 as u32 {
+        digit = val - 97 as u32 + 10 as u32
+    } else if val >= 65 as u32 && val <= 90 as u32 {
+        digit = val - 65 as u32 + 10 as u32
+    }
+    if digit < radix {
+        return Option.Some(digit)
+    }
+    return Option.None
+}

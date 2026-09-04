@@ -6,20 +6,19 @@ use super::super::types::{ArType, TypeId};
 use super::expr::synth_expr;
 
 pub fn check_pattern(checker: &mut TypeChecker<'_>, pattern: PatternId, value_ty: TypeId) {
-    // Peel & / &mut / ptr so `match self` on `shared self: &Result<T,E>` sees Result.
-    let value_ty = {
+    let pat = checker.pool.pattern(pattern);
+    let value_ty = if matches!(pat, Pattern::Bind { .. }) {
+        value_ty
+    } else {
         let mut id = value_ty;
         for _ in 0..4 {
             match checker.resolve(id) {
-                ArType::Ref(inner) | ArType::RefMut(inner) | ArType::Ptr(inner) => {
-                    id = inner;
-                }
+                ArType::Ref(inner) | ArType::RefMut(inner) | ArType::Ptr(inner) => id = inner,
                 _ => break,
             }
         }
         id
     };
-    let pat = checker.pool.pattern(pattern);
     match pat {
         Pattern::Wildcard { .. } => {}
         Pattern::Bind { span, name: _ } => {
@@ -48,6 +47,21 @@ pub fn check_pattern(checker: &mut TypeChecker<'_>, pattern: PatternId, value_ty
             variant,
             payload,
         } => {
+            // Peel only to inspect the enum constructor. A plain binding must
+            // retain `ref T`; globally peeling here silently turned
+            // `Option<ref T>` payload bindings into owned `T` values.
+            let value_ty = {
+                let mut id = value_ty;
+                for _ in 0..4 {
+                    match checker.resolve(id) {
+                        ArType::Ref(inner) | ArType::RefMut(inner) | ArType::Ptr(inner) => {
+                            id = inner;
+                        }
+                        _ => break,
+                    }
+                }
+                id
+            };
             let type_key = crate::NodeKey::from(type_name.span);
             if let Some(enum_symbol_id) = checker.resolved.type_refs.get(&type_key).copied() {
                 let val_ty = checker.resolve(value_ty);
@@ -390,7 +404,7 @@ pub fn check_pattern(checker: &mut TypeChecker<'_>, pattern: PatternId, value_ty
         Pattern::Tuple { items, span: _ } => {
             let val_ty = checker.type_info.resolve_type_id(value_ty);
             if let ArType::Tuple(tys) = val_ty {
-                let tys_cloned = tys.clone();
+                let tys_cloned = tys;
                 for (i, &item_id) in checker.pool.pattern_list(*items).iter().enumerate() {
                     let item_ty = tys_cloned
                         .get(i)

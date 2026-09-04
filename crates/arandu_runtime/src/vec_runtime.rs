@@ -19,8 +19,6 @@
 //! into the process-local table; invalid ids are treated as no-ops or abort
 //! on write paths that would corrupt storage.
 
-#![allow(clippy::missing_safety_doc)]
-
 use std::sync::Mutex;
 
 struct Slot {
@@ -34,6 +32,9 @@ fn lock() -> std::sync::MutexGuard<'static, Vec<Option<Slot>>> {
 }
 
 /// Create an empty vector; returns handle `>= 0`.
+///
+/// # Safety
+/// Safe to call from any thread; acquires process-local synchronized table.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_vec_new() -> i64 {
     let mut g = lock();
@@ -48,6 +49,9 @@ pub unsafe extern "C" fn ar_vec_new() -> i64 {
 }
 
 /// Push `value` onto vector `id`. Invalid id aborts.
+///
+/// # Safety
+/// `id` must be a valid vector handle allocated by [`ar_vec_new`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_vec_push(id: i64, value: i64) {
     let mut g = lock();
@@ -57,17 +61,23 @@ pub unsafe extern "C" fn ar_vec_push(id: i64, value: i64) {
     slot.data.push(value);
 }
 
-/// Length of vector `id`, or `-1` if invalid.
+/// Length of vector `id`, or `usize::MAX` if invalid.
+///
+/// # Safety
+/// `id` should be a valid vector handle allocated by [`ar_vec_new`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ar_vec_len(id: i64) -> i64 {
+pub unsafe extern "C" fn ar_vec_len(id: i64) -> usize {
     let g = lock();
     match g.get(id as usize).and_then(|s| s.as_ref()) {
-        Some(slot) => slot.data.len() as i64,
-        None => -1,
+        Some(slot) => slot.data.len(),
+        None => usize::MAX, // sentinel para inválido
     }
 }
 
 /// `1` if `index` is in range, else `0`. Invalid id → `0`.
+///
+/// # Safety
+/// `id` should be a valid vector handle allocated by [`ar_vec_new`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_vec_has(id: i64, index: i64) -> i64 {
     if index < 0 {
@@ -81,6 +91,9 @@ pub unsafe extern "C" fn ar_vec_has(id: i64, index: i64) -> i64 {
 }
 
 /// Get element at `index`. Invalid / OOB → `0` (check [`ar_vec_has`] first).
+///
+/// # Safety
+/// `id` should be a valid vector handle allocated by [`ar_vec_new`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_vec_get(id: i64, index: i64) -> i64 {
     if index < 0 {
@@ -94,6 +107,9 @@ pub unsafe extern "C" fn ar_vec_get(id: i64, index: i64) -> i64 {
 }
 
 /// Overwrite index; returns `1` on success, `0` on OOB/invalid.
+///
+/// # Safety
+/// `id` should be a valid vector handle allocated by [`ar_vec_new`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_vec_put(id: i64, index: i64, value: i64) -> i64 {
     if index < 0 {
@@ -114,6 +130,9 @@ pub unsafe extern "C" fn ar_vec_put(id: i64, index: i64, value: i64) -> i64 {
 
 /// Pop last element and return it. Caller must ensure non-empty (`ar_vec_len > 0`).
 /// Empty / invalid → `0` (ambiguous with a stored zero — check length first).
+///
+/// # Safety
+/// `id` must be a valid vector handle allocated by [`ar_vec_new`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_vec_pop(id: i64) -> i64 {
     let mut g = lock();
@@ -124,6 +143,9 @@ pub unsafe extern "C" fn ar_vec_pop(id: i64) -> i64 {
 }
 
 /// Set length to 0; capacity retained.
+///
+/// # Safety
+/// `id` should be a valid vector handle allocated by [`ar_vec_new`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_vec_clear(id: i64) {
     let mut g = lock();
@@ -133,6 +155,9 @@ pub unsafe extern "C" fn ar_vec_clear(id: i64) {
 }
 
 /// Destroy handle and free storage.
+///
+/// # Safety
+/// `id` must be a valid vector handle allocated by [`ar_vec_new`] and must not be used afterwards.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_vec_destroy(id: i64) {
     let mut g = lock();
@@ -148,11 +173,11 @@ pub unsafe extern "C" fn ar_vec_destroy(id: i64) {
 /// # Safety
 /// JIT host only; free with [`ar_vec_buf_free`] using the same size.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ar_vec_malloc(size: i64) -> *mut u8 {
-    if size <= 0 {
+pub unsafe extern "C" fn ar_vec_malloc(size: usize) -> *mut u8 {
+    if size == 0 {
         return std::ptr::null_mut();
     }
-    let layout = match std::alloc::Layout::from_size_align(size as usize, 8) {
+    let layout = match std::alloc::Layout::from_size_align(size, 8) {
         Ok(l) => l,
         Err(_) => return std::ptr::null_mut(),
     };
@@ -164,11 +189,11 @@ pub unsafe extern "C" fn ar_vec_malloc(size: i64) -> *mut u8 {
 /// # Safety
 /// `p`/`size` must match a prior `ar_vec_malloc` pair (or `p` null).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ar_vec_buf_free(p: *mut u8, size: i64) {
-    if p.is_null() || size <= 0 {
+pub unsafe extern "C" fn ar_vec_buf_free(p: *mut u8, size: usize) {
+    if p.is_null() || size == 0 {
         return;
     }
-    let layout = match std::alloc::Layout::from_size_align(size as usize, 8) {
+    let layout = match std::alloc::Layout::from_size_align(size, 8) {
         Ok(l) => l,
         Err(_) => return,
     };
@@ -180,8 +205,8 @@ pub unsafe extern "C" fn ar_vec_buf_free(p: *mut u8, size: i64) {
 /// # Safety
 /// Same as malloc/free pair.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ar_vec_realloc(p: *mut u8, old_size: i64, new_size: i64) -> *mut u8 {
-    if new_size <= 0 {
+pub unsafe extern "C" fn ar_vec_realloc(p: *mut u8, old_size: usize, new_size: usize) -> *mut u8 {
+    if new_size == 0 {
         unsafe { ar_vec_buf_free(p, old_size) };
         return std::ptr::null_mut();
     }
@@ -190,7 +215,7 @@ pub unsafe extern "C" fn ar_vec_realloc(p: *mut u8, old_size: i64, new_size: i64
         return std::ptr::null_mut();
     }
     if !p.is_null() && old_size > 0 {
-        let n = std::cmp::min(old_size, new_size) as usize;
+        let n = std::cmp::min(old_size, new_size);
         unsafe {
             std::ptr::copy_nonoverlapping(p, new_ptr, n);
             ar_vec_buf_free(p, old_size);
@@ -200,6 +225,65 @@ pub unsafe extern "C" fn ar_vec_realloc(p: *mut u8, old_size: i64, new_size: i64
         // as fresh alloc without free/copy of a null base.
     }
     new_ptr
+}
+
+#[repr(C)]
+pub struct ArOwnedString {
+    pub data: *mut u8,
+    pub len: usize,
+    pub capacity: usize,
+}
+
+/// Append a UTF-8 byte sequence to the owned String buffer.
+/// Returns 0 on overflow/OOM and leaves the original value unchanged.
+///
+/// # Safety
+/// `string` must point to the std.alloc.String layout and `value` must be
+/// readable for `value_len` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ar_string_push_str(
+    string: *mut ArOwnedString,
+    value: *const u8,
+    value_len: usize,
+) -> i8 {
+    let Some(string) = (unsafe { string.as_mut() }) else {
+        return 0;
+    };
+    if value_len > 0 && value.is_null() {
+        return 0;
+    }
+    let Some(required) = string.len.checked_add(value_len) else {
+        return 0;
+    };
+    if required > i32::MAX as usize {
+        return 0;
+    }
+    if required > string.capacity {
+        let mut capacity = string.capacity.max(8);
+        while capacity < required {
+            let Some(doubled) = capacity.checked_mul(2) else {
+                capacity = required;
+                break;
+            };
+            capacity = doubled.min(i32::MAX as usize);
+            if capacity == i32::MAX as usize && capacity < required {
+                return 0;
+            }
+        }
+        let replacement = unsafe { ar_vec_realloc(string.data, string.capacity, capacity) };
+        if replacement.is_null() {
+            return 0;
+        }
+        string.data = replacement;
+        string.capacity = capacity;
+    }
+    if value_len > 0 {
+        unsafe {
+            std::ptr::copy_nonoverlapping(value, string.data.add(string.len), value_len);
+        }
+    }
+    string.len = required;
+    1
 }
 
 #[cfg(test)]
@@ -221,7 +305,34 @@ mod tests {
             assert_eq!(ar_vec_pop(id), 5);
             assert_eq!(ar_vec_len(id), 1);
             ar_vec_destroy(id);
-            assert_eq!(ar_vec_len(id), -1);
+            assert_eq!(ar_vec_len(id), usize::MAX);
+        }
+    }
+
+    #[test]
+    fn string_push_str_is_utf8_preserving_and_failure_atomic() {
+        unsafe {
+            let mut string = ArOwnedString {
+                data: std::ptr::null_mut(),
+                len: 0,
+                capacity: 0,
+            };
+            let first = "olá".as_bytes();
+            assert_eq!(
+                ar_string_push_str(&mut string, first.as_ptr(), first.len()),
+                1
+            );
+            assert_eq!(string.len, 4);
+            assert_eq!(std::slice::from_raw_parts(string.data, string.len), first);
+
+            let before = (string.data, string.len, string.capacity);
+            assert_eq!(
+                ar_string_push_str(&mut string, first.as_ptr(), usize::MAX),
+                0
+            );
+            assert_eq!((string.data, string.len, string.capacity), before);
+
+            ar_vec_buf_free(string.data, string.capacity);
         }
     }
 }

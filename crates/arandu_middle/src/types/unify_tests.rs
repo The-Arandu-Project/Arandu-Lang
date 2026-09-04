@@ -258,7 +258,7 @@ fn func_same_params_and_return() {
     let mut i = new_interner();
     let params = vec![int_t(&mut i), bool_t(&mut i)];
     let ret = int_t(&mut i);
-    let f = ArType::Func(params.clone(), ret);
+    let f = ArType::Func(params, ret);
     assert!(unify(&f, &f, &i));
 }
 

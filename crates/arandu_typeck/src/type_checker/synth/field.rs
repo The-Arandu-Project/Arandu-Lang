@@ -6,17 +6,22 @@ use super::super::constraints::ConstraintOrigin;
 use super::super::types::{ArType, Primitive};
 use super::expr::synth_expr;
 
-/// Peel auto-deref layers for field/index bases: `Nullable`, then `&`/`&mut`/`ptr`.
+/// Peel auto-deref layers for field/index bases: `Option`, `Nullable`, then `&`/`&mut`/`ptr`.
 ///
-/// Returns `(inner_ty_id, was_nullable)`. Used so `shared self` (`&T`) and
+/// Returns `(inner_ty_id, was_nullable, was_option)`. Used so `shared self` (`&T`) and
 /// `mut self` (`&mut T`) can use `self.field` without an explicit `*`.
-fn peel_auto_deref_base(checker: &TypeChecker<'_>, base_ty_id: TypeId) -> (TypeId, bool) {
+fn peel_auto_deref_base(checker: &TypeChecker<'_>, base_ty_id: TypeId) -> (TypeId, bool, bool) {
     let mut id = base_ty_id;
     let mut was_nullable = false;
-    // Bound iterations: Nullable? + a few ref layers is plenty; avoid infinite
+    let mut was_option = false;
+    // Bound iterations: Option/Nullable? + a few ref layers is plenty; avoid infinite
     // loops on malformed interned graphs.
     for _ in 0..8 {
         match checker.resolve(id) {
+            ArType::Option(inner) => {
+                was_option = true;
+                id = inner;
+            }
             ArType::Nullable(inner) => {
                 was_nullable = true;
                 id = inner;
@@ -27,7 +32,7 @@ fn peel_auto_deref_base(checker: &TypeChecker<'_>, base_ty_id: TypeId) -> (TypeI
             _ => break,
         }
     }
-    (id, was_nullable)
+    (id, was_nullable, was_option)
 }
 
 pub(crate) fn resolve_namespace_field(
@@ -79,15 +84,15 @@ pub(crate) fn resolve_field(
         return checker.intern(ArType::Error);
     }
 
-    let (actual_base_ty_id, was_nullable) = peel_auto_deref_base(checker, base_ty_id);
+    let (actual_base_ty_id, was_nullable, was_option) = peel_auto_deref_base(checker, base_ty_id);
     let actual_base_ty = checker.resolve(actual_base_ty_id);
 
-    if was_nullable && !safe {
+    if (was_nullable || was_option) && !safe {
         let base_ty = checker.resolve(base_ty_id);
         let diag = crate::Diagnostic::error(
             crate::DiagCode::T006NotNullable,
             format!(
-                "cannot access field '{}' on nullable type '{}'",
+                "cannot access field '{}' on nullable or optional type '{}'",
                 field,
                 base_ty.display(&checker.symbols, &checker.type_info.type_interner)
             ),
@@ -100,15 +105,15 @@ pub(crate) fn resolve_field(
                 base_ty.display(&checker.symbols, &checker.type_info.type_interner)
             ),
         )
-        .with_hint("use safe access `?.` or make the value non-nullable".to_string());
+        .with_hint("use safe access `?.` or unwrap the value first".to_string());
         checker.diagnostics.push(diag);
         return checker.intern(ArType::Error);
     }
 
     let struct_info_opt = match actual_base_ty {
-        ArType::Named(id, args) => Some((id, args.clone())),
+        ArType::Named(id, args) => Some((id, args)),
         ArType::Ptr(inner) => match checker.resolve(inner) {
-            ArType::Named(id, args) => Some((id, args.clone())),
+            ArType::Named(id, args) => Some((id, args)),
             _ => None,
         },
         _ => None,
@@ -194,7 +199,9 @@ pub(crate) fn resolve_field(
     };
 
     let field_id = checker.intern(field_ty);
-    if safe || was_nullable {
+    if was_option {
+        checker.intern(ArType::Option(field_id))
+    } else if safe || was_nullable {
         checker.intern(ArType::Nullable(field_id))
     } else {
         field_id
@@ -215,15 +222,15 @@ pub(crate) fn resolve_index(
         return checker.intern(ArType::Error);
     }
 
-    let (actual_base_ty_id, was_nullable) = peel_auto_deref_base(checker, base_ty_id);
+    let (actual_base_ty_id, was_nullable, was_option) = peel_auto_deref_base(checker, base_ty_id);
     let actual_base_ty = checker.resolve(actual_base_ty_id);
 
-    if was_nullable && !safe {
+    if (was_nullable || was_option) && !safe {
         let base_ty = checker.resolve(base_ty_id);
         let diag = crate::Diagnostic::error(
             crate::DiagCode::T006NotNullable,
             format!(
-                "cannot index nullable type '{}'",
+                "cannot index nullable or optional type '{}'",
                 base_ty.display(&checker.symbols, &checker.type_info.type_interner)
             ),
             checker.pool.expr_span(index),
@@ -240,8 +247,13 @@ pub(crate) fn resolve_index(
         return checker.intern(ArType::Error);
     }
 
-    let elem_ty_id = match actual_base_ty {
-        ArType::Array(_, inner) | ArType::Slice(inner) => inner,
+    let elem_ty_id = match &actual_base_ty {
+        ArType::Array(_, inner) | ArType::Slice(inner) => *inner,
+        ArType::Named(_, args)
+            if arandu_middle::types::is_vec_type(&actual_base_ty, &checker.symbols) =>
+        {
+            args[0]
+        }
         _ => {
             checker.add_constraint(
                 actual_base_ty_id,
@@ -257,7 +269,9 @@ pub(crate) fn resolve_index(
     };
 
     let index_ty = checker.resolve(index_ty_id);
-    if !index_ty.is_error() && !index_ty.is_integer() {
+    let is_range_index = matches!(index_ty, ArType::Range(_));
+
+    if !index_ty.is_error() && !index_ty.is_integer() && !is_range_index {
         checker.add_constraint(
             ArType::Primitive(Primitive::Int),
             index_ty_id,
@@ -269,7 +283,18 @@ pub(crate) fn resolve_index(
         );
     }
 
-    if safe || was_nullable {
+    if is_range_index {
+        let slice_ty_id = checker.intern(ArType::Slice(elem_ty_id));
+        if was_option {
+            checker.intern(ArType::Option(slice_ty_id))
+        } else if safe || was_nullable {
+            checker.intern(ArType::Nullable(slice_ty_id))
+        } else {
+            slice_ty_id
+        }
+    } else if was_option {
+        checker.intern(ArType::Option(elem_ty_id))
+    } else if safe || was_nullable {
         checker.intern(ArType::Nullable(elem_ty_id))
     } else {
         elem_ty_id

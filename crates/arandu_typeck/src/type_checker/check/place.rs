@@ -144,9 +144,14 @@ pub(crate) fn synth_place(checker: &mut TypeChecker<'_>, place: &arandu_parser::
                     current_ty_id = checker.intern(ArType::Error);
                     break;
                 }
-                match actual_base_ty {
+                match &actual_base_ty {
                     ArType::Array(_, inner) | ArType::Slice(inner) => {
-                        current_ty_id = inner;
+                        current_ty_id = *inner;
+                    }
+                    ArType::Named(_, args)
+                        if arandu_middle::types::is_vec_type(&actual_base_ty, &checker.symbols) =>
+                    {
+                        current_ty_id = args[0];
                     }
                     _ => {
                         let err_id = checker.intern(ArType::Error);

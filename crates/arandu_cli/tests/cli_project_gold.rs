@@ -227,13 +227,27 @@ fn new_scaffolds_package_and_check_run() {
         Some(1)
     );
 
-    // --release is reserved for LLVM — must not silently change meaning.
+    // Release builds use the speed-oriented Cranelift AOT and O2 middle-end
+    // pipeline while preserving the same transactional publication contract.
+    fs::write(
+        project.join("src/main.aru"),
+        "module hello_gold\nfunc main(): int { return 2 }\n",
+    )
+    .unwrap();
     let rel = run_cli_in(&project, &["build", "--release"]);
-    assert_eq!(rel.status.code(), Some(2));
     assert!(
-        String::from_utf8_lossy(&rel.stderr).contains("LLVM")
-            || String::from_utf8_lossy(&rel.stderr).contains("llvm")
+        rel.status.success(),
+        "release build failed:\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&rel.stdout),
+        String::from_utf8_lossy(&rel.stderr)
     );
+    assert!(String::from_utf8_lossy(&rel.stdout).contains("backend=cranelift-release"));
+    let release_states = files_named(&project.join("target/release"), "build-state.json");
+    assert_eq!(release_states.len(), 1);
+    let release_state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&release_states[0]).unwrap()).unwrap();
+    assert_eq!(release_state["profile"], "release");
+    assert_eq!(release_state["backend"], "cranelift-aot-speed");
 
     let clean = run_cli_in(&project, &["clean"]);
     assert!(clean.status.success());

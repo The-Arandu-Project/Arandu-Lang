@@ -280,7 +280,7 @@ fn logs_multiple_failures_and_temp_dir_reach_the_structured_report() {
         @Test\nfunc context_case(): void {\n\
             testing.log(\"before failures\")\n\
             let temporary = testing.tempDir(0)\n\
-            testing.expect(!path.is_empty(temporary), \"temporary path must be usable\")\n\
+            testing.expect(!path.isEmpty(temporary), \"temporary path must be usable\")\n\
             testing.fail(\"primary\")\n\
             testing.fail(\"secondary\")\n\
         }\n\n\

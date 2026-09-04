@@ -34,20 +34,20 @@ pub fn runtime_library() -> Result<PathBuf, CliFailure> {
     if let Some(explicit) = std::env::var_os("ARANDU_RUNTIME_LIB") {
         candidates.push(PathBuf::from(explicit));
     }
-    if let Ok(executable) = std::env::current_exe() {
-        if let Some(bin) = executable.parent() {
-            // Cargo development layout: target/{debug,release}/arandu_cli.
-            candidates.push(bin.join(filename));
-            // Installed SDK layout: bin/arandu + lib/<host>/runtime.
-            if let Some(prefix) = bin.parent() {
-                candidates.push(
-                    prefix
-                        .join("lib")
-                        .join(artifact::host_triple())
-                        .join(filename),
-                );
-                candidates.push(prefix.join("lib").join(filename));
-            }
+    if let Ok(executable) = std::env::current_exe()
+        && let Some(bin) = executable.parent()
+    {
+        // Cargo development layout: target/{debug,release}/arandu_cli.
+        candidates.push(bin.join(filename));
+        // Installed SDK layout: bin/arandu + lib/<host>/runtime.
+        if let Some(prefix) = bin.parent() {
+            candidates.push(
+                prefix
+                    .join("lib")
+                    .join(artifact::host_triple())
+                    .join(filename),
+            );
+            candidates.push(prefix.join("lib").join(filename));
         }
     }
 

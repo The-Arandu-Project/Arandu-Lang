@@ -2,10 +2,10 @@ Program
   Struct User
     name: str
 
-  Func User.greet(shared self: &User) -> str
+  Func User.greet(shared self: ref User) -> str
     Return
       Field(name): str
-        LocalRef(self): &User
+        LocalRef(self): ref User
 
   Func main() -> void
     Var user: User =
@@ -14,6 +14,6 @@ Program
           Str(Ada): str
     Var _: str =
       Call: str
-        Field(greet): func(&User) str
+        Field(greet): func(ref User) str
           LocalRef(user): User
         LocalRef(user): User

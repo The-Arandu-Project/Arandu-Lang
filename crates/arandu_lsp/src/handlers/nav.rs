@@ -119,7 +119,8 @@ pub(super) fn workspace_symbols(
                 source: info.source,
                 path: Arc::clone(&info.path),
                 uri: crate::uri_util::parse_uri(uri_s)
-                    .unwrap_or_else(|| crate::uri_util::parse_uri("file:///").expect("file root")),
+                    .or_else(|| crate::uri_util::uri_from_path(&info.path))
+                    .unwrap_or_else(|| crate::uri_util::parse_uri("file:///").expect("valid uri")),
             })
             .collect();
         let syms = ide::workspace_symbols(snap, &list, &query);

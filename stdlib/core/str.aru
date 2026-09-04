@@ -1,65 +1,109 @@
 module std.core.str
 
-/// Minimal 0.1 — **IN optional** thin string helpers (PROMOTE str thin).
-///
-/// Host fat-str ABI (`ptr` + `len`), malloc-backed results (same lifetime
-/// policy as ToStr / path join). Not in default template.
-///
-/// | Function       | Status |
-/// |----------------|--------|
-/// | `is_empty`     | pure |
-/// | `len`          | host (fat-str length) |
-/// | `concat`       | host |
-/// | `starts_with`  | host |
-/// | `ends_with`    | host |
-/// | `split_last`   | host (after last `sep`; empty sep → full string) |
+import std.core.option as option
 
 extern "C" {
-    func ar_str_len(s: str): u64
-    func ar_str_concat(a: str, b: str): str
+    func ar_str_len(s: str): uint
     func ar_str_starts_with(s: str, prefix: str): int
     func ar_str_ends_with(s: str, suffix: str): int
-    func ar_str_split_last(s: str, sep: str): str
+    func ar_str_contains(s: str, needle: str): int
+    func ar_str_find(s: str, needle: str): int
 }
 
-/// True when the string has zero length.
-public func is_empty(s: str): bool {
+/// Returns `true` if the string is empty (`len == 0`).
+///
+/// # Examples
+/// ```arandu
+/// str.isEmpty("")     // true
+/// str.isEmpty("hello") // false
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func isEmpty(s: str): bool {
     return s == ""
 }
 
-/// Byte length (UTF-8 bytes; fat-str `len` slot).
-public func len(s: str): u64 {
+/// Returns the byte length of the string when encoded as UTF-8.
+///
+/// # Examples
+/// ```arandu
+/// str.lenBytes("abc") // 3
+/// str.lenBytes("olá") // 4 ('á' occupies 2 bytes in UTF-8)
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func lenBytes(s: str): uint {
     unsafe {
         return ar_str_len(s)
     }
 }
 
-/// Concatenate two strings (malloc-backed result).
-public func concat(a: str, b: str): str {
-    unsafe {
-        return ar_str_concat(a, b)
-    }
-}
-
-/// True if `s` begins with `prefix`.
-public func starts_with(s: str, prefix: str): bool {
+/// Returns `true` if the string `s` starts with `prefix`.
+///
+/// # Examples
+/// ```arandu
+/// str.startsWith("compiler", "comp") // true
+/// str.startsWith("arandu", "lang")   // false
+/// ```
+///
+/// # Complexity
+/// Time: O(M) where M is prefix length | Space: O(1)
+public func startsWith(s: str, prefix: str): bool {
     unsafe {
         return ar_str_starts_with(s, prefix) != 0
     }
 }
 
-/// True if `s` ends with `suffix`.
-public func ends_with(s: str, suffix: str): bool {
+/// Returns `true` if the string `s` ends with `suffix`.
+///
+/// # Examples
+/// ```arandu
+/// str.endsWith("file.aru", ".aru") // true
+/// str.endsWith("main.c", ".aru")   // false
+/// ```
+///
+/// # Complexity
+/// Time: O(M) where M is suffix length | Space: O(1)
+public func endsWith(s: str, suffix: str): bool {
     unsafe {
         return ar_str_ends_with(s, suffix) != 0
     }
 }
 
-/// Substring after the last occurrence of `sep` (byte-wise).
+/// Returns `true` if the string `s` contains the substring `needle`.
 ///
-/// Empty `sep` or no match → full `s` (malloc copy). Trailing sep → empty.
-public func split_last(s: str, sep: str): str {
+/// # Examples
+/// ```arandu
+/// str.contains("arandu compiler", "arandu") // true
+/// str.contains("hello world", "rust")       // false
+/// ```
+///
+/// # Complexity
+/// Time: O(N * M) | Space: O(1)
+public func contains(s: str, needle: str): bool {
     unsafe {
-        return ar_str_split_last(s, sep)
+        return ar_str_contains(s, needle) != 0
+    }
+}
+
+/// Returns the first byte index of `needle` in `s`, or `Option.None` if not found.
+///
+/// # Examples
+/// ```arandu
+/// str.find("arandu", "ran") // Some(1)
+/// str.find("arandu", "xyz") // None
+/// ```
+///
+/// # Complexity
+/// Time: O(N * M) | Space: O(1)
+public func find(s: str, needle: str): Option<uint> {
+    unsafe {
+        let idx = ar_str_find(s, needle)
+        if idx < 0 {
+            return Option.None
+        }
+        return Option.Some(idx as uint)
     }
 }

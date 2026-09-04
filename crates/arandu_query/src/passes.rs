@@ -3,9 +3,8 @@ use crate::{ArandCompilerDb, SourceFile};
 use arandu_parser::Program;
 use arandu_resolve::ResolutionResult;
 use arandu_semantics::{amir::AmirProgram, TypeCheckResult};
+use arandu_typeck::type_checker::TargetInfo;
 use salsa::Accumulator;
-#[cfg(any(test, debug_assertions))]
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use std::sync::Arc;
 
@@ -41,12 +40,16 @@ impl std::ops::Deref for ModuleSignatures {
     }
 }
 
-#[cfg(any(test, debug_assertions))]
-pub static TYPE_CHECK_EXEC_COUNT: AtomicUsize = AtomicUsize::new(0);
-
-/// Counts `item_body_typeck` body executions (P1 fine-grained).
-#[cfg(any(test, debug_assertions))]
-pub static ITEM_BODY_TYPECK_EXEC_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Explicit type-check target read from the Salsa [`crate::db::TargetConfig`]
+/// input (CLI `--layout=`, default host). Keeps typeck pure: the pointer width
+/// never hard-codes a 64-bit assumption inside a query.
+fn database_target_info(db: &dyn ArandCompilerDb) -> TargetInfo {
+    let layout = db.target_config().data_layout(db);
+    TargetInfo {
+        // `DataLayout` stores byte widths; `TargetInfo` expects bits.
+        pointer_width: (layout.pointer_width() * 8) as u8,
+    }
+}
 
 pub fn cycle_recover(
     _db: &dyn ArandCompilerDb,
@@ -235,8 +238,13 @@ pub fn module_signatures(db: &dyn ArandCompilerDb, file: SourceFile) -> ModuleSi
                 diagnostics,
                 ..
             } = std::sync::Arc::unwrap_or_clone(std::sync::Arc::clone(&resolved_arc.value));
-            let mut checker =
-                arandu_semantics::TypeChecker::new(symbols, resolved, diagnostics, &program.pool);
+            let mut checker = arandu_semantics::TypeChecker::new(
+                symbols,
+                resolved,
+                diagnostics,
+                &program.pool,
+                database_target_info(db),
+            );
 
             // Merge imported type info (path rewrite shared with resolve).
             // Each `module_signatures` is Salsa-memoized; merge_from is the cold cost.
@@ -254,6 +262,24 @@ pub fn module_signatures(db: &dyn ArandCompilerDb, file: SourceFile) -> ModuleSi
                         checker
                             .type_info
                             .merge_from(imported_sigs.type_info.as_ref());
+                        // Body-derived contracts cross the module boundary
+                        // through their own HashEq query. A dependency body
+                        // edit therefore stops here when the public relation is
+                        // unchanged, while a changed relation invalidates the
+                        // importing item's checks.
+                        let recovered_cycle = imported_sigs
+                            .diagnostics
+                            .iter()
+                            .any(|diagnostic| diagnostic.message.contains("cyclic"));
+                        if !recovered_cycle {
+                            let imported_interfaces = borrow_interfaces(db, imported_file);
+                            for (symbol, summary) in &imported_interfaces.entries {
+                                checker
+                                    .type_info
+                                    .return_borrow_summaries
+                                    .insert(*symbol, summary.clone());
+                            }
+                        }
                         for diag in &imported_sigs.diagnostics {
                             if diag.message.contains("cyclic") {
                                 checker.diagnostics.push(diag.clone());
@@ -425,13 +451,14 @@ pub fn item_body_typeck(
     file: SourceFile,
     item_sym: arandu_middle::SymbolId,
 ) -> HashEq<TypeCheckResult> {
-    #[cfg(any(test, debug_assertions))]
-    ITEM_BODY_TYPECK_EXEC_COUNT.fetch_add(1, Ordering::Relaxed);
-
     let body_in = item_source_input(db, file, item_sym);
     let signatures = module_signatures(db, file);
-    let res =
-        arandu_semantics::check_item_body_only(signatures, body_in.program.as_ref(), item_sym);
+    let res = arandu_semantics::check_item_body_only(
+        signatures,
+        body_in.program.as_ref(),
+        item_sym,
+        database_target_info(db),
+    );
     HashEq::new(res)
 }
 
@@ -469,7 +496,8 @@ pub fn file_typeck_view(db: &dyn ArandCompilerDb, file: SourceFile) -> HashEq<Ty
     }
 
     // Residual for decls without primary keys (normally empty).
-    let residual = arandu_semantics::check_non_func_bodies_only(signatures, program);
+    let residual =
+        arandu_semantics::check_non_func_bodies_only(signatures, program, database_target_info(db));
     if !residual.diagnostics.is_empty()
         || residual.type_info.expr_types.iter().any(|s| s.is_some())
         || !residual.type_info.decl_types.is_empty()
@@ -493,9 +521,6 @@ pub fn file_typeck_view(db: &dyn ArandCompilerDb, file: SourceFile) -> HashEq<Ty
     file = ?file.file_id(db),
 ))]
 pub fn type_check(db: &dyn ArandCompilerDb, file: SourceFile) -> HashEq<TypeCheckResult> {
-    #[cfg(any(test, debug_assertions))]
-    TYPE_CHECK_EXEC_COUNT.fetch_add(1, Ordering::Relaxed);
-
     // P1: compose per-function body checks (early cutoff across funcs).
     let res = file_typeck_view(db, file);
 
@@ -524,6 +549,17 @@ pub fn type_check(db: &dyn ArandCompilerDb, file: SourceFile) -> HashEq<TypeChec
 pub struct LowerAmirArtifacts {
     pub amir: AmirProgram,
     pub type_check: TypeCheckResult,
+}
+
+/// Canonical borrow contracts isolated from the function bodies that proved
+/// them. Consumers use this narrow query so Salsa can cut propagation when an
+/// implementation edit leaves the public dependency relation unchanged.
+#[derive(Debug, Clone)]
+pub struct BorrowInterfaces {
+    pub entries: Vec<(
+        arandu_middle::SymbolId,
+        arandu_middle::types::ReturnBorrowSummary,
+    )>,
 }
 
 /// Collect transitive imports of `root`, lower each to HIR, and link into `hir`.
@@ -698,7 +734,12 @@ pub fn lower_amir(db: &dyn ArandCompilerDb, file: SourceFile) -> HashEq<LowerAmi
 
     let amir = {
         arandu_base::time_pass!("lower-amir-body");
-        match arandu_semantics::lower_to_amir(&type_check_result, &hir) {
+        let pointer_width = db.target_config().data_layout(db).pointer_width();
+        match arandu_semantics::lower_to_amir_with_interfaces(
+            &mut type_check_result,
+            &hir,
+            pointer_width,
+        ) {
             Ok(a) => a,
             Err(diags) => {
                 for diag in diags {
@@ -712,6 +753,24 @@ pub fn lower_amir(db: &dyn ArandCompilerDb, file: SourceFile) -> HashEq<LowerAmi
         amir,
         type_check: type_check_result,
     })
+}
+
+#[salsa::tracked]
+#[tracing::instrument(level = "trace", target = "arandu_query", skip(db), fields(
+    query = "borrow_interfaces",
+    file = ?file.file_id(db),
+))]
+pub fn borrow_interfaces(db: &dyn ArandCompilerDb, file: SourceFile) -> HashEq<BorrowInterfaces> {
+    let lowered = lower_amir(db, file);
+    let mut entries = lowered
+        .type_check
+        .type_info
+        .return_borrow_summaries
+        .iter()
+        .map(|(symbol, summary)| (*symbol, summary.clone()))
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|(symbol, _)| (symbol.file_id, symbol.local_id.0));
+    HashEq::new(BorrowInterfaces { entries })
 }
 
 #[salsa::tracked]

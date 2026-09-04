@@ -121,7 +121,7 @@ fn check_multi_var_decl(
         vec![ok_id, err_nullable]
     } else {
         match checker.resolve(val_ty_id) {
-            ArType::Tuple(tys) => tys.clone(),
+            ArType::Tuple(tys) => tys,
             ArType::Error => vec![checker.intern(ArType::Error); bindings.len()],
             _ => vec![val_ty_id; bindings.len()],
         }
@@ -233,7 +233,7 @@ fn check_set_stmt(
                 vec![ok_id, err_id]
             } else {
                 match checker.resolve(val_ty_id) {
-                    ArType::Tuple(tys) => tys.clone(),
+                    ArType::Tuple(tys) => tys,
                     ArType::Error => vec![checker.intern(ArType::Error); places.len()],
                     _ => vec![val_ty_id; places.len()],
                 }
@@ -330,7 +330,7 @@ fn check_return_stmt(
     {
         checker.add_constraint(
             current_ret,
-            val_ty.clone(),
+            val_ty,
             ConstraintOrigin::ImplicitWidening {
                 source_span: values.first().map_or(span, |v| checker.pool.expr_span(*v)),
                 target_span: span,

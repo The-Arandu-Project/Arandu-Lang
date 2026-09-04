@@ -107,7 +107,7 @@
                 },
                 {
                     "name": "keyword.declaration.arandu",
-                    "match": "\\b(func|async|await|struct|enum|interface|const|type|module|import|from|as|public|extern|unsafe|let|mut|set|own|shared)\\b"
+                    "match": "\\b(func|async|await|struct|enum|interface|const|type|module|import|from|as|public|extern|unsafe|let|mut|set|own|shared|ref)\\b"
                 }
             ]
         },

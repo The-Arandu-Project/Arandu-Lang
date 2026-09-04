@@ -105,7 +105,7 @@ pub(super) fn synth_control_flow_expr(
             if !types::unify(&then_ty, &else_ty, &checker.type_info.type_interner) {
                 checker.add_constraint(
                     then_ty.clone(),
-                    else_ty.clone(),
+                    else_ty,
                     ConstraintOrigin::IfBranches {
                         then_span: checker.pool.block(then_id).span,
                         else_span: checker.pool.block(else_id).span,

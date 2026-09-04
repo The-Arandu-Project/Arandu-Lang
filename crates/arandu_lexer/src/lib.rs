@@ -1,12 +1,9 @@
 mod error;
 mod lexer;
 mod token;
-mod token_name;
 
-#[path = "lexer/ident.rs"]
-pub(crate) mod ident;
-#[path = "lexer/punctuation.rs"]
-pub(crate) mod punctuation;
+pub(crate) use lexer::ident;
+pub(crate) use lexer::punctuation;
 
 pub mod simd;
 

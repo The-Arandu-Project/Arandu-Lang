@@ -6,6 +6,7 @@ use arandu_query::{AnalysisSnapshot, SourceFile};
 use lsp_types::{CompletionItem, CompletionItemKind, InsertTextFormat, Position};
 
 use super::presentation::{markdown_documentation, prefix_at, symbol_presentation, typecheck};
+use super::types::MAX_COMPLETION_ITEMS;
 use crate::conv::position_to_offset;
 
 #[must_use]
@@ -69,11 +70,8 @@ pub fn completions(
     }
     // Symbols from the file's table
     for symbol in tc.symbols.iter() {
-        let name = symbol.name.to_string();
-        if !prefix.is_empty()
-            && !name.to_ascii_lowercase().starts_with(&prefix_l)
-            && !name.starts_with(&prefix)
-        {
+        let name_str = symbol.name.as_str();
+        if !prefix.is_empty() && !starts_with_ignore_case(name_str, &prefix_l) {
             continue;
         }
         let kind = match symbol.kind {
@@ -91,7 +89,7 @@ pub fn completions(
         };
         let presentation = symbol_presentation(snap, source, &tc, symbol);
         items.push(CompletionItem {
-            label: name,
+            label: symbol.name.to_string(),
             kind: Some(kind),
             detail: Some(presentation.signature),
             documentation: presentation.documentation.map(markdown_documentation),
@@ -100,8 +98,18 @@ pub fn completions(
     }
     items.sort_by(|a, b| a.label.cmp(&b.label));
     items.dedup_by(|a, b| a.label == b.label);
-    items.truncate(200);
+    items.truncate(MAX_COMPLETION_ITEMS);
     items
+}
+
+#[inline]
+fn starts_with_ignore_case(s: &str, prefix_lower: &str) -> bool {
+    if s.len() < prefix_lower.len() {
+        return false;
+    }
+    s.chars()
+        .zip(prefix_lower.chars())
+        .all(|(a, b)| a.to_ascii_lowercase() == b)
 }
 
 fn is_annotation_completion(text: &str, offset: u32, prefix: &str) -> bool {
@@ -187,11 +195,19 @@ const STD_CHILDREN: &[(&str, &[&str])] = &[
             "prelude",
             "intrinsics",
             "future",
-            "ptr",
             "pointer",
+            "str",
+            "cmp",
+            "char",
+            "ascii",
+            "num",
+            "slice",
         ],
     ),
-    ("std.alloc", &["vec", "allocator_api", "gen_arena"]),
+    (
+        "std.alloc",
+        &["vec", "allocator_api", "gen_arena", "string"],
+    ),
 ];
 
 /// If the cursor is inside an `import …` path (not after `as`), suggest next segments.

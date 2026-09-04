@@ -43,7 +43,7 @@ pub fn substitute_type(ty: &ArType, subst: &GenericSubst, interner: &TypeInterne
             let new_args: Vec<TypeId> = args
                 .iter()
                 .map(|&a| {
-                    let resolved = interner.resolve(a).clone();
+                    let resolved = interner.resolve(a);
                     let substituted = substitute_type(&resolved, subst, interner);
                     interner.intern(substituted)
                 })
@@ -121,7 +121,7 @@ pub fn substitute_type(ty: &ArType, subst: &GenericSubst, interner: &TypeInterne
             let new_items: Vec<TypeId> = items
                 .iter()
                 .map(|&t| {
-                    let resolved = interner.resolve(t).clone();
+                    let resolved = interner.resolve(t);
                     let substituted = substitute_type(&resolved, subst, interner);
                     interner.intern(substituted)
                 })
@@ -132,12 +132,12 @@ pub fn substitute_type(ty: &ArType, subst: &GenericSubst, interner: &TypeInterne
             let new_params: Vec<TypeId> = params
                 .iter()
                 .map(|&p| {
-                    let resolved = interner.resolve(p).clone();
+                    let resolved = interner.resolve(p);
                     let substituted = substitute_type(&resolved, subst, interner);
                     interner.intern(substituted)
                 })
                 .collect();
-            let resolved_ret = interner.resolve(*ret).clone();
+            let resolved_ret = interner.resolve(*ret);
             let subst_ret = substitute_type(&resolved_ret, subst, interner);
             let ret_id = interner.intern(subst_ret);
             ArType::Func(new_params, ret_id)

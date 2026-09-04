@@ -1,54 +1,53 @@
 module examples.minimal.m10_path_empty
 
-// Minimal 0.1 — std.path IN optional (PROMOTE-L4 thin: is_empty / is_absolute / join / file_name).
+// Minimal 0.1 — std.path (isEmpty / isAbsolute / join / fileName).
 import std.path as path
 
 func main(): int {
-    // is_empty
-    if !path.is_empty("") {
+    // isEmpty
+    if !path.isEmpty("") {
         return 1
     }
-    if path.is_empty("x") {
+    if path.isEmpty("x") {
         return 2
     }
 
-    // is_absolute — host Path semantics (Unix gold on Linux CI)
-    if !path.is_absolute("/tmp") {
+    // isAbsolute
+    if !path.isAbsolute("/tmp") {
         return 3
     }
-    if !path.is_absolute("/") {
+    if !path.isAbsolute("/") {
         return 4
     }
-    if path.is_absolute("rel") {
+    if path.isAbsolute("rel") {
         return 5
     }
-    if path.is_absolute("./x") {
+    if path.isAbsolute("./x") {
         return 6
     }
-    if path.is_absolute("") {
+    if path.isAbsolute("") {
         return 7
     }
 
-    // join — real host Path::join (Unix)
+    // join
     if path.join("a", "b") != "a/b" {
         return 8
     }
     if path.join("/tmp", "x") != "/tmp/x" {
         return 9
     }
-    // absolute second component replaces on Unix
     if path.join("/tmp", "/abs") != "/abs" {
         return 10
     }
 
-    // file_name
-    if path.file_name("leaf") != "leaf" {
+    // fileName
+    if path.fileName("leaf") != "leaf" {
         return 11
     }
-    if path.file_name("/tmp/leaf") != "leaf" {
+    if path.fileName("/tmp/leaf") != "leaf" {
         return 12
     }
-    if path.file_name("/tmp/x/y") != "y" {
+    if path.fileName("/tmp/x/y") != "y" {
         return 13
     }
 

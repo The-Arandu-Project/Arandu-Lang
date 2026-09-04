@@ -283,7 +283,7 @@ pub fn try_hand_lower_module(
             let between = source.get(end as usize..next.start as usize).unwrap_or("");
             let has_nl = between.contains('\n');
             let has_semi = toks.iter().any(|t| matches!(t.kind, TokenKind::Semicolon));
-            if !has_nl && !has_semi && starts_top_level_decl(next.kind) {
+            if !has_nl && !has_semi && starts_top_level_tok(source, next) {
                 return None;
             }
         }
@@ -312,6 +312,26 @@ fn starts_top_level_decl(kind: TokenKind) -> bool {
     )
 }
 
+/// Like [`starts_top_level_decl`], but also recognizes the soft keyword
+/// `from` when it lexes as a plain identifier.
+fn starts_top_level_tok(source: &str, tok: &Token) -> bool {
+    starts_top_level_decl(tok.kind)
+        || (tok.kind == TokenKind::IdentValue && tok.lexeme(source) == "from")
+}
+
+/// Consume the soft keyword `from` regardless of whether it lexed as the
+/// (now retired) `KwFrom` keyword or as a plain identifier.
+fn eat_soft_from(ctx: &HandCtx<'_>, cur: &mut Cursor<'_>) -> bool {
+    if matches!(
+        cur.peek(),
+        Some(tok) if tok.kind == TokenKind::IdentValue && ctx.text(tok) == Some("from")
+    ) {
+        cur.bump();
+        return true;
+    }
+    false
+}
+
 /// All import forms.
 #[must_use]
 pub fn try_hand_lower_import(
@@ -333,7 +353,7 @@ pub fn try_hand_lower_import(
     let mut cur = Cursor::new(&toks);
     let span = token_bounds_span(file_id, &toks)?;
 
-    if cur.eat(TokenKind::KwFrom) {
+    if eat_soft_from(&ctx, &mut cur) {
         // from path import { A, B as C }  OR  from "ext" import { … }
         if cur.peek_kind() == Some(TokenKind::StringStart) {
             let source_s = parse_static_string(&mut ctx, &mut cur)?;
@@ -415,6 +435,9 @@ fn parse_import_brace_list(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>) -> Optio
             let mut end = name_tok.start + name_tok.len;
             let alias = if cur.eat(TokenKind::KwAs) {
                 let a = cur.peek()?;
+                if !matches!(a.kind, TokenKind::IdentValue | TokenKind::IdentType) {
+                    return None;
+                }
                 let alias = SmolStr::new(ctx.text(a)?);
                 end = a.start + a.len;
                 cur.bump();

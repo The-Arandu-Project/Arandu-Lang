@@ -29,8 +29,7 @@ pub fn materialize_remote_graph(
     let store = CacheStore::new(cache.clone());
     let root = fs::canonicalize(root)
         .map_err(|error| format!("cannot canonicalize project root: {error}"))?;
-    let mut queue =
-        VecDeque::from([(manifest_path.to_path_buf(), root_data.clone(), root.clone())]);
+    let mut queue = VecDeque::from([(manifest_path.to_path_buf(), root_data.clone(), root)]);
     let mut seen_manifests = BTreeSet::new();
     let mut remotes = BTreeMap::new();
     let mut packages = 0usize;

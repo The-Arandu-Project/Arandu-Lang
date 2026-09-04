@@ -5,7 +5,8 @@ use std::sync::{Arc, Mutex, RwLock};
 use crate::explain::RebuildLog;
 use crate::manifest::ProjectManifest;
 use crate::vfs::{ModuleRoots, PackageModuleMap};
-use salsa::Storage;
+use arandu_middle::DataLayout;
+use salsa::{Setter, Storage};
 
 pub type FileId = u32;
 
@@ -82,9 +83,17 @@ pub trait ArandCompilerDb: salsa::Database {
     fn as_db_impl(&self) -> Option<&DatabaseImpl> {
         None
     }
+    /// Salsa input for the compilation target. Defaults to the host layout;
+    /// the CLI sets it from `--layout=` before any query runs.
+    fn target_config(&self) -> TargetConfig {
+        self.as_db_impl()
+            .expect("target_config requires DatabaseImpl")
+            .target_config()
+    }
 }
 
 pub use arandu_middle::db::SourceFile;
+pub use arandu_middle::db::TargetConfig;
 
 /// Internal shared state for the file registry.
 ///
@@ -155,6 +164,8 @@ pub struct DatabaseImpl {
     module_roots: Arc<RwLock<Option<ModuleRoots>>>,
     /// P4 pre-resolved logical namespace. When present it is authoritative.
     package_modules: Arc<RwLock<Option<PackageModuleMap>>>,
+    /// Compilation target Salsa input (default: host layout). See [`Self::set_target_config`].
+    target_config: Arc<RwLock<Option<TargetConfig>>>,
 }
 
 // Manual Clone: Storage is cloneable; share Arc file registry + log + CST cache.
@@ -169,6 +180,7 @@ impl Clone for DatabaseImpl {
             project_manifest: Arc::clone(&self.project_manifest),
             module_roots: Arc::clone(&self.module_roots),
             package_modules: Arc::clone(&self.package_modules),
+            target_config: Arc::clone(&self.target_config),
         }
     }
 }
@@ -186,7 +198,7 @@ impl DatabaseImpl {
     /// Database without rebuild event overhead.
     #[must_use]
     pub fn new() -> Self {
-        Self {
+        let mut db = Self {
             storage: Storage::new(None),
             files: Arc::new(RwLock::new(FileRegistry::default())),
             cst_cache: Arc::new(Mutex::new(CstCache::default())),
@@ -195,7 +207,10 @@ impl DatabaseImpl {
             project_manifest: Arc::new(RwLock::new(None)),
             module_roots: Arc::new(RwLock::new(None)),
             package_modules: Arc::new(RwLock::new(None)),
-        }
+            target_config: Arc::new(RwLock::new(None)),
+        };
+        db.set_target_config(DataLayout::host());
+        db
     }
 
     /// Database with DX.5 causal-chain recording (Salsa `WillExecute` / validate).
@@ -203,7 +218,7 @@ impl DatabaseImpl {
     pub fn with_rebuild_log() -> (Self, Arc<RebuildLog>) {
         let log = RebuildLog::new();
         let callback = RebuildLog::salsa_callback(Arc::clone(&log));
-        let db = Self {
+        let mut db = Self {
             storage: Storage::new(Some(callback)),
             files: Arc::new(RwLock::new(FileRegistry::default())),
             cst_cache: Arc::new(Mutex::new(CstCache::default())),
@@ -212,7 +227,9 @@ impl DatabaseImpl {
             project_manifest: Arc::new(RwLock::new(None)),
             module_roots: Arc::new(RwLock::new(None)),
             package_modules: Arc::new(RwLock::new(None)),
+            target_config: Arc::new(RwLock::new(None)),
         };
+        db.set_target_config(DataLayout::host());
         (db, log)
     }
 
@@ -279,6 +296,43 @@ impl DatabaseImpl {
         *self.module_roots.read().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Set the compilation target (pointer width / alignment classes) as a
+    /// Salsa input. Changing it invalidates exactly the semantic queries that
+    /// depend on it (`module_signatures`, `item_body_typeck`, `file_typeck_view`).
+    /// Defaults to the host layout when never called.
+    pub fn set_target_config(&mut self, data_layout: DataLayout) {
+        let existing = self
+            .target_config
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .copied();
+        match existing {
+            Some(input) => {
+                input.set_data_layout(self).to(data_layout);
+            }
+            None => {
+                let input = TargetConfig::new(self, data_layout);
+                let mut slot = self
+                    .target_config
+                    .write()
+                    .unwrap_or_else(|error| error.into_inner());
+                *slot = Some(input);
+            }
+        }
+    }
+
+    /// Registered Salsa input for the compilation target.
+    #[must_use]
+    pub fn target_config(&self) -> TargetConfig {
+        *self
+            .target_config
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .expect("TargetConfig input is initialized by DatabaseImpl::new/with_rebuild_log")
+    }
+
     pub fn set_package_module_map(&self, map: PackageModuleMap) {
         let mut current = self
             .package_modules
@@ -332,18 +386,25 @@ impl DatabaseImpl {
     /// Used by watch mode when an `.aru` is deleted. Does **not** swallow the
     /// broken import — dependents re-resolve and emit M001.
     pub fn unregister_source_file(&self, path: &str) {
-        let mut reg = self.files.write().unwrap_or_else(|e| e.into_inner());
-        if let Some(file) = reg.remove_path(path) {
+        let file = {
+            let mut reg = self.files.write().unwrap_or_else(|e| e.into_inner());
+            reg.remove_path(path)
+        };
+        if let Some(file) = file {
             let fid = file.file_id(self.as_source_db());
             // A file can deliberately have more than one registry key (for
             // example its absolute editor path plus package-qualified and bare
             // import keys). Keep the reverse index alive while any alias still
             // refers to the same Salsa input.
-            let has_alias = reg
-                .by_path
-                .values()
+            let candidates: Vec<SourceFile> = {
+                let reg = self.files.read().unwrap_or_else(|e| e.into_inner());
+                reg.by_path.values().copied().collect()
+            };
+            let has_alias = candidates
+                .into_iter()
                 .any(|candidate| candidate.file_id(self.as_source_db()) == fid);
             if !has_alias {
+                let mut reg = self.files.write().unwrap_or_else(|e| e.into_inner());
                 reg.by_id.remove(fid);
             }
         }
@@ -474,7 +535,10 @@ impl arandu_middle::db::SourceDatabase for DatabaseImpl {
 impl ArandCompilerDb for DatabaseImpl {
     /// O(1) lookup by FileId via the reverse index.
     fn source_text(&self, file: FileId) -> Arc<str> {
-        let reg = self.files.read().unwrap_or_else(|e| e.into_inner());
+        let reg = self
+            .files
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         reg.by_id
             .get(&file)
             .map(|f| f.text(self.as_source_db()).clone())
@@ -483,7 +547,10 @@ impl ArandCompilerDb for DatabaseImpl {
 
     /// O(1) lookup by FileId via the reverse index.
     fn file_path(&self, file: FileId) -> Arc<PathBuf> {
-        let reg = self.files.read().unwrap_or_else(|e| e.into_inner());
+        let reg = self
+            .files
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         reg.by_id
             .get(&file)
             .map(|f| f.path(self.as_source_db()).clone())

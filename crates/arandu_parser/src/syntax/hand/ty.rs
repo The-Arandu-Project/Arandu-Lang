@@ -14,6 +14,9 @@ pub fn can_start_type_kind(kind: TokenKind) -> bool {
         TokenKind::IdentType
             | TokenKind::IdentValue
             | TokenKind::KwPtr
+            | TokenKind::KwOwn
+            | TokenKind::KwRef
+            | TokenKind::KwMut
             | TokenKind::LBracket
             | TokenKind::LParen
             | TokenKind::KwFunc
@@ -73,6 +76,28 @@ pub fn parse_type(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>) -> Option<TypeExp
     let start_tok = cur.peek()?;
     let start = start_tok.start;
 
+    // Canonical ownership spelling: `own T`, `ref T`, `mut ref T`.
+    if cur.eat(TokenKind::KwOwn) {
+        return parse_type(ctx, cur);
+    }
+    if cur.eat(TokenKind::KwRef) {
+        let inner = parse_type(ctx, cur)?;
+        let end = ctx.pool.type_expr_span(inner).end;
+        return Some(ctx.pool.alloc_type_expr(TypeExpr::Ref {
+            span: ctx.span(start, end),
+            inner,
+        }));
+    }
+    if cur.eat(TokenKind::KwMut) {
+        cur.expect(TokenKind::KwRef)?;
+        let inner = parse_type(ctx, cur)?;
+        let end = ctx.pool.type_expr_span(inner).end;
+        return Some(ctx.pool.alloc_type_expr(TypeExpr::RefMut {
+            span: ctx.span(start, end),
+            inner,
+        }));
+    }
+
     // `&mut T` / `&T` — safe reference types (F2.0). Not raw `ptr[T]`.
     if cur.eat(TokenKind::Amp) {
         let is_mut = cur.eat(TokenKind::KwMut);
@@ -126,16 +151,58 @@ pub fn parse_type(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>) -> Option<TypeExp
         }));
     }
 
-    // (T) group or func type (T, U) -> R — keep group / simple for now
+    // `(T)` grouped type or `(T, U) -> R` function type. A comma without an
+    // arrow is not silently accepted as a tuple because tuple types do not yet
+    // have an AST representation.
     if cur.eat(TokenKind::LParen) {
-        let inner = parse_type(ctx, cur)?;
+        let mut params = Vec::new();
+        let mut saw_comma = false;
+        if cur.peek_kind() != Some(TokenKind::RParen) {
+            loop {
+                params.push(parse_type(ctx, cur)?);
+                if !cur.eat(TokenKind::Comma) {
+                    break;
+                }
+                saw_comma = true;
+                if cur.peek_kind() == Some(TokenKind::RParen) {
+                    break;
+                }
+            }
+        }
         let close = cur.expect(TokenKind::RParen)?;
-        return Some(ctx.pool.alloc_type_expr(TypeExpr::Group {
+        if cur.eat(TokenKind::Arrow) {
+            let result_start = cur.peek()?.start;
+            let result_ty = parse_type(ctx, cur)?;
+            let end = ctx.pool.type_expr_span(result_ty).end;
+            let result = ResultType::Single {
+                span: ctx.span(result_start, end),
+                ty: result_ty,
+            };
+            let params = ctx.pool.alloc_type_expr_list(&params);
+            return Some(ctx.pool.alloc_type_expr(TypeExpr::Func {
+                span: ctx.span(start, end),
+                params,
+                result: Some(result),
+            }));
+        }
+        if saw_comma || params.len() != 1 {
+            return None;
+        }
+        let inner = params[0];
+        Some(ctx.pool.alloc_type_expr(TypeExpr::Group {
             span: ctx.span(start, close.start + close.len),
             inner,
-        }));
+        }))
+    } else {
+        parse_named_or_primitive_type(ctx, cur, start)
     }
+}
 
+fn parse_named_or_primitive_type(
+    ctx: &mut HandCtx<'_>,
+    cur: &mut Cursor<'_>,
+    start: u32,
+) -> Option<TypeExprId> {
     let t = cur.bump()?;
     let span = ctx.token_span(t);
     let mut ty = if let Some(name) = primitive_type_token_name(t.kind) {
@@ -259,7 +326,9 @@ pub fn parse_dotted_ident_path(
     let mut path = smallvec::SmallVec::new();
     loop {
         let t = cur.peek()?;
-        if !matches!(t.kind, TokenKind::IdentValue | TokenKind::IdentType) {
+        if !matches!(t.kind, TokenKind::IdentValue | TokenKind::IdentType)
+            && !crate::parser::is_contextual_module_segment(&t.kind)
+        {
             return None;
         }
         path.push(SmolStr::new(ctx.text(t)?));

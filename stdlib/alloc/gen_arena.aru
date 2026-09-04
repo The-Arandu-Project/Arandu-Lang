@@ -1,45 +1,34 @@
-// arandu_alloc::gen_arena — generational slots (F2.3.runtime product surface).
+// arandu_alloc::gen_arena — generational slots.
 //
-// Minimal 0.1 — **IN optional** (PROMOTE GenArena thin, same family as Vec).
-// Pure-buffer storage + free-func API; host only for raw bytes (`ar_vec_*`).
-// Compiler AMIR GenInsert/GenGet/GenRemove still use host i64 MVP (`ar_gen_*`).
+// Minimal 0.1 — generational arena.
 
 module std.alloc.gen_arena
 
 import std.core.mem as mem
+import std.core.intrinsics as intrinsics
 
 extern "C" {
-    func ar_vec_malloc(size: u64): ptr[u8]
-    func ar_vec_buf_free(p: ptr[u8], size: u64): void
-    func ar_vec_realloc(p: ptr[u8], oldSize: u64, newSize: u64): ptr[u8]
-    func abort(): void
+    func ar_vec_malloc(size: uint): ptr[u8]
+    func ar_vec_buf_free(p: ptr[u8], size: uint): void
+    func ar_vec_realloc(p: ptr[u8], oldSize: uint, newSize: uint): ptr[u8]
 }
 
 /// Fat handle: slot index + remembered generation (8 bytes).
-///
-/// POD auto-copy (structural): all fields are scalars, so the move checker
-/// treats `GenRef` like `int` — assign/pass by value without consuming the origin.
-/// Not interchangeable with ptr[T] or &T without compiler promotion.
 public struct GenRef {
     index: u32
     generation: u32
 }
 
 /// Recyclable generational arena (slab free list + gen bump on recycle).
-///
-/// Layout (parallel pure buffers, like a typed slab):
-/// - `data` / `gen` / `used` — slot tables, length `slots_cap`
-/// - `free` — free-list of recycled indices, length `free_len`
-/// - live count = `slots - free_len`
 public struct GenArena<T> {
     data: ptr[T]
     gen: ptr[u32]
     used: ptr[u8]
     free: ptr[u32]
-    free_len: u64
-    free_cap: u64
-    slots: u64
-    slots_cap: u64
+    free_len: uint
+    free_cap: uint
+    slots: uint
+    slots_cap: uint
 }
 
 /// Empty arena (no allocation until first `insert`).
@@ -49,20 +38,20 @@ public func new<T>(): GenArena<T> {
         gen: nil,
         used: nil,
         free: nil,
-        free_len: 0 as u64,
-        free_cap: 0 as u64,
-        slots: 0 as u64,
-        slots_cap: 0 as u64,
+        free_len: 0,
+        free_cap: 0,
+        slots: 0,
+        slots_cap: 0,
     }
 }
 
-func grow_slots<T>(mut a: GenArena<T>, minCap: u64): void {
+func growSlots<T>(a: mut ref GenArena<T>, minCap: uint): void {
     if a.slots_cap >= minCap {
         return
     }
-    let mut newCap: u64 = a.slots_cap
+    let mut newCap: uint = a.slots_cap
     if newCap == 0 {
-        newCap = 8 as u64
+        newCap = 8
     }
     while newCap < minCap {
         newCap = newCap * 2
@@ -75,15 +64,15 @@ func grow_slots<T>(mut a: GenArena<T>, minCap: u64): void {
         let nullp: ptr[u8] = nil
         let pData = ar_vec_realloc(a.data as ptr[u8], oldSlots * elem, newCap * elem)
         if pData == nullp {
-            abort()
+            intrinsics.abort()
         }
         let pGen = ar_vec_realloc(a.gen as ptr[u8], oldSlots * genElem, newCap * genElem)
         if pGen == nullp {
-            abort()
+            intrinsics.abort()
         }
         let pUsed = ar_vec_realloc(a.used as ptr[u8], oldSlots * usedElem, newCap * usedElem)
         if pUsed == nullp {
-            abort()
+            intrinsics.abort()
         }
         a.data = pData as ptr[T]
         a.gen = pGen as ptr[u32]
@@ -92,13 +81,13 @@ func grow_slots<T>(mut a: GenArena<T>, minCap: u64): void {
     }
 }
 
-func grow_free<T>(mut a: GenArena<T>, minCap: u64): void {
+func growFree<T>(a: mut ref GenArena<T>, minCap: uint): void {
     if a.free_cap >= minCap {
         return
     }
-    let mut newCap: u64 = a.free_cap
+    let mut newCap: uint = a.free_cap
     if newCap == 0 {
-        newCap = 8 as u64
+        newCap = 8
     }
     while newCap < minCap {
         newCap = newCap * 2
@@ -110,37 +99,38 @@ func grow_free<T>(mut a: GenArena<T>, minCap: u64): void {
         let nullp: ptr[u8] = nil
         let p = ar_vec_realloc(a.free as ptr[u8], oldBytes, newBytes)
         if p == nullp {
-            abort()
+            intrinsics.abort()
         }
         a.free = p as ptr[u32]
         a.free_cap = newCap
     }
 }
 
-/// Insert `value`; returns a `GenRef` valid until matching `remove` (or recycle).
-public func insert<T>(mut a: GenArena<T>, value: T): GenRef {
+/// Insert `value` into arena; returns valid generational handle.
+public func insert<T>(a: mut ref GenArena<T>, value: T): GenRef {
     if a.free_len > 0 {
-        a.free_len = a.free_len - 1
+        let lastIdx = a.free_len - 1
         unsafe {
-            let freePtr = mem.ptrOffset<u32>(a.free, a.free_len as i32)
-            let idx = mem.ptrRead<u32>(freePtr)
-            let genPtr = mem.ptrOffset<u32>(a.gen, idx as i32)
-            let oldG = mem.ptrRead<u32>(genPtr)
-            let newG = oldG + 1 as u32
-            mem.ptrWrite<u32>(genPtr, newG)
-            let dataPtr = mem.ptrOffset<T>(a.data, idx as i32)
-            mem.ptrWrite<T>(dataPtr, value)
-            let usedPtr = mem.ptrOffset<u8>(a.used, idx as i32)
+            let freePtr = mem.ptrOffset<u32>(a.free, lastIdx as i32)
+            let slot = mem.ptrRead<u32>(freePtr)
+            a.free_len = lastIdx
+            let usedPtr = mem.ptrOffset<u8>(a.used, slot as i32)
             mem.ptrWrite<u8>(usedPtr, 1 as u8)
+            let genPtr = mem.ptrOffset<u32>(a.gen, slot as i32)
+            let g = mem.ptrRead<u32>(genPtr)
+            let nextG = g + 1 as u32
+            mem.ptrWrite<u32>(genPtr, nextG)
+            let dataPtr = mem.ptrOffset<T>(a.data, slot as i32)
+            mem.ptrWrite<T>(dataPtr, value)
             return GenRef {
-                index: idx,
-                generation: newG,
+                index: slot,
+                generation: nextG,
             }
         }
     }
     let need = a.slots + 1
     if a.slots_cap < need {
-        grow_slots<T>(a, need)
+        growSlots<T>(a, need)
     }
     let idx = a.slots as u32
     unsafe {
@@ -158,26 +148,24 @@ public func insert<T>(mut a: GenArena<T>, value: T): GenRef {
     }
 }
 
-/// Load payload; **aborts** if generation mismatches or slot is empty.
-///
-/// `GenRef` is a POD struct (two `u32`s): language auto-copy — pass by value freely.
-public func get<T>(shared a: GenArena<T>, r: GenRef): T {
-    let idx = r.index as u64
+/// Load payload; aborts if generation mismatches or slot is empty.
+public func get<T>(a: ref GenArena<T>, r: GenRef): T {
+    let idx = r.index as uint
     if idx >= a.slots {
         unsafe {
-            abort()
+            intrinsics.abort()
         }
     }
     unsafe {
         let usedPtr = mem.ptrOffset<u8>(a.used, r.index as i32)
         let u = mem.ptrRead<u8>(usedPtr)
         if u == 0 as u8 {
-            abort()
+            intrinsics.abort()
         }
         let genPtr = mem.ptrOffset<u32>(a.gen, r.index as i32)
         let g = mem.ptrRead<u32>(genPtr)
         if g != r.generation {
-            abort()
+            intrinsics.abort()
         }
         let dataPtr = mem.ptrOffset<T>(a.data, r.index as i32)
         return mem.ptrRead<T>(dataPtr)
@@ -185,10 +173,8 @@ public func get<T>(shared a: GenArena<T>, r: GenRef): T {
 }
 
 /// Drop ownership of the slot if `r.generation` still matches; else `None`.
-///
-/// `GenRef` is POD auto-copy; stale re-use after recycle yields `None` (not O001).
-public func remove<T>(mut a: GenArena<T>, r: GenRef): Option<T> {
-    let idx = r.index as u64
+public func remove<T>(a: mut ref GenArena<T>, r: GenRef): Option<T> {
+    let idx = r.index as uint
     if idx >= a.slots {
         return Option.None
     }
@@ -208,7 +194,7 @@ public func remove<T>(mut a: GenArena<T>, r: GenRef): Option<T> {
         mem.ptrWrite<u8>(usedPtr, 0 as u8)
         let needFree = a.free_len + 1
         if a.free_cap < needFree {
-            grow_free<T>(a, needFree)
+            growFree<T>(a, needFree)
         }
         let freePtr = mem.ptrOffset<u32>(a.free, a.free_len as i32)
         mem.ptrWrite<u32>(freePtr, r.index)
@@ -218,17 +204,17 @@ public func remove<T>(mut a: GenArena<T>, r: GenRef): Option<T> {
 }
 
 /// Number of live (occupied) slots.
-public func len<T>(shared a: GenArena<T>): u64 {
+public func len<T>(a: ref GenArena<T>): uint {
     return a.slots - a.free_len
 }
 
 /// `true` when no live slots.
-public func is_empty<T>(shared a: GenArena<T>): bool {
-    return len<T>(a) == 0 as u64
+public func isEmpty<T>(a: ref GenArena<T>): bool {
+    return len<T>(a) == 0
 }
 
 /// Deallocate all tables and reset to empty.
-public func destroy<T>(mut a: GenArena<T>): void {
+public func destroy<T>(a: mut ref GenArena<T>): void {
     if a.slots_cap > 0 {
         let elem = mem.sizeOf<T>()
         let genElem = mem.sizeOf<u32>()
@@ -241,8 +227,8 @@ public func destroy<T>(mut a: GenArena<T>): void {
         a.data = nil
         a.gen = nil
         a.used = nil
-        a.slots_cap = 0 as u64
-        a.slots = 0 as u64
+        a.slots_cap = 0
+        a.slots = 0
     }
     if a.free_cap > 0 {
         let genElem = mem.sizeOf<u32>()
@@ -250,7 +236,7 @@ public func destroy<T>(mut a: GenArena<T>): void {
             ar_vec_buf_free(a.free as ptr[u8], a.free_cap * genElem)
         }
         a.free = nil
-        a.free_cap = 0 as u64
-        a.free_len = 0 as u64
+        a.free_cap = 0
+        a.free_len = 0
     }
 }

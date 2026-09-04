@@ -63,7 +63,11 @@ For compilation backends (such as the C backend and Cranelift JIT), platform-dep
 
 ### 3. Canonical Fat Pointer Layouts (`str` and `[]T`)
 
-Strings and Slices in Arandu are not raw pointers; they are represented using a **Fat Pointer ABI**.
+Strings and slices use a **Fat Pointer ABI** (`pointer + length`). This is only
+the physical representation; it does not by itself provide lifetime or
+ownership safety. The compiler separately proves the provenance of safe
+references. `str` is a managed language value and `[]T` is a non-owning safe
+borrowed view whose origin and live range are erased only after validation.
 
 ### String Layout (`str`)
 
@@ -81,10 +85,25 @@ struct StrLayout {
 O suporte de um layout não promove automaticamente o target na distribuição.
 ABI de FFI e targets adicionais precisam de runners/artefatos nativos.
 
+Agregados pequenos ainda são passados indiretamente no Cranelift. Não existe
+uma regra portável “struct com até 16 bytes vai em registradores”: no Windows
+x64, agregados comuns só são tratados como inteiros quando têm exatamente 1,
+2, 4 ou 8 bytes; no SysV AMD64, até dois eightbytes são classificados por seus
+campos; AArch64 possui classificação própria, inclusive para agregados
+homogêneos de ponto flutuante. A otimização BC.5 exige um classificador por
+target compartilhado por declaração, call e return, mais testes contra C em
+runners nativos. Até isso existir, a passagem indireta é a opção conservadora.
+
 ## Futuro e Próximos Passos
 
 Ampliar matrizes de layout e chamada junto da matriz de release; nunca inferir
 ponteiro, float ou alinhamento a partir do host do compilador.
+
+Referências normativas para BC.5:
+
+- [System V AMD64 ABI](https://refspecs.linuxfoundation.org/elf/x86_64-abi-0.98.pdf)
+- [Microsoft x64 calling convention](https://learn.microsoft.com/cpp/build/x64-calling-convention)
+- [AAPCS64](https://github.com/ARM-software/abi-aa/blob/main/aapcs64/aapcs64.rst)
 
 - **64-bit Target**: `size = 16`, `align = 8`, field offsets: `ptr` at offset `0`, `len` at offset `8`.
 - **32-bit Target**: `size = 8`, `align = 4`, field offsets: `ptr` at offset `0`, `len` at offset `4`.
@@ -106,6 +125,11 @@ struct SliceLayout {
 - **64-bit Target**: `size = 16`, `align = 8`, field offsets: `ptr` at offset `0`, `len` at offset `8`.
 - **32-bit Target**: `size = 8`, `align = 4`, field offsets: `ptr` at offset `0`, `len` at offset `4`.
 
+The two-word layout is not itself the safety proof. A raw `ptr[T]` may be null
+or dangling and requires `unsafe` dereference; `[]T` additionally carries
+compiler-only origin, mutability and live-range facts checked before code
+generation. C and Cranelift receive only the same two target-width slots.
+
 ### Generational reference (`GenRef`) — F2.3.runtime
 
 See **`docs/arandu-genref-gold-rfc-v0.1.md`**. Summary:
@@ -119,7 +143,7 @@ struct GenRef {
 ```
 
 Not a `(ptr, len)` fat pointer. Payload lives in `std.alloc.gen_arena` slots.
-Mismatch on use → `std.core.intrinsics.abort_generational_mismatch` (trap, not UB).
+Mismatch on use → `std.core.intrinsics.abortGenerationalMismatch` (trap, not UB).
 
 ---
 

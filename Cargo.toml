@@ -51,12 +51,26 @@ semver = "1.0.28"
 rowan = "0.17.0"
 bumpalo = "3.20.3"
 
+
+[profile.dev.package."*"]
+opt-level = 2
+
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "thin"
+overflow-checks = false
+debug = "line-tables-only"
+
+[profile.release-with-debug]
+inherits = "release"
+debug = 2
+
 [workspace.lints]
 # Intentionally empty: use default toolchain lint levels.
 
 [workspace.lints.clippy]
-# U0 hygiene gate (plan: unwrap/clone root fix). Start as warn workspace-wide;
-# crates that finished U1 set deny locally (backend_c, cli, …).
 unwrap_used = "warn"
 expect_used = "warn"
 panic = "warn"

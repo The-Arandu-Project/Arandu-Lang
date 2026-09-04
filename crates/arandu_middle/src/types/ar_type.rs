@@ -219,11 +219,11 @@ impl ArType {
             }
             ArType::Ref(inner) => {
                 let inner_str = interner.resolve(*inner).display(symbols, interner);
-                format!("&{}", inner_str)
+                format!("ref {}", inner_str)
             }
             ArType::RefMut(inner) => {
                 let inner_str = interner.resolve(*inner).display(symbols, interner);
-                format!("&mut {}", inner_str)
+                format!("mut ref {}", inner_str)
             }
             ArType::GenRef => "GenRef".to_string(),
             ArType::Tuple(types) => {
@@ -305,20 +305,20 @@ impl ArType {
             | ArType::Ptr(_)
             | ArType::Nullable(_)
             | ArType::Ref(_)
-            | ArType::RefMut(_)
+            | ArType::Slice(_)
             | ArType::GenRef => true,
             ArType::Error | ArType::Void | ArType::Err => true,
             // Named / aggregates: structural decision needs `TypeInfo::is_copy`.
             ArType::Named(_, _)
             | ArType::Func(_, _)
-            | ArType::Slice(_)
             | ArType::Array(_, _)
             | ArType::Tuple(_)
             | ArType::Result(_, _)
             | ArType::Option(_)
             | ArType::Coroutine(_)
             | ArType::Poll(_)
-            | ArType::Range(_) => false,
+            | ArType::Range(_)
+            | ArType::RefMut(_) => false,
         }
     }
 }
@@ -535,9 +535,9 @@ mod tests {
         let i = new_interner();
         assert!(ArType::Ptr(i.intern(ArType::Primitive(Primitive::Int))).is_copy_v01());
         assert!(ArType::Nullable(i.intern(ArType::Primitive(Primitive::Int))).is_copy_v01());
-        // F2.0: safe refs are Copy (pointer-width handles).
+        // Shared refs are Copy; exclusive refs preserve uniqueness by moving.
         assert!(ArType::Ref(i.intern(ArType::Primitive(Primitive::Int))).is_copy_v01());
-        assert!(ArType::RefMut(i.intern(ArType::Primitive(Primitive::Int))).is_copy_v01());
+        assert!(!ArType::RefMut(i.intern(ArType::Primitive(Primitive::Int))).is_copy_v01());
     }
 
     #[test]
@@ -553,7 +553,7 @@ mod tests {
         let i = new_interner();
         let int = i.intern(ArType::Primitive(Primitive::Int));
         assert!(!ArType::Func(vec![int], int).is_copy_v01());
-        assert!(!ArType::Slice(int).is_copy_v01());
+        assert!(ArType::Slice(int).is_copy_v01());
         assert!(!ArType::Array(3, int).is_copy_v01());
         assert!(!ArType::Tuple(vec![int]).is_copy_v01());
         assert!(!ArType::Result(int, int).is_copy_v01());
