@@ -115,7 +115,7 @@ fn collect_interface(checker: &mut TypeChecker, decl: &arandu_parser::InterfaceD
         checker
             .type_info
             .generic_params
-            .insert(iface_sym, std::sync::Arc::new(type_param_symbols.clone()));
+            .insert(iface_sym, std::sync::Arc::new(type_param_symbols));
     }
 
     let mut methods = Vec::new();

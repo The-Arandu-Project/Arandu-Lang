@@ -40,7 +40,15 @@ pub fn create_symbol_table_with_prelude(
     tracing::debug!(target: "arandu_resolve", "Creating symbol table with prelude");
     for (module, members) in PRELUDE_MODULE_MEMBERS {
         for member in *members {
-            let _ = table.define_module_member(module, member, span);
+            if let Err(existing) = table.define_module_member(module, member, span) {
+                return Err(vec![crate::Diagnostic::error(
+                    crate::DiagCode::N006ImportConflict,
+                    format!(
+                        "prelude module member `{module}.{member}` conflicts with existing symbol {existing:?}"
+                    ),
+                    span,
+                )]);
+            }
         }
     }
     let global_scope = table.global_scope();
@@ -192,7 +200,30 @@ pub fn resolve_imports_and_bodies(
                                     scope: global,
                                     is_public: true,
                                 };
-                                let _ = resolver.symbols.insert_imported(sym);
+                                match resolver.symbols.insert_imported(sym) {
+                                    Ok(Some(placeholder_id)) => {
+                                        if let Some(entry) =
+                                            resolver.imported_symbols.remove(&placeholder_id)
+                                        {
+                                            resolver.imported_symbols.insert(id, entry);
+                                        }
+                                    }
+                                    Ok(None) => {}
+                                    Err(existing) => {
+                                        let existing_span = resolver.symbols.get(existing).span;
+                                        resolver.diagnostics.push(
+                                            arandu_middle::Diagnostic::error(
+                                                arandu_middle::DiagCode::N006ImportConflict,
+                                                format!(
+                                                    "import `{}` conflicts with an existing declaration",
+                                                    import_name
+                                                ),
+                                                item.span,
+                                            )
+                                            .with_label(existing_span, "already defined here"),
+                                        );
+                                    }
+                                }
                             }
                         }
                     }

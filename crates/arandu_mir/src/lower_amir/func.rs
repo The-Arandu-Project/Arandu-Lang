@@ -1,5 +1,3 @@
-#![allow(clippy::collapsible_if)]
-
 use super::{CalleeArgModes, LowerCtx, MoveState};
 use crate::TypeCheckResult;
 use crate::amir::{AmirFunc, AmirOperand, AmirTemp, AmirTerminator, TempId};
@@ -113,13 +111,12 @@ pub(crate) fn lower_func(
     }
 
     // If last block does not have a terminator, implicitly return
-    if let Some(curr) = ctx.builder.current_block {
-        if ctx.builder.blocks[curr.as_usize()]
+    if let Some(curr) = ctx.builder.current_block
+        && ctx.builder.blocks[curr.as_usize()]
             .terminator
             .is_unreachable()
-        {
-            ctx.builder.blocks[curr.as_usize()].terminator = AmirTerminator::Return;
-        }
+    {
+        ctx.builder.blocks[curr.as_usize()].terminator = AmirTerminator::Return;
     }
 
     // Seal all remaining unsealed blocks
@@ -256,35 +253,33 @@ fn promote_escaped_coroutines(func: &mut AmirFunc) {
                             | AmirRvalue::Alloc(op)
                             | AmirRvalue::ToStr { value: op, .. }
                             | AmirRvalue::CoroutineReady { value: op, .. } => {
-                                if let AmirOperand::Copy(src) | AmirOperand::Move(src) = op {
-                                    if let Some(src_origins) = temp_origins.get(src) {
-                                        origins.extend(src_origins);
-                                    }
+                                if let AmirOperand::Copy(src) | AmirOperand::Move(src) = op
+                                    && let Some(src_origins) = temp_origins.get(src)
+                                {
+                                    origins.extend(src_origins);
                                 }
                             }
                             AmirRvalue::Unary {
                                 op: unary_op,
                                 operand,
                             } => {
-                                if !matches!(unary_op, crate::ops::UnaryOp::Await) {
-                                    if let AmirOperand::Copy(src) | AmirOperand::Move(src) = operand
-                                    {
-                                        if let Some(src_origins) = temp_origins.get(src) {
-                                            origins.extend(src_origins);
-                                        }
-                                    }
+                                if !matches!(unary_op, crate::ops::UnaryOp::Await)
+                                    && let AmirOperand::Copy(src) | AmirOperand::Move(src) = operand
+                                    && let Some(src_origins) = temp_origins.get(src)
+                                {
+                                    origins.extend(src_origins);
                                 }
                             }
                             AmirRvalue::Binary { left, right, .. } => {
-                                if let AmirOperand::Copy(src) | AmirOperand::Move(src) = left {
-                                    if let Some(src_origins) = temp_origins.get(src) {
-                                        origins.extend(src_origins);
-                                    }
+                                if let AmirOperand::Copy(src) | AmirOperand::Move(src) = left
+                                    && let Some(src_origins) = temp_origins.get(src)
+                                {
+                                    origins.extend(src_origins);
                                 }
-                                if let AmirOperand::Copy(src) | AmirOperand::Move(src) = right {
-                                    if let Some(src_origins) = temp_origins.get(src) {
-                                        origins.extend(src_origins);
-                                    }
+                                if let AmirOperand::Copy(src) | AmirOperand::Move(src) = right
+                                    && let Some(src_origins) = temp_origins.get(src)
+                                {
+                                    origins.extend(src_origins);
                                 }
                             }
                             AmirRvalue::FieldAccess {
@@ -297,31 +292,31 @@ fn promote_escaped_coroutines(func: &mut AmirFunc) {
                             }
                             AmirRvalue::StructLiteral { fields, .. } => {
                                 for (_, op) in fields {
-                                    if let AmirOperand::Copy(src) | AmirOperand::Move(src) = op {
-                                        if let Some(src_origins) = temp_origins.get(src) {
-                                            origins.extend(src_origins);
-                                        }
+                                    if let AmirOperand::Copy(src) | AmirOperand::Move(src) = op
+                                        && let Some(src_origins) = temp_origins.get(src)
+                                    {
+                                        origins.extend(src_origins);
                                     }
                                 }
                             }
                             AmirRvalue::IndexAccess { base, index } => {
-                                if let AmirOperand::Copy(src) | AmirOperand::Move(src) = base {
-                                    if let Some(src_origins) = temp_origins.get(src) {
-                                        origins.extend(src_origins);
-                                    }
+                                if let AmirOperand::Copy(src) | AmirOperand::Move(src) = base
+                                    && let Some(src_origins) = temp_origins.get(src)
+                                {
+                                    origins.extend(src_origins);
                                 }
-                                if let AmirOperand::Copy(src) | AmirOperand::Move(src) = index {
-                                    if let Some(src_origins) = temp_origins.get(src) {
-                                        origins.extend(src_origins);
-                                    }
+                                if let AmirOperand::Copy(src) | AmirOperand::Move(src) = index
+                                    && let Some(src_origins) = temp_origins.get(src)
+                                {
+                                    origins.extend(src_origins);
                                 }
                             }
                             AmirRvalue::Array { items } | AmirRvalue::Tuple { items } => {
                                 for op in items {
-                                    if let AmirOperand::Copy(src) | AmirOperand::Move(src) = op {
-                                        if let Some(src_origins) = temp_origins.get(src) {
-                                            origins.extend(src_origins);
-                                        }
+                                    if let AmirOperand::Copy(src) | AmirOperand::Move(src) = op
+                                        && let Some(src_origins) = temp_origins.get(src)
+                                    {
+                                        origins.extend(src_origins);
                                     }
                                 }
                             }
@@ -373,12 +368,12 @@ fn promote_escaped_coroutines(func: &mut AmirFunc) {
                     }
                     AmirStmt::Call { args, .. } => {
                         for arg in args {
-                            if let AmirOperand::Copy(src) | AmirOperand::Move(src) = arg {
-                                if let Some(src_origins) = temp_origins.get(src) {
-                                    for &origin in src_origins {
-                                        if escaped_origins.insert(origin) {
-                                            changed = true;
-                                        }
+                            if let AmirOperand::Copy(src) | AmirOperand::Move(src) = arg
+                                && let Some(src_origins) = temp_origins.get(src)
+                            {
+                                for &origin in src_origins {
+                                    if escaped_origins.insert(origin) {
+                                        changed = true;
                                     }
                                 }
                             }
@@ -401,16 +396,15 @@ fn promote_escaped_coroutines(func: &mut AmirFunc) {
                 AmirTerminator::Goto { target, args } => {
                     let target_block = &func.blocks[target.as_usize()];
                     for (idx, arg) in args.iter().enumerate() {
-                        if let AmirOperand::Copy(src) | AmirOperand::Move(src) = arg {
-                            if let Some(src_origins) = temp_origins.get(src).cloned() {
-                                if let Some(param) = target_block.params.get(idx) {
-                                    let entry = temp_origins.entry(param.id).or_default();
-                                    let old_len = entry.len();
-                                    entry.extend(src_origins);
-                                    if entry.len() > old_len {
-                                        changed = true;
-                                    }
-                                }
+                        if let AmirOperand::Copy(src) | AmirOperand::Move(src) = arg
+                            && let Some(src_origins) = temp_origins.get(src).cloned()
+                            && let Some(param) = target_block.params.get(idx)
+                        {
+                            let entry = temp_origins.entry(param.id).or_default();
+                            let old_len = entry.len();
+                            entry.extend(src_origins);
+                            if entry.len() > old_len {
+                                changed = true;
                             }
                         }
                     }
@@ -424,31 +418,29 @@ fn promote_escaped_coroutines(func: &mut AmirFunc) {
                 } => {
                     let true_block = &func.blocks[if_true.as_usize()];
                     for (idx, arg) in true_args.iter().enumerate() {
-                        if let AmirOperand::Copy(src) | AmirOperand::Move(src) = arg {
-                            if let Some(src_origins) = temp_origins.get(src).cloned() {
-                                if let Some(param) = true_block.params.get(idx) {
-                                    let entry = temp_origins.entry(param.id).or_default();
-                                    let old_len = entry.len();
-                                    entry.extend(src_origins);
-                                    if entry.len() > old_len {
-                                        changed = true;
-                                    }
-                                }
+                        if let AmirOperand::Copy(src) | AmirOperand::Move(src) = arg
+                            && let Some(src_origins) = temp_origins.get(src).cloned()
+                            && let Some(param) = true_block.params.get(idx)
+                        {
+                            let entry = temp_origins.entry(param.id).or_default();
+                            let old_len = entry.len();
+                            entry.extend(src_origins);
+                            if entry.len() > old_len {
+                                changed = true;
                             }
                         }
                     }
                     let false_block = &func.blocks[if_false.as_usize()];
                     for (idx, arg) in false_args.iter().enumerate() {
-                        if let AmirOperand::Copy(src) | AmirOperand::Move(src) = arg {
-                            if let Some(src_origins) = temp_origins.get(src).cloned() {
-                                if let Some(param) = false_block.params.get(idx) {
-                                    let entry = temp_origins.entry(param.id).or_default();
-                                    let old_len = entry.len();
-                                    entry.extend(src_origins);
-                                    if entry.len() > old_len {
-                                        changed = true;
-                                    }
-                                }
+                        if let AmirOperand::Copy(src) | AmirOperand::Move(src) = arg
+                            && let Some(src_origins) = temp_origins.get(src).cloned()
+                            && let Some(param) = false_block.params.get(idx)
+                        {
+                            let entry = temp_origins.entry(param.id).or_default();
+                            let old_len = entry.len();
+                            entry.extend(src_origins);
+                            if entry.len() > old_len {
+                                changed = true;
                             }
                         }
                     }
@@ -461,32 +453,30 @@ fn promote_escaped_coroutines(func: &mut AmirFunc) {
                     for (_, target, args) in targets {
                         let target_block = &func.blocks[target.as_usize()];
                         for (idx, arg) in args.iter().enumerate() {
-                            if let AmirOperand::Copy(src) | AmirOperand::Move(src) = arg {
-                                if let Some(src_origins) = temp_origins.get(src).cloned() {
-                                    if let Some(param) = target_block.params.get(idx) {
-                                        let entry = temp_origins.entry(param.id).or_default();
-                                        let old_len = entry.len();
-                                        entry.extend(src_origins);
-                                        if entry.len() > old_len {
-                                            changed = true;
-                                        }
-                                    }
+                            if let AmirOperand::Copy(src) | AmirOperand::Move(src) = arg
+                                && let Some(src_origins) = temp_origins.get(src).cloned()
+                                && let Some(param) = target_block.params.get(idx)
+                            {
+                                let entry = temp_origins.entry(param.id).or_default();
+                                let old_len = entry.len();
+                                entry.extend(src_origins);
+                                if entry.len() > old_len {
+                                    changed = true;
                                 }
                             }
                         }
                     }
                     let other_block = &func.blocks[otherwise.0.as_usize()];
                     for (idx, arg) in otherwise.1.iter().enumerate() {
-                        if let AmirOperand::Copy(src) | AmirOperand::Move(src) = arg {
-                            if let Some(src_origins) = temp_origins.get(src).cloned() {
-                                if let Some(param) = other_block.params.get(idx) {
-                                    let entry = temp_origins.entry(param.id).or_default();
-                                    let old_len = entry.len();
-                                    entry.extend(src_origins);
-                                    if entry.len() > old_len {
-                                        changed = true;
-                                    }
-                                }
+                        if let AmirOperand::Copy(src) | AmirOperand::Move(src) = arg
+                            && let Some(src_origins) = temp_origins.get(src).cloned()
+                            && let Some(param) = other_block.params.get(idx)
+                        {
+                            let entry = temp_origins.entry(param.id).or_default();
+                            let old_len = entry.len();
+                            entry.extend(src_origins);
+                            if entry.len() > old_len {
+                                changed = true;
                             }
                         }
                     }
@@ -497,14 +487,13 @@ fn promote_escaped_coroutines(func: &mut AmirFunc) {
     }
 
     for origin in escaped_origins {
-        if let Some(&instr_id) = stack_coro_origins.get(&origin) {
-            if let AmirStmt::Assign {
+        if let Some(&instr_id) = stack_coro_origins.get(&origin)
+            && let AmirStmt::Assign {
                 rhs: AmirRvalue::CoroutineReady { stack, .. },
                 ..
             } = &mut func.stmts.payloads[instr_id]
-            {
-                *stack = false;
-            }
+        {
+            *stack = false;
         }
     }
 }

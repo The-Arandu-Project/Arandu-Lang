@@ -129,7 +129,7 @@ pub(super) fn synth_call_expr(
                         }
                         crate::type_checker::EnumPayloadShape::Tuple(tids) => {
                             let enum_id = checker.intern(enum_ty);
-                            return Some(checker.intern(ArType::Func(tids.clone(), enum_id)));
+                            return Some(checker.intern(ArType::Func(tids, enum_id)));
                         }
                     }
                 }
@@ -346,7 +346,7 @@ pub(super) fn synth_call_expr(
                     let arg_ids = checker.pool.expr_list(args_range).to_vec();
                     let ns_ty = checker.resolve(ns_ty_id);
                     if let ArType::Func(params, ret) = ns_ty {
-                        let mut params = params.clone();
+                        let mut params = params;
                         let mut ret = ret;
                         // Multi-file generic free funcs (`rt.spawn(ex, job)`):
                         // same inference as Path callees — instantiate T from

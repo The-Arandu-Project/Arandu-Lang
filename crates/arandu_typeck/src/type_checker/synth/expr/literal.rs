@@ -199,7 +199,7 @@ pub(super) fn synth_literal_expr(
             let struct_ty = checker.lower_type_expr(ty_id, checker.type_scope());
             let mut struct_ty_id = checker.intern(struct_ty);
             let struct_info = match checker.resolve(struct_ty_id) {
-                ArType::Named(symbol_id, generic_args) => Some((symbol_id, generic_args.clone())),
+                ArType::Named(symbol_id, generic_args) => Some((symbol_id, generic_args)),
                 _ => None,
             };
             if let Some((symbol_id, mut generic_args)) = struct_info {

@@ -105,11 +105,11 @@ pub unsafe extern "C" fn ar_rt_cancel_i64(handle: i64) {
     }
     let idx = handle as usize;
     let mut guard = TASKS.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(slot) = guard.get_mut(idx).and_then(|s| s.take()) {
-        if !slot.state.is_null() {
-            unsafe {
-                ar_co_free(slot.state);
-            }
+    if let Some(slot) = guard.get_mut(idx).and_then(|s| s.take())
+        && !slot.state.is_null()
+    {
+        unsafe {
+            ar_co_free(slot.state);
         }
     }
 }

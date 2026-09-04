@@ -1,7 +1,7 @@
 //! Pattern and field pattern formatting implementation.
 
 use super::types::HirPrettyCtx;
-use crate::hir::{HirFieldPattern, HirPattern};
+use crate::hir::HirPattern;
 
 pub(super) fn format_pattern_ref(pat: &HirPattern, ctx: &HirPrettyCtx<'_>) -> String {
     match pat {
@@ -115,18 +115,5 @@ pub(super) fn format_pattern_ref(pat: &HirPattern, ctx: &HirPrettyCtx<'_>) -> St
 impl HirPattern {
     pub(super) fn pretty_print_to(&self, out: &mut String, _indent: usize, ctx: &HirPrettyCtx<'_>) {
         out.push_str(&format_pattern_ref(self, ctx));
-    }
-}
-
-impl HirFieldPattern {
-    #[allow(dead_code)]
-    pub(super) fn pretty_print_to(&self, out: &mut String, _indent: usize, ctx: &HirPrettyCtx<'_>) {
-        let pat_str = self.pattern.map_or("None".to_string(), |pid| {
-            format!("Some({})", format_pattern_ref(ctx.pool.pattern(pid), ctx))
-        });
-        out.push_str(&format!(
-            "HirFieldPattern {{ span: {:?}, name: {:?}, pattern: {} }}",
-            self.span, self.name, pat_str
-        ));
     }
 }

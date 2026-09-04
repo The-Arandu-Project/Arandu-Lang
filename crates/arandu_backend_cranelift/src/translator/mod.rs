@@ -261,10 +261,10 @@ impl<'a, 'b, M: Module> FunctionTranslator<'a, 'b, M> {
                 },
             },
             AmirOperand::FunctionRef(_) | AmirOperand::GlobalRef(_) => {
-                if let AmirOperand::GlobalRef(symbol) = op {
-                    if let Some(ty) = self.type_info.decl_type(*symbol) {
-                        return ty.clone();
-                    }
+                if let AmirOperand::GlobalRef(symbol) = op
+                    && let Some(ty) = self.type_info.decl_type(*symbol)
+                {
+                    return ty;
                 }
                 ArType::Error
             }

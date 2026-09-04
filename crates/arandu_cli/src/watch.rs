@@ -54,26 +54,19 @@ pub fn cmd_watch(start: &Path, flags: &ProjectFlags, data_layout: DataLayout) ->
         ));
     };
     let listing = *roots.package_listing(&db);
-    let Some(manifest) = db.project_manifest() else {
-        return Err(CliFailure::operational(
-            "start package watcher",
-            Some(ctx.manifest_path),
-            "package manifest not initialized (internal)",
-        ));
-    };
 
     let mut sess = PackageWatchSession::new(
         &mut db,
         arandu_query::PackageWatchConfig {
             package_root: ctx.root.clone(),
-            package_src: package_src.clone(),
+            package_src,
             package_name: ctx.name.clone(),
             entry_rel: ctx.entry_rel.clone(),
             entry_abs: ctx.entry_path.clone(),
             manifest_path: ctx.manifest_path.clone(),
             listing,
             module_roots: roots,
-            manifest,
+            manifest: ctx.manifest,
         },
     );
 

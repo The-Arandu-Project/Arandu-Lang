@@ -419,9 +419,9 @@ pub(in crate::passes::monomorphize) fn instantiation_key_for_call(
             let base_ty = tc.type_info.type_interner.resolve(pool.expr(*base).ty);
             let actual = peel_recv_base_ty(tc, base_ty);
             let recv_args: Vec<_> = match actual {
-                ArType::Named(_, args) => args.clone(),
+                ArType::Named(_, args) => args,
                 ArType::Ptr(inner) => match tc.type_info.type_interner.resolve(inner) {
-                    ArType::Named(_, args) => args.clone(),
+                    ArType::Named(_, args) => args,
                     _ => Vec::new(),
                 },
                 ArType::Result(ok, err) => vec![ok, err],

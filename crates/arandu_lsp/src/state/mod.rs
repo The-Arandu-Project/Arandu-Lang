@@ -363,7 +363,7 @@ mod tests {
                     &snap,
                     &[crate::ide::DocSnap {
                         source,
-                        path: Arc::new(path.clone()),
+                        path: Arc::new(path),
                         uri: uri.clone(),
                     }],
                     "overlay",

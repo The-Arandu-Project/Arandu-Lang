@@ -207,13 +207,13 @@ pub fn benchmark_cpu_identity() -> String {
         }
     }
     #[cfg(target_os = "linux")]
-    if let Ok(cpuinfo) = std::fs::read_to_string("/proc/cpuinfo") {
-        if let Some(model) = cpuinfo.lines().find_map(|line| {
+    if let Ok(cpuinfo) = std::fs::read_to_string("/proc/cpuinfo")
+        && let Some(model) = cpuinfo.lines().find_map(|line| {
             let (key, value) = line.split_once(':')?;
             (key.trim() == "model name").then(|| value.trim().to_string())
-        }) {
-            return model;
-        }
+        })
+    {
+        return model;
     }
     #[cfg(target_os = "macos")]
     if let Ok(output) = Command::new("sysctl")

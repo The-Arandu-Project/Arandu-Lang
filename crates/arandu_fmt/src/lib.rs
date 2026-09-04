@@ -138,22 +138,17 @@ fn format_from_tree(tree: &SyntaxTree) -> String {
 
 /// Reindent a top-level item: 4 spaces per `{}` depth; trim line ends.
 fn reindent_item(item_src: &str) -> String {
-    let unified = item_src.replace("\r\n", "\n").replace('\r', "\n");
-    let lines: Vec<&str> = unified
-        .strip_suffix('\n')
-        .unwrap_or(&unified)
-        .split('\n')
-        .collect();
     let mut out = String::with_capacity(item_src.len() + 16);
     let mut depth: i32 = 0;
     let mut in_string = false;
     let mut in_char = false;
     let mut escaped = false;
 
-    for (li, line) in lines.iter().enumerate() {
+    let mut lines_iter = item_src.lines().peekable();
+    while let Some(line) = lines_iter.next() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
-            if li + 1 < lines.len() {
+            if lines_iter.peek().is_some() {
                 out.push('\n');
             }
             continue;
@@ -224,19 +219,9 @@ fn reindent_item(item_src: &str) -> String {
 }
 
 fn normalize_whitespace(source: &str) -> String {
-    let unified = source.replace("\r\n", "\n").replace('\r', "\n");
-    let lines: Vec<&str> = if unified.is_empty() {
-        Vec::new()
-    } else {
-        unified
-            .strip_suffix('\n')
-            .unwrap_or(&unified)
-            .split('\n')
-            .collect()
-    };
-    let mut out = String::with_capacity(unified.len() + 1);
+    let mut out = String::with_capacity(source.len() + 1);
     let mut blank_run = 0u32;
-    for line in lines {
+    for line in source.lines() {
         let trimmed = line.trim_end();
         if trimmed.is_empty() {
             blank_run += 1;

@@ -132,10 +132,10 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                     ptr_val,
                     0,
                 );
-                if let Some(lhs_temp) = lhs {
-                    if let Some(&var) = self.temp_map.get(lhs_temp) {
-                        self.builder.def_var(var, loaded_val);
-                    }
+                if let Some(lhs_temp) = lhs
+                    && let Some(&var) = self.temp_map.get(lhs_temp)
+                {
+                    self.builder.def_var(var, loaded_val);
                 }
                 true
             }
@@ -178,10 +178,10 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 };
                 let byte_off = self.builder.ins().imul(idx_ext, size_val);
                 let result = self.builder.ins().iadd(base, byte_off);
-                if let Some(lhs_temp) = lhs {
-                    if let Some(&var) = self.temp_map.get(lhs_temp) {
-                        self.builder.def_var(var, result);
-                    }
+                if let Some(lhs_temp) = lhs
+                    && let Some(&var) = self.temp_map.get(lhs_temp)
+                {
+                    self.builder.def_var(var, result);
                 }
                 true
             }
@@ -196,10 +196,10 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                     .and_then(|t| self.get_temp_clif_type(t))
                     .unwrap_or(self.ptr_type);
                 let c = self.builder.ins().iconst(clif_ty, value as i64);
-                if let Some(lhs_temp) = lhs {
-                    if let Some(&var) = self.temp_map.get(lhs_temp) {
-                        self.builder.def_var(var, c);
-                    }
+                if let Some(lhs_temp) = lhs
+                    && let Some(&var) = self.temp_map.get(lhs_temp)
+                {
+                    self.builder.def_var(var, c);
                 }
                 true
             }

@@ -185,7 +185,7 @@ impl PackageWatchSession {
     #[must_use]
     pub fn keys_for_rel(&self, rel: &str) -> Vec<String> {
         let rel = rel.replace('\\', "/");
-        vec![format!("{}/{}", self.package_name, rel), rel.clone()]
+        vec![format!("{}/{}", self.package_name, rel), rel]
     }
 
     fn reindex_keys(&mut self, db: &DatabaseImpl) {

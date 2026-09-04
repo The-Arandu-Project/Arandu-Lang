@@ -635,7 +635,7 @@ mod tests {
         let mut stmts = AmirStmtTable::new();
         stmts.push(AmirStmt::Assign {
             lhs: temp(0),
-            rhs: AmirRvalue::Borrow(projected_place.clone()),
+            rhs: AmirRvalue::Borrow(projected_place),
         });
         stmts.push(AmirStmt::Store {
             lhs: AmirPlace {

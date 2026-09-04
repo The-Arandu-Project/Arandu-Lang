@@ -258,14 +258,14 @@ pub fn cmd_doctor(flags: &ProjectFlags) -> i32 {
     );
 
     // Env extras only in verbose
-    if flags.verbose {
-        if let Ok(val) = std::env::var(STDLIB_ENV) {
-            categories.push(DoctorCategory {
-                status: DoctorStatus::Ok,
-                title: format!("Environment ({STDLIB_ENV})"),
-                details: vec![DoctorDetail::Info(val)],
-            });
-        }
+    if flags.verbose
+        && let Ok(val) = std::env::var(STDLIB_ENV)
+    {
+        categories.push(DoctorCategory {
+            status: DoctorStatus::Ok,
+            title: format!("Environment ({STDLIB_ENV})"),
+            details: vec![DoctorDetail::Info(val)],
+        });
     }
 
     // ── Print Flutter-style report ──────────────────────────────────────
@@ -354,10 +354,10 @@ fn print_category(cat: &DoctorCategory, color: bool, verbose: bool) {
     if !show_all && !verbose {
         // Compact mode: one-line category is enough when healthy; still show
         // first info line for Skip so users know why it is blank.
-        if matches!(cat.status, DoctorStatus::Skip) {
-            if let Some(DoctorDetail::Info(msg)) = cat.details.first() {
-                println!("    • {msg}");
-            }
+        if matches!(cat.status, DoctorStatus::Skip)
+            && let Some(DoctorDetail::Info(msg)) = cat.details.first()
+        {
+            println!("    • {msg}");
         }
         return;
     }

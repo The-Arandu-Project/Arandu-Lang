@@ -9,7 +9,6 @@
 //! them as JIT imports through the re-exports below, so existing
 //! `arandu_backend_cranelift::<module>_runtime` paths keep working.
 
-#![allow(clippy::collapsible_if)]
 pub mod abi;
 pub mod aot;
 pub mod jit;

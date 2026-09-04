@@ -5,8 +5,6 @@
 //! base local and moves are recovered from `Load(place)` followed by consuming
 //! `Move(temp)` operands.
 
-#![allow(clippy::collapsible_if)]
-
 use crate::amir::{
     AmirFunc, AmirOperand, AmirPlace, AmirRvalue, AmirStmt, AmirTerminator, BlockId, LocalId,
     TempId, for_each_rvalue_operand, for_each_rvalue_place,
@@ -279,11 +277,11 @@ fn temp_origins<'bump>(
                         }
                         _ => {}
                     }
-                    if let Some(loc) = found_origin {
-                        if origins[lhs.as_usize()].is_none() {
-                            origins[lhs.as_usize()] = Some(loc);
-                            changed = true;
-                        }
+                    if let Some(loc) = found_origin
+                        && origins[lhs.as_usize()].is_none()
+                    {
+                        origins[lhs.as_usize()] = Some(loc);
+                        changed = true;
                     }
                 }
             }
@@ -612,10 +610,10 @@ fn local_diag_span(local: LocalId, func: &AmirFunc, symbols: &SymbolTable) -> Sp
     let Some(l) = func.locals.get(local.as_usize()) else {
         return Span::new(0, 0, 0);
     };
-    if let Some(u) = l.use_span {
-        if u.start != u.end {
-            return u;
-        }
+    if let Some(u) = l.use_span
+        && u.start != u.end
+    {
+        return u;
     }
     if l.span.start != l.span.end {
         return l.span;

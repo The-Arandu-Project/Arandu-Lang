@@ -404,7 +404,7 @@ pub fn check_pattern(checker: &mut TypeChecker<'_>, pattern: PatternId, value_ty
         Pattern::Tuple { items, span: _ } => {
             let val_ty = checker.type_info.resolve_type_id(value_ty);
             if let ArType::Tuple(tys) = val_ty {
-                let tys_cloned = tys.clone();
+                let tys_cloned = tys;
                 for (i, &item_id) in checker.pool.pattern_list(*items).iter().enumerate() {
                     let item_ty = tys_cloned
                         .get(i)

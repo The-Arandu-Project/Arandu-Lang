@@ -386,18 +386,25 @@ impl DatabaseImpl {
     /// Used by watch mode when an `.aru` is deleted. Does **not** swallow the
     /// broken import — dependents re-resolve and emit M001.
     pub fn unregister_source_file(&self, path: &str) {
-        let mut reg = self.files.write().unwrap_or_else(|e| e.into_inner());
-        if let Some(file) = reg.remove_path(path) {
+        let file = {
+            let mut reg = self.files.write().unwrap_or_else(|e| e.into_inner());
+            reg.remove_path(path)
+        };
+        if let Some(file) = file {
             let fid = file.file_id(self.as_source_db());
             // A file can deliberately have more than one registry key (for
             // example its absolute editor path plus package-qualified and bare
             // import keys). Keep the reverse index alive while any alias still
             // refers to the same Salsa input.
-            let has_alias = reg
-                .by_path
-                .values()
+            let candidates: Vec<SourceFile> = {
+                let reg = self.files.read().unwrap_or_else(|e| e.into_inner());
+                reg.by_path.values().copied().collect()
+            };
+            let has_alias = candidates
+                .into_iter()
                 .any(|candidate| candidate.file_id(self.as_source_db()) == fid);
             if !has_alias {
+                let mut reg = self.files.write().unwrap_or_else(|e| e.into_inner());
                 reg.by_id.remove(fid);
             }
         }

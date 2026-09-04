@@ -19,8 +19,6 @@
 //! into the process-local table; invalid ids are treated as no-ops or abort
 //! on write paths that would corrupt storage.
 
-#![allow(clippy::missing_safety_doc)]
-
 use std::sync::Mutex;
 
 struct Slot {
@@ -34,6 +32,9 @@ fn lock() -> std::sync::MutexGuard<'static, Vec<Option<Slot>>> {
 }
 
 /// Create an empty vector; returns handle `>= 0`.
+///
+/// # Safety
+/// Safe to call from any thread; acquires process-local synchronized table.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_vec_new() -> i64 {
     let mut g = lock();
@@ -48,6 +49,9 @@ pub unsafe extern "C" fn ar_vec_new() -> i64 {
 }
 
 /// Push `value` onto vector `id`. Invalid id aborts.
+///
+/// # Safety
+/// `id` must be a valid vector handle allocated by [`ar_vec_new`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_vec_push(id: i64, value: i64) {
     let mut g = lock();
@@ -58,6 +62,9 @@ pub unsafe extern "C" fn ar_vec_push(id: i64, value: i64) {
 }
 
 /// Length of vector `id`, or `usize::MAX` if invalid.
+///
+/// # Safety
+/// `id` should be a valid vector handle allocated by [`ar_vec_new`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_vec_len(id: i64) -> usize {
     let g = lock();
@@ -68,6 +75,9 @@ pub unsafe extern "C" fn ar_vec_len(id: i64) -> usize {
 }
 
 /// `1` if `index` is in range, else `0`. Invalid id → `0`.
+///
+/// # Safety
+/// `id` should be a valid vector handle allocated by [`ar_vec_new`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_vec_has(id: i64, index: i64) -> i64 {
     if index < 0 {
@@ -81,6 +91,9 @@ pub unsafe extern "C" fn ar_vec_has(id: i64, index: i64) -> i64 {
 }
 
 /// Get element at `index`. Invalid / OOB → `0` (check [`ar_vec_has`] first).
+///
+/// # Safety
+/// `id` should be a valid vector handle allocated by [`ar_vec_new`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_vec_get(id: i64, index: i64) -> i64 {
     if index < 0 {
@@ -94,6 +107,9 @@ pub unsafe extern "C" fn ar_vec_get(id: i64, index: i64) -> i64 {
 }
 
 /// Overwrite index; returns `1` on success, `0` on OOB/invalid.
+///
+/// # Safety
+/// `id` should be a valid vector handle allocated by [`ar_vec_new`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_vec_put(id: i64, index: i64, value: i64) -> i64 {
     if index < 0 {
@@ -114,6 +130,9 @@ pub unsafe extern "C" fn ar_vec_put(id: i64, index: i64, value: i64) -> i64 {
 
 /// Pop last element and return it. Caller must ensure non-empty (`ar_vec_len > 0`).
 /// Empty / invalid → `0` (ambiguous with a stored zero — check length first).
+///
+/// # Safety
+/// `id` must be a valid vector handle allocated by [`ar_vec_new`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_vec_pop(id: i64) -> i64 {
     let mut g = lock();
@@ -124,6 +143,9 @@ pub unsafe extern "C" fn ar_vec_pop(id: i64) -> i64 {
 }
 
 /// Set length to 0; capacity retained.
+///
+/// # Safety
+/// `id` should be a valid vector handle allocated by [`ar_vec_new`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_vec_clear(id: i64) {
     let mut g = lock();
@@ -133,6 +155,9 @@ pub unsafe extern "C" fn ar_vec_clear(id: i64) {
 }
 
 /// Destroy handle and free storage.
+///
+/// # Safety
+/// `id` must be a valid vector handle allocated by [`ar_vec_new`] and must not be used afterwards.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_vec_destroy(id: i64) {
     let mut g = lock();

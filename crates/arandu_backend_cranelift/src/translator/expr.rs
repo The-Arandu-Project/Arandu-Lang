@@ -661,13 +661,13 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                         .get(variant)
                         .copied()
                         .unwrap_or(0);
-                    if let Some(variant_shape) = variants.get(tag) {
-                        if let Some(payload_ty_id) = variant_shape.payload_ty {
-                            let payload_ty = self.type_info.resolve_type_id(payload_ty_id);
-                            let payload_layout = self.checked_layout(&payload_ty);
-                            if *index < payload_layout.field_offsets.len() {
-                                payload_offset = payload_layout.field_offsets[*index] as i32;
-                            }
+                    if let Some(variant_shape) = variants.get(tag)
+                        && let Some(payload_ty_id) = variant_shape.payload_ty
+                    {
+                        let payload_ty = self.type_info.resolve_type_id(payload_ty_id);
+                        let payload_layout = self.checked_layout(&payload_ty);
+                        if *index < payload_layout.field_offsets.len() {
+                            payload_offset = payload_layout.field_offsets[*index] as i32;
                         }
                     }
                 }

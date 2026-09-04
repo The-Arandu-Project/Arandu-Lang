@@ -77,11 +77,4 @@ impl CalleeArgModes {
             .and_then(|v| v.get(arg_index).copied())
             .unwrap_or(ArgConsumeKind::Move)
     }
-
-    #[inline]
-    #[must_use]
-    #[allow(dead_code)] // kept for analyses / tooling over call-site modes
-    pub fn is_borrowed(&self, callee: SymbolId, arg_index: usize) -> bool {
-        self.kind(callee, arg_index).is_borrow()
-    }
 }

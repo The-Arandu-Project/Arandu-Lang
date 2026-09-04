@@ -40,7 +40,6 @@ impl std::fmt::Display for TargetKind {
 }
 
 /// Resolved package context for project-mode commands.
-#[allow(dead_code)] // fields reserved for doctor/logs and future multi-file package graph
 pub struct ProjectContext {
     pub root: PathBuf,
     pub manifest_path: PathBuf,

@@ -111,9 +111,9 @@ pub(crate) fn resolve_field(
     }
 
     let struct_info_opt = match actual_base_ty {
-        ArType::Named(id, args) => Some((id, args.clone())),
+        ArType::Named(id, args) => Some((id, args)),
         ArType::Ptr(inner) => match checker.resolve(inner) {
-            ArType::Named(id, args) => Some((id, args.clone())),
+            ArType::Named(id, args) => Some((id, args)),
             _ => None,
         },
         _ => None,

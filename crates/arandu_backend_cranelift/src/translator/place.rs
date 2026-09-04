@@ -221,13 +221,12 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
         let offset = layout.field_offsets.get(field_idx).copied().unwrap_or(0) as i32;
 
         // Update current_ty to the field type for nested projections.
-        if let ArType::Named(sid, _) = &struct_ty {
-            if let Some(fields) = self.type_info.struct_fields.get(sid) {
-                if let Some(&tid) = fields.get(field_name.as_str()) {
-                    *current_ty = self.type_info.resolve_type_id(tid);
-                    return offset;
-                }
-            }
+        if let ArType::Named(sid, _) = &struct_ty
+            && let Some(fields) = self.type_info.struct_fields.get(sid)
+            && let Some(&tid) = fields.get(field_name.as_str())
+        {
+            *current_ty = self.type_info.resolve_type_id(tid);
+            return offset;
         }
         *current_ty = ArType::Error;
         offset
