@@ -52,8 +52,10 @@ pub unsafe extern "C" fn ar_rt_waker_wake(id: i64) {
     };
     if let Some(state) = state {
         let (lock, cvar) = &*state;
-        let mut woken = lock.lock().unwrap_or_else(|e| e.into_inner());
-        *woken = true;
+        {
+            let mut woken = lock.lock().unwrap_or_else(|e| e.into_inner());
+            *woken = true;
+        }
         cvar.notify_one();
     }
 }

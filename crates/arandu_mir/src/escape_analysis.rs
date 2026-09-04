@@ -326,7 +326,7 @@ pub fn find_escapes(func: &AmirFunc, interner: &crate::types::TypeInterner) -> V
                     events.push(EscapeEvent {
                         kind: EscapeKind::Return,
                         place_local: place.local,
-                        span: temp_span(*lhs, func).unwrap_or(place_span(place, func)),
+                        span: temp_span(*lhs, func).unwrap_or_else(|| place_span(place, func)),
                         block: block.id,
                         reason: "reference escapes via return of the current function",
                     });

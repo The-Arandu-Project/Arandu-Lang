@@ -565,7 +565,7 @@ impl LowerCtx<'_> {
                     symbols,
                     &self.tc.type_info.type_interner,
                 );
-                let callee_symbol = method_target.or(match &callee_expr.kind {
+                let callee_symbol = method_target.or_else(|| match &callee_expr.kind {
                     HirExprKind::Path { symbol } => Some(*symbol),
                     HirExprKind::TypePath { member_symbol, .. } => Some(*member_symbol),
                     HirExprKind::Generic { callee, .. } => {

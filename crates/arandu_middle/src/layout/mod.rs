@@ -611,10 +611,12 @@ impl LayoutEngine {
         rhs: u64,
         operation: LayoutOperation,
     ) -> Result<u64, LayoutError> {
-        let value = lhs.checked_add(rhs).ok_or(LayoutError::SizeOverflow {
-            operation,
-            limit: self.data_layout.object_size_bound(),
-        })?;
+        let value = lhs
+            .checked_add(rhs)
+            .ok_or_else(|| LayoutError::SizeOverflow {
+                operation,
+                limit: self.data_layout.object_size_bound(),
+            })?;
         self.check_object_size(value, operation)
     }
 
@@ -624,10 +626,12 @@ impl LayoutEngine {
         rhs: u64,
         operation: LayoutOperation,
     ) -> Result<u64, LayoutError> {
-        let value = lhs.checked_mul(rhs).ok_or(LayoutError::SizeOverflow {
-            operation,
-            limit: self.data_layout.object_size_bound(),
-        })?;
+        let value = lhs
+            .checked_mul(rhs)
+            .ok_or_else(|| LayoutError::SizeOverflow {
+                operation,
+                limit: self.data_layout.object_size_bound(),
+            })?;
         self.check_object_size(value, operation)
     }
 
@@ -641,10 +645,13 @@ impl LayoutEngine {
             return Err(LayoutError::InvalidAlignment { align });
         }
         let mask = align - 1;
-        let padded = value.checked_add(mask).ok_or(LayoutError::SizeOverflow {
-            operation,
-            limit: self.data_layout.object_size_bound(),
-        })? & !mask;
+        let padded = value
+            .checked_add(mask)
+            .ok_or_else(|| LayoutError::SizeOverflow {
+                operation,
+                limit: self.data_layout.object_size_bound(),
+            })?
+            & !mask;
         self.check_object_size(padded, operation)
     }
 

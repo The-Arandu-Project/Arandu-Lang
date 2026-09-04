@@ -141,17 +141,18 @@ pub fn cmd_project_bench(
         };
         arandu_runtime::testing_runtime::init_benchmark_context(exact, sequence, config.clone());
         let execution = run_exact_benchmark(&ctx, exact, data_layout);
-        let mut event = arandu_runtime::testing_runtime::finish_benchmark_context().unwrap_or(
-            arandu_codegen::testing::BenchmarkEventV1 {
-                sequence,
-                id: exact.to_string(),
-                config,
-                samples: Vec::new(),
-                stdout: arandu_codegen::testing::CapturedOutput::default(),
-                stderr: arandu_codegen::testing::CapturedOutput::default(),
-                failure: Some("benchmark context did not produce a result".to_string()),
-            },
-        );
+        let mut event =
+            arandu_runtime::testing_runtime::finish_benchmark_context().unwrap_or_else(|| {
+                arandu_codegen::testing::BenchmarkEventV1 {
+                    sequence,
+                    id: exact.to_string(),
+                    config,
+                    samples: Vec::new(),
+                    stdout: arandu_codegen::testing::CapturedOutput::default(),
+                    stderr: arandu_codegen::testing::CapturedOutput::default(),
+                    failure: Some("benchmark context did not produce a result".to_string()),
+                }
+            });
         if let Err(error) = execution {
             event.failure = Some(format!("{error:?}"));
         }

@@ -283,10 +283,13 @@ impl DatabaseImpl {
 
     /// Register dual module roots (package + stdlib) for `resolve_module_path`.
     pub fn set_module_roots(&self, roots: ModuleRoots) {
-        let mut g = self.module_roots.write().unwrap_or_else(|e| e.into_inner());
-        *g = Some(roots);
+        let std = roots.stdlib_root(self);
+        {
+            let mut g = self.module_roots.write().unwrap_or_else(|e| e.into_inner());
+            *g = Some(roots);
+        }
         // Keep flat stdlib_root in sync when roots carry one.
-        if let Some(std) = roots.stdlib_root(self) {
+        if let Some(std) = std {
             self.set_stdlib_root(std.as_ref().clone());
         }
     }

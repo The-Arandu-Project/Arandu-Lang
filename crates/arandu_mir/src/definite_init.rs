@@ -282,11 +282,10 @@ fn emit_uninit_diag(
     diagnostics: &mut Vec<(BlockId, Diagnostic)>,
 ) {
     let local_info = &func.locals[local.as_usize()];
-    let name = local_info
-        .symbol
-        .map_or("<compiler local>".to_string(), |s| {
-            symbols.get(s).name.to_string()
-        });
+    let name = local_info.symbol.map_or_else(
+        || "<compiler local>".to_string(),
+        |s| symbols.get(s).name.to_string(),
+    );
     // Prefer use site → declaration → symbol span (S-SPAN-THREAD).
     let span = {
         if let Some(u) = local_info.use_span {

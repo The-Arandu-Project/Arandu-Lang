@@ -127,7 +127,7 @@ fn format_from_tree(tree: &SyntaxTree) -> String {
     if out.starts_with('\n') && out.len() > 1 {
         let non_nl = out
             .find(|c| c != '\n')
-            .unwrap_or(out.len().saturating_sub(1));
+            .unwrap_or_else(|| out.len().saturating_sub(1));
         out.drain(..non_nl);
     }
     if !out.ends_with('\n') {
@@ -240,7 +240,7 @@ fn normalize_whitespace(source: &str) -> String {
     if out.starts_with('\n') && out.len() > 1 {
         let non_nl = out
             .find(|c| c != '\n')
-            .unwrap_or(out.len().saturating_sub(1));
+            .unwrap_or_else(|| out.len().saturating_sub(1));
         out.drain(..non_nl);
     }
     out
