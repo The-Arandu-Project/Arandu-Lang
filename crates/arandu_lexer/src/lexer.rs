@@ -5,7 +5,9 @@ use crate::simd::SimdBackendKind;
 use crate::{LexError, LexErrorCode, Span, Token, TokenKind};
 
 mod comment;
+pub(crate) mod ident;
 mod numeric;
+pub(crate) mod punctuation;
 mod string;
 
 pub struct Lexer<'a> {

@@ -32,8 +32,8 @@ pub fn validate_amir_func(
     let mut diags = Vec::new();
 
     if func.blocks.is_empty() {
-        diags.push(Diagnostic::error(
-            DiagCode::U001FeatureNotSupported,
+        diags.push(Diagnostic::ice(
+            DiagCode::ICEGEN002,
             "function has no basic blocks (CFG-4)".to_string(),
             span,
         ));
@@ -52,8 +52,8 @@ pub fn validate_amir_func(
             ));
         }
         if !is_valid_terminator(&block.terminator) {
-            diags.push(Diagnostic::error(
-                DiagCode::U001FeatureNotSupported,
+            diags.push(Diagnostic::ice(
+                DiagCode::ICEGEN002,
                 format!("bb{i}: invalid terminator (CFG-1)"),
                 span,
             ));
@@ -61,8 +61,8 @@ pub fn validate_amir_func(
 
         for succ in terminator_targets(&block.terminator) {
             if succ.as_usize() >= func.blocks.len() {
-                diags.push(Diagnostic::error(
-                    DiagCode::U001FeatureNotSupported,
+                diags.push(Diagnostic::ice(
+                    DiagCode::ICEGEN002,
                     format!(
                         "bb{i}: terminator targets non-existent bb{} (CFG-3)",
                         succ.as_usize()
@@ -145,8 +145,8 @@ pub fn validate_amir_func(
         if !reachable.contains(BlockId::from_usize(i))
             && !matches!(block.terminator, AmirTerminator::Unreachable)
         {
-            diags.push(Diagnostic::error(
-                DiagCode::U001FeatureNotSupported,
+            diags.push(Diagnostic::ice(
+                DiagCode::ICEGEN002,
                 format!("bb{i}: not reachable from bb0 (CFG-5)"),
                 span,
             ));

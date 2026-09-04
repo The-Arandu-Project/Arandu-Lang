@@ -124,8 +124,11 @@ fn format_from_tree(tree: &SyntaxTree) -> String {
         }
     }
     // Preserve leading module-less files; strip excess leading blanks.
-    while out.starts_with('\n') && out.len() > 1 {
-        out.remove(0);
+    if out.starts_with('\n') && out.len() > 1 {
+        let non_nl = out
+            .find(|c| c != '\n')
+            .unwrap_or(out.len().saturating_sub(1));
+        out.drain(..non_nl);
     }
     if !out.ends_with('\n') {
         out.push('\n');
@@ -249,8 +252,11 @@ fn normalize_whitespace(source: &str) -> String {
     if out.is_empty() {
         out.push('\n');
     }
-    while out.starts_with('\n') && out.len() > 1 {
-        out.remove(0);
+    if out.starts_with('\n') && out.len() > 1 {
+        let non_nl = out
+            .find(|c| c != '\n')
+            .unwrap_or(out.len().saturating_sub(1));
+        out.drain(..non_nl);
     }
     out
 }
@@ -322,7 +328,7 @@ pub fn actions_for_diagnostic(start: u32, end: u32, message: &str) -> Vec<CodeAc
     out
 }
 
-/// @deprecated path — use [`actions_for_diagnostic`].
+#[deprecated(since = "0.1.0", note = "use actions_for_diagnostic instead")]
 #[must_use]
 pub fn actions_for_expected_semicolon(start: u32, end: u32, message: &str) -> Option<CodeAction> {
     actions_for_diagnostic(start, end, message)
@@ -435,6 +441,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn semicolon_action() {
         let a = actions_for_expected_semicolon(10, 11, "expected SEMICOLON").unwrap();
         assert_eq!(a.edits[0].new_text, ";");

@@ -20,7 +20,7 @@ pub use result_option::{
     result_ok_err_ids, result_type_decl_span, try_ok_type, type_name_base,
 };
 pub use subst::{GenericSubst, build_subst, build_subst_ids, substitute_type, substitute_type_id};
-pub use type_interner::{InternerGeneration, TypeId, TypeInterner};
+pub use type_interner::{TypeId, TypeInterner};
 pub use unify::{
     is_assignable, is_assignable_return_type, resolve_literal_pair, unify, unify_return_type,
 };

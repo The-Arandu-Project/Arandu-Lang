@@ -26,10 +26,6 @@ use std::sync::RwLock;
 
 newtype_index!(TypeId);
 
-/// Generation counter for Salsa query cache invalidation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct InternerGeneration(pub u32);
-
 /// A global interner that assigns a unique `TypeId` to every structural `ArType`.
 #[derive(Debug)]
 pub struct TypeInterner {
@@ -37,7 +33,6 @@ pub struct TypeInterner {
     map: RwLock<FxHashMap<ArType, TypeId>>,
     /// Reverse map: TypeId → ArType  (resolution).
     types: RwLock<Vec<ArType>>,
-    pub generation: InternerGeneration,
 }
 
 impl TypeInterner {
@@ -46,7 +41,6 @@ impl TypeInterner {
         let interner = Self {
             map: RwLock::new(FxHashMap::default()),
             types: RwLock::new(Vec::new()),
-            generation: InternerGeneration(0),
         };
         // Pre-intern all Primitive variants
         let primitives = [
@@ -216,14 +210,6 @@ impl TypeInterner {
     pub fn display(&self, id: TypeId, symbols: &SymbolTable) -> String {
         self.resolve(id).display(symbols, self)
     }
-
-    /// Merge all types from another interner into self.
-    pub fn merge_from(&self, other: &Self) {
-        let types = other.types.read().unwrap_or_else(|e| e.into_inner());
-        for ty in types.iter() {
-            self.intern(ty.clone());
-        }
-    }
 }
 
 impl Default for TypeInterner {
@@ -239,7 +225,6 @@ impl Clone for TypeInterner {
             types: std::sync::RwLock::new(
                 self.types.read().unwrap_or_else(|e| e.into_inner()).clone(),
             ),
-            generation: self.generation,
         }
     }
 }
