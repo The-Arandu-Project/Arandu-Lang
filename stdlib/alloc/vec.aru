@@ -59,16 +59,17 @@ public func withCapacity<T>(cap: uint): Vec<T> {
     return v
 }
 
-/// Ensure absolute capacity ≥ `minCap`.
-func ensureCapacity<T>(v: mut ref Vec<T>, minCap: uint): void {
+/// Attempts to ensure absolute capacity ≥ `minCap`.
+///
+/// Returns `true` on success. On failure (such as capacity overflow or
+/// allocation failure), returns `false` and leaves `v` completely unmodified.
+public func tryEnsureCapacity<T>(v: mut ref Vec<T>, minCap: uint): bool {
     if v.capacity >= minCap {
-        return
+        return true
     }
     let maxCap: uint = 2147483647
     if minCap > maxCap {
-        unsafe {
-            intrinsics.abort()
-        }
+        return false
     }
     let mut newCap: uint = v.capacity
     if newCap == 0 {
@@ -83,9 +84,7 @@ func ensureCapacity<T>(v: mut ref Vec<T>, minCap: uint): void {
     }
     let elem = mem.sizeOf<T>()
     if elem > 0 && newCap > (maxCap / elem) {
-        unsafe {
-            intrinsics.abort()
-        }
+        return false
     }
     let oldBytes = v.capacity * elem
     let newBytes = newCap * elem
@@ -93,11 +92,35 @@ func ensureCapacity<T>(v: mut ref Vec<T>, minCap: uint): void {
         let nullp: ptr[u8] = nil
         let p = ar_vec_realloc(v.data as ptr[u8], oldBytes, newBytes)
         if p == nullp {
-            intrinsics.abort()
+            return false
         }
         v.data = p as ptr[T]
         v.capacity = newCap
     }
+    return true
+}
+
+/// Ensure absolute capacity ≥ `minCap`. Aborts if reallocation fails.
+func ensureCapacity<T>(v: mut ref Vec<T>, minCap: uint): void {
+    if !tryEnsureCapacity<T>(v, minCap) {
+        unsafe {
+            intrinsics.abort()
+        }
+    }
+}
+
+/// Fallible capacity reservation.
+///
+/// Reserves capacity for at least `additional` more elements beyond current `len`.
+/// Returns `true` on success, or `false` on OOM without aborting and preserving
+/// existing vector contents.
+public func tryReserve<T>(v: mut ref Vec<T>, additional: uint): bool {
+    let maxCap: uint = 2147483647
+    if additional > maxCap - v.len {
+        return false
+    }
+    let need = v.len + additional
+    return tryEnsureCapacity<T>(v, need)
 }
 
 /// Reserves capacity for at least `additional` more elements beyond current `len`.
@@ -112,14 +135,34 @@ func ensureCapacity<T>(v: mut ref Vec<T>, minCap: uint): void {
 /// # Complexity
 /// Time: O(n) reallocation | Space: O(capacity)
 public func reserve<T>(v: mut ref Vec<T>, additional: uint): void {
-    let maxCap: uint = 2147483647
-    if additional > maxCap - v.len {
+    if !tryReserve<T>(v, additional) {
         unsafe {
             intrinsics.abort()
         }
     }
-    let need = v.len + additional
-    ensureCapacity<T>(v, need)
+}
+
+/// Fallible element append.
+///
+/// Appends `value` to the end of the vector. Returns `true` on success.
+/// On allocation failure, returns `false` and leaves the vector intact.
+public func tryPush<T>(v: mut ref Vec<T>, value: T): bool {
+    let maxCap: uint = 2147483647
+    if v.len >= maxCap {
+        return false
+    }
+    let need = v.len + 1
+    if v.capacity < need {
+        if !tryEnsureCapacity<T>(v, need) {
+            return false
+        }
+    }
+    unsafe {
+        let dest = mem.ptrOffset<T>(v.data, v.len as i32)
+        mem.ptrWrite<T>(dest, value)
+    }
+    v.len = v.len + 1
+    return true
 }
 
 /// Appends `value` to the end of the vector.
@@ -134,21 +177,11 @@ public func reserve<T>(v: mut ref Vec<T>, additional: uint): void {
 /// # Complexity
 /// Time: Amortized O(1) | Space: O(1)
 public func push<T>(v: mut ref Vec<T>, value: T): void {
-    let maxCap: uint = 2147483647
-    if v.len >= maxCap {
+    if !tryPush<T>(v, value) {
         unsafe {
             intrinsics.abort()
         }
     }
-    let need = v.len + 1
-    if v.capacity < need {
-        ensureCapacity<T>(v, need)
-    }
-    unsafe {
-        let dest = mem.ptrOffset<T>(v.data, v.len as i32)
-        mem.ptrWrite<T>(dest, value)
-    }
-    v.len = v.len + 1
 }
 
 /// Removes and returns the last element, or `Option.None` if the vector is empty.
@@ -362,6 +395,16 @@ public func Vec.asSlice<T>(self: ref Vec<T>): []T {
 /// Reserves capacity for at least `additional` more elements.
 public func Vec.reserve<T>(self: mut ref Vec<T>, additional: uint): void {
     reserve(self, additional)
+}
+
+/// Fallible capacity reservation returning `true` on success, `false` on OOM.
+public func Vec.tryReserve<T>(self: mut ref Vec<T>, additional: uint): bool {
+    return tryReserve(self, additional)
+}
+
+/// Fallible element append returning `true` on success, `false` on OOM.
+public func Vec.tryPush<T>(self: mut ref Vec<T>, value: T): bool {
+    return tryPush(self, value)
 }
 
 /// Clears the vector, keeping allocated memory.

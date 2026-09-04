@@ -639,3 +639,112 @@ fn test_struct_generic_substitution() {
     assert_eq!(layout.field_offsets, vec![0]);
     assert_eq!(layout.size, 4);
 }
+
+#[test]
+fn test_target_32bit_vec_and_string_evidence() {
+    let interner = TypeInterner::new();
+
+    // Struct mimicking Vec[T] / String: { ptr, len: uint, cap: uint }
+    let struct_sym = SymbolId::new(0, 100);
+    let u8_tid = interner.intern(ArType::Primitive(Primitive::U8));
+    let ptr_u8_tid = interner.intern(ArType::Ptr(u8_tid));
+    let uint_tid = interner.intern(ArType::Primitive(Primitive::Uint));
+
+    let mut fields = FxHashMap::<String, TypeId>::default();
+    fields.insert("data".to_string(), ptr_u8_tid);
+    fields.insert("len".to_string(), uint_tid);
+    fields.insert("capacity".to_string(), uint_tid);
+
+    let mut field_indices = FxHashMap::<String, usize>::default();
+    field_indices.insert("data".to_string(), 0);
+    field_indices.insert("len".to_string(), 1);
+    field_indices.insert("capacity".to_string(), 2);
+
+    let mut fields_map = FxHashMap::<SymbolId, FxHashMap<String, TypeId>>::default();
+    fields_map.insert(struct_sym, fields);
+
+    let mut indices_map = FxHashMap::<SymbolId, FxHashMap<String, usize>>::default();
+    indices_map.insert(struct_sym, field_indices);
+
+    let provider = StructMockProvider {
+        fields: fields_map,
+        field_indices: indices_map,
+        generic_params: FxHashMap::default(),
+        enum_variants: FxHashMap::default(),
+    };
+
+    let struct_ty = ArType::Named(struct_sym, vec![]);
+    let struct_id = interner.intern(struct_ty);
+
+    // 64-bit target: ptr=8, uint=8, cap=8 -> size=24, align=8, offsets=[0, 8, 16]
+    let engine_64 = LayoutEngine::new(8);
+    let layout_64 = engine_64.layout_of(struct_id, &interner, &provider);
+    assert_eq!(layout_64.size, 24);
+    assert_eq!(layout_64.align, 8);
+    assert_eq!(layout_64.field_offsets, vec![0, 8, 16]);
+
+    // 32-bit generic target: ptr=4, uint=4, cap=4 -> size=12, align=4, offsets=[0, 4, 8]
+    let engine_32 = LayoutEngine::new(4);
+    let layout_32 = engine_32.layout_of(struct_id, &interner, &provider);
+    assert_eq!(layout_32.size, 12);
+    assert_eq!(layout_32.align, 4);
+    assert_eq!(layout_32.field_offsets, vec![0, 4, 8]);
+
+    // 32-bit i686 SysV target: size=12, align=4, offsets=[0, 4, 8]
+    let engine_i686 = LayoutEngine::from_data_layout(DataLayout::i686_sysv());
+    let layout_i686 = engine_i686.layout_of(struct_id, &interner, &provider);
+    assert_eq!(layout_i686.size, 12);
+    assert_eq!(layout_i686.align, 4);
+    assert_eq!(layout_i686.field_offsets, vec![0, 4, 8]);
+}
+
+#[test]
+fn test_target_32bit_mixed_alignment_evidence() {
+    let interner = TypeInterner::new();
+
+    // Struct with mixed types: { a: u8, b: u64, c: u32 }
+    let struct_sym = SymbolId::new(0, 101);
+    let u8_tid = interner.intern(ArType::Primitive(Primitive::U8));
+    let u64_tid = interner.intern(ArType::Primitive(Primitive::U64));
+    let u32_tid = interner.intern(ArType::Primitive(Primitive::U32));
+
+    let mut fields = FxHashMap::<String, TypeId>::default();
+    fields.insert("a".to_string(), u8_tid);
+    fields.insert("b".to_string(), u64_tid);
+    fields.insert("c".to_string(), u32_tid);
+
+    let mut field_indices = FxHashMap::<String, usize>::default();
+    field_indices.insert("a".to_string(), 0);
+    field_indices.insert("b".to_string(), 1);
+    field_indices.insert("c".to_string(), 2);
+
+    let mut fields_map = FxHashMap::<SymbolId, FxHashMap<String, TypeId>>::default();
+    fields_map.insert(struct_sym, fields);
+
+    let mut indices_map = FxHashMap::<SymbolId, FxHashMap<String, usize>>::default();
+    indices_map.insert(struct_sym, field_indices);
+
+    let provider = StructMockProvider {
+        fields: fields_map,
+        field_indices: indices_map,
+        generic_params: FxHashMap::default(),
+        enum_variants: FxHashMap::default(),
+    };
+
+    let struct_ty = ArType::Named(struct_sym, vec![]);
+    let struct_id = interner.intern(struct_ty);
+
+    // In 64-bit: a@0, pad 7, b@8, c@16, pad 4 -> size=24, align=8
+    let engine_64 = LayoutEngine::new(8);
+    let layout_64 = engine_64.layout_of(struct_id, &interner, &provider);
+    assert_eq!(layout_64.size, 24);
+    assert_eq!(layout_64.align, 8);
+    assert_eq!(layout_64.field_offsets, vec![0, 8, 16]);
+
+    // In i686 SysV (where u64 align is 4!): a@0, pad 3, b@4, c@12 -> size=16, align=4
+    let engine_i686 = LayoutEngine::from_data_layout(DataLayout::i686_sysv());
+    let layout_i686 = engine_i686.layout_of(struct_id, &interner, &provider);
+    assert_eq!(layout_i686.size, 16);
+    assert_eq!(layout_i686.align, 4);
+    assert_eq!(layout_i686.field_offsets, vec![0, 4, 12]);
+}

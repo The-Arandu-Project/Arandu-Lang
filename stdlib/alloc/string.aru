@@ -126,16 +126,17 @@ public func from(value: str): String {
     return s
 }
 
-/// Ensure capacity in bytes ≥ `minCap`.
-func ensureCapacity(s: mut ref String, minCap: uint): void {
+/// Attempts to ensure capacity in bytes ≥ `minCap`.
+///
+/// Returns `true` on success, or `false` on OOM or capacity overflow without
+/// modifying `s`.
+public func tryEnsureCapacity(s: mut ref String, minCap: uint): bool {
     let maxCap = maxBufferCapacity()
     if minCap > maxCap {
-        unsafe {
-            intrinsics.abort()
-        }
+        return false
     }
     if s.capacity >= minCap {
-        return
+        return true
     }
     let mut newCap: uint = s.capacity
     if newCap == 0 {
@@ -152,11 +153,34 @@ func ensureCapacity(s: mut ref String, minCap: uint): void {
         let nullp: ptr[u8] = nil
         let p = ar_vec_realloc(s.data, s.capacity, newCap)
         if p == nullp {
-            intrinsics.abort()
+            return false
         }
         s.data = p
         s.capacity = newCap
     }
+    return true
+}
+
+/// Ensure capacity in bytes ≥ `minCap`. Aborts if reallocation fails.
+func ensureCapacity(s: mut ref String, minCap: uint): void {
+    if !tryEnsureCapacity(s, minCap) {
+        unsafe {
+            intrinsics.abort()
+        }
+    }
+}
+
+/// Fallible byte capacity reservation.
+///
+/// Reserves capacity for at least `additional` more bytes beyond current `len`.
+/// Returns `true` on success, or `false` on OOM without aborting.
+public func tryReserve(s: mut ref String, additional: uint): bool {
+    let maxCap = maxBufferCapacity()
+    if additional > maxCap - s.len {
+        return false
+    }
+    let need = s.len + additional
+    return tryEnsureCapacity(s, need)
 }
 
 /// Returns the byte length of the String.
@@ -213,13 +237,11 @@ public func isEmpty(s: ref String): bool {
 /// # Complexity
 /// Time: O(n) reallocation | Space: O(capacity)
 public func reserve(s: mut ref String, additional: uint): void {
-    if additional > maxBufferCapacity() - s.len {
+    if !tryReserve(s, additional) {
         unsafe {
             intrinsics.abort()
         }
     }
-    let need = s.len + additional
-    ensureCapacity(s, need)
 }
 
 /// Appends a single Unicode scalar value (`char`) encoded as UTF-8 bytes (1 to 4 bytes).
@@ -360,6 +382,11 @@ public func String.asBytes(self: ref String): []u8 {
 /// Appends UTF-8 bytes to the String.
 public func String.pushStr(self: mut ref String, value: str): bool {
     return pushStr(self, value)
+}
+
+/// Fallible capacity reservation returning `true` on success, `false` on OOM.
+public func String.tryReserve(self: mut ref String, additional: uint): bool {
+    return tryReserve(self, additional)
 }
 
 /// Clears the String, retaining capacity.

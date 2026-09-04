@@ -621,3 +621,55 @@ func main(): int {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+#[test]
+fn run_vec_and_string_try_reserve_try_push() {
+    let dir = std::env::temp_dir();
+    let file = dir.join("arandu_cli_try_push.aru");
+    std::fs::write(
+        &file,
+        r#"
+module tests.cli.vec_try_push
+import std.alloc.vec as vec
+import std.alloc.string as string
+
+func main(): int {
+    let mut v = vec.new<int>()
+    if !vec.tryReserve<int>(v, 16) {
+        return 1
+    }
+    if !vec.tryPush<int>(v, 42) {
+        return 2
+    }
+    if !vec.tryPush<int>(v, 84) {
+        return 3
+    }
+    if vec.len<int>(v) != 2 {
+        return 4
+    }
+
+    let mut s = string.new()
+    if !string.tryReserve(s, 32) {
+        return 5
+    }
+    if !string.pushStr(s, "hello") {
+        return 6
+    }
+    if string.len(s) != 5 {
+        return 7
+    }
+
+    return 0
+}
+"#,
+    )
+    .unwrap();
+    let root = workspace_root();
+    let out = run_cli_in(&root, &["run", file.to_str().unwrap()]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "try_push: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
