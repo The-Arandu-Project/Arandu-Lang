@@ -297,6 +297,61 @@ fn jit_float_compare() {
 }
 
 #[test]
+fn jit_ieee754_nan_comparisons() {
+    let src = r#"
+    func cmp_eq(a: float, b: float): bool { return a == b; }
+    func cmp_ne(a: float, b: float): bool { return a != b; }
+    func cmp_lt(a: float, b: float): bool { return a < b; }
+    func cmp_gt(a: float, b: float): bool { return a > b; }
+    func cmp_le(a: float, b: float): bool { return a <= b; }
+    func cmp_ge(a: float, b: float): bool { return a >= b; }
+    "#;
+    let (amir, symbols, type_info) = compile_src(src);
+    let backend = backend_for_test();
+    let module = backend.compile(&amir, &symbols, &type_info).unwrap();
+    let nan = f64::NAN;
+    let one = 1.0;
+
+    unsafe {
+        let f_eq: unsafe fn(f64, f64) -> bool = module.get_fn("cmp_eq").unwrap();
+        let f_ne: unsafe fn(f64, f64) -> bool = module.get_fn("cmp_ne").unwrap();
+        let f_lt: unsafe fn(f64, f64) -> bool = module.get_fn("cmp_lt").unwrap();
+        let f_gt: unsafe fn(f64, f64) -> bool = module.get_fn("cmp_gt").unwrap();
+        let f_le: unsafe fn(f64, f64) -> bool = module.get_fn("cmp_le").unwrap();
+        let f_ge: unsafe fn(f64, f64) -> bool = module.get_fn("cmp_ge").unwrap();
+
+        // IEEE 754-2019: NaN compared to NaN
+        assert!(!f_eq(nan, nan), "nan == nan must be false");
+        assert!(f_ne(nan, nan), "nan != nan must be true");
+        assert!(!f_lt(nan, nan), "nan < nan must be false");
+        assert!(!f_gt(nan, nan), "nan > nan must be false");
+        assert!(!f_le(nan, nan), "nan <= nan must be false");
+        assert!(!f_ge(nan, nan), "nan >= nan must be false");
+
+        // IEEE 754-2019: NaN compared to ordered value
+        assert!(!f_eq(nan, one), "nan == 1.0 must be false");
+        assert!(f_ne(nan, one), "nan != 1.0 must be true");
+        assert!(!f_lt(nan, one), "nan < 1.0 must be false");
+        assert!(!f_gt(nan, one), "nan > 1.0 must be false");
+        assert!(!f_le(nan, one), "nan <= 1.0 must be false");
+        assert!(!f_ge(nan, one), "nan >= 1.0 must be false");
+
+        assert!(!f_eq(one, nan), "1.0 == nan must be false");
+        assert!(f_ne(one, nan), "1.0 != nan must be true");
+        assert!(!f_lt(one, nan), "1.0 < nan must be false");
+        assert!(!f_gt(one, nan), "1.0 > nan must be false");
+        assert!(!f_le(one, nan), "1.0 <= nan must be false");
+        assert!(!f_ge(one, nan), "1.0 >= nan must be false");
+
+        // Standard ordered comparisons
+        assert!(f_eq(one, 1.0), "1.0 == 1.0 must be true");
+        assert!(f_ne(one, 2.0), "1.0 != 2.0 must be true");
+        assert!(f_lt(one, 2.0), "1.0 < 2.0 must be true");
+        assert!(f_gt(2.0, one), "2.0 > 1.0 must be true");
+    }
+}
+
+#[test]
 fn jit_cross_function_call() {
     let src = r#"
     func helper(): int {
