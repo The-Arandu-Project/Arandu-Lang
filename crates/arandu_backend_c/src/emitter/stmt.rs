@@ -252,15 +252,52 @@ impl<'a> CEmitter<'a> {
             }
             AmirStmt::StorageLive(_) | AmirStmt::StorageDead(_) => {}
             AmirStmt::Destroy(place) => {
-                if place.projections.is_empty() {
-                    let ty = self.local_ty(func, place.local);
-                    let ty_id = func.locals[place.local.as_usize()].ty;
-                    if let Some((_, destructor)) = self.gen_drop_glue(ty_id, &ty) {
-                        let destructor =
-                            super::sanitize_c_ident(&self.symbols.get(destructor).name);
-                        let value = self.format_place(place, func);
-                        let _ = writeln!(&mut self.output, "    {destructor}({value});");
+                let local_ty = self.local_ty(func, place.local);
+                let mut current_ty = local_ty;
+                for proj in &place.projections {
+                    match proj {
+                        arandu_middle::amir::AmirProjection::Deref => {
+                            current_ty = match &current_ty {
+                                ArType::Ptr(inner)
+                                | ArType::Ref(inner)
+                                | ArType::RefMut(inner)
+                                | ArType::Nullable(inner) => self.interner.resolve(*inner),
+                                other => other.clone(),
+                            };
+                        }
+                        arandu_middle::amir::AmirProjection::Field(field_sym) => {
+                            let struct_ty = match &current_ty {
+                                ArType::Ptr(inner)
+                                | ArType::Ref(inner)
+                                | ArType::RefMut(inner)
+                                | ArType::Nullable(inner) => self.interner.resolve(*inner),
+                                other => other.clone(),
+                            };
+                            let struct_id = match &struct_ty {
+                                ArType::Named(id, _) => *id,
+                                _ => arandu_middle::SymbolId::DUMMY,
+                            };
+                            let field_name = self
+                                .symbols
+                                .get(*field_sym)
+                                .name
+                                .rsplit('.')
+                                .next()
+                                .unwrap_or("");
+                            if let Some(fields) = self.provider.get_struct_fields(struct_id)
+                                && let Some(&field_ty_id) = fields.get(field_name)
+                            {
+                                current_ty = self.interner.resolve(field_ty_id);
+                            }
+                        }
+                        arandu_middle::amir::AmirProjection::Index(_) => {}
                     }
+                }
+                let ty_id = self.interner.intern(current_ty.clone());
+                if let Some((_, destructor)) = self.gen_drop_glue(ty_id, &current_ty) {
+                    let destructor = super::sanitize_c_ident(&self.symbols.get(destructor).name);
+                    let value = self.format_place(place, func);
+                    let _ = writeln!(&mut self.output, "    {destructor}({value});");
                 }
             }
             AmirStmt::Nop => {}

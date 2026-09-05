@@ -338,9 +338,10 @@ fn is_borrowed_at_entry_matches_block_in() {
 
 #[test]
 fn tuple_carrier_and_projection_preserve_structural_holder() {
-    let int = intern_ty(ArType::Primitive(Primitive::Int));
-    let ref_int = intern_ty(ArType::Ref(int));
-    let tuple_ty = intern_ty(ArType::Tuple(vec![ref_int, int]));
+    let interner = TypeInterner::new();
+    let int = interner.intern(ArType::Primitive(Primitive::Int));
+    let ref_int = interner.intern(ArType::Ref(int));
+    let tuple_ty = interner.intern(ArType::tuple(&[ref_int, int], &interner));
     let mut stmts = AmirStmtTable::new();
     stmts.push(AmirStmt::Assign {
         lhs: TempId::from_usize(0),
@@ -528,9 +529,10 @@ fn overwrite_kills_only_the_destination_holder_state() {
 
 #[test]
 fn call_summary_composes_result_and_parameter_paths() {
-    let int = intern_ty(ArType::Primitive(Primitive::Int));
-    let ref_int = intern_ty(ArType::Ref(int));
-    let tuple_ty = intern_ty(ArType::Tuple(vec![ref_int]));
+    let interner = TypeInterner::new();
+    let int = interner.intern(ArType::Primitive(Primitive::Int));
+    let ref_int = interner.intern(ArType::Ref(int));
+    let tuple_ty = interner.intern(ArType::tuple(&[ref_int], &interner));
     let mut stmts = AmirStmtTable::new();
     stmts.push(AmirStmt::Assign {
         lhs: TempId::from_usize(0),
@@ -542,7 +544,7 @@ fn call_summary_composes_result_and_parameter_paths() {
         args: smallvec![AmirOperand::Copy(TempId::from_usize(0))],
         return_borrow: Some(ReturnBorrowSummary {
             dependencies: vec![ReturnBorrowDependency {
-                result_path: BorrowPath(vec![BorrowPathSegment::Tuple(0)]),
+                result_path: BorrowPath(smallvec![BorrowPathSegment::Tuple(0)]),
                 sources: vec![BorrowSource {
                     parameter_index: 0,
                     parameter_path: BorrowPath::root(),

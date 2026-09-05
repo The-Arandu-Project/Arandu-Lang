@@ -104,7 +104,10 @@ fn o003_shared_while_exclusive() {
 fn o002_move_while_borrowed() {
     let int = intern(ArType::Primitive(Primitive::Int));
     // Non-copy local of a "struct" so Move matters — use Named non-copy.
-    let named = intern(ArType::Named(SymbolId::new(0, 1), vec![]));
+    let named = intern(ArType::Named(
+        SymbolId::new(0, 1),
+        crate::hir::IndexRange::empty(),
+    ));
     let mut stmts = AmirStmtTable::new();
     // t0 = &s0
     stmts.push(AmirStmt::Assign {

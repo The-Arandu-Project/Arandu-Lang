@@ -727,7 +727,7 @@ mod tests {
         let interner = TypeInterner::new();
         let int = interner.intern(ArType::Primitive(Primitive::Int));
         let ref_int = interner.intern(ArType::Ref(int));
-        let struct_ty = interner.intern(ArType::Named(SymbolId::new(0, 1), vec![]));
+        let struct_ty = interner.intern(ArType::named(SymbolId::new(0, 1), &[], &interner));
         let void = interner.intern(ArType::Void);
 
         let mut stmts = AmirStmtTable::new();

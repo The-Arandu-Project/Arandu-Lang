@@ -177,7 +177,7 @@ fn option_carrier_publishes_a_structural_result_path() {
     assert_eq!(summary.dependencies.len(), 1);
     assert_eq!(
         summary.dependencies[0].result_path,
-        BorrowPath(vec![arandu_middle::types::BorrowPathSegment::OptionSome])
+        BorrowPath::from(vec![arandu_middle::types::BorrowPathSegment::OptionSome])
     );
     assert_eq!(
         summary.dependencies[0]

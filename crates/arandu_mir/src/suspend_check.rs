@@ -93,7 +93,7 @@ mod tests {
         let interner = TypeInterner::new();
         let int = interner.intern(ArType::Primitive(Primitive::Int));
         let ref_int = interner.intern(ArType::Ref(int));
-        let tuple = interner.intern(ArType::Tuple(vec![ref_int]));
+        let tuple = interner.intern(ArType::tuple(&[ref_int], &interner));
         let coroutine = interner.intern(ArType::Coroutine(int));
         let mut stmts = AmirStmtTable::new();
         stmts.push(AmirStmt::Assign {

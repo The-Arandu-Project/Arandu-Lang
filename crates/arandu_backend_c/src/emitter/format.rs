@@ -149,7 +149,7 @@ impl<'a> CEmitter<'a> {
             }
             ArType::Tuple(tys) => {
                 let mut name = "ArType_Tuple".to_string();
-                for &t in tys {
+                for &t in self.interner.type_args(*tys).iter() {
                     name.push('_');
                     name.push_str(&self.format_type(&self.interner.resolve(t)));
                 }
@@ -157,7 +157,7 @@ impl<'a> CEmitter<'a> {
             }
             ArType::Func(params, ret) => {
                 let mut name = "ArFunc".to_string();
-                for &p in params {
+                for &p in self.interner.type_args(*params).iter() {
                     name.push('_');
                     name.push_str(&self.format_type(&self.interner.resolve(p)));
                 }
@@ -230,11 +230,14 @@ impl<'a> CEmitter<'a> {
                 }
                 AmirProjection::Index(index_op) => {
                     let is_vec = arandu_middle::types::is_vec_type(&current_ty, self.symbols);
-                    let elem_ty =
-                        match arandu_middle::types::index_elem_type(&current_ty, self.symbols) {
-                            Some(id) => self.interner.resolve(id),
-                            None => ArType::Error,
-                        };
+                    let elem_ty = match arandu_middle::types::index_elem_type(
+                        &current_ty,
+                        self.symbols,
+                        self.interner,
+                    ) {
+                        Some(id) => self.interner.resolve(id),
+                        None => ArType::Error,
+                    };
                     let elem_c_ty = self.format_type(&elem_ty);
                     let index_str = self.format_operand(index_op, func);
 

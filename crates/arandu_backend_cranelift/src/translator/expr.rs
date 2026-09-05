@@ -311,7 +311,11 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
 
                 let pointer_width = self.ptr_type.bytes() as u64;
                 let struct_ty = expected_ar_type.cloned().unwrap_or_else(|| {
-                    arandu_semantics::types::ArType::Named(*struct_symbol, Vec::new())
+                    arandu_semantics::types::ArType::named(
+                        *struct_symbol,
+                        &[],
+                        &self.type_info.type_interner,
+                    )
                 });
                 let layout = self.checked_layout(&struct_ty);
 
@@ -399,7 +403,10 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                         );
                     } else {
                         let elem_ty = match &tuple_ty {
-                            ArType::Tuple(tids) => tids
+                            ArType::Tuple(tids) => self
+                                .type_info
+                                .type_interner
+                                .type_args(*tids)
                                 .get(i)
                                 .map(|&tid| self.type_info.type_interner.resolve(tid))
                                 .unwrap_or(ArType::Error),
@@ -712,7 +719,13 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                             ptr_val,
                             0,
                         );
-                        self.type_info.resolve_type_id(args[0])
+                        self.type_info
+                            .type_interner
+                            .type_args(*args)
+                            .first()
+                            .copied()
+                            .map(|tid| self.type_info.resolve_type_id(tid))
+                            .unwrap_or(ArType::Error)
                     }
                     _ => ArType::Error,
                 };

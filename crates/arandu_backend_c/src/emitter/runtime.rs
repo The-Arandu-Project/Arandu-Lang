@@ -275,6 +275,12 @@ static ArStr ar_str_concat(ArStr a, ArStr b) {{
     buf[total] = 0;
     return ar_str_pack(buf, total);
 }}
+static {len_c_ty} ar_str_eq(ArStr a, ArStr b) {{
+    if (a.len != b.len) return 0;
+    if (a.len <= 0) return 1;
+    if (!a.ptr || !b.ptr) return a.ptr == b.ptr ? 1 : 0;
+    return memcmp(a.ptr, b.ptr, (size_t)a.len) == 0 ? 1 : 0;
+}}
 static {len_c_ty} ar_str_starts_with(ArStr s, ArStr p) {{
     if (p.len <= 0) return 1;
     if (s.len < p.len || !s.ptr || !p.ptr) return 0;
@@ -399,6 +405,10 @@ static inline void* ar_co_await_ptr(uint8_t* aw) {{
         let _ = writeln!(&mut self.output, "#include <stdbool.h>");
         let _ = writeln!(&mut self.output, "#include <stdlib.h>");
         let _ = writeln!(&mut self.output, "#include <string.h>");
+        let _ = writeln!(
+            &mut self.output,
+            "#if defined(__GNUC__) || defined(__clang__)\n#define AR_MAY_ALIAS __attribute__((__may_alias__))\n#else\n#define AR_MAY_ALIAS\n#endif"
+        );
         if needs_str {
             let _ = writeln!(&mut self.output, "#include <stdarg.h>");
             let _ = writeln!(&mut self.output, "#include <stdio.h>");

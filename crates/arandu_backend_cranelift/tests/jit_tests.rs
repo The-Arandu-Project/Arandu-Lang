@@ -1389,7 +1389,7 @@ fn jit_gen_insert_get_copy_tuple() {
 
     let interner = TypeInterner::new();
     let int_ty = interner.intern(ArType::Primitive(Primitive::Int));
-    let tuple_ty = interner.intern(ArType::Tuple(vec![int_ty, int_ty]));
+    let tuple_ty = interner.intern(ArType::tuple(&[int_ty, int_ty], &interner));
     let gen_ty = interner.intern(ArType::GenRef);
 
     let mut stmts = AmirStmtTable::new();
@@ -1497,10 +1497,9 @@ fn jit_gen_insert_get_copy_tuple() {
         literal_pool: pool,
         extern_funcs: Default::default(),
     };
-    let type_info = {
-        let mut ti = arandu_semantics::TypeInfo::default();
-        ti.type_interner = interner;
-        ti
+    let type_info = arandu_semantics::TypeInfo {
+        type_interner: interner,
+        ..Default::default()
     };
     let backend = backend_for_test();
     let module = backend
@@ -1634,10 +1633,9 @@ fn jit_vec_legacy_handle_len_abi() {
         literal_pool: pool,
         extern_funcs: Default::default(),
     };
-    let type_info = {
-        let mut ti = arandu_semantics::TypeInfo::default();
-        ti.type_interner = interner;
-        ti
+    let type_info = arandu_semantics::TypeInfo {
+        type_interner: interner,
+        ..Default::default()
     };
     let backend = backend_for_test();
     let module = backend

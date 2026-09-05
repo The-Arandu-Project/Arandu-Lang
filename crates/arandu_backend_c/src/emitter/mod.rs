@@ -113,9 +113,10 @@ impl<'a> CEmitter<'a> {
         if generic_args.is_empty() {
             return field_ty;
         }
+        let generic_args_vec = self.interner.type_args(*generic_args);
         let substitution = build_subst_ids(
             self.symbols.type_params_of(*struct_id),
-            generic_args,
+            &generic_args_vec,
             self.interner,
         );
         substitute_type(&field_ty, &substitution, self.interner)

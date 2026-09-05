@@ -740,7 +740,12 @@ pub fn lower_amir(db: &dyn ArandCompilerDb, file: SourceFile) -> HashEq<LowerAmi
             &hir,
             pointer_width,
         ) {
-            Ok(a) => a,
+            Ok((a, diags)) => {
+                for diag in diags {
+                    arandu_middle::db::DiagnosticsAccumulator(diag).accumulate(db);
+                }
+                a
+            }
             Err(diags) => {
                 for diag in diags {
                     arandu_middle::db::DiagnosticsAccumulator(diag).accumulate(db);

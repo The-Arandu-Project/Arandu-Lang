@@ -136,7 +136,9 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 let inner_ty_id = match &current_ty {
                     ArType::Ptr(inner) | ArType::Slice(inner) | ArType::Array(_, inner) => *inner,
                     ArType::Ref(inner) | ArType::RefMut(inner) => *inner,
-                    ArType::Named(_, args) if is_vec => args[0],
+                    ArType::Named(_, args) if is_vec => {
+                        self.type_info.type_interner.type_args(*args)[0]
+                    }
                     _ => {
                         self.record_ice(
                             "indexing non-indexable type in codegen",
@@ -230,6 +232,56 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
         }
         *current_ty = ArType::Error;
         offset
+    }
+
+    pub(crate) fn place_ar_ty(&self, place: &AmirPlace) -> ArType {
+        let mut current_ty = self.local_ar_ty(place.local);
+        for proj in &place.projections {
+            match proj {
+                AmirProjection::Deref => {
+                    current_ty = unwrap_ptr_like(&current_ty, self);
+                }
+                AmirProjection::Field(symbol_id) => {
+                    if matches!(
+                        current_ty,
+                        ArType::Ptr(_) | ArType::Ref(_) | ArType::RefMut(_) | ArType::Nullable(_)
+                    ) {
+                        current_ty = unwrap_ptr_like(&current_ty, self);
+                    }
+                    let struct_ty = current_ty.clone();
+                    let field_name = &self.symbol_table.get(*symbol_id).name;
+                    if let ArType::Named(sid, _) = &struct_ty
+                        && let Some(fields) = self.type_info.struct_fields.get(sid)
+                        && let Some(&tid) = fields.get(field_name.as_str())
+                    {
+                        current_ty = self.type_info.resolve_type_id(tid);
+                    } else {
+                        return ArType::Error;
+                    }
+                }
+                AmirProjection::Index(_) => {
+                    if matches!(
+                        current_ty,
+                        ArType::Ptr(_) | ArType::Ref(_) | ArType::RefMut(_) | ArType::Nullable(_)
+                    ) {
+                        current_ty = unwrap_ptr_like(&current_ty, self);
+                    }
+                    let is_vec = is_vec_type(&current_ty, self.symbol_table);
+                    let inner_ty_id = match &current_ty {
+                        ArType::Ptr(inner) | ArType::Slice(inner) | ArType::Array(_, inner) => {
+                            *inner
+                        }
+                        ArType::Ref(inner) | ArType::RefMut(inner) => *inner,
+                        ArType::Named(_, args) if is_vec => {
+                            self.type_info.type_interner.type_args(*args)[0]
+                        }
+                        _ => return ArType::Error,
+                    };
+                    current_ty = self.type_info.resolve_type_id(inner_ty_id);
+                }
+            }
+        }
+        current_ty
     }
 }
 

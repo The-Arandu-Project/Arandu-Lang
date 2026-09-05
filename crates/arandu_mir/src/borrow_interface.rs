@@ -469,7 +469,7 @@ fn aggregate_origins(
 
 fn prefix_origins(output: &mut Origins, input: &Origins, segment: BorrowPathSegment) {
     for (path, origins) in input {
-        let mut prefixed = Vec::with_capacity(path.0.len() + 1);
+        let mut prefixed = smallvec::SmallVec::with_capacity(path.0.len() + 1);
         prefixed.push(segment.clone());
         prefixed.extend(path.0.iter().cloned());
         output
@@ -484,7 +484,12 @@ fn strip_prefix(input: &Origins, segment: &BorrowPathSegment) -> Origins {
     for (path, origins) in input {
         if path.0.first() == Some(segment) {
             output
-                .entry(BorrowPath(path.0[1..].to_vec()))
+                .entry(BorrowPath(path.0[1..].into()))
+                .or_default()
+                .extend(origins.iter().cloned());
+        } else if path.0.is_empty() {
+            output
+                .entry(BorrowPath::root())
                 .or_default()
                 .extend(origins.iter().cloned());
         }
@@ -508,7 +513,11 @@ fn field_name(
     type_id: crate::types::TypeId,
     index: usize,
 ) -> Option<smol_str::SmolStr> {
-    let ArType::Named(symbol, _) = type_info.type_interner.resolve(type_id) else {
+    let mut resolved = type_info.type_interner.resolve(type_id);
+    while let ArType::Ref(inner) | ArType::RefMut(inner) = resolved {
+        resolved = type_info.type_interner.resolve(inner);
+    }
+    let ArType::Named(symbol, _) = resolved else {
         return None;
     };
     type_info

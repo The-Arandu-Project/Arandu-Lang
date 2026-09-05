@@ -81,31 +81,37 @@ impl LowerCtx<'_> {
             ));
         };
 
-        let mut variant_tag = None;
-        let mut found_variant_symbol = None;
-        for &decl_id in &self.hir.decls {
-            let decl = self.hir.pool.decl(decl_id);
-            if let HirDecl::Enum(hir_enum) = decl
-                && hir_enum.symbol == type_symbol
-            {
-                for (index, v) in self
-                    .hir
-                    .pool
-                    .enum_variants_list(hir_enum.variants)
-                    .iter()
-                    .enumerate()
-                {
-                    if symbols.get(v.symbol).name == variant {
-                        variant_tag = Some(index);
-                        found_variant_symbol = Some(v.symbol);
-                        break;
+        let tag_value = self
+            .tc
+            .type_info
+            .enum_variant_tags
+            .get(&variant_symbol_id)
+            .copied()
+            .or_else(|| {
+                for &decl_id in &self.hir.decls {
+                    let decl = self.hir.pool.decl(decl_id);
+                    if let HirDecl::Enum(hir_enum) = decl
+                        && hir_enum.symbol == type_symbol
+                    {
+                        for (index, v) in self
+                            .hir
+                            .pool
+                            .enum_variants_list(hir_enum.variants)
+                            .iter()
+                            .enumerate()
+                        {
+                            if v.symbol == variant_symbol_id
+                                || symbols.get(v.symbol).name.rsplit('.').next() == Some(variant)
+                            {
+                                return Some(index);
+                            }
+                        }
                     }
                 }
-                break;
-            }
-        }
+                None
+            });
 
-        let Some(tag_value) = variant_tag else {
+        let Some(tag_value) = tag_value else {
             return Err(Diagnostic::error(
                 DiagCode::T018UndefinedField,
                 format!("variant '{variant}' tag not found on enum '{enum_name}'"),
@@ -130,7 +136,7 @@ impl LowerCtx<'_> {
         if payload.is_empty() {
             Ok(AmirOperand::Copy(tag_matches))
         } else {
-            let variant_symbol_actual = found_variant_symbol.unwrap_or(variant_symbol_id);
+            let variant_symbol_actual = variant_symbol_id;
             let shape_opt = self.tc.type_info.enum_variants.get(&variant_symbol_actual);
             let Some((_, crate::passes::type_checker::EnumPayloadShape::Tuple(tids))) = shape_opt
             else {
@@ -499,7 +505,11 @@ impl LowerCtx<'_> {
                 let pat_ids = self.hir.pool.pattern_list(*items);
                 let item_tys: Vec<ArType> = if let ArType::Tuple(tys) = scrutinee_ty {
                     let interner = &self.tc.type_info.type_interner;
-                    tys.iter().map(|&tid| interner.resolve(tid)).collect()
+                    interner
+                        .type_args(tys)
+                        .iter()
+                        .map(|&tid| interner.resolve(tid))
+                        .collect()
                 } else {
                     vec![ArType::Error; pat_ids.len()]
                 };

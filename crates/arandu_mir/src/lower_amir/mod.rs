@@ -48,7 +48,10 @@ pub fn lower_to_amir(
     pointer_width: u64,
 ) -> Result<AmirProgram, Vec<Diagnostic>> {
     let mut owned = tc.clone();
-    lower_to_amir_with_interfaces(&mut owned, hir, pointer_width)
+    match lower_to_amir_with_interfaces(&mut owned, hir, pointer_width) {
+        Ok((program, _)) => Ok(program),
+        Err(diags) => Err(diags),
+    }
 }
 
 /// Lower AMIR and publish flow-derived borrow interfaces back into `tc`.
@@ -64,7 +67,7 @@ pub fn lower_to_amir_with_interfaces(
     tc: &mut TypeCheckResult,
     hir: &HirProgram,
     pointer_width: u64,
-) -> Result<AmirProgram, Vec<Diagnostic>> {
+) -> Result<(AmirProgram, Vec<Diagnostic>), Vec<Diagnostic>> {
     if tc.diagnostics.iter().any(|d| d.severity == Severity::Error) {
         return Err(tc.diagnostics.clone());
     }
@@ -107,7 +110,8 @@ pub fn lower_to_amir_with_interfaces(
         }
     }
 
-    if diagnostics.is_empty() {
+    let has_errors = diagnostics.iter().any(|d| d.severity == Severity::Error);
+    if !has_errors {
         let mut extern_funcs = rustc_hash::FxHashMap::default();
         for sym in tc.symbols.iter() {
             if sym.kind == arandu_middle::SymbolKind::ExternFunc
@@ -115,7 +119,10 @@ pub fn lower_to_amir_with_interfaces(
             {
                 let ty = tc.type_info.type_interner.resolve(ty_id);
                 if let arandu_middle::types::ArType::Func(params, ret) = ty {
-                    let param_types: Vec<_> = params
+                    let param_types: Vec<_> = tc
+                        .type_info
+                        .type_interner
+                        .type_args(params)
                         .iter()
                         .map(|&p| tc.type_info.type_interner.resolve(p))
                         .collect();
@@ -185,8 +192,9 @@ pub fn lower_to_amir_with_interfaces(
             );
         }
 
-        if diagnostics.is_empty() {
-            Ok(program)
+        let has_errors = diagnostics.iter().any(|d| d.severity == Severity::Error);
+        if !has_errors {
+            Ok((program, diagnostics))
         } else {
             Err(diagnostics)
         }

@@ -10,7 +10,7 @@ use crate::passes::type_checker::types::{ArType, Primitive};
 use smallvec::smallvec;
 
 fn non_copy_ty() -> ArType {
-    ArType::Named(crate::SymbolId::new(0, 0), Vec::new())
+    ArType::Named(crate::SymbolId::new(0, 0), crate::hir::IndexRange::empty())
 }
 
 fn int_ty() -> ArType {

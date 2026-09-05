@@ -317,25 +317,29 @@ impl LowerCtx<'_> {
                     })
                 }?;
                 if let Some(dest) = target {
-                    let lookup_bare = symbols
-                        .get(*member_symbol)
-                        .name
-                        .rsplit('.')
-                        .next()
-                        .unwrap_or("");
-                    let already_assigned =
-                        self.tc
-                            .type_info
-                            .enum_variant_tags
-                            .contains_key(member_symbol)
-                            || self.tc.type_info.enum_variants.iter().any(
-                                |(v_sym, (parent, _))| {
-                                    *parent == *type_symbol
-                                        && symbols.get(*v_sym).name.rsplit('.').next().unwrap_or("")
-                                            == lookup_bare
-                                        && self.tc.type_info.enum_variant_tags.contains_key(v_sym)
-                                },
-                            );
+                    let lookup_bare = self
+                        .tc
+                        .type_info
+                        .enum_variant_name(symbols, *member_symbol)
+                        .unwrap_or_else(|| {
+                            symbols
+                                .try_get(*member_symbol)
+                                .map(|s| s.name.rsplit('.').next().unwrap_or("").to_string())
+                                .unwrap_or_default()
+                        });
+                    let already_assigned = self
+                        .tc
+                        .type_info
+                        .enum_variant_tags
+                        .contains_key(member_symbol)
+                        || (!lookup_bare.is_empty()
+                            && self
+                                .tc
+                                .type_info
+                                .enum_variant_by_name(symbols, *type_symbol, &lookup_bare)
+                                .is_some_and(|(canon_id, _, _)| {
+                                    self.tc.type_info.enum_variant_tags.contains_key(&canon_id)
+                                }));
                     if !already_assigned {
                         let rhs = self.consume_operand(op)?;
                         self.emit_assign_temp(dest, AmirRvalue::Use(rhs));
@@ -536,10 +540,13 @@ impl LowerCtx<'_> {
                                 item_ops.push(self.lower_expr(arg, None, symbols)?);
                             }
                             let param_tys = match self.resolve_ty(callee_expr.ty) {
-                                ArType::Func(params, _) => params,
+                                ArType::Func(params, _) => {
+                                    self.tc.type_info.type_interner.type_args(params)
+                                }
                                 _ => vec![],
                             };
-                            let tuple_ty = ArType::Tuple(param_tys);
+                            let tuple_ty =
+                                ArType::tuple(&param_tys, &self.tc.type_info.type_interner);
                             let dest_tuple = self.new_temp(tuple_ty);
                             self.emit_assign_temp(
                                 dest_tuple,
@@ -626,12 +633,20 @@ impl LowerCtx<'_> {
                 // Method calls: HIR already includes the receiver as arg 0 when
                 // typeck rewrites `obj.m(a)` → Call(Field(m), [obj, a]). Only inject
                 // `base` when args are short of the formal arity (legacy / incomplete HIR).
-                let formal_params: Vec<ArType> = match self.resolve_ty(callee_expr.ty) {
-                    ArType::Func(params, _) => {
-                        params.iter().map(|&id| self.resolve_ty(id)).collect()
-                    }
-                    _ => Vec::new(),
-                };
+                let callee_resolved_ty = self.resolve_ty(callee_expr.ty);
+                let callee_decl_ty = callee_symbol.and_then(|sym| self.tc.type_info.decl_type(sym));
+                let formal_params: Vec<ArType> =
+                    match callee_decl_ty.as_ref().unwrap_or(&callee_resolved_ty) {
+                        ArType::Func(params, _) => self
+                            .tc
+                            .type_info
+                            .type_interner
+                            .type_args(*params)
+                            .iter()
+                            .map(|&id| self.resolve_ty(id))
+                            .collect(),
+                        _ => Vec::new(),
+                    };
                 let mut arg_ops = Vec::with_capacity(args_slice.len() + 1);
                 let inject_receiver = method_target.is_some()
                     && !formal_params.is_empty()
@@ -1122,11 +1137,14 @@ impl LowerCtx<'_> {
                 );
                 Ok(AmirOperand::Copy(dest))
             }
-            HirExprKind::UnsafeBlock { .. } => Err(amir_unsupported(
-                expr.span,
-                "unsafe block expression",
-                "v0.2 UNSAFE: unsafe legality and lowering",
-            )),
+            HirExprKind::UnsafeBlock { block } => {
+                let dest = match target {
+                    Some(t) => t,
+                    None => self.new_temp_id(expr.ty),
+                };
+                self.lower_block_as_expr(*block, Some(dest), symbols)?;
+                Ok(AmirOperand::Copy(dest))
+            }
             HirExprKind::Error => {
                 let dest = self.new_temp(ArType::Error);
                 Ok(AmirOperand::Copy(dest))
