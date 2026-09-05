@@ -42,12 +42,17 @@ impl TypeArgsPool {
         if args.is_empty() {
             return IndexRange::empty();
         }
+        debug_assert!(args.len() <= u32::MAX as usize, "type args list overflow");
         if let Some(&start) = self.seen.get(args) {
             return IndexRange {
                 start,
                 len: args.len() as u32,
             };
         }
+        debug_assert!(
+            self.args.len() <= u32::MAX as usize,
+            "type args pool overflow"
+        );
         let start = self.args.len() as u32;
         self.args.extend_from_slice(args);
         self.seen.insert(args.to_vec(), start);
