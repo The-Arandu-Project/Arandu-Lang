@@ -1,17 +1,25 @@
 use super::primitive::Primitive;
 use super::type_interner::{TypeId, TypeInterner};
+use crate::hir::pool::IndexRange;
 use crate::{SymbolId, SymbolTable};
 
+/// Canonical internal type representation.
+///
+/// Variants that carry type-argument lists (`Named`, `Func`, `Tuple`) use
+/// `IndexRange` (8 bytes) instead of `Vec<TypeId>` (24+ bytes). The actual
+/// `TypeId` data lives in the `TypeInterner`'s contiguous `TypeArgsPool`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ArType {
     /// Primitive types: int, float, bool, str, ...\
     Primitive(Primitive),
 
     /// Named type with optional generic arguments: `User`, `List<int>`
-    Named(SymbolId, Vec<TypeId>),
+    /// The `IndexRange` points into `TypeInterner::type_args_pool`.
+    Named(SymbolId, IndexRange),
 
     /// Function type: func(int, str) bool
-    Func(Vec<TypeId>, TypeId),
+    /// The `IndexRange` points into `TypeInterner::type_args_pool`.
+    Func(IndexRange, TypeId),
 
     /// Nullable wrapper: str?
     Nullable(TypeId),
@@ -36,7 +44,8 @@ pub enum ArType {
     GenRef,
 
     /// Multi-value tuple (non-`Result` returns only)
-    Tuple(Vec<TypeId>),
+    /// The `IndexRange` points into `TypeInterner::type_args_pool`.
+    Tuple(IndexRange),
 
     /// `Result<T, E>` — canonical success/error type
     Result(TypeId, TypeId),
@@ -71,6 +80,38 @@ pub enum ArType {
     /// Poison type — operations on Error never produce new errors.
     /// This is the key to preventing cascading error messages.
     Error,
+}
+
+impl ArType {
+    /// Construct a `Named` type, pushing generic args into the interner's pool.
+    pub fn named(sym: SymbolId, args: &[TypeId], interner: &TypeInterner) -> Self {
+        let range = interner.push_type_args(args);
+        ArType::Named(sym, range)
+    }
+
+    /// Construct a `Func` type, pushing param types into the interner's pool.
+    pub fn func(params: &[TypeId], ret: TypeId, interner: &TypeInterner) -> Self {
+        let range = interner.push_type_args(params);
+        ArType::Func(range, ret)
+    }
+
+    /// Construct a `Tuple` type, pushing element types into the interner's pool.
+    pub fn tuple(elems: &[TypeId], interner: &TypeInterner) -> Self {
+        let range = interner.push_type_args(elems);
+        ArType::Tuple(range)
+    }
+
+    /// Borrow the type arguments for this variant from the interner's pool.
+    /// Returns empty vec for non-argument-carrying variants.
+    #[must_use]
+    pub fn type_args(&self, interner: &TypeInterner) -> Vec<TypeId> {
+        match self {
+            ArType::Named(_, range) | ArType::Func(range, _) | ArType::Tuple(range) => {
+                interner.type_args(*range)
+            }
+            _ => Vec::new(),
+        }
+    }
 }
 
 impl ArType {
@@ -173,14 +214,12 @@ impl ArType {
         match self {
             ArType::Primitive(p) => p.to_string(),
             ArType::Named(id, args) => {
-                // Multi-module: type args may reference SymbolIds from imported files
-                // that are not always present in the *local* SymbolTable. Never ICE in
-                // diagnostic display (W2 residual: ICE on missing symbol while printing).
                 let name = symbols.try_get(*id).map(|s| s.name.as_str()).unwrap_or("?");
-                if args.is_empty() {
+                let arg_tys = interner.type_args(*args);
+                if arg_tys.is_empty() {
                     name.to_string()
                 } else {
-                    let args_str: Vec<String> = args
+                    let args_str: Vec<String> = arg_tys
                         .iter()
                         .map(|&a| interner.resolve(a).display(symbols, interner))
                         .collect();
@@ -188,7 +227,8 @@ impl ArType {
                 }
             }
             ArType::Func(params, ret) => {
-                let params_str: Vec<String> = params
+                let param_tys = interner.type_args(*params);
+                let params_str: Vec<String> = param_tys
                     .iter()
                     .map(|&p| interner.resolve(p).display(symbols, interner))
                     .collect();
@@ -226,8 +266,9 @@ impl ArType {
                 format!("mut ref {}", inner_str)
             }
             ArType::GenRef => "GenRef".to_string(),
-            ArType::Tuple(types) => {
-                let parts: Vec<String> = types
+            ArType::Tuple(range) => {
+                let type_tys = interner.type_args(*range);
+                let parts: Vec<String> = type_tys
                     .iter()
                     .map(|&t| interner.resolve(t).display(symbols, interner))
                     .collect();
@@ -445,13 +486,13 @@ mod tests {
         assert!(!ArType::Error.is_to_str_v01());
         let interner = new_interner();
         let int_id = interner.intern(ArType::Primitive(Primitive::Int));
-        assert!(!ArType::Named(crate::SymbolId::new(0, 1), vec![]).is_to_str_v01());
+        assert!(!ArType::Named(crate::SymbolId::new(0, 1), IndexRange::empty()).is_to_str_v01());
         assert!(!ArType::Slice(int_id).is_to_str_v01());
         assert!(!ArType::Ptr(int_id).is_to_str_v01());
         assert!(!ArType::Array(4, int_id).is_to_str_v01());
         assert!(!ArType::Option(int_id).is_to_str_v01());
         assert!(!ArType::Result(int_id, int_id).is_to_str_v01());
-        assert!(!ArType::Func(vec![int_id], int_id).is_to_str_v01());
+        assert!(!ArType::func(&[int_id], int_id, &interner).is_to_str_v01());
     }
 
     // ── default_literal ──
@@ -549,13 +590,13 @@ mod tests {
 
     #[test]
     fn named_func_slice_array_tuple_are_not_copy() {
-        assert!(!ArType::Named(SymbolId::new(0, 1), vec![]).is_copy_v01());
+        assert!(!ArType::Named(SymbolId::new(0, 1), IndexRange::empty()).is_copy_v01());
         let i = new_interner();
         let int = i.intern(ArType::Primitive(Primitive::Int));
-        assert!(!ArType::Func(vec![int], int).is_copy_v01());
+        assert!(!ArType::func(&[int], int, &i).is_copy_v01());
         assert!(ArType::Slice(int).is_copy_v01());
         assert!(!ArType::Array(3, int).is_copy_v01());
-        assert!(!ArType::Tuple(vec![int]).is_copy_v01());
+        assert!(!ArType::tuple(&[int], &i).is_copy_v01());
         assert!(!ArType::Result(int, int).is_copy_v01());
         assert!(!ArType::Option(int).is_copy_v01());
         assert!(!ArType::Coroutine(int).is_copy_v01());
@@ -590,7 +631,10 @@ mod tests {
             )
             .unwrap();
         let i = new_interner();
-        assert_eq!(ArType::Named(id, vec![]).display(&syms, &i), "MyStruct");
+        assert_eq!(
+            ArType::Named(id, IndexRange::empty()).display(&syms, &i),
+            "MyStruct"
+        );
     }
 
     #[test]
@@ -609,9 +653,9 @@ mod tests {
             )
             .unwrap();
         let i = new_interner();
-        let int_tid = i.intern(ArType::Named(int_id, vec![]));
+        let int_tid = i.intern(ArType::Named(int_id, IndexRange::empty()));
         assert_eq!(
-            ArType::Named(list_id, vec![int_tid]).display(&syms, &i),
+            ArType::named(list_id, &[int_tid], &i).display(&syms, &i),
             "List<int>"
         );
     }
@@ -629,9 +673,9 @@ mod tests {
             )
             .unwrap();
         let i = new_interner();
-        let int_tid = i.intern(ArType::Named(sym, vec![]));
+        let int_tid = i.intern(ArType::Named(sym, IndexRange::empty()));
         let ret = i.intern(ArType::Void);
-        let f = ArType::Func(vec![int_tid, int_tid], ret);
+        let f = ArType::func(&[int_tid, int_tid], ret, &i);
         assert_eq!(f.display(&syms, &i), "func(int, int)");
     }
 
@@ -656,9 +700,9 @@ mod tests {
             )
             .unwrap();
         let i = new_interner();
-        let int_tid = i.intern(ArType::Named(int_sym, vec![]));
-        let bool_tid = i.intern(ArType::Named(bool_sym, vec![]));
-        let f = ArType::Func(vec![int_tid], bool_tid);
+        let int_tid = i.intern(ArType::Named(int_sym, IndexRange::empty()));
+        let bool_tid = i.intern(ArType::Named(bool_sym, IndexRange::empty()));
+        let f = ArType::func(&[int_tid], bool_tid, &i);
         assert_eq!(f.display(&syms, &i), "func(int) bool");
     }
 
@@ -675,7 +719,7 @@ mod tests {
             )
             .unwrap();
         let i = new_interner();
-        let int_tid = i.intern(ArType::Named(int_sym, vec![]));
+        let int_tid = i.intern(ArType::Named(int_sym, IndexRange::empty()));
         assert_eq!(ArType::Nullable(int_tid).display(&syms, &i), "int?");
         assert_eq!(ArType::Slice(int_tid).display(&syms, &i), "[]int");
         assert_eq!(ArType::Array(4, int_tid).display(&syms, &i), "[4]int");
@@ -703,10 +747,10 @@ mod tests {
             )
             .unwrap();
         let i = new_interner();
-        let int_tid = i.intern(ArType::Named(int_sym, vec![]));
-        let str_tid = i.intern(ArType::Named(str_sym, vec![]));
+        let int_tid = i.intern(ArType::Named(int_sym, IndexRange::empty()));
+        let str_tid = i.intern(ArType::Named(str_sym, IndexRange::empty()));
         assert_eq!(
-            ArType::Tuple(vec![int_tid, str_tid]).display(&syms, &i),
+            ArType::tuple(&[int_tid, str_tid], &i).display(&syms, &i),
             "(int, str)"
         );
         assert_eq!(
@@ -739,7 +783,7 @@ mod tests {
         let foreign = SymbolId::new(99, 0); // not in empty table
         let empty = empty_symbols();
         let int_tid = i.intern(ArType::Primitive(Primitive::Int));
-        let ty = ArType::Named(foreign, vec![int_tid]);
+        let ty = ArType::named(foreign, &[int_tid], &i);
         let s = ty.display(&empty, &i);
         assert!(s.contains('?'), "got {s}");
         assert!(s.contains("int"), "got {s}");

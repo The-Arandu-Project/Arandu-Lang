@@ -13,7 +13,7 @@ use call::synth_call_expr;
 use control_flow::synth_control_flow_expr;
 use literal::synth_literal_expr;
 
-pub(crate) use call::check_call_arg;
+pub(crate) use call::{check_call_arg, infer_and_instantiate_func};
 
 use super::ctor::synth_variant_sugar;
 use arandu_middle::types::type_interner::TypeId;
@@ -55,7 +55,7 @@ fn synth_expr_inner(
     if let Some(id) = synth_binary_unary_expr(checker, expr, &kind, span) {
         return id;
     }
-    if let Some(id) = synth_control_flow_expr(checker, expr, &kind, span) {
+    if let Some(id) = synth_control_flow_expr(checker, expr, &kind, span, expected) {
         return id;
     }
 

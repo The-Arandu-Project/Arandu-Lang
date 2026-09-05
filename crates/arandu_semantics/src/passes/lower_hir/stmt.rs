@@ -88,7 +88,12 @@ fn lower_stmt_raw(
                     .or_else(|| {
                         value_ty_id.and_then(|vid| {
                             match type_check.type_info.type_interner.resolve(vid) {
-                                ArType::Tuple(elems) => elems.get(i).copied(),
+                                ArType::Tuple(elems) => type_check
+                                    .type_info
+                                    .type_interner
+                                    .type_args(elems)
+                                    .get(i)
+                                    .copied(),
                                 _ if bindings.len() == 1 => Some(vid),
                                 _ => None,
                             }

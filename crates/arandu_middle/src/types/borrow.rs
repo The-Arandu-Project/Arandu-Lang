@@ -31,14 +31,30 @@ pub enum BorrowPathSegment {
     RangeElement,
 }
 
+use smallvec::SmallVec;
+
 /// A canonical path. The empty path denotes the value itself.
+/// Inline capacity of 4 avoids heap allocation in typical paths.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct BorrowPath(pub Vec<BorrowPathSegment>);
+pub struct BorrowPath(pub SmallVec<[BorrowPathSegment; 4]>);
 
 impl BorrowPath {
     #[must_use]
     pub fn root() -> Self {
-        Self::default()
+        Self(SmallVec::new())
+    }
+}
+
+impl From<Vec<BorrowPathSegment>> for BorrowPath {
+    fn from(v: Vec<BorrowPathSegment>) -> Self {
+        Self(SmallVec::from_vec(v))
+    }
+}
+
+impl std::ops::Deref for BorrowPath {
+    type Target = [BorrowPathSegment];
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 

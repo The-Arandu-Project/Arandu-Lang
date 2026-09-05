@@ -413,9 +413,9 @@ fn lowers_enum_with_variants() {
             assert_eq!(symbol_name(&symbols, e.symbol), "Color");
             let variants = hir.pool.enum_variants_list(e.variants);
             assert_eq!(variants.len(), 3);
-            assert_eq!(symbol_name(&symbols, variants[0].symbol), "Red");
-            assert_eq!(symbol_name(&symbols, variants[1].symbol), "Green");
-            assert_eq!(symbol_name(&symbols, variants[2].symbol), "Blue");
+            assert_eq!(symbol_name(&symbols, variants[0].symbol), "Color.Red");
+            assert_eq!(symbol_name(&symbols, variants[1].symbol), "Color.Green");
+            assert_eq!(symbol_name(&symbols, variants[2].symbol), "Color.Blue");
             assert!(variants[0].payload.is_none());
         }
         other => panic!("expected Enum, got {other:?}"),

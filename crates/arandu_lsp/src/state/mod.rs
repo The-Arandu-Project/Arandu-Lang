@@ -257,10 +257,7 @@ mod tests {
         assert!(diagnostics.is_empty(), "stale diagnostics: {diagnostics:?}");
         let tc = arandu_query::passes::type_check(state.host.db(), main);
         assert!(
-            tc.symbols
-                .module_members
-                .get("util")
-                .is_some_and(|members| members.contains_key("answer")),
+            tc.symbols.lookup_module_member("util", "answer").is_some(),
             "created module members must be available to completion"
         );
         let call = main_text.find("util.answer").expect("util call");

@@ -413,11 +413,12 @@ impl LayoutEngine {
                 }
             }
             ArType::Tuple(tys) => {
+                let ty_ids = interner.type_args(*tys).to_vec();
                 let mut current_offset = 0;
                 let mut max_align = 1;
-                let mut field_offsets = Vec::with_capacity(tys.len());
+                let mut field_offsets = Vec::with_capacity(ty_ids.len());
 
-                for &ty_id in tys {
+                for &ty_id in &ty_ids {
                     let layout = self.layout_of(ty_id, interner, provider)?;
                     max_align = max_align.max(layout.align);
                     current_offset =
@@ -452,10 +453,11 @@ impl LayoutEngine {
                         fields_with_indices.sort_by_key(|x| x.0);
 
                         let generic_params = provider.get_generic_params(*symbol_id).unwrap_or(&[]);
+                        let arg_ids = interner.type_args(*generic_args);
                         let subst: FxHashMap<SymbolId, TypeId> = generic_params
                             .iter()
                             .copied()
-                            .zip(generic_args.iter().copied())
+                            .zip(arg_ids.iter().copied())
                             .collect();
 
                         let mut current_offset = 0;
@@ -675,7 +677,8 @@ fn substitute(ty: &ArType, subst: &FxHashMap<SymbolId, TypeId>, interner: &TypeI
             if let Some(&concrete_id) = subst.get(id) {
                 interner.resolve(concrete_id)
             } else {
-                let new_args = args
+                let arg_ids = interner.type_args(*args).to_vec();
+                let new_args: Vec<TypeId> = arg_ids
                     .iter()
                     .map(|&arg_id| {
                         let arg_ty = interner.resolve(arg_id);
@@ -683,11 +686,13 @@ fn substitute(ty: &ArType, subst: &FxHashMap<SymbolId, TypeId>, interner: &TypeI
                         interner.lookup(&substituted_arg).unwrap_or(arg_id)
                     })
                     .collect();
-                ArType::Named(*id, new_args)
+                let range = interner.push_type_args(&new_args);
+                ArType::Named(*id, range)
             }
         }
         ArType::Func(params, ret) => {
-            let new_params = params
+            let param_ids = interner.type_args(*params).to_vec();
+            let new_params: Vec<TypeId> = param_ids
                 .iter()
                 .map(|&param_id| {
                     let param_ty = interner.resolve(param_id);
@@ -698,7 +703,8 @@ fn substitute(ty: &ArType, subst: &FxHashMap<SymbolId, TypeId>, interner: &TypeI
             let ret_ty = interner.resolve(*ret);
             let substituted_ret = substitute(&ret_ty, subst, interner);
             let new_ret = interner.lookup(&substituted_ret).unwrap_or(*ret);
-            ArType::Func(new_params, new_ret)
+            let range = interner.push_type_args(&new_params);
+            ArType::Func(range, new_ret)
         }
         ArType::Nullable(inner) => {
             let inner_ty = interner.resolve(*inner);
@@ -737,7 +743,8 @@ fn substitute(ty: &ArType, subst: &FxHashMap<SymbolId, TypeId>, interner: &TypeI
             ArType::RefMut(new_inner)
         }
         ArType::Tuple(tys) => {
-            let new_tys = tys
+            let ty_ids = interner.type_args(*tys).to_vec();
+            let new_tys: Vec<TypeId> = ty_ids
                 .iter()
                 .map(|&ty_id| {
                     let item_ty = interner.resolve(ty_id);
@@ -745,7 +752,8 @@ fn substitute(ty: &ArType, subst: &FxHashMap<SymbolId, TypeId>, interner: &TypeI
                     interner.lookup(&substituted_item).unwrap_or(ty_id)
                 })
                 .collect();
-            ArType::Tuple(new_tys)
+            let range = interner.push_type_args(&new_tys);
+            ArType::Tuple(range)
         }
         ArType::Result(ok, err) => {
             let ok_ty = interner.resolve(*ok);

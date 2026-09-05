@@ -14,4 +14,4 @@ pub use generic_inst::{
     expand_aliases, expand_named_with_defaults, expand_type_args_with_defaults,
     extract_generic_param_symbols, struct_fields_instantiated, synth_generic_instantiation,
 };
-pub use interfaces::{InterfaceInfo, collect_interfaces_and_constraints};
+pub use interfaces::{InterfaceInfo, InterfaceMethod, collect_interfaces_and_constraints};

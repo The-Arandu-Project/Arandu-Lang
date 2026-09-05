@@ -495,7 +495,12 @@ fn validate_type_expr_constraints(
                     .get(&struct_or_enum_id)
                     .cloned()
             {
-                let arg_tys: Vec<ArType> = arg_ids.iter().map(|&id| checker.resolve(id)).collect();
+                let interner = &checker.type_info.type_interner;
+                let arg_tys: Vec<ArType> = interner
+                    .type_args(arg_ids)
+                    .iter()
+                    .map(|&id| checker.resolve(id))
+                    .collect();
                 crate::type_checker::types::interfaces::check_instantiation_constraints(
                     checker,
                     struct_or_enum_id,
@@ -563,7 +568,7 @@ fn type_contains_named_without_indirection(
             false
         }
         ArType::Tuple(tys) => {
-            for &tid in tys {
+            for &tid in interner.type_args(*tys).iter() {
                 let inner = interner.resolve(tid);
                 if type_contains_named_without_indirection(
                     &inner, target_id, interner, provider, visited,

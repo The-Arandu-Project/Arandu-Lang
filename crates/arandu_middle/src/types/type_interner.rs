@@ -20,11 +20,48 @@
 use super::ar_type::ArType;
 use super::primitive::Primitive;
 use crate::SymbolTable;
+use crate::hir::pool::IndexRange;
 use crate::newtype_index;
 use rustc_hash::FxHashMap;
 use std::sync::RwLock;
 
 newtype_index!(TypeId);
+
+/// Arena-backed storage for type argument lists with deduplication.
+///
+/// Each `ArType::Named(SymbolId, Vec<TypeId>)` becomes `ArType::Named(SymbolId, IndexRange)`.
+/// Arguments are stored contiguously here; identical sequences dedup to the same `IndexRange`.
+#[derive(Debug, Clone, Default)]
+pub struct TypeArgsPool {
+    args: Vec<TypeId>,
+    seen: FxHashMap<Vec<TypeId>, u32>,
+}
+
+impl TypeArgsPool {
+    fn push_args_dedup(&mut self, args: &[TypeId]) -> IndexRange {
+        if args.is_empty() {
+            return IndexRange::empty();
+        }
+        if let Some(&start) = self.seen.get(args) {
+            return IndexRange {
+                start,
+                len: args.len() as u32,
+            };
+        }
+        let start = self.args.len() as u32;
+        self.args.extend_from_slice(args);
+        self.seen.insert(args.to_vec(), start);
+        IndexRange {
+            start,
+            len: args.len() as u32,
+        }
+    }
+
+    #[must_use]
+    fn get(&self, range: IndexRange) -> &[TypeId] {
+        &self.args[range.range()]
+    }
+}
 
 /// A global interner that assigns a unique `TypeId` to every structural `ArType`.
 #[derive(Debug)]
@@ -33,6 +70,8 @@ pub struct TypeInterner {
     map: RwLock<FxHashMap<ArType, TypeId>>,
     /// Reverse map: TypeId → ArType  (resolution).
     types: RwLock<Vec<ArType>>,
+    /// Arena-backed type argument storage.
+    type_args_pool: RwLock<TypeArgsPool>,
 }
 
 impl TypeInterner {
@@ -41,6 +80,7 @@ impl TypeInterner {
         let interner = Self {
             map: RwLock::new(FxHashMap::default()),
             types: RwLock::new(Vec::new()),
+            type_args_pool: RwLock::new(TypeArgsPool::default()),
         };
         // Pre-intern all Primitive variants
         let primitives = [
@@ -101,6 +141,26 @@ impl TypeInterner {
         map.insert(ty.clone(), id);
         types.push(ty.clone());
         id
+    }
+
+    /// Push type arguments into the contiguous pool (with dedup) and return the backing range.
+    /// Identical argument sequences always produce the same `IndexRange`.
+    #[must_use]
+    pub fn push_type_args(&self, args: &[TypeId]) -> IndexRange {
+        self.type_args_pool
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .push_args_dedup(args)
+    }
+
+    /// Borrow the type arguments for a given range from the contiguous pool.
+    #[must_use]
+    pub fn type_args(&self, range: IndexRange) -> Vec<TypeId> {
+        self.type_args_pool
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(range)
+            .to_vec()
     }
 
     /// Resolve a `TypeId` back to its `ArType` (clones the interned value).
@@ -225,6 +285,12 @@ impl Clone for TypeInterner {
             types: std::sync::RwLock::new(
                 self.types.read().unwrap_or_else(|e| e.into_inner()).clone(),
             ),
+            type_args_pool: std::sync::RwLock::new(
+                self.type_args_pool
+                    .read()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone(),
+            ),
         }
     }
 }
@@ -292,7 +358,7 @@ mod tests {
         let int_id = interner.intern(ArType::Primitive(Primitive::Int));
         let str_id = interner.intern(ArType::Primitive(Primitive::Str));
         let bool_id = interner.intern(ArType::Primitive(Primitive::Bool));
-        let func_ty = ArType::Func(vec![int_id, str_id], bool_id);
+        let func_ty = ArType::func(&[int_id, str_id], bool_id, &interner);
         let id = interner.intern(func_ty.clone());
         assert_eq!(interner.resolve(id), func_ty);
     }

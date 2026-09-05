@@ -62,7 +62,7 @@ Func testTypetuplePattern(res: MyResult) -> int
     _2 = s0
     _3 = discriminant(_2)
     _4 = eq _3, 0
-    _5 = payload(_2 as MyOk.0)
+    _5 = payload(_2 as MyResult.MyOk.0)
     _6 = and _4, true
     branch _6 => bb1, else bb2
   bb1:

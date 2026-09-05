@@ -78,7 +78,7 @@ pub(super) fn dump_stmt(
                 dump_expr(pool, *expr)
             ));
         }
-        Stmt::Expr { span, expr } => {
+        Stmt::Expr { span, expr, .. } => {
             out.push(format!(
                 "{pad}Expr {} {}",
                 dump_span(*span),

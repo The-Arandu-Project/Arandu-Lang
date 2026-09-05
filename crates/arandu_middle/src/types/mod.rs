@@ -3,7 +3,7 @@ mod borrow;
 pub mod lower;
 mod primitive;
 mod result_option;
-mod subst;
+pub mod subst;
 pub mod type_interner;
 mod unify;
 

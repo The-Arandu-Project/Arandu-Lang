@@ -294,7 +294,7 @@ fn parse_generic_type_args(
 ) -> Option<(IndexRange, u32)> {
     cur.expect(TokenKind::Lt)?;
     let mut args = Vec::new();
-    if cur.peek_kind() != Some(TokenKind::Gt) {
+    if !cur.at_gt() {
         loop {
             args.push(parse_type(ctx, cur)?);
             if cur.eat(TokenKind::Comma) {
@@ -303,8 +303,8 @@ fn parse_generic_type_args(
             break;
         }
     }
-    let gt = cur.expect(TokenKind::Gt)?;
-    Some((ctx.pool.alloc_type_expr_list(&args), gt.start + gt.len))
+    let (gt_start, gt_len) = cur.expect_gt()?;
+    Some((ctx.pool.alloc_type_expr_list(&args), gt_start + gt_len))
 }
 
 /// `: T` result type (single).

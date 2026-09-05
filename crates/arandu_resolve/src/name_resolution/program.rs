@@ -76,18 +76,45 @@ impl<'a> Resolver<'a> {
             .define_vis(global_scope, "free", SymbolKind::Func, span, true)
             .ok();
 
-        let _ = self
+        let res_sym = self
             .symbols
-            .define_vis(global_scope, "Result", SymbolKind::Enum, span, true);
-        let _ = self
+            .define_vis(global_scope, "Result", SymbolKind::Enum, span, true)
+            .ok()
+            .or_else(|| self.symbols.lookup_type(global_scope, "Result"));
+        if let Some(sym) = res_sym {
+            self.symbols
+                .set_lang_item(sym, arandu_middle::symbol_table::LangItem::Result);
+        }
+
+        let opt_sym = self
             .symbols
-            .define_vis(global_scope, "Option", SymbolKind::Enum, span, true);
-        let _ = self
+            .define_vis(global_scope, "Option", SymbolKind::Enum, span, true)
+            .ok()
+            .or_else(|| self.symbols.lookup_type(global_scope, "Option"));
+        if let Some(sym) = opt_sym {
+            self.symbols
+                .set_lang_item(sym, arandu_middle::symbol_table::LangItem::Option);
+        }
+
+        let coro_sym = self
             .symbols
-            .define_vis(global_scope, "Coroutine", SymbolKind::Enum, span, true);
-        let _ = self
+            .define_vis(global_scope, "Coroutine", SymbolKind::Enum, span, true)
+            .ok()
+            .or_else(|| self.symbols.lookup_type(global_scope, "Coroutine"));
+        if let Some(sym) = coro_sym {
+            self.symbols
+                .set_lang_item(sym, arandu_middle::symbol_table::LangItem::Coroutine);
+        }
+
+        let poll_sym = self
             .symbols
-            .define_vis(global_scope, "Poll", SymbolKind::Enum, span, true);
+            .define_vis(global_scope, "Poll", SymbolKind::Enum, span, true)
+            .ok()
+            .or_else(|| self.symbols.lookup_type(global_scope, "Poll"));
+        if let Some(sym) = poll_sym {
+            self.symbols
+                .set_lang_item(sym, arandu_middle::symbol_table::LangItem::Poll);
+        }
 
         let global = self.symbols.global_scope();
         let has_result = self.symbols.lookup_type(global, "Result").is_some();

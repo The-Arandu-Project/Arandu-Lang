@@ -113,9 +113,7 @@ impl<'a> Resolver<'a> {
                             {
                                 self.symbols
                                     .associated_members
-                                    .entry(type_sym)
-                                    .or_default()
-                                    .insert(name.clone(), symbol);
+                                    .insert((type_sym, name.clone()), symbol);
                             }
                         }
                         Err(previous) => {
@@ -148,6 +146,33 @@ impl<'a> Resolver<'a> {
                 if let Some(enum_sym) =
                     self.define_vis(scope, &decl.name, SymbolKind::Enum, decl.span, pub_)
                 {
+                    match (self.current_module.as_deref(), decl.name.as_str()) {
+                        (Some("std.core.future"), "Poll") => {
+                            self.symbols.set_lang_item(
+                                enum_sym,
+                                arandu_middle::symbol_table::LangItem::Poll,
+                            );
+                        }
+                        (Some("std.core.result"), "Result") => {
+                            self.symbols.set_lang_item(
+                                enum_sym,
+                                arandu_middle::symbol_table::LangItem::Result,
+                            );
+                        }
+                        (Some("std.core.option"), "Option") => {
+                            self.symbols.set_lang_item(
+                                enum_sym,
+                                arandu_middle::symbol_table::LangItem::Option,
+                            );
+                        }
+                        (Some("std.core.coroutine"), "Coroutine") => {
+                            self.symbols.set_lang_item(
+                                enum_sym,
+                                arandu_middle::symbol_table::LangItem::Coroutine,
+                            );
+                        }
+                        _ => {}
+                    }
                     // Variants inherit the enum's export visibility (public enum → public ctors).
                     for variant in &decl.variants {
                         if let Ok(symbol) = self.symbols.define_associated_member_vis(
@@ -157,6 +182,49 @@ impl<'a> Resolver<'a> {
                             pub_,
                         ) {
                             self.resolved.define(variant.span, symbol);
+                            match (
+                                self.current_module.as_deref(),
+                                decl.name.as_str(),
+                                variant.name.as_str(),
+                            ) {
+                                (Some("std.core.option"), "Option", "Some") => {
+                                    self.symbols.set_lang_item(
+                                        symbol,
+                                        arandu_middle::symbol_table::LangItem::OptionSome,
+                                    );
+                                }
+                                (Some("std.core.option"), "Option", "None") => {
+                                    self.symbols.set_lang_item(
+                                        symbol,
+                                        arandu_middle::symbol_table::LangItem::OptionNone,
+                                    );
+                                }
+                                (Some("std.core.result"), "Result", "Ok") => {
+                                    self.symbols.set_lang_item(
+                                        symbol,
+                                        arandu_middle::symbol_table::LangItem::ResultOk,
+                                    );
+                                }
+                                (Some("std.core.result"), "Result", "Err") => {
+                                    self.symbols.set_lang_item(
+                                        symbol,
+                                        arandu_middle::symbol_table::LangItem::ResultErr,
+                                    );
+                                }
+                                (Some("std.core.future"), "Poll", "Ready") => {
+                                    self.symbols.set_lang_item(
+                                        symbol,
+                                        arandu_middle::symbol_table::LangItem::PollReady,
+                                    );
+                                }
+                                (Some("std.core.future"), "Poll", "Pending") => {
+                                    self.symbols.set_lang_item(
+                                        symbol,
+                                        arandu_middle::symbol_table::LangItem::PollPending,
+                                    );
+                                }
+                                _ => {}
+                            }
                         }
                     }
                 }

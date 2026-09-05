@@ -162,6 +162,7 @@ pub struct TypeChecker<'a> {
     type_scope_id: Option<ScopeId>,
     pub pool: &'a AstPool,
     pub target_info: TargetInfo,
+    pub current_observed_effects: arandu_middle::EffectFlags,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -241,6 +242,7 @@ impl<'a> TypeChecker<'a> {
             type_scope_id: None,
             pool,
             target_info,
+            current_observed_effects: arandu_middle::EffectFlags::NONE,
         }
     }
 

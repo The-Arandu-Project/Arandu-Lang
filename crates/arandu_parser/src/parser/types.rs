@@ -38,7 +38,7 @@ impl<'a> Parser<'a> {
         if !self.eat_name("LT") {
             return Ok(SmallVec::new());
         }
-        let params_vec = self.parse_comma_separated_list("GT", 1, |parser| {
+        let params_vec = self.parse_generic_list(1, |parser| {
             let start = parser.mark();
             let name = parser.expect_ident_type()?;
             let constraints = if parser.eat_name("COLON") {
@@ -59,14 +59,14 @@ impl<'a> Parser<'a> {
                 default,
             })
         })?;
-        self.expect_name("GT")?;
+        self.expect_gt()?;
         Ok(params_vec.into())
     }
 
     pub(super) fn parse_generic_args(&mut self) -> Result<IndexRange, ParseError> {
         self.expect_name("LT")?;
-        let args = self.parse_comma_separated_list("GT", 1, super::Parser::parse_type)?;
-        self.expect_name("GT")?;
+        let args = self.parse_generic_list(1, super::Parser::parse_type)?;
+        self.expect_gt()?;
         let range = self.pool.alloc_type_expr_list(&args);
         Ok(range)
     }
@@ -99,10 +99,10 @@ impl<'a> Parser<'a> {
         Ok(items)
     }
 
-    pub(super) fn parse_constraint_list(&mut self) -> Result<Vec<TypeName>, ParseError> {
-        let mut constraints = vec![self.parse_type_name()?];
+    pub(super) fn parse_constraint_list(&mut self) -> Result<Vec<TypeExprId>, ParseError> {
+        let mut constraints = vec![self.parse_type()?];
         while self.eat_name("PLUS") {
-            constraints.push(self.parse_type_name()?);
+            constraints.push(self.parse_type()?);
         }
         Ok(constraints)
     }
@@ -547,6 +547,12 @@ impl<'a> Parser<'a> {
                 TokenKind::Lt => depth += 1,
                 TokenKind::Gt => {
                     depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return Some(index);
+                    }
+                }
+                TokenKind::ShiftRight => {
+                    depth = depth.saturating_sub(2);
                     if depth == 0 {
                         return Some(index);
                     }

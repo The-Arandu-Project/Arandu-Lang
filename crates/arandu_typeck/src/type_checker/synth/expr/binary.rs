@@ -195,6 +195,9 @@ pub(super) fn synth_binary_unary_expr(
                     }
                 }
                 UnaryOp::Await => {
+                    checker.current_observed_effects = checker
+                        .current_observed_effects
+                        .union(arandu_middle::EffectFlags::SUSPEND);
                     if expr_ty.is_error() {
                         Some(checker.intern(ArType::Error))
                     } else if let ArType::Coroutine(inner) = expr_ty {

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 
 use crate::SymbolId;
 use arandu_middle::types::{BorrowKind, BorrowPath, BorrowPathSegment, ReturnBorrowSummary};
@@ -15,6 +16,12 @@ pub enum EnumPayloadShape {
     Unit,
     /// Payload element types as interned ids (no owned `ArType` trees).
     Tuple(Vec<TypeId>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InterfaceConstraint {
+    pub iface_sym: SymbolId,
+    pub type_args: SmallVec<[TypeId; 2]>,
 }
 
 /// Shared metadata maps use `Arc` so `merge_from` (item body typeck fold) is O(1)
@@ -44,12 +51,14 @@ pub struct TypeInfo {
     pub generic_params: FxHashMap<SymbolId, Arc<Vec<SymbolId>>>,
     /// T2.1: type-parameter symbol → default type (`A = GlobalAllocator`).
     pub generic_defaults: FxHashMap<SymbolId, TypeId>,
-    /// Type-parameter symbol → interface symbols required (`T: Display`).
-    pub param_constraints: FxHashMap<SymbolId, Arc<Vec<SymbolId>>>,
+    /// Type-parameter symbol → interface constraints required (`T: Display`, `I: Iterator<Item>`).
+    pub param_constraints: FxHashMap<SymbolId, Arc<Vec<InterfaceConstraint>>>,
     /// Interface symbol → method signatures (nominal, Go-style structural check).
-    pub(crate) interfaces: FxHashMap<SymbolId, types::InterfaceInfo>,
+    pub interfaces: FxHashMap<SymbolId, types::InterfaceInfo>,
     /// Cache of instantiated variant/method signatures to avoid redundant substitution.
     pub variant_instantiations: FxHashMap<(SymbolId, Vec<TypeId>), (Vec<TypeId>, TypeId)>,
+    /// Declared and inferred effects per function symbol.
+    pub function_effects: FxHashMap<SymbolId, arandu_middle::EffectFlags>,
 }
 
 impl TypeInfo {
@@ -83,11 +92,46 @@ impl TypeInfo {
             param_constraints: FxHashMap::default(),
             interfaces: FxHashMap::default(),
             variant_instantiations: FxHashMap::default(),
+            function_effects: FxHashMap::default(),
         }
     }
 
     pub fn record_enum_variant_tag(&mut self, variant: SymbolId, tag: usize) {
         self.enum_variant_tags.insert(variant, tag);
+    }
+
+    /// The bare variant name (`Color.Red` → `Red`) for an enum variant symbol.
+    #[must_use]
+    pub fn enum_variant_name(
+        &self,
+        symbols: &crate::SymbolTable,
+        variant: SymbolId,
+    ) -> Option<String> {
+        symbols
+            .try_get(variant)
+            .map(|s| s.name.rsplit('.').next().unwrap_or("").to_string())
+    }
+
+    /// Find the canonical variant symbol for an enum by its bare name.
+    /// Returns `(canonical_variant_symbol, enum_symbol, tag)` when found.
+    #[must_use]
+    pub fn enum_variant_by_name(
+        &self,
+        symbols: &crate::SymbolTable,
+        enum_sym: SymbolId,
+        name: &str,
+    ) -> Option<(SymbolId, SymbolId, usize)> {
+        for (&v_sym, &(parent, _)) in &self.enum_variants {
+            if parent == enum_sym
+                && symbols
+                    .try_get(v_sym)
+                    .is_some_and(|s| s.name.rsplit('.').next().unwrap_or("") == name)
+                && let Some(&tag) = self.enum_variant_tags.get(&v_sym)
+            {
+                return Some((v_sym, enum_sym, tag));
+            }
+        }
+        None
     }
 
     /// Lookup struct field type by struct symbol and field name.
@@ -145,7 +189,7 @@ impl TypeInfo {
     ) -> Result<Vec<(BorrowPath, BorrowKind)>, BorrowShapeError> {
         let mut output = Vec::new();
         let mut visiting = Vec::new();
-        self.collect_borrow_paths(id, &mut Vec::new(), &mut visiting, &mut output)?;
+        self.collect_borrow_paths(id, &mut SmallVec::new(), &mut visiting, &mut output)?;
         output.sort();
         output.dedup();
         Ok(output)
@@ -154,7 +198,7 @@ impl TypeInfo {
     fn collect_borrow_paths(
         &self,
         id: TypeId,
-        prefix: &mut Vec<BorrowPathSegment>,
+        prefix: &mut SmallVec<[BorrowPathSegment; 4]>,
         visiting: &mut Vec<TypeId>,
         output: &mut Vec<(BorrowPath, BorrowKind)>,
     ) -> Result<(), BorrowShapeError> {
@@ -175,6 +219,7 @@ impl TypeInfo {
                 output.push((BorrowPath(prefix.clone()), BorrowKind::Exclusive));
             }
             ArType::Tuple(items) => {
+                let items = self.type_interner.type_args(items);
                 for (index, item) in items.into_iter().enumerate() {
                     let Ok(index) = u32::try_from(index) else {
                         return Err(BorrowShapeError::PathCountExceeded);
@@ -199,9 +244,10 @@ impl TypeInfo {
             }
             ArType::Named(symbol, arguments) => {
                 if let Some(fields) = self.struct_fields.get(&symbol) {
+                    let args = self.type_interner.type_args(arguments);
                     let substitution = self.generic_params.get(&symbol).and_then(|parameters| {
-                        (parameters.len() == arguments.len() && !parameters.is_empty())
-                            .then(|| build_subst_ids(parameters, &arguments, &self.type_interner))
+                        (parameters.len() == args.len() && !parameters.is_empty())
+                            .then(|| build_subst_ids(parameters, &args, &self.type_interner))
                     });
                     let mut fields = fields.iter().collect::<Vec<_>>();
                     fields.sort_by_key(|(name, _)| *name);
@@ -305,8 +351,14 @@ impl TypeInfo {
         }
         visiting.insert(id, true);
         let result = self.type_interner.with_type(id, |ty| match ty {
-            ArType::Named(sym, args) => self.is_named_struct_pod_copy(*sym, args, visiting),
-            ArType::Tuple(elems) => elems.iter().all(|&e| self.is_pod_component(e, visiting)),
+            ArType::Named(sym, args) => {
+                let args = self.type_interner.type_args(*args);
+                self.is_named_struct_pod_copy(*sym, &args, visiting)
+            }
+            ArType::Tuple(elems) => {
+                let elems = self.type_interner.type_args(*elems);
+                elems.iter().all(|&e| self.is_pod_component(e, visiting))
+            }
             ArType::Array(_, elem) => self.is_pod_component(*elem, visiting),
             ArType::Option(inner) => self.is_pod_component(*inner, visiting),
             ArType::Result(ok, err) => {
@@ -328,8 +380,14 @@ impl TypeInfo {
                 p.is_numeric() || matches!(p, Primitive::Bool | Primitive::Char | Primitive::Byte)
             }
             ArType::IntLiteral | ArType::FloatLiteral | ArType::GenRef => true,
-            ArType::Named(sym, args) => self.is_named_struct_pod_copy(*sym, args, visiting),
-            ArType::Tuple(elems) => elems.iter().all(|&e| self.is_pod_component(e, visiting)),
+            ArType::Named(sym, args) => {
+                let args = self.type_interner.type_args(*args);
+                self.is_named_struct_pod_copy(*sym, &args, visiting)
+            }
+            ArType::Tuple(elems) => {
+                let elems = self.type_interner.type_args(*elems);
+                elems.iter().all(|&e| self.is_pod_component(e, visiting))
+            }
             ArType::Array(_, elem) => self.is_pod_component(*elem, visiting),
             ArType::Option(inner) => self.is_pod_component(*inner, visiting),
             ArType::Result(ok, err) => {
@@ -405,29 +463,31 @@ pub fn translate_type(ty: &ArType, from: &TypeInterner, to: &mut TypeInterner) -
     match ty {
         ArType::Primitive(p) => ArType::Primitive(*p),
         ArType::Named(id, args) => {
-            let new_args = args
+            let old_args = from.type_args(*args);
+            let new_args = old_args
                 .iter()
                 .map(|&arg_id| {
                     let resolved = from.resolve(arg_id);
                     let translated = translate_type(&resolved, from, to);
                     to.intern(translated)
                 })
-                .collect();
-            ArType::Named(*id, new_args)
+                .collect::<Vec<_>>();
+            ArType::named(*id, &new_args, to)
         }
         ArType::Func(params, ret) => {
-            let new_params = params
+            let old_params = from.type_args(*params);
+            let new_params = old_params
                 .iter()
                 .map(|&param_id| {
                     let resolved = from.resolve(param_id);
                     let translated = translate_type(&resolved, from, to);
                     to.intern(translated)
                 })
-                .collect();
+                .collect::<Vec<_>>();
             let resolved_ret = from.resolve(*ret);
             let translated_ret = translate_type(&resolved_ret, from, to);
             let new_ret = to.intern(translated_ret);
-            ArType::Func(new_params, new_ret)
+            ArType::func(&new_params, new_ret, to)
         }
         ArType::Nullable(inner) => {
             let resolved = from.resolve(*inner);
@@ -467,15 +527,16 @@ pub fn translate_type(ty: &ArType, from: &TypeInterner, to: &mut TypeInterner) -
         }
         ArType::GenRef => ArType::GenRef,
         ArType::Tuple(items) => {
-            let new_items = items
+            let old_items = from.type_args(*items);
+            let new_items = old_items
                 .iter()
                 .map(|&item_id| {
                     let resolved = from.resolve(item_id);
                     let translated = translate_type(&resolved, from, to);
                     to.intern(translated)
                 })
-                .collect();
-            ArType::Tuple(new_items)
+                .collect::<Vec<_>>();
+            ArType::tuple(&new_items, to)
         }
         ArType::Result(ok, err) => {
             let resolved_ok = from.resolve(*ok);
@@ -611,19 +672,38 @@ impl TypeInfo {
                 .insert(*symbol, self.type_interner.intern(translated));
         }
         for (symbol, constraints) in &other.param_constraints {
+            let mut translated_constraints = Vec::with_capacity(constraints.len());
+            for c in constraints.iter() {
+                let mut new_args = SmallVec::with_capacity(c.type_args.len());
+                for &arg in &c.type_args {
+                    let ty = other.type_interner.resolve(arg);
+                    let translated =
+                        translate_type(&ty, &other.type_interner, &mut self.type_interner);
+                    new_args.push(self.type_interner.intern(translated));
+                }
+                translated_constraints.push(InterfaceConstraint {
+                    iface_sym: c.iface_sym,
+                    type_args: new_args,
+                });
+            }
             self.param_constraints
-                .insert(*symbol, Arc::clone(constraints));
+                .insert(*symbol, Arc::new(translated_constraints));
         }
         for (symbol, interface_info) in &other.interfaces {
             let mut translated_methods = Vec::new();
-            for (name, tid) in &interface_info.methods {
-                let ty = other.type_interner.resolve(*tid);
+            for m in &interface_info.methods {
+                let ty = other.type_interner.resolve(m.sig_id);
                 let translated = translate_type(&ty, &other.type_interner, &mut self.type_interner);
-                translated_methods.push((name.clone(), self.type_interner.intern(translated)));
+                translated_methods.push(types::InterfaceMethod {
+                    name: m.name.clone(),
+                    sig_id: self.type_interner.intern(translated),
+                    generic_params: m.generic_params.clone(),
+                });
             }
             self.interfaces.insert(
                 *symbol,
                 types::InterfaceInfo {
+                    self_param: interface_info.self_param,
                     methods: translated_methods,
                 },
             );
@@ -648,6 +728,9 @@ impl TypeInfo {
                 translate_type(&other_ty, &other.type_interner, &mut self.type_interner);
             let id = self.type_interner.intern(translated);
             self.expr_types[idx] = Some(id);
+        }
+        for (&symbol, &effects) in &other.function_effects {
+            self.function_effects.insert(symbol, effects);
         }
     }
 
@@ -746,7 +829,8 @@ impl arandu_middle::layout::StructLayoutProvider for TypeInfo {
                         Some(tids[0])
                     } else {
                         // Multi-payload: layout uses the interned Tuple type if present.
-                        self.type_interner.lookup(&ArType::Tuple(tids.clone()))
+                        let range = self.type_interner.push_type_args(tids);
+                        self.type_interner.lookup(&ArType::Tuple(range))
                     }
                 }
             };
@@ -779,7 +863,9 @@ mod borrow_shape_tests {
         let option_shared = info.type_interner.intern(ArType::Option(shared));
 
         let record = SymbolId::new(0, 10);
-        let record_type = info.type_interner.intern(ArType::Named(record, vec![]));
+        let record_type =
+            info.type_interner
+                .intern(ArType::named(record, &[], &info.type_interner));
         info.struct_fields.insert(
             record,
             Arc::new(FxHashMap::from_iter([
@@ -794,14 +880,17 @@ mod borrow_shape_tests {
             paths,
             vec![
                 (
-                    BorrowPath(vec![
-                        BorrowPathSegment::Field("read".into()),
-                        BorrowPathSegment::OptionSome,
-                    ]),
+                    BorrowPath(
+                        vec![
+                            BorrowPathSegment::Field("read".into()),
+                            BorrowPathSegment::OptionSome,
+                        ]
+                        .into()
+                    ),
                     BorrowKind::Shared,
                 ),
                 (
-                    BorrowPath(vec![BorrowPathSegment::Field("write".into())]),
+                    BorrowPath(vec![BorrowPathSegment::Field("write".into())].into()),
                     BorrowKind::Exclusive,
                 ),
             ]
@@ -812,14 +901,15 @@ mod borrow_shape_tests {
         info.enum_variants
             .insert(variant, (choice, EnumPayloadShape::Tuple(vec![shared])));
         info.enum_variant_tags.insert(variant, 7);
-        let choice_type = info.type_interner.intern(ArType::Named(choice, vec![]));
+        let choice_type =
+            info.type_interner
+                .intern(ArType::named(choice, &[], &info.type_interner));
         assert_eq!(
             info.borrow_paths(choice_type).expect("enum shape"),
             vec![(
-                BorrowPath(vec![
-                    BorrowPathSegment::Variant(7),
-                    BorrowPathSegment::Payload(0),
-                ]),
+                BorrowPath(
+                    vec![BorrowPathSegment::Variant(7), BorrowPathSegment::Payload(0),].into()
+                ),
                 BorrowKind::Shared,
             )]
         );

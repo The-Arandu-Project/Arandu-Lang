@@ -1,4 +1,5 @@
 use super::*;
+use crate::hir::pool::IndexRange;
 use crate::newtype_index;
 
 struct LayoutEngine(super::LayoutEngine);
@@ -324,7 +325,7 @@ fn aggregate_layout_rejects_offset_that_crosses_target_bound() {
     let provider = MockProvider;
     let byte = interner.intern(ArType::Primitive(Primitive::U8));
     let almost_full = interner.intern(ArType::Array((1_u64 << 31) - 1, byte));
-    let tuple = interner.intern(ArType::Tuple(vec![almost_full, byte]));
+    let tuple = interner.intern(ArType::tuple(&[almost_full, byte], &interner));
 
     assert_eq!(
         engine.try_layout_of(tuple, &interner, &provider),
@@ -359,7 +360,7 @@ fn test_func_layout() {
     let interner = TypeInterner::new();
     let provider = MockProvider;
     let int_id = interner.intern(ArType::Primitive(Primitive::Int));
-    let func_ty = ArType::Func(vec![int_id, int_id], int_id);
+    let func_ty = ArType::func(&[int_id, int_id], int_id, &interner);
     let tid = interner.intern(func_ty);
     let layout = engine.layout_of(tid, &interner, &provider);
     assert_eq!(layout.size, 8);
@@ -388,7 +389,7 @@ fn test_tuple_layout() {
     let u8_id = interner.intern(ArType::Primitive(Primitive::U8));
     let i32_id = interner.intern(ArType::Primitive(Primitive::I32));
     let u8_2 = interner.intern(ArType::Primitive(Primitive::U8));
-    let tuple_ty = ArType::Tuple(vec![u8_id, i32_id, u8_2]);
+    let tuple_ty = ArType::tuple(&[u8_id, i32_id, u8_2], &interner);
     let tid = interner.intern(tuple_ty);
     let layout = engine.layout_of(tid, &interner, &provider);
     // u8 at 0, i32 at 4 (align 4), u8 at 8, total = 12 (aligned to 4)
@@ -465,7 +466,7 @@ fn test_zst_allocator_field_adds_no_size() {
         .field_indices
         .insert(zst_id, FxHashMap::<String, usize>::default());
 
-    let zst_ty = ArType::Named(zst_id, vec![]);
+    let zst_ty = ArType::Named(zst_id, IndexRange::empty());
     let zst_tid = interner.intern(zst_ty);
     let zst_layout = engine.layout_of(zst_tid, &interner, &provider);
     assert_eq!(zst_layout.size, 0); // ZST has 0 size
@@ -488,7 +489,7 @@ fn test_zst_allocator_field_adds_no_size() {
     );
     vec_fields.insert(
         "allocator".to_string(),
-        interner.intern(ArType::Named(zst_id, vec![])),
+        interner.intern(ArType::Named(zst_id, IndexRange::empty())),
     );
 
     let mut vec_indices = FxHashMap::<String, usize>::default();
@@ -500,7 +501,7 @@ fn test_zst_allocator_field_adds_no_size() {
     provider.fields.insert(vec_id, vec_fields);
     provider.field_indices.insert(vec_id, vec_indices);
 
-    let vec_ty = ArType::Named(vec_id, vec![]);
+    let vec_ty = ArType::Named(vec_id, IndexRange::empty());
     let vec_tid = interner.intern(vec_ty);
     let vec_layout = engine.layout_of(vec_tid, &interner, &provider);
 
@@ -570,7 +571,7 @@ fn test_struct_layout_and_padding() {
         enum_variants: FxHashMap::<SymbolId, Vec<EnumPayloadShape>>::default(),
     };
 
-    let struct_ty = ArType::Named(struct_sym, Vec::new());
+    let struct_ty = ArType::Named(struct_sym, IndexRange::empty());
     let struct_id = interner.intern(struct_ty);
 
     let layout = engine.layout_of(struct_id, &interner, &provider);
@@ -588,7 +589,7 @@ fn test_struct_missing_fields_fallback() {
     let engine = LayoutEngine::new(8);
     let interner = TypeInterner::new();
     let struct_sym = SymbolId::new(0, 9999);
-    let struct_ty = ArType::Named(struct_sym, Vec::new());
+    let struct_ty = ArType::Named(struct_sym, IndexRange::empty());
     let struct_id = interner.intern(struct_ty);
     let provider = MockProvider;
     let layout = engine.layout_of(struct_id, &interner, &provider);
@@ -605,7 +606,7 @@ fn test_struct_generic_substitution() {
     let struct_sym = SymbolId::new(0, 42);
     let param_sym = SymbolId::new(0, 1);
 
-    let param_ty = interner.intern(ArType::Named(param_sym, vec![]));
+    let param_ty = interner.intern(ArType::Named(param_sym, IndexRange::empty()));
 
     let mut fields = FxHashMap::<String, TypeId>::default();
     fields.insert("value".to_string(), param_ty);
@@ -630,7 +631,7 @@ fn test_struct_generic_substitution() {
     };
 
     let concrete_int = interner.intern(ArType::Primitive(Primitive::I32));
-    let struct_ty = ArType::Named(struct_sym, vec![concrete_int]);
+    let struct_ty = ArType::named(struct_sym, &[concrete_int], &interner);
     let struct_id = interner.intern(struct_ty);
 
     let layout = engine.layout_of(struct_id, &interner, &provider);
@@ -673,7 +674,7 @@ fn test_target_32bit_vec_and_string_evidence() {
         enum_variants: FxHashMap::default(),
     };
 
-    let struct_ty = ArType::Named(struct_sym, vec![]);
+    let struct_ty = ArType::Named(struct_sym, IndexRange::empty());
     let struct_id = interner.intern(struct_ty);
 
     // 64-bit target: ptr=8, uint=8, cap=8 -> size=24, align=8, offsets=[0, 8, 16]
@@ -731,7 +732,7 @@ fn test_target_32bit_mixed_alignment_evidence() {
         enum_variants: FxHashMap::default(),
     };
 
-    let struct_ty = ArType::Named(struct_sym, vec![]);
+    let struct_ty = ArType::Named(struct_sym, IndexRange::empty());
     let struct_id = interner.intern(struct_ty);
 
     // In 64-bit: a@0, pad 7, b@8, c@16, pad 4 -> size=24, align=8

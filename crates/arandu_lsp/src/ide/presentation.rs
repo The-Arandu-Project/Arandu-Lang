@@ -42,7 +42,8 @@ pub(crate) fn symbol_presentation(
     let parameter_names = function_parameter_names(snap, source, symbol);
     let (signature, parameters) = match ty.as_ref() {
         Some(ArType::Func(param_types, return_type)) => {
-            let labels: Vec<_> = param_types
+            let param_types_vec = tc.type_info.type_interner.type_args(*param_types);
+            let labels: Vec<_> = param_types_vec
                 .iter()
                 .enumerate()
                 .map(|(index, type_id)| {

@@ -98,7 +98,10 @@ pub(crate) fn collect_type_shapes(checker: &mut TypeChecker<'_>, program: &Progr
                                 })
                                 .collect();
                             if tids.len() > 1 {
-                                checker.intern(super::super::ArType::Tuple(tids.clone()));
+                                checker.intern(super::super::ArType::tuple(
+                                    &tids,
+                                    &checker.type_info.type_interner,
+                                ));
                             }
                             super::super::EnumPayloadShape::Tuple(tids)
                         }
@@ -117,19 +120,32 @@ pub(crate) fn collect_type_shapes(checker: &mut TypeChecker<'_>, program: &Progr
                             .cloned();
                         if let Some(gp) = gp {
                             for &p_sym in gp.iter() {
-                                let arg_ty = super::super::ArType::Named(p_sym, vec![]);
+                                let arg_ty = super::super::ArType::named(
+                                    p_sym,
+                                    &[],
+                                    &checker.type_info.type_interner,
+                                );
                                 enum_args.push(checker.intern(arg_ty));
                             }
                         }
-                        let ret_ty_id =
-                            checker.intern(super::super::ArType::Named(enum_symbol_id, enum_args));
+                        let ret_ty_id = checker.intern(super::super::ArType::named(
+                            enum_symbol_id,
+                            &enum_args,
+                            &checker.type_info.type_interner,
+                        ));
                         let variant_ty = match &shape {
                             super::super::EnumPayloadShape::Tuple(tids) => {
-                                super::super::ArType::Func(tids.clone(), ret_ty_id)
+                                super::super::ArType::func(
+                                    tids,
+                                    ret_ty_id,
+                                    &checker.type_info.type_interner,
+                                )
                             }
-                            super::super::EnumPayloadShape::Unit => {
-                                super::super::ArType::Named(enum_symbol_id, vec![])
-                            }
+                            super::super::EnumPayloadShape::Unit => super::super::ArType::named(
+                                enum_symbol_id,
+                                &[],
+                                &checker.type_info.type_interner,
+                            ),
                         };
                         let variant_ty_id = checker.intern(variant_ty);
                         checker.record_decl_type(variant_symbol_id, variant_ty_id);
@@ -282,10 +298,15 @@ pub(crate) fn collect_signature_types(checker: &mut TypeChecker<'_>, program: &P
                         {
                             let mut new_args = Vec::new();
                             for &param_sym in struct_params.iter() {
-                                let arg_ty = ArType::Named(param_sym, vec![]);
+                                let arg_ty =
+                                    ArType::named(param_sym, &[], &checker.type_info.type_interner);
                                 new_args.push(checker.intern(arg_ty));
                             }
-                            let new_first_ty = ArType::Named(struct_id, new_args);
+                            let new_first_ty = ArType::named(
+                                struct_id,
+                                &new_args,
+                                &checker.type_info.type_interner,
+                            );
                             let bare_inst = checker.intern(new_first_ty);
                             *first_ty_id =
                                 apply_receiver_ownership(checker, bare_inst, effective_ownership);
@@ -347,7 +368,8 @@ pub(crate) fn collect_signature_types(checker: &mut TypeChecker<'_>, program: &P
                             );
                         }
                     }
-                    let func_ty = ArType::Func(param_types, ret_id);
+                    let func_ty =
+                        ArType::func(&param_types, ret_id, &checker.type_info.type_interner);
                     let func_id = checker.intern(func_ty);
                     checker.record_decl_type(symbol_id, func_id);
 
@@ -365,6 +387,46 @@ pub(crate) fn collect_signature_types(checker: &mut TypeChecker<'_>, program: &P
                             checker.lower_type_expr(first_param.ty, checker.symbols.global_scope());
                         if let ArType::Named(struct_id, _) = param_ty {
                             checker.type_info.destructors.insert(struct_id, symbol_id);
+                        }
+                    }
+
+                    // Effect System (A2): Process @Effects(...) attribute
+                    for attr in &func_decl.attrs {
+                        if attr.name == "Effects" || attr.name == "effects" {
+                            let mut flags = arandu_middle::EffectFlags::NONE;
+                            for arg in &attr.args {
+                                let name = match checker.pool.expr(*arg) {
+                                    arandu_parser::ExprKind::Path { path } => {
+                                        path.first().map(|s| s.as_str())
+                                    }
+                                    arandu_parser::ExprKind::InterpolatedString { parts } => {
+                                        let part_ids = checker.pool.string_part_list(*parts);
+                                        part_ids.first().and_then(|&id| {
+                                            match checker.pool.string_part(id) {
+                                                arandu_parser::StringPart::Text {
+                                                    text, ..
+                                                } => Some(text.as_str()),
+                                                _ => None,
+                                            }
+                                        })
+                                    }
+                                    _ => None,
+                                };
+                                if let Some(eff_name) = name {
+                                    if let Some(flag) =
+                                        arandu_middle::EffectFlags::from_name(eff_name)
+                                    {
+                                        flags = flags.union(flag);
+                                    } else {
+                                        checker.diagnostics.push(arandu_middle::Diagnostic::error(
+                                            arandu_middle::DiagCode::N012UnknownAnnotation,
+                                            format!("unknown effect '{eff_name}' in @Effects"),
+                                            attr.span,
+                                        ));
+                                    }
+                                }
+                            }
+                            checker.type_info.function_effects.insert(symbol_id, flags);
                         }
                     }
                 }
@@ -386,6 +448,25 @@ pub(crate) fn collect_signature_types(checker: &mut TypeChecker<'_>, program: &P
 
                     let name_key = crate::NodeKey::from(member.span);
                     if let Some(symbol_id) = checker.resolved.definitions.get(&name_key).copied() {
+                        let member_name = member.name.as_str();
+                        let mut flags = arandu_middle::EffectFlags::FOREIGN;
+                        if member_name.starts_with("ar_rt_tcp_")
+                            || member_name.starts_with("ar_net_")
+                        {
+                            flags = flags.union(arandu_middle::EffectFlags::NET);
+                        } else if member_name.starts_with("ar_fs_")
+                            || member_name.starts_with("ar_io_")
+                        {
+                            flags = flags
+                                .union(arandu_middle::EffectFlags::FILE_READ)
+                                .union(arandu_middle::EffectFlags::FILE_WRITE);
+                        } else if member_name.starts_with("ar_rt_supervisor_")
+                            || member_name.starts_with("ar_process_")
+                        {
+                            flags = flags.union(arandu_middle::EffectFlags::PROCESS);
+                        }
+                        checker.type_info.function_effects.insert(symbol_id, flags);
+
                         let ret_id = checker.intern(ret_ty);
                         // Signature-only intrinsics cannot be inspected by the
                         // AMIR solver. Publish a borrow interface only when the
@@ -442,7 +523,8 @@ pub(crate) fn collect_signature_types(checker: &mut TypeChecker<'_>, program: &P
                                 }
                             }
                         }
-                        let func_ty = ArType::Func(param_types, ret_id);
+                        let func_ty =
+                            ArType::func(&param_types, ret_id, &checker.type_info.type_interner);
                         let func_id = checker.intern(func_ty);
                         checker.record_decl_type(symbol_id, func_id);
                         let params = super::super::types::extract_generic_param_symbols(

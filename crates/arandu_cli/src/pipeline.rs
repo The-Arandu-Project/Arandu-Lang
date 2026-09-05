@@ -127,17 +127,24 @@ pub fn handle_accumulated_diags(
     if diags.is_empty() {
         return;
     }
-    let diagnostics: Vec<_> = diags.iter().map(|d| d.0.clone()).collect();
-    if diagnostics
+    let mut deduped: Vec<&arandu_middle::Diagnostic> = Vec::with_capacity(diags.len());
+    for d in diags {
+        let diag = &d.0;
+        if !deduped.contains(&diag) {
+            deduped.push(diag);
+        }
+    }
+    if deduped
         .iter()
         .any(|d| matches!(d.severity, arandu_middle::Severity::Error))
     {
-        print_diagnostics_and_exit(diagnostics, filepath);
+        print_diagnostics_and_exit(deduped.into_iter().cloned(), filepath);
     }
     let source = std::fs::read_to_string(filepath).unwrap_or_default();
-    let named_source = miette::NamedSource::new(filepath, source);
-    for diagnostic in diagnostics {
-        let report = miette::Report::new(diagnostic).with_source_code(named_source.clone());
+    let source_arc: std::sync::Arc<str> = source.into();
+    for diagnostic in deduped {
+        let named_source = miette::NamedSource::new(filepath, source_arc.clone());
+        let report = miette::Report::new(diagnostic.clone()).with_source_code(named_source);
         eprintln!("{:?}", report);
     }
 }
@@ -165,7 +172,12 @@ pub fn pipeline_lower(
     let type_diags = arandu_query::passes::type_check::accumulated::<
         arandu_middle::db::DiagnosticsAccumulator,
     >(db, file);
-    handle_accumulated_diags(&type_diags, filepath);
+    if type_diags
+        .iter()
+        .any(|d| matches!(d.0.severity, arandu_middle::Severity::Error))
+    {
+        handle_accumulated_diags(&type_diags, filepath);
+    }
 
     let artifacts = {
         arandu_base::time_pass!("lower-amir");

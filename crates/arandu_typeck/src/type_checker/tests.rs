@@ -113,10 +113,8 @@ fn ty_ctx_isolates_by_file_id() {
     let mut ctx = TyCtx::new();
     let i = new_interner();
     let local_ty = i.intern(ArType::Ptr(i.intern(ArType::Primitive(Primitive::Byte))));
-    let imported_fn = i.intern(ArType::Func(
-        vec![i.intern(ArType::Primitive(Primitive::Int))],
-        i.intern(ArType::Primitive(Primitive::Int)),
-    ));
+    let int_ty = i.intern(ArType::Primitive(Primitive::Int));
+    let imported_fn = i.intern(ArType::func(&[int_ty], int_ty, &i));
     // Local binding and imported func share dense local_id=3, different file.
     let local = SymbolId::new(0, 3);
     let imported = SymbolId::new(7, 3);
@@ -187,7 +185,9 @@ fn type_info_pod_struct_is_copy_vec_like_is_not() {
     gen_fields.insert("index".into(), u32_ty);
     gen_fields.insert("generation".into(), u32_ty);
     info.struct_fields.insert(gen_sym, Arc::new(gen_fields));
-    let gen_tid = info.type_interner.intern(ArType::Named(gen_sym, vec![]));
+    let gen_tid = info
+        .type_interner
+        .intern(ArType::named(gen_sym, &[], &info.type_interner));
     assert!(
         info.is_copy(gen_tid),
         "POD handle struct should be auto-copy"
@@ -199,7 +199,9 @@ fn type_info_pod_struct_is_copy_vec_like_is_not() {
     vec_fields.insert("data".into(), ptr_ty);
     vec_fields.insert("len".into(), u64_ty);
     info.struct_fields.insert(vec_sym, Arc::new(vec_fields));
-    let vec_tid = info.type_interner.intern(ArType::Named(vec_sym, vec![]));
+    let vec_tid = info
+        .type_interner
+        .intern(ArType::named(vec_sym, &[], &info.type_interner));
     assert!(
         !info.is_copy(vec_tid),
         "struct with ptr field must not be auto-copy"
@@ -209,7 +211,9 @@ fn type_info_pod_struct_is_copy_vec_like_is_not() {
     let unit_sym = SymbolId::new(0, 12);
     info.struct_fields
         .insert(unit_sym, Arc::new(FxHashMap::default()));
-    let unit_tid = info.type_interner.intern(ArType::Named(unit_sym, vec![]));
+    let unit_tid = info
+        .type_interner
+        .intern(ArType::named(unit_sym, &[], &info.type_interner));
     assert!(info.is_copy(unit_tid), "empty struct is POD copy");
 
     // Bare ptr remains copy (cheap handle)
@@ -226,7 +230,9 @@ fn type_info_pod_struct_is_copy_vec_like_is_not() {
     let mut view_fields = FxHashMap::default();
     view_fields.insert("value".into(), shared_ref);
     info.struct_fields.insert(view_sym, Arc::new(view_fields));
-    let view_ty = info.type_interner.intern(ArType::Named(view_sym, vec![]));
+    let view_ty = info
+        .type_interner
+        .intern(ArType::named(view_sym, &[], &info.type_interner));
     assert!(info.is_copy(view_ty), "shared-ref carrier should be copy");
 
     let mut_view_sym = SymbolId::new(0, 14);
@@ -234,9 +240,9 @@ fn type_info_pod_struct_is_copy_vec_like_is_not() {
     mut_view_fields.insert("value".into(), exclusive_ref);
     info.struct_fields
         .insert(mut_view_sym, Arc::new(mut_view_fields));
-    let mut_view_ty = info
-        .type_interner
-        .intern(ArType::Named(mut_view_sym, vec![]));
+    let mut_view_ty =
+        info.type_interner
+            .intern(ArType::named(mut_view_sym, &[], &info.type_interner));
     assert!(
         !info.is_copy(mut_view_ty),
         "exclusive-ref carrier must remain move-only"
@@ -266,13 +272,13 @@ fn translate_primitive() {
 fn translate_named_with_args() {
     let from = new_interner();
     let int_id = from.intern(ArType::Primitive(Primitive::Int));
-    let named = ArType::Named(SymbolId::new(0, 0), vec![int_id]);
+    let named = ArType::named(SymbolId::new(0, 0), &[int_id], &from);
     let mut to = new_interner();
     let result = translate_type(&named, &from, &mut to);
     let expected_int = to.intern(ArType::Primitive(Primitive::Int));
     assert_eq!(
         result,
-        ArType::Named(SymbolId::new(0, 0), vec![expected_int])
+        ArType::named(SymbolId::new(0, 0), &[expected_int], &to)
     );
 }
 
@@ -281,12 +287,12 @@ fn translate_func() {
     let from = new_interner();
     let int_id = from.intern(ArType::Primitive(Primitive::Int));
     let void_id = from.intern(ArType::Void);
-    let func = ArType::Func(vec![int_id], void_id);
+    let func = ArType::func(&[int_id], void_id, &from);
     let mut to = new_interner();
     let result = translate_type(&func, &from, &mut to);
     let expected_int = to.intern(ArType::Primitive(Primitive::Int));
     let expected_void = to.intern(ArType::Void);
-    assert_eq!(result, ArType::Func(vec![expected_int], expected_void));
+    assert_eq!(result, ArType::func(&[expected_int], expected_void, &to));
 }
 
 #[test]
@@ -311,7 +317,7 @@ fn translate_slice_ptr_array_tuple_result_option_coroutine_range() {
         ArType::Slice(int_id),
         ArType::Ptr(int_id),
         ArType::Array(5, int_id),
-        ArType::Tuple(vec![int_id, bool_id]),
+        ArType::tuple(&[int_id, bool_id], &from),
         ArType::Result(int_id, bool_id),
         ArType::Option(int_id),
         ArType::Coroutine(int_id),
@@ -449,9 +455,13 @@ fn merge_from_generic_params() {
 #[test]
 fn merge_from_param_constraints() {
     let mut from_info = TypeInfo::new();
+    let constraint = crate::type_checker::info::InterfaceConstraint {
+        iface_sym: SymbolId::new(0, 2),
+        type_args: smallvec::SmallVec::new(),
+    };
     from_info.param_constraints.insert(
         SymbolId::new(0, 1),
-        std::sync::Arc::new(vec![SymbolId::new(0, 2)]),
+        std::sync::Arc::new(vec![constraint.clone()]),
     );
     let mut to_info = TypeInfo::new();
     to_info.merge_from(&from_info);
@@ -460,7 +470,7 @@ fn merge_from_param_constraints() {
             .param_constraints
             .get(&SymbolId::new(0, 1))
             .map(|a| a.as_slice()),
-        Some([SymbolId::new(0, 2)].as_slice())
+        Some([constraint].as_slice())
     );
 }
 
@@ -470,6 +480,7 @@ fn merge_from_interfaces() {
     from_info.interfaces.insert(
         SymbolId::new(0, 0),
         InterfaceInfo {
+            self_param: None,
             methods: Vec::new(),
         },
     );
@@ -757,7 +768,7 @@ fn constraint_undefined_field() {
         .unwrap();
     let constraint = Constraint {
         is_subtype: false,
-        expected: ArType::Named(sym, vec![]),
+        expected: ArType::Named(sym, arandu_middle::hir::IndexRange::empty()),
         found: ArType::Void,
         origin: ConstraintOrigin::UndefinedField {
             base_span: dummy_span(),

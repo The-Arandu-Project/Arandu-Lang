@@ -38,6 +38,7 @@ pub enum Stmt {
     Expr {
         span: Span,
         expr: Expr,
+        has_semi: bool,
     },
     If {
         span: Span,

@@ -164,6 +164,10 @@ fn annotation_completions(text: &str, offset: u32, prefix: &str) -> Vec<Completi
                     Some(format!("{}(\"${{1:library}}\")", spec.canonical_name)),
                     Some(InsertTextFormat::SNIPPET),
                 ),
+                arandu_semantics::attributes::AnnotationArguments::EffectList => (
+                    Some(format!("{}(${{1:Pure}})", spec.canonical_name)),
+                    Some(InsertTextFormat::SNIPPET),
+                ),
             };
             CompletionItem {
                 label: spec.canonical_name.to_string(),
@@ -316,10 +320,12 @@ fn module_member_completions(
     let global = tc.symbols.global_scope();
     let module_sym = tc.symbols.lookup_module(global, alias)?;
     let _ = module_sym;
-    let members = tc.symbols.module_members.get(alias)?;
     let prefix_l = prefix.to_ascii_lowercase();
     let mut items = Vec::new();
-    for (name, &sym_id) in members {
+    for ((mod_name, name), &sym_id) in &tc.symbols.module_members {
+        if mod_name.as_str() != alias {
+            continue;
+        }
         let name_s = name.as_str();
         // Skip associated method keys `Type.method` at top-level complete after alias.
         if name_s.contains('.') {

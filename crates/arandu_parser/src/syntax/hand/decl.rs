@@ -6,8 +6,8 @@ use super::ty::{parse_dotted_ident_path, parse_type};
 use crate::ast::ast_pool::AstPool;
 use crate::syntax::kind::{SyntaxKind, SyntaxNode};
 use crate::{
-    Attribute, ConstDecl, ExternDecl, GenericParam, ImportDecl, ImportItem, InterfaceDecl,
-    ModuleDecl, TopLevelDecl, TypeAliasDecl, TypeName, Visibility, WhereItem,
+    Attribute, ConstDecl, ExprKind, ExternDecl, GenericParam, ImportDecl, ImportItem,
+    InterfaceDecl, ModuleDecl, TopLevelDecl, TypeAliasDecl, Visibility, WhereItem,
 };
 use arandu_lexer::{Span, Token, TokenKind};
 use smallvec::{SmallVec, smallvec};
@@ -116,8 +116,32 @@ pub(super) fn parse_attributes(
         if cur.eat(TokenKind::LParen) {
             if cur.peek_kind() != Some(TokenKind::RParen) {
                 loop {
-                    // Attr args may be bare string literals
-                    args.push(try_hand_lower_expr(ctx, cur, 0)?);
+                    // Attr args may be bare string literals or identifiers (e.g. @Effects(Pure, Net))
+                    let is_bare_ident = if let Some(tok) = cur.peek() {
+                        matches!(tok.kind, TokenKind::IdentValue | TokenKind::IdentType)
+                            && !cur.peek_at(1).is_some_and(|next| {
+                                matches!(
+                                    next.kind,
+                                    TokenKind::Dot | TokenKind::LBrace | TokenKind::LParen
+                                )
+                            })
+                    } else {
+                        false
+                    };
+                    let arg = if is_bare_ident {
+                        let t = cur.bump()?;
+                        let text = SmolStr::new(ctx.text(t)?);
+                        let span = ctx.token_span(t);
+                        ctx.pool.alloc_expr(
+                            ExprKind::Path {
+                                path: smallvec::smallvec![text],
+                            },
+                            span,
+                        )
+                    } else {
+                        try_hand_lower_expr(ctx, cur, 0)?
+                    };
+                    args.push(arg);
                     if cur.eat(TokenKind::Comma) {
                         continue;
                     }
@@ -145,7 +169,7 @@ pub(super) fn parse_generic_params(
         return Some(smallvec![]);
     }
     let mut params = SmallVec::new();
-    if cur.peek_kind() != Some(TokenKind::Gt) {
+    if !cur.at_gt() {
         loop {
             let name_tok = cur.peek()?;
             if !matches!(name_tok.kind, TokenKind::IdentType | TokenKind::IdentValue) {
@@ -158,15 +182,9 @@ pub(super) fn parse_generic_params(
             let mut p_end = name_tok.start + name_tok.len;
             if cur.eat(TokenKind::Colon) {
                 loop {
-                    let path_start = cur.peek()?.start;
-                    let path = parse_dotted_ident_path(ctx, cur)?;
-                    let last = path.last()?;
-                    let path_end = path_start + last.len() as u32;
-                    p_end = path_end;
-                    constraints.push(TypeName {
-                        span: ctx.span(path_start, path_end),
-                        path,
-                    });
+                    let ty = super::ty::parse_type(ctx, cur)?;
+                    p_end = ctx.pool.type_expr_span(ty).end;
+                    constraints.push(ty);
                     if cur.eat(TokenKind::Plus) {
                         continue;
                     }
@@ -193,7 +211,7 @@ pub(super) fn parse_generic_params(
             break;
         }
     }
-    cur.expect(TokenKind::Gt)?;
+    cur.expect_gt()?;
     Some(params)
 }
 
@@ -216,15 +234,8 @@ pub(super) fn parse_where_clause(
         cur.expect(TokenKind::Colon)?;
         let mut constraints = SmallVec::new();
         loop {
-            let path_start = cur.peek()?.start;
-            let path = parse_dotted_ident_path(ctx, cur)?;
-            // End of last path segment: approximate from last segment text len.
-            let last = path.last()?;
-            let path_end = path_start + last.len() as u32;
-            constraints.push(TypeName {
-                span: ctx.span(path_start, path_end),
-                path,
-            });
+            let ty = super::ty::parse_type(ctx, cur)?;
+            constraints.push(ty);
             if cur.eat(TokenKind::Plus) {
                 continue;
             }
@@ -232,7 +243,7 @@ pub(super) fn parse_where_clause(
         }
         let item_end = constraints
             .last()
-            .map(|c: &TypeName| c.span.end)
+            .map(|c| ctx.pool.type_expr_span(*c).end)
             .unwrap_or(start + name_tok.len);
         items.push(WhereItem {
             span: ctx.span(start, item_end),

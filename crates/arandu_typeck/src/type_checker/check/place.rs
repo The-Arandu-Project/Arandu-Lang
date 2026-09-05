@@ -70,9 +70,15 @@ pub(crate) fn synth_place(checker: &mut TypeChecker<'_>, place: &arandu_parser::
                     break;
                 }
                 let struct_info_opt = match actual_base_ty {
-                    ArType::Named(id, args) => Some((id, args.clone())),
+                    ArType::Named(id, args) => {
+                        let args_vec = interner.type_args(args);
+                        Some((id, args_vec))
+                    }
                     ArType::Ptr(inner) => match interner.resolve(inner) {
-                        ArType::Named(id, args) => Some((id, args.clone())),
+                        ArType::Named(id, args) => {
+                            let args_vec = interner.type_args(args);
+                            Some((id, args_vec))
+                        }
                         _ => None,
                     },
                     _ => None,
@@ -151,7 +157,7 @@ pub(crate) fn synth_place(checker: &mut TypeChecker<'_>, place: &arandu_parser::
                     ArType::Named(_, args)
                         if arandu_middle::types::is_vec_type(&actual_base_ty, &checker.symbols) =>
                     {
-                        current_ty_id = args[0];
+                        current_ty_id = interner.type_args(*args)[0];
                     }
                     _ => {
                         let err_id = checker.intern(ArType::Error);

@@ -17,6 +17,7 @@ pub enum AnnotationId {
     Forbid,
     NoFallback,
     Destructor,
+    Effects,
     NoSuspend,
     Specialize,
     Repr,
@@ -64,6 +65,7 @@ impl AnnotationTarget {
 pub enum AnnotationArguments {
     None,
     OneString,
+    EffectList,
 }
 
 impl AnnotationArguments {
@@ -72,6 +74,7 @@ impl AnnotationArguments {
         match self {
             Self::None => "no arguments",
             Self::OneString => "one string argument",
+            Self::EffectList => "one or more effect identifiers or strings",
         }
     }
 }
@@ -195,6 +198,16 @@ pub static BUILTIN_ANNOTATIONS: &[AnnotationSpec] = &[
         summary: "Associates one consuming cleanup method with its receiver type.",
     },
     AnnotationSpec {
+        id: AnnotationId::Effects,
+        canonical_name: "Effects",
+        legacy_aliases: &["effects"],
+        targets: FUNCTION,
+        arguments: AnnotationArguments::EffectList,
+        repeatable: false,
+        availability: AnnotationAvailability::Implemented,
+        summary: "Declares static effects and capabilities for a function.",
+    },
+    AnnotationSpec {
         id: AnnotationId::NoSuspend,
         canonical_name: "NoSuspend",
         legacy_aliases: &["nosuspend"],
@@ -283,6 +296,15 @@ fn arguments_match(spec: &AnnotationSpec, attr: &Attribute, pool: &AstPool) -> b
                     matches!(pool.expr(*arg), ExprKind::InterpolatedString { .. })
                 })
         }
+        AnnotationArguments::EffectList => {
+            !attr.args.is_empty()
+                && attr.args.iter().all(|arg| {
+                    matches!(
+                        pool.expr(*arg),
+                        ExprKind::Path { .. } | ExprKind::InterpolatedString { .. }
+                    )
+                })
+        }
     }
 }
 
@@ -346,6 +368,35 @@ pub fn validate_attributes(
                 attr.span,
             ));
             continue;
+        }
+        if spec.arguments == AnnotationArguments::EffectList {
+            let mut has_invalid_effect = false;
+            for arg in &attr.args {
+                let name = match pool.expr(*arg) {
+                    ExprKind::Path { path } => path.first().map(|s| s.as_str()),
+                    ExprKind::InterpolatedString { parts } => {
+                        let part_ids = pool.string_part_list(*parts);
+                        part_ids.first().and_then(|&id| match pool.string_part(id) {
+                            arandu_parser::StringPart::Text { text, .. } => Some(text.as_str()),
+                            _ => None,
+                        })
+                    }
+                    _ => None,
+                };
+                if let Some(eff_name) = name
+                    && arandu_middle::EffectFlags::from_name(eff_name).is_none()
+                {
+                    out.diagnostics.push(Diagnostic::error(
+                        DiagCode::N012UnknownAnnotation,
+                        format!("unknown effect '{eff_name}' in @{}", spec.canonical_name),
+                        attr.span,
+                    ));
+                    has_invalid_effect = true;
+                }
+            }
+            if has_invalid_effect {
+                continue;
+            }
         }
         if !spec.repeatable && out.ids.contains(&spec.id) {
             out.diagnostics.push(Diagnostic::error(

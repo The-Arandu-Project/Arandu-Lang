@@ -303,7 +303,7 @@ fn parse_primary_post(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>) -> Option<Exp
             Some(TokenKind::Lt) if looks_like_generic_args(cur) => {
                 cur.bump();
                 let mut type_args = Vec::new();
-                if cur.peek_kind() != Some(TokenKind::Gt) {
+                if !cur.at_gt() {
                     loop {
                         type_args.push(parse_type(ctx, cur)?);
                         if cur.eat(TokenKind::Comma) {
@@ -312,12 +312,12 @@ fn parse_primary_post(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>) -> Option<Exp
                         break;
                     }
                 }
-                let gt = cur.expect(TokenKind::Gt)?;
+                let (gt_start, gt_len) = cur.expect_gt()?;
                 let args = ctx.pool.alloc_type_expr_list(&type_args);
                 let left_span = ctx.pool.expr_span(left);
                 left = ctx.pool.alloc_expr(
                     ExprKind::Generic { callee: left, args },
-                    ctx.span(left_span.start, gt.start + gt.len),
+                    ctx.span(left_span.start, gt_start + gt_len),
                 );
                 // generic must be followed by call or trailing block
                 if cur.peek_kind() == Some(TokenKind::LParen) {
@@ -545,6 +545,14 @@ fn looks_like_generic_args(cur: &Cursor<'_>) -> bool {
             TokenKind::Lt => depth += 1,
             TokenKind::Gt => {
                 depth -= 1;
+                if depth == 0 {
+                    return cur
+                        .peek_at(i + 1)
+                        .is_some_and(|n| matches!(n.kind, TokenKind::LParen | TokenKind::LBrace));
+                }
+            }
+            TokenKind::ShiftRight => {
+                depth -= 2;
                 if depth == 0 {
                     return cur
                         .peek_at(i + 1)
@@ -840,6 +848,7 @@ fn parse_if_expr(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>, start: u32) -> Opt
             let nested_id = ctx.pool.alloc_stmt(crate::Stmt::Expr {
                 span: ctx.pool.expr_span(nested),
                 expr: nested,
+                has_semi: false,
             });
             crate::Block {
                 span: ctx.pool.expr_span(nested),

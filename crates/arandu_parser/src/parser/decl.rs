@@ -4,6 +4,7 @@ use super::{
     ParseErrorCode, Parser, StructDecl, TokenKind, TopLevelDecl, TypeAliasDecl, TypeName,
     Visibility, is_contextual_module_segment,
 };
+use crate::{ExprId, ExprKind};
 use smallvec::SmallVec;
 use smol_str::SmolStr;
 
@@ -429,7 +430,7 @@ impl<'a> Parser<'a> {
 
     pub(super) fn parse_field_decl(
         &mut self,
-        require_semicolon: bool,
+        _require_semicolon: bool,
     ) -> Result<FieldDecl, ParseError> {
         self.collect_doc_comments();
         let docs = self.take_pending_docs();
@@ -439,8 +440,8 @@ impl<'a> Parser<'a> {
         let name = self.expect_ident_value()?;
         self.expect_name("COLON")?;
         let ty = self.parse_type()?;
-        if require_semicolon || self.at_kind_name("SEMICOLON") {
-            self.expect_semicolon()?;
+        if self.at_kind_name("SEMICOLON") {
+            self.advance();
         }
         let field = FieldDecl {
             span: self.span_from_mark(start),
@@ -606,8 +607,8 @@ impl<'a> Parser<'a> {
         let impl_generic_params = self.parse_generic_params()?;
         let target_type_name = self.parse_type_name()?;
         let type_generic_args = if self.eat_name("LT") {
-            let args = self.parse_comma_separated_list("GT", 1, super::Parser::parse_type)?;
-            self.expect_name("GT")?;
+            let args = self.parse_generic_list(1, super::Parser::parse_type)?;
+            self.expect_gt()?;
             args
         } else {
             Vec::new()
@@ -773,7 +774,7 @@ impl<'a> Parser<'a> {
             let name_span = self.current().span(self.file_id);
             let name = self.expect_name_like()?;
             let args = if self.eat_name("LPAREN") {
-                let args = self.parse_arguments()?;
+                let args = self.parse_attribute_arguments()?;
                 self.expect_name("RPAREN")?;
                 args
             } else {
@@ -788,6 +789,90 @@ impl<'a> Parser<'a> {
             self.skip_semicolons();
         }
         Ok(attrs)
+    }
+
+    pub(super) fn parse_attribute_arguments(&mut self) -> Result<Vec<ExprId>, ParseError> {
+        let mut args = Vec::new();
+        if self.at_kind_name("RPAREN") {
+            return Ok(args);
+        }
+        loop {
+            let is_bare_ident = matches!(
+                self.current().kind,
+                TokenKind::IdentValue | TokenKind::IdentType
+            ) && !self.tokens.get(self.pos + 1).is_some_and(|next| {
+                matches!(
+                    next.kind,
+                    TokenKind::Dot | TokenKind::LBrace | TokenKind::LParen
+                )
+            });
+            let arg = if is_bare_ident {
+                let start = self.pos;
+                let name = self.expect_name_like()?;
+                let span = self.span_from_mark(start);
+                self.pool.alloc_expr(
+                    ExprKind::Path {
+                        path: smallvec::smallvec![name],
+                    },
+                    span,
+                )
+            } else {
+                self.parse_expr(0)?
+            };
+            args.push(arg);
+            if !self.eat_name("COMMA") {
+                break;
+            }
+            if self.at_kind_name("RPAREN") {
+                break;
+            }
+        }
+        Ok(args)
+    }
+
+    pub(super) fn parse_generic_list<T, F>(
+        &mut self,
+        min_items: usize,
+        mut parse_item: F,
+    ) -> Result<Vec<T>, ParseError>
+    where
+        F: FnMut(&mut Self) -> Result<T, ParseError>,
+    {
+        if self.at_gt() {
+            if min_items == 0 {
+                return Ok(Vec::new());
+            }
+            return Err(ParseError::new(
+                ParseErrorCode::ExpectedToken,
+                "expected item before GT",
+                self.current(),
+                self.file_id,
+                self.source,
+            ));
+        }
+
+        let mut items = Vec::new();
+        loop {
+            items.push(parse_item(self)?);
+            if !self.eat_name("COMMA") {
+                break;
+            }
+            if self.at_gt() {
+                break;
+            }
+        }
+
+        if items.len() < min_items {
+            return Err(ParseError::new(
+                ParseErrorCode::ExpectedToken,
+                format!("expected at least {min_items} item(s) before GT"),
+                self.current(),
+                self.file_id,
+                self.source,
+            ));
+        }
+
+        Ok(items)
     }
 
     pub(super) fn parse_comma_separated_list<T, F>(

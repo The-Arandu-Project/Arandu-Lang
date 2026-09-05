@@ -119,6 +119,7 @@ impl<'a> Parser<'a> {
             Stmt::Expr {
                 span: self.span_from_mark(start),
                 expr,
+                has_semi: true,
             }
         }))
     }

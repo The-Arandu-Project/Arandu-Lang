@@ -179,6 +179,7 @@ fn suggest_from_exact_match() {
         span: dummy_span(),
         scope: ScopeId(0),
         is_public: true,
+        lang_item: None,
     }];
     assert_eq!(
         r.suggest_from("println", &syms),
@@ -196,6 +197,7 @@ fn suggest_from_levenshtein() {
         span: dummy_span(),
         scope: ScopeId(0),
         is_public: true,
+        lang_item: None,
     }];
     assert_eq!(r.suggest_from("prntln", &syms), Some("println".to_string()));
 }
@@ -210,6 +212,7 @@ fn suggest_from_no_match() {
         span: dummy_span(),
         scope: ScopeId(0),
         is_public: true,
+        lang_item: None,
     }];
     assert_eq!(r.suggest_from("abcdef", &syms), None);
 }
@@ -224,6 +227,7 @@ fn suggest_from_case_insensitive() {
         span: dummy_span(),
         scope: ScopeId(0),
         is_public: true,
+        lang_item: None,
     }];
     assert_eq!(
         r.suggest_from("println", &syms),

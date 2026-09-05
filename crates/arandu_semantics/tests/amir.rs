@@ -163,6 +163,63 @@ func main() {
 }
 
 #[test]
+fn nested_composite_struct_elaborates_recursive_drop_glue() {
+    let src = r#"
+struct ResourceA { handle: ptr[u8] }
+@Destructor
+func ResourceA.close(own self): void {}
+
+struct ResourceB { handle: ptr[u8] }
+@Destructor
+func ResourceB.close(own self): void {}
+
+struct Container {
+    a: ResourceA
+    b: ResourceB
+}
+
+func main() {
+    let c = Container {
+        a: ResourceA { handle: nil },
+        b: ResourceB { handle: nil },
+    }
+}
+"#;
+    let program = arandu_parser::parse(src).expect("parse");
+    let resolution = resolve_for_test(0, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
+    assert!(tc.diagnostics.is_empty(), "{:?}", tc.diagnostics);
+    let hir = lower_to_hir(&mut tc, &program).expect("HIR");
+    let amir = lower_to_amir(&tc, &hir, 64).expect("AMIR");
+
+    for func in &amir.funcs {
+        if tc.symbols.get(func.symbol).name == "main" {
+            let destroys: Vec<_> = func
+                .blocks
+                .iter()
+                .flat_map(|block| func.block_stmts(block.id))
+                .filter_map(|stmt| match stmt {
+                    AmirStmt::Destroy(p) => Some(p),
+                    _ => None,
+                })
+                .collect();
+            // Both fields of Container (b and a in reverse order) must be destroyed!
+            assert_eq!(
+                destroys.len(),
+                2,
+                "composite struct without explicit destructor must destroy its 2 destructible fields"
+            );
+            assert_eq!(destroys[0].projections.len(), 1);
+            assert_eq!(destroys[1].projections.len(), 1);
+        }
+    }
+}
+
+#[test]
 fn non_copy_local_use_after_move_fails_during_amir_analysis() {
     let src = r#"
 struct Boxed {

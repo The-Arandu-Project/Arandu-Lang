@@ -104,7 +104,12 @@ pub(crate) fn lower_decl(
                 }
                 let receiver_ty = d.params.first().and_then(|_| {
                     match type_check.type_info.type_interner.resolve(decl_ty_id) {
-                        ArType::Func(params, _) => params.first().copied(),
+                        ArType::Func(params, _) => type_check
+                            .type_info
+                            .type_interner
+                            .type_args(params)
+                            .first()
+                            .copied(),
                         _ => None,
                     }
                 });
@@ -206,7 +211,7 @@ pub(crate) fn lower_decl(
                                     Some(tids[0])
                                 } else {
                                     let interner = &type_check.type_info.type_interner;
-                                    Some(interner.intern(ArType::Tuple(tids.clone())))
+                                    Some(interner.intern(ArType::tuple(tids, interner)))
                                 }
                             }
                         });

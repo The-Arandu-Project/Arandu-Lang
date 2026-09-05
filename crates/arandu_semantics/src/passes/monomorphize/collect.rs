@@ -71,7 +71,10 @@ impl<'a, 'bump> InstantiationAnalyzer<'a, 'bump> {
         let params = self.tc.type_info.generic_params.get(&symbol)?;
         let type_args_vec: Vec<TypeId> = params
             .iter()
-            .map(|param| self.interner.intern(ArType::Named(*param, Vec::new())))
+            .map(|param| {
+                self.interner
+                    .intern(ArType::named(*param, &[], self.interner))
+            })
             .collect();
         let type_args = self.bump.alloc_slice_copy(&type_args_vec);
         self.insert_key(InstantiationKey { symbol, type_args }, Span::new(0, 0, 0))
@@ -409,7 +412,7 @@ pub(in crate::passes::monomorphize) fn instantiation_key_for_call(
     let (symbol, type_args) = match &callee.kind {
         HirExprKind::Field { base, field } | HirExprKind::SafeField { base, field } => {
             let sym = method_symbol_from_field(pool, tc, *base, field.as_str())?;
-            let params = tc.type_info.generic_params.get(&sym)?;
+            let params = tc.type_info.generic_params.get(&sym)?.clone();
             if params.is_empty() {
                 return None;
             }
@@ -419,43 +422,40 @@ pub(in crate::passes::monomorphize) fn instantiation_key_for_call(
             let base_ty = tc.type_info.type_interner.resolve(pool.expr(*base).ty);
             let actual = peel_recv_base_ty(tc, base_ty);
             let recv_args: Vec<_> = match actual {
-                ArType::Named(_, args) => args,
+                ArType::Named(_, args) => tc.type_info.type_interner.type_args(args),
                 ArType::Ptr(inner) => match tc.type_info.type_interner.resolve(inner) {
-                    ArType::Named(_, args) => args,
+                    ArType::Named(_, args) => tc.type_info.type_interner.type_args(args),
                     _ => Vec::new(),
                 },
                 ArType::Result(ok, err) => vec![ok, err],
                 ArType::Option(inner) => vec![inner],
                 _ => Vec::new(),
             };
-            if recv_args.is_empty() {
-                return None;
+            if recv_args.len() == params.len() && !recv_args.is_empty() {
+                (sym, recv_args)
+            } else {
+                let call_info = CallSiteInfo {
+                    callee_id,
+                    args,
+                    result_ty: call_result_ty,
+                    recv_args: &recv_args,
+                };
+                let inferred = infer_call_type_args(tc, sym, &params, pool, &call_info)?;
+                (sym, inferred)
             }
-            // Method may have extra type params after the struct's; only receiver-driven
-            // specializations are collected here (method type args need `Generic`).
-            if recv_args.len() > params.len() {
-                return None;
-            }
-            // If method has more params than receiver args, require Generic for the rest.
-            if recv_args.len() != params.len() {
-                return None;
-            }
-            (sym, recv_args)
         }
         HirExprKind::Path { symbol } => {
             let params = tc.type_info.generic_params.get(symbol)?.clone();
             if params.is_empty() {
                 return None;
             }
-            let inferred = infer_free_func_type_args(
-                tc,
-                *symbol,
-                &params,
-                pool,
+            let call_info = CallSiteInfo {
                 callee_id,
                 args,
-                call_result_ty,
-            )?;
+                result_ty: call_result_ty,
+                recv_args: &[],
+            };
+            let inferred = infer_call_type_args(tc, *symbol, &params, pool, &call_info)?;
             (*symbol, inferred)
         }
         HirExprKind::TypePath { member_symbol, .. } => {
@@ -463,15 +463,13 @@ pub(in crate::passes::monomorphize) fn instantiation_key_for_call(
             if params.is_empty() {
                 return None;
             }
-            let inferred = infer_free_func_type_args(
-                tc,
-                *member_symbol,
-                &params,
-                pool,
+            let call_info = CallSiteInfo {
                 callee_id,
                 args,
-                call_result_ty,
-            )?;
+                result_ty: call_result_ty,
+                recv_args: &[],
+            };
+            let inferred = infer_call_type_args(tc, *member_symbol, &params, pool, &call_info)?;
             (*member_symbol, inferred)
         }
         _ => return None,
@@ -482,6 +480,13 @@ pub(in crate::passes::monomorphize) fn instantiation_key_for_call(
         return None;
     }
     Some((symbol, type_args))
+}
+
+struct CallSiteInfo<'a> {
+    callee_id: HirExprId,
+    args: arandu_middle::hir::IndexRange,
+    result_ty: arandu_middle::types::TypeId,
+    recv_args: &'a [TypeId],
 }
 
 fn is_identity_args(
@@ -504,42 +509,46 @@ fn is_identity_args(
     })
 }
 
-/// Infer free-function type arguments by matching formal param types against
+/// Infer function/method type arguments by matching formal param types against
 /// arg expr types, plus the specialized callee type typeck recorded on the
 /// callee expr (covers `join<T>(h)` where `T` only appears in the return type).
-fn infer_free_func_type_args(
+fn infer_call_type_args(
     tc: &TypeCheckResult,
     symbol: SymbolId,
     params: &[SymbolId],
     pool: &arandu_middle::hir::HirPool,
-    callee_id: HirExprId,
-    args: arandu_middle::hir::IndexRange,
-    call_result_ty: arandu_middle::types::TypeId,
+    call: &CallSiteInfo<'_>,
 ) -> Option<Vec<arandu_middle::types::TypeId>> {
     let func_ty = tc.type_info.decl_type(symbol)?;
     let ArType::Func(formals, ret) = func_ty else {
         return None;
     };
-    let arg_ids = pool.expr_list(args);
-    if formals.len() != arg_ids.len() {
+    let arg_ids = pool.expr_list(call.args);
+    let interner = &tc.type_info.type_interner;
+    let formals_vec = interner.type_args(formals);
+    if formals_vec.len() != arg_ids.len() {
         return None;
     }
 
     // param_sym → concrete TypeId
     let mut bindings: rustc_hash::FxHashMap<SymbolId, arandu_middle::types::TypeId> =
         rustc_hash::FxHashMap::default();
-    let interner = &tc.type_info.type_interner;
 
-    for (&formal_id, &arg_eid) in formals.iter().zip(arg_ids.iter()) {
+    for (&param_sym, &concrete_tid) in params.iter().zip(call.recv_args.iter()) {
+        bindings.insert(param_sym, concrete_tid);
+    }
+
+    for (&formal_id, &arg_eid) in formals_vec.iter().zip(arg_ids.iter()) {
         let formal = interner.resolve(formal_id);
         let arg_ty_id = pool.expr(arg_eid).ty;
         collect_param_bindings(interner, params, &formal, arg_ty_id, &mut bindings);
     }
 
     // Specialized Func type on the callee (typeck inference → HIR .ty).
-    let cal_ty = interner.resolve(pool.expr(callee_id).ty);
+    let cal_ty = interner.resolve(pool.expr(call.callee_id).ty);
     if let ArType::Func(spec_formals, spec_ret) = cal_ty {
-        for (&orig, &spec) in formals.iter().zip(spec_formals.iter()) {
+        let spec_formals_vec = interner.type_args(spec_formals);
+        for (&orig, &spec) in formals_vec.iter().zip(spec_formals_vec.iter()) {
             let formal = interner.resolve(orig);
             collect_param_bindings(interner, params, &formal, spec, &mut bindings);
         }
@@ -550,7 +559,43 @@ fn infer_free_func_type_args(
     // Call expression result type (e.g. `return join(h)` expects int).
     {
         let ret_formal = interner.resolve(ret);
-        collect_param_bindings(interner, params, &ret_formal, call_result_ty, &mut bindings);
+        collect_param_bindings(interner, params, &ret_formal, call.result_ty, &mut bindings);
+    }
+
+    // Deduce unbound type parameters from constraints of bound parameters.
+    for &p in params {
+        if bindings.contains_key(&p) {
+            continue;
+        }
+        let bound_pairs: Vec<(SymbolId, arandu_middle::types::TypeId)> =
+            bindings.iter().map(|(&k, &v)| (k, v)).collect();
+        for (b_sym, b_tid) in bound_pairs {
+            let Some(constraints) = tc.type_info.param_constraints.get(&b_sym) else {
+                continue;
+            };
+            for bound in constraints.iter() {
+                let Some(iface_params) = tc.type_info.generic_params.get(&bound.iface_sym) else {
+                    continue;
+                };
+                for (&iface_param_sym, &arg_tid) in iface_params.iter().zip(bound.type_args.iter())
+                {
+                    if let ArType::Named(arg_sym, _) = interner.resolve(arg_tid)
+                        && arg_sym == p
+                        && let Some(deduced) =
+                            deduce_mono_iface_param(tc, b_tid, bound.iface_sym, iface_param_sym)
+                    {
+                        bindings.insert(p, deduced);
+                        break;
+                    }
+                }
+                if bindings.contains_key(&p) {
+                    break;
+                }
+            }
+            if bindings.contains_key(&p) {
+                break;
+            }
+        }
     }
 
     let mut out = Vec::with_capacity(params.len());
@@ -562,6 +607,96 @@ fn infer_free_func_type_args(
         out.push(tid);
     }
     Some(out)
+}
+
+fn deduce_mono_iface_param(
+    tc: &TypeCheckResult,
+    concrete_tid: arandu_middle::types::TypeId,
+    iface_sym: SymbolId,
+    iface_param_sym: SymbolId,
+) -> Option<arandu_middle::types::TypeId> {
+    let interner = &tc.type_info.type_interner;
+    let concrete = interner.resolve(concrete_tid);
+    let type_id = match concrete {
+        ArType::Named(id, _) => id,
+        ArType::Ref(inner) | ArType::RefMut(inner) | ArType::Ptr(inner) => {
+            match interner.resolve(inner) {
+                ArType::Named(id, _) => id,
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    let iface = tc.type_info.interfaces.get(&iface_sym)?;
+    for m in &iface.methods {
+        let method_name = &m.name;
+        let required_id = m.sig_id;
+        let required_ty = interner.resolve(required_id);
+        let Some(prov_sym) = tc.symbols.lookup_associated_member(type_id, method_name) else {
+            continue;
+        };
+        let Some(mut prov_ty) = tc.type_info.decl_type(prov_sym) else {
+            continue;
+        };
+        if let Some(prov_gp) = tc.type_info.generic_params.get(&prov_sym)
+            && let ArType::Func(prov_p, _) = &prov_ty
+        {
+            let prov_args = tc.type_info.type_interner.type_args(*prov_p);
+            if let Some(&self_fid) = prov_args.first() {
+                let self_formal = interner.resolve(self_fid);
+                let mut prov_bindings = rustc_hash::FxHashMap::default();
+                collect_param_bindings(
+                    interner,
+                    prov_gp,
+                    &self_formal,
+                    concrete_tid,
+                    &mut prov_bindings,
+                );
+                let prov_concrete: Vec<TypeId> = prov_gp
+                    .iter()
+                    .map(|p| {
+                        prov_bindings
+                            .get(p)
+                            .copied()
+                            .unwrap_or_else(|| interner.intern(ArType::named(*p, &[], interner)))
+                    })
+                    .collect();
+                let subst =
+                    arandu_middle::types::build_subst_ids(prov_gp, &prov_concrete, interner);
+                if let Some(decl_tid) = tc.type_info.decl_type_id(prov_sym) {
+                    let inst = arandu_middle::types::substitute_type_id(decl_tid, &subst, interner);
+                    prov_ty = interner.resolve(inst);
+                }
+            }
+        }
+        let mut iface_bindings = rustc_hash::FxHashMap::default();
+        if let (ArType::Func(req_p, req_ret), ArType::Func(prov_p, prov_ret)) =
+            (&required_ty, &prov_ty)
+        {
+            collect_param_bindings(
+                interner,
+                &[iface_param_sym],
+                &interner.resolve(*req_ret),
+                *prov_ret,
+                &mut iface_bindings,
+            );
+            let req_args = tc.type_info.type_interner.type_args(*req_p);
+            let prov_args = tc.type_info.type_interner.type_args(*prov_p);
+            for (&r, &pr) in req_args.iter().zip(prov_args.iter()) {
+                collect_param_bindings(
+                    interner,
+                    &[iface_param_sym],
+                    &interner.resolve(r),
+                    pr,
+                    &mut iface_bindings,
+                );
+            }
+        }
+        if let Some(&deduced) = iface_bindings.get(&iface_param_sym) {
+            return Some(deduced);
+        }
+    }
+    None
 }
 
 fn collect_param_bindings(
@@ -577,10 +712,16 @@ fn collect_param_bindings(
         }
         ArType::Named(_, args) => {
             let actual = interner.resolve(actual_id);
-            if let ArType::Named(_, act_args) = actual
-                && args.len() == act_args.len()
+            let act_args = match actual {
+                ArType::Named(_, a) => Some(a),
+                _ => None,
+            };
+            if let Some(act_args) = act_args
+                && args.len == act_args.len
             {
-                for (&fa, &aa) in args.iter().zip(act_args.iter()) {
+                let formal_args = interner.type_args(*args);
+                let actual_args = interner.type_args(act_args);
+                for (&fa, &aa) in formal_args.iter().zip(actual_args.iter()) {
                     let fty = interner.resolve(fa);
                     collect_param_bindings(interner, type_params, &fty, aa, bindings);
                 }
@@ -641,9 +782,11 @@ fn collect_param_bindings(
         }
         ArType::Func(fps, fret) => {
             if let ArType::Func(aps, aret) = interner.resolve(actual_id)
-                && fps.len() == aps.len()
+                && fps.len == aps.len
             {
-                for (&fp, &ap) in fps.iter().zip(aps.iter()) {
+                let formal_fps = interner.type_args(*fps);
+                let actual_aps = interner.type_args(aps);
+                for (&fp, &ap) in formal_fps.iter().zip(actual_aps.iter()) {
                     collect_param_bindings(
                         interner,
                         type_params,
@@ -663,9 +806,11 @@ fn collect_param_bindings(
         }
         ArType::Tuple(items) => {
             if let ArType::Tuple(acts) = interner.resolve(actual_id)
-                && items.len() == acts.len()
+                && items.len == acts.len
             {
-                for (&fi, &ai) in items.iter().zip(acts.iter()) {
+                let formal_items = interner.type_args(*items);
+                let actual_items = interner.type_args(acts);
+                for (&fi, &ai) in formal_items.iter().zip(actual_items.iter()) {
                     collect_param_bindings(
                         interner,
                         type_params,

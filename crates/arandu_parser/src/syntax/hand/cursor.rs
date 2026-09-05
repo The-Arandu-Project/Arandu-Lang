@@ -99,12 +99,17 @@ pub fn token_span(file_id: u32, t: &Token) -> Span {
 pub struct Cursor<'a> {
     toks: &'a [&'a Token],
     pos: usize,
+    split_gt: Option<(u32, u32)>,
 }
 
 impl<'a> Cursor<'a> {
     #[must_use]
     pub fn new(toks: &'a [&'a Token]) -> Self {
-        Self { toks, pos: 0 }
+        Self {
+            toks,
+            pos: 0,
+            split_gt: None,
+        }
     }
 
     #[must_use]
@@ -162,6 +167,30 @@ impl<'a> Cursor<'a> {
         if t.kind == kind {
             self.pos += 1;
             Some(t)
+        } else {
+            None
+        }
+    }
+
+    #[must_use]
+    pub fn at_gt(&self) -> bool {
+        self.split_gt.is_some()
+            || self.peek_kind() == Some(TokenKind::Gt)
+            || self.peek_kind() == Some(TokenKind::ShiftRight)
+    }
+
+    pub fn expect_gt(&mut self) -> Option<(u32, u32)> {
+        if let Some(span) = self.split_gt.take() {
+            return Some(span);
+        }
+        let t = self.peek()?;
+        if t.kind == TokenKind::Gt {
+            self.pos += 1;
+            Some((t.start, t.len))
+        } else if t.kind == TokenKind::ShiftRight {
+            self.pos += 1;
+            self.split_gt = Some((t.start + 1, 1));
+            Some((t.start, 1))
         } else {
             None
         }

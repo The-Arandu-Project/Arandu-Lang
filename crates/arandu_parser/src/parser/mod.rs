@@ -131,6 +131,7 @@ pub struct Parser<'a> {
     pub suppression_window: u32,
     /// Optional event sink for green-tree construction (F1 event-driven CST).
     pub(crate) events: Option<Vec<crate::syntax::events::ParseEvent>>,
+    pub(crate) split_gt: Option<Token>,
 }
 
 #[derive(Debug, Clone)]
@@ -154,6 +155,7 @@ impl<'a> Parser<'a> {
             file_id: 0,
             suppression_window: 0,
             events: None,
+            split_gt: None,
         }
     }
 
@@ -309,7 +311,10 @@ impl<'a> Parser<'a> {
             || self.current().span(self.file_id),
             |token| token.span(self.file_id),
         );
-        let end_span = if self.pos == start {
+        let end_span = if self.split_gt.is_some() {
+            let tok = &self.tokens[self.pos];
+            Span::new(self.file_id, tok.start, tok.start + 1)
+        } else if self.pos == start {
             start_span
         } else {
             self.tokens
@@ -454,17 +459,16 @@ impl<'a> Parser<'a> {
     pub(super) fn expect_name(&mut self, name: &str) -> Result<(), ParseError> {
         if self.at_kind_name(name) {
             self.advance();
-            Ok(())
-        } else {
-            Err(ParseError::expected(
-                ParseErrorCode::ExpectedToken,
-                format!("expected {name}"),
-                self.current(),
-                self.file_id,
-                self.source,
-                token_expectation_names(name),
-            ))
+            return Ok(());
         }
+        Err(ParseError::expected(
+            ParseErrorCode::ExpectedToken,
+            format!("expected {name}"),
+            self.current(),
+            self.file_id,
+            self.source,
+            token_expectation_names(name),
+        ))
     }
 
     pub(super) fn eat_name(&mut self, name: &str) -> bool {
@@ -474,6 +478,59 @@ impl<'a> Parser<'a> {
         } else {
             false
         }
+    }
+
+    pub(super) fn at_gt(&self) -> bool {
+        matches!(self.current().kind, TokenKind::Gt | TokenKind::ShiftRight)
+    }
+
+    pub(super) fn eat_gt(&mut self) -> bool {
+        if let Some(split) = self.split_gt.take() {
+            self.suppression_window += 1;
+            self.emit_token_event(&split);
+            if self.pos < self.tokens.len() - 1 {
+                self.pos += 1;
+            }
+            return true;
+        }
+        if self.tokens[self.pos].kind == TokenKind::ShiftRight {
+            self.suppression_window += 1;
+            let tok = self.tokens[self.pos];
+            let first = Token {
+                kind: TokenKind::Gt,
+                start: tok.start,
+                len: 1,
+                inserted: false,
+            };
+            let second = Token {
+                kind: TokenKind::Gt,
+                start: tok.start + 1,
+                len: 1,
+                inserted: false,
+            };
+            self.emit_token_event(&first);
+            self.split_gt = Some(second);
+            return true;
+        }
+        if self.tokens[self.pos].kind == TokenKind::Gt {
+            self.advance();
+            return true;
+        }
+        false
+    }
+
+    pub(super) fn expect_gt(&mut self) -> Result<(), ParseError> {
+        if self.eat_gt() {
+            return Ok(());
+        }
+        Err(ParseError::expected(
+            ParseErrorCode::ExpectedToken,
+            "expected GT",
+            self.current(),
+            self.file_id,
+            self.source,
+            token_expectation_names("GT"),
+        ))
     }
 
     pub(super) fn expect_kind(&mut self, kind: TokenKind) -> Result<(), ParseError> {
@@ -513,7 +570,11 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn current(&self) -> &Token {
-        &self.tokens[self.pos]
+        if let Some(ref tok) = self.split_gt {
+            tok
+        } else {
+            &self.tokens[self.pos]
+        }
     }
 
     pub(super) fn token_text(&self, token: &Token) -> &str {
@@ -534,6 +595,17 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn advance_raw(&mut self) -> &Token {
+        if let Some(split) = self.split_gt.take() {
+            self.emit_token_event(&split);
+            if self.pos < self.tokens.len() - 1 {
+                self.pos += 1;
+            }
+            return if self.pos > 0 {
+                &self.tokens[self.pos - 1]
+            } else {
+                &self.tokens[0]
+            };
+        }
         let idx = self.pos;
         let token = self.tokens[idx];
         self.emit_token_event(&token);

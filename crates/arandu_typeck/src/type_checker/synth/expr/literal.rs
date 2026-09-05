@@ -202,7 +202,8 @@ pub(super) fn synth_literal_expr(
                 ArType::Named(symbol_id, generic_args) => Some((symbol_id, generic_args)),
                 _ => None,
             };
-            if let Some((symbol_id, mut generic_args)) = struct_info {
+            if let Some((symbol_id, generic_args)) = struct_info {
+                let mut generic_args = checker.type_info.type_interner.type_args(generic_args);
                 let field_ids = checker.pool.field_init_list(fields_range).to_vec();
 
                 // Infer missing type args from field values: `BoxG { v: 42 }` → `BoxG<int>`.
@@ -215,7 +216,8 @@ pub(super) fn synth_literal_expr(
                         infer_struct_type_args(checker, &params, &template_fields, &field_ids)
                 {
                     generic_args = inferred;
-                    let concrete = ArType::Named(symbol_id, generic_args.clone());
+                    let concrete =
+                        ArType::named(symbol_id, &generic_args, &checker.type_info.type_interner);
                     struct_ty_id = checker.intern(concrete);
                 }
 

@@ -554,6 +554,7 @@ impl<'a> Parser<'a> {
                 statements: vec![self.pool.alloc_stmt(Stmt::Expr {
                     span: nested_span,
                     expr: nested,
+                    has_semi: false,
                 })],
             }
         } else {

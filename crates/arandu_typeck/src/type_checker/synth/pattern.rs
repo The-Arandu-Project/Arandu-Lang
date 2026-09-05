@@ -144,7 +144,8 @@ pub fn check_pattern(checker: &mut TypeChecker<'_>, pattern: PatternId, value_ty
                         }
                     }
                 } else {
-                    let expected_enum_ty = ArType::Named(enum_symbol_id, vec![]);
+                    let expected_enum_ty =
+                        ArType::named(enum_symbol_id, &[], &checker.type_info.type_interner);
                     if !super::super::types::unify(
                         &val_ty,
                         &expected_enum_ty,
@@ -404,7 +405,7 @@ pub fn check_pattern(checker: &mut TypeChecker<'_>, pattern: PatternId, value_ty
         Pattern::Tuple { items, span: _ } => {
             let val_ty = checker.type_info.resolve_type_id(value_ty);
             if let ArType::Tuple(tys) = val_ty {
-                let tys_cloned = tys;
+                let tys_cloned = checker.type_info.type_interner.type_args(tys);
                 for (i, &item_id) in checker.pool.pattern_list(*items).iter().enumerate() {
                     let item_ty = tys_cloned
                         .get(i)
@@ -432,7 +433,8 @@ pub fn check_pattern(checker: &mut TypeChecker<'_>, pattern: PatternId, value_ty
         } => {
             let type_key = crate::NodeKey::from(type_name.span);
             if let Some(struct_symbol_id) = checker.resolved.type_refs.get(&type_key).copied() {
-                let expected_struct_ty = ArType::Named(struct_symbol_id, vec![]);
+                let expected_struct_ty =
+                    ArType::named(struct_symbol_id, &[], &checker.type_info.type_interner);
                 let val_ty = checker.resolve(value_ty);
                 if !super::super::types::unify(
                     &val_ty,

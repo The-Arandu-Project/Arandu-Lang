@@ -1435,3 +1435,159 @@ fn impl_blocks_preserve_associated_functions_and_instance_methods() {
     ";
     assert_type_errors!(source, []);
 }
+
+#[test]
+fn interface_method_self_parameter_and_return_substitution() {
+    let source = "
+        enum Ordering {
+            Less,
+            Equal,
+            Greater,
+        }
+        interface Ord {
+            func cmp(self: ref Self, other: ref Self): Ordering
+        }
+        struct Score {
+            val: int
+        }
+        func Score.cmp(self: ref Score, other: ref Score): Ordering {
+            if self.val < other.val { return Ordering.Less }
+            if self.val > other.val { return Ordering.Greater }
+            return Ordering.Equal
+        }
+        func min_by<T: Ord>(a: T, b: T): T {
+            let ord = a.cmp(ref b)
+            match ord {
+                Ordering.Less => { return a }
+                _ => { return b }
+            }
+        }
+        func main(): int {
+            let s1 = Score { val: 10 }
+            let s2 = Score { val: 20 }
+            let m = min_by<Score>(s1, s2)
+            return m.val
+        }
+    ";
+    assert_type_errors!(source, []);
+}
+
+#[test]
+fn parameterized_interface_constraint_satisfied_and_methods_called() {
+    let source = "
+        interface Iterator<Item> {
+            func next(self: mut ref Self): Option<Item>
+        }
+        struct Counter {
+            curr: int
+        }
+        func Counter.next(self: mut ref Counter): Option<int> {
+            let val = self.curr
+            self.curr = self.curr + 1
+            return Option.Some(val)
+        }
+        func step<I: Iterator<int>>(mut iter: I): Option<int> {
+            return iter.next()
+        }
+        func main(): int {
+            let mut c = Counter { curr: 0 }
+            let res = step<Counter>(c)
+            match res {
+                Option.Some(val) => { return val }
+                Option.None => { return -1 }
+            }
+        }
+    ";
+    assert_type_errors!(source, []);
+}
+
+#[test]
+fn parameterized_interface_constraint_generic_adapter_take() {
+    let source = "
+        interface Iterator<Item> {
+            func next(self: mut ref Self): Option<Item>
+        }
+        struct Take<I: Iterator<Item>, Item> {
+            iter: I
+            remaining: int
+        }
+        func Take.next<I: Iterator<Item>, Item>(self: mut ref Take<I, Item>): Option<Item> {
+            if self.remaining <= 0 {
+                return Option.None
+            }
+            self.remaining = self.remaining - 1
+            return self.iter.next()
+        }
+        struct RangeIter {
+            val: int
+        }
+        func RangeIter.next(self: mut ref RangeIter): Option<int> {
+            let v = self.val
+            self.val = self.val + 1
+            return Option.Some(v)
+        }
+        func take<I: Iterator<Item>, Item>(iter: I, n: int): Take<I, Item> {
+            return Take<I, Item> { iter, remaining: n }
+        }
+        func main(): int {
+            let r = RangeIter { val: 10 }
+            let mut t = take(r, 5)
+            let item = t.next()
+            match item {
+                Option.Some(val) => { return val }
+                Option.None => { return 0 }
+            }
+        }
+    ";
+    assert_type_errors!(source, []);
+}
+
+#[test]
+fn parameterized_interface_constraint_type_argument_mismatch() {
+    let source = "
+        interface Iterator<Item> {
+            func next(self: mut ref Self): Option<Item>
+        }
+        struct Counter {
+            curr: int
+        }
+        func Counter.next(self: mut ref Counter): Option<int> {
+            return Option.Some(self.curr)
+        }
+        func consume<I: Iterator<str>>(mut iter: I): Option<str> {
+            return iter.next()
+        }
+        func main() {
+            let c = Counter { curr: 0 }
+            let _ = consume<Counter>(c)
+        }
+    ";
+    assert_type_errors!(source, [T025InterfaceNotSatisfied]);
+}
+
+#[test]
+fn where_clause_with_parameterized_interface_constraint() {
+    let source = "
+        interface Iterator<Item> {
+            func next(self: mut ref Self): Option<Item>
+        }
+        struct Range {
+            current: int
+        }
+        func Range.next(self: mut ref Range): Option<int> {
+            return Option.Some(self.current)
+        }
+        func first<I, Item>(mut iter: I): Option<Item> where I: Iterator<Item> {
+            return iter.next()
+        }
+        func main(): int {
+            let r = Range { current: 42 }
+            let res = first(r)
+            match res {
+                Option.Some(v) => { return v }
+                Option.None => { return 0 }
+            }
+        }
+    ";
+    assert_type_errors!(source, []);
+}

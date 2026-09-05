@@ -121,7 +121,7 @@ pub enum Visibility {
 pub struct GenericParam {
     pub span: Span,
     pub name: SmolStr,
-    pub constraints: SmallVec<[TypeName; 2]>,
+    pub constraints: SmallVec<[TypeExprId; 2]>,
     /// T2.1: optional default type arg, e.g. `A = GlobalAllocator` in `Vec<T, A = GlobalAllocator>`.
     pub default: Option<TypeExprId>,
 }
@@ -130,7 +130,7 @@ pub struct GenericParam {
 pub struct WhereItem {
     pub span: Span,
     pub name: SmolStr,
-    pub constraints: SmallVec<[TypeName; 2]>,
+    pub constraints: SmallVec<[TypeExprId; 2]>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

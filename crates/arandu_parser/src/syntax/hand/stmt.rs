@@ -166,7 +166,7 @@ pub fn parse_stmt_tokens(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>) -> Option<
         _ => {
             // expr stmt
             let expr = try_hand_lower_expr(ctx, cur, 0)?;
-            let _ = cur.eat(TokenKind::Semicolon);
+            let has_semi = cur.eat(TokenKind::Semicolon);
             let end = ctx.pool.expr_span(expr).end;
             let span = ctx.span(start, end);
             if matches!(
@@ -175,7 +175,11 @@ pub fn parse_stmt_tokens(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>) -> Option<
             ) {
                 Some(ctx.pool.alloc_stmt(Stmt::Match { span, expr }))
             } else {
-                Some(ctx.pool.alloc_stmt(Stmt::Expr { span, expr }))
+                Some(ctx.pool.alloc_stmt(Stmt::Expr {
+                    span,
+                    expr,
+                    has_semi,
+                }))
             }
         }
     }
@@ -199,11 +203,12 @@ fn lower_ident_stmt(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>, start: u32) -> 
         }
     }
     let expr = try_hand_lower_expr(ctx, cur, 0)?;
-    let _ = cur.eat(TokenKind::Semicolon);
+    let has_semi = cur.eat(TokenKind::Semicolon);
     let end = ctx.pool.expr_span(expr).end;
     Some(ctx.pool.alloc_stmt(Stmt::Expr {
         span: ctx.span(start, end),
         expr,
+        has_semi,
     }))
 }
 
