@@ -638,7 +638,7 @@ impl LowerCtx<'_> {
                 ..
             } => {
                 if *target == target_block {
-                    args.get(param_idx).cloned()
+                    args.get(param_idx).copied()
                 } else {
                     None
                 }
@@ -651,9 +651,9 @@ impl LowerCtx<'_> {
                 ..
             } => {
                 if *if_true == target_block {
-                    true_args.get(param_idx).cloned()
+                    true_args.get(param_idx).copied()
                 } else if *if_false == target_block {
-                    false_args.get(param_idx).cloned()
+                    false_args.get(param_idx).copied()
                 } else {
                     None
                 }
@@ -663,11 +663,11 @@ impl LowerCtx<'_> {
             } => {
                 for (_, dest, target_args) in targets {
                     if *dest == target_block {
-                        return target_args.get(param_idx).cloned();
+                        return target_args.get(param_idx).copied();
                     }
                 }
                 if otherwise.0 == target_block {
-                    otherwise.1.get(param_idx).cloned()
+                    otherwise.1.get(param_idx).copied()
                 } else {
                     None
                 }

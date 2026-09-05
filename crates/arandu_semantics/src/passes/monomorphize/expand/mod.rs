@@ -79,7 +79,7 @@ pub fn expand_specializations<'bump>(
         .expr_types
         .iter()
         .flatten()
-        .cloned()
+        .copied()
         .chain(tc.type_info.decl_types.values().copied())
         .collect();
     observed_types.sort_by_key(|ty| ty.0);
