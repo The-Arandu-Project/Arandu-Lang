@@ -1,0 +1,334 @@
+module std.alloc.hash_map
+
+import std.alloc.vec as vec
+import std.core.hash as hash
+
+/// An entry within a `HashMap` bucket.
+public struct Entry<K, V> {
+    hash: u64
+    key: K
+    value: V
+    distance: uint
+}
+
+/// Fast contiguous hash table based on Robin Hood Hashing with Backward-Shift deletion.
+///
+/// # Design (DoD / SoA)
+/// - Contiguous flat storage via `Vec<Option<Entry<K, V>>>`, eliminating node heap allocations.
+/// - Robin Hood displacement bounds variance on probe sequences (PSL).
+/// - Deletion uses backward-shift without tombstones, preserving optimal cache density.
+/// - Load factor threshold is 75% with power-of-two growth.
+public struct HashMap<K, V> {
+    buckets: vec.Vec<Option<Entry<K, V>>>
+    len: uint
+    mask: uint
+}
+
+/// Computes the 64-bit FNV-1a hash of `key`.
+public func hashKey<K: hash.Hash>(k: ref K): u64 {
+    let mut h = hash.fnvNew()
+    k.hash(mut ref h)
+    return h.finish()
+}
+
+/// Creates a new empty `HashMap` with zero heap allocation until first insertion.
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func new<K: hash.Hash, V>(): HashMap<K, V> {
+    return HashMap<K, V> {
+        buckets: vec.new<Option<Entry<K, V>>>(),
+        len: 0,
+        mask: 0,
+    }
+}
+
+/// Creates a new `HashMap` with preallocated capacity for at least `minCap` entries.
+///
+/// Capacity is rounded up to the nearest power of two (minimum 8).
+///
+/// # Complexity
+/// Time: O(cap) | Space: O(cap)
+public func withCapacity<K: hash.Hash, V>(minCap: uint): HashMap<K, V> {
+    let mut cap: uint = 8
+    while cap < minCap {
+        cap = cap * 2
+    }
+    let mut buckets = vec.withCapacity<Option<Entry<K, V>>>(cap)
+    let mut i: uint = 0
+    while i < cap {
+        vec.push<Option<Entry<K, V>>>(buckets, Option.None)
+        i = i + 1
+    }
+    return HashMap<K, V> {
+        buckets: buckets,
+        len: 0,
+        mask: cap - 1,
+    }
+}
+
+/// Returns the number of key-value pairs in the map.
+public func len<K, V>(self: ref HashMap<K, V>): uint {
+    return self.len
+}
+
+/// Returns `true` if the map contains no elements.
+public func isEmpty<K, V>(self: ref HashMap<K, V>): bool {
+    return self.len == 0
+}
+
+/// Returns the current total bucket capacity of the map.
+public func capacity<K, V>(self: ref HashMap<K, V>): uint {
+    return vec.len<Option<Entry<K, V>>>(self.buckets)
+}
+
+/// Clears the map, removing all key-value pairs while retaining bucket capacity.
+public func clear<K, V>(self: mut ref HashMap<K, V>): void {
+    let cap = vec.len<Option<Entry<K, V>>>(self.buckets)
+    let mut i: uint = 0
+    while i < cap {
+        vec.put<Option<Entry<K, V>>>(self.buckets, i, Option.None);
+        i = i + 1
+    }
+    self.len = 0
+}
+
+/// Internal function to resize and rehash all elements when load factor exceeds 75%.
+public func resize<K: hash.Hash, V>(self: mut ref HashMap<K, V>): void {
+    let oldCap = vec.len<Option<Entry<K, V>>>(self.buckets)
+    let mut newCap: uint = 8
+    if oldCap > 0 {
+        newCap = oldCap * 2
+    }
+    let mut newBuckets = vec.withCapacity<Option<Entry<K, V>>>(newCap)
+    let mut i: uint = 0
+    while i < newCap {
+        vec.push<Option<Entry<K, V>>>(newBuckets, Option.None)
+        i = i + 1
+    }
+    let oldBuckets = self.buckets
+    self.buckets = newBuckets
+    self.mask = newCap - 1
+    self.len = 0
+
+    let mut j: uint = 0
+    while j < oldCap {
+        match vec.get<Option<Entry<K, V>>>(oldBuckets, j) {
+            Some(Some(entry)) => {
+                insertEntry(self, entry.key, entry.value, entry.hash);
+            }
+            _ => {}
+        }
+        j = j + 1
+    }
+}
+
+/// Internal insertion helper implementing Robin Hood probing.
+public func insertEntry<K: hash.Hash, V>(self: mut ref HashMap<K, V>, key: K, val: V, h: u64): Option<V> {
+    let cap = vec.len<Option<Entry<K, V>>>(self.buckets)
+    if cap == 0 || (self.len + 1) * 4 > cap * 3 {
+        resize(self)
+    }
+    let currentCap = vec.len<Option<Entry<K, V>>>(self.buckets)
+    let mut idx = (h as uint) & self.mask
+    let mut dist: uint = 0
+    let mut curKey = key
+    let mut curVal = val
+    let mut curHash = h
+
+    while dist < currentCap {
+        match vec.get<Option<Entry<K, V>>>(self.buckets, idx) {
+            Some(None) => {
+                vec.put<Option<Entry<K, V>>>(self.buckets, idx, Option.Some(Entry<K, V> {
+                    hash: curHash,
+                    key: curKey,
+                    value: curVal,
+                    distance: dist,
+                }));
+                self.len = self.len + 1
+                return Option.None
+            }
+            Some(Some(entry)) => {
+                if entry.hash == curHash && entry.key.eq(ref curKey) {
+                    let old = entry.value
+                    vec.put<Option<Entry<K, V>>>(self.buckets, idx, Option.Some(Entry<K, V> {
+                        hash: curHash,
+                        key: curKey,
+                        value: curVal,
+                        distance: entry.distance,
+                    }));
+                    return Option.Some(old)
+                }
+                if dist > entry.distance {
+                    let tempKey = entry.key
+                    let tempVal = entry.value
+                    let tempHash = entry.hash
+                    let tempDist = entry.distance
+
+                    vec.put<Option<Entry<K, V>>>(self.buckets, idx, Option.Some(Entry<K, V> {
+                        hash: curHash,
+                        key: curKey,
+                        value: curVal,
+                        distance: dist,
+                    }));
+
+                    curKey = tempKey
+                    curVal = tempVal
+                    curHash = tempHash
+                    dist = tempDist
+                }
+            }
+            _ => {}
+        }
+        idx = (idx + 1) & self.mask
+        dist = dist + 1
+    }
+    return Option.None
+}
+
+/// Inserts a key-value pair into the map.
+///
+/// If the map did not have this key present, `Option.None` is returned.
+/// If the map did have this key present, the value is updated and the old value is returned.
+///
+/// # Complexity
+/// Time: O(1) amortized | Space: O(1) amortized
+public func insert<K: hash.Hash, V>(self: mut ref HashMap<K, V>, key: K, val: V): Option<V> {
+    let h = hashKey(ref key)
+    return insertEntry(self, key, val, h)
+}
+
+/// Returns `true` if the map contains a value for the specified key.
+///
+/// # Complexity
+/// Time: O(1) average | Space: O(1)
+public func contains<K: hash.Hash, V>(self: ref HashMap<K, V>, key: ref K): bool {
+    let cap = vec.len<Option<Entry<K, V>>>(self.buckets)
+    if cap == 0 {
+        return false
+    }
+    let h = hashKey<K>(key)
+    let mut idx = (h as uint) & self.mask
+    let mut dist: uint = 0
+    while dist < cap {
+        match vec.get<Option<Entry<K, V>>>(self.buckets, idx) {
+            Some(Some(entry)) => {
+                if dist > entry.distance {
+                    return false
+                }
+                if entry.hash == h && entry.key.eq(key) {
+                    return true
+                }
+            }
+            _ => {
+                return false
+            }
+        }
+        idx = (idx + 1) & self.mask
+        dist = dist + 1
+    }
+    return false
+}
+
+/// Returns a copy of the value corresponding to the key if present.
+///
+/// # Complexity
+/// Time: O(1) average | Space: O(1)
+public func get<K: hash.Hash, V>(self: ref HashMap<K, V>, key: ref K): Option<V> {
+    let cap = vec.len<Option<Entry<K, V>>>(self.buckets)
+    if cap == 0 {
+        return Option.None
+    }
+    let h = hashKey<K>(key)
+    let mut idx = (h as uint) & self.mask
+    let mut dist: uint = 0
+    while dist < cap {
+        match vec.get<Option<Entry<K, V>>>(self.buckets, idx) {
+            Some(Some(entry)) => {
+                if dist > entry.distance {
+                    return Option.None
+                }
+                if entry.hash == h && entry.key.eq(key) {
+                    return Option.Some(entry.value)
+                }
+            }
+            _ => {
+                return Option.None
+            }
+        }
+        idx = (idx + 1) & self.mask
+        dist = dist + 1
+    }
+    return Option.None
+}
+
+/// Removes a key from the map using Backward-Shift deletion, returning the value at the key if present.
+///
+/// # Complexity
+/// Time: O(1) average | Space: O(1)
+public func remove<K: hash.Hash, V>(self: mut ref HashMap<K, V>, key: ref K): Option<V> {
+    let cap = vec.len<Option<Entry<K, V>>>(self.buckets)
+    if cap == 0 {
+        return Option.None
+    }
+    let h = hashKey<K>(key)
+    let mut idx = (h as uint) & self.mask
+    let mut dist: uint = 0
+
+    while dist < cap {
+        match vec.get<Option<Entry<K, V>>>(self.buckets, idx) {
+            Some(Some(entry)) => {
+                if dist > entry.distance {
+                    return Option.None
+                }
+                if entry.hash == h && entry.key.eq(key) {
+                    let removedVal = entry.value
+
+                    let mut curr = idx
+                    let mut next = (idx + 1) & self.mask
+                    let mut shifting = true
+
+                    while shifting {
+                        let mut shouldShift = false
+                        match vec.get<Option<Entry<K, V>>>(self.buckets, next) {
+                            Some(Some(nextEntry)) => {
+                                if nextEntry.distance > 0 {
+                                    shouldShift = true
+                                }
+                            }
+                            _ => {}
+                        }
+
+                        if shouldShift {
+                            match vec.get<Option<Entry<K, V>>>(self.buckets, next) {
+                                Some(Some(nextEntry)) => {
+                                    vec.put<Option<Entry<K, V>>>(self.buckets, curr, Option.Some(Entry<K, V> {
+                                        hash: nextEntry.hash,
+                                        key: nextEntry.key,
+                                        value: nextEntry.value,
+                                        distance: nextEntry.distance - 1,
+                                    }));
+                                }
+                                _ => {}
+                            }
+                            curr = next
+                            next = (next + 1) & self.mask
+                        } else {
+                            vec.put<Option<Entry<K, V>>>(self.buckets, curr, Option.None);
+                            shifting = false
+                        }
+                    }
+
+                    self.len = self.len - 1
+                    return Option.Some(removedVal)
+                }
+            }
+            _ => {
+                return Option.None
+            }
+        }
+        idx = (idx + 1) & self.mask
+        dist = dist + 1
+    }
+    return Option.None
+}

@@ -17,6 +17,10 @@ extern "C" {
     func ar_vec_buf_free(p: ptr[u8], size: uint): void
     func ar_vec_realloc(p: ptr[u8], oldSize: uint, newSize: uint): ptr[u8]
     func ar_string_push_str(s: mut ref String, value: str): bool
+    func ar_str_starts_with(s: str, prefix: str): int
+    func ar_str_ends_with(s: str, suffix: str): int
+    func ar_str_contains(s: str, needle: str): int
+    func ar_str_find(s: str, needle: str): int
 }
 
 /// Returns a shared UTF-8 string view (`str`) borrowing the String's data.
@@ -392,6 +396,55 @@ public func String.tryReserve(self: mut ref String, additional: uint): bool {
 /// Clears the String, retaining capacity.
 public func String.clear(self: mut ref String): void {
     clear(self)
+}
+
+/// Truncates the String to `newLen` bytes.
+public func truncate(s: mut ref String, newLen: uint): void {
+    if newLen < s.len {
+        s.len = newLen
+    }
+}
+
+/// Truncates this String to `newLen` bytes.
+public func String.truncate(self: mut ref String, newLen: uint): void {
+    truncate(self, newLen)
+}
+
+/// Returns `true` if this String starts with `prefix`.
+public func String.startsWith(self: ref String, prefix: str): bool {
+    unsafe {
+        return ar_str_starts_with(*self.asStr(), prefix) != 0
+    }
+}
+
+/// Returns `true` if this String ends with `suffix`.
+public func String.endsWith(self: ref String, suffix: str): bool {
+    unsafe {
+        return ar_str_ends_with(*self.asStr(), suffix) != 0
+    }
+}
+
+/// Returns `true` if this String contains `needle`.
+public func String.contains(self: ref String, needle: str): bool {
+    unsafe {
+        return ar_str_contains(*self.asStr(), needle) != 0
+    }
+}
+
+/// Returns the byte index of the first occurrence of `needle` in this String.
+public func String.find(self: ref String, needle: str): Option<uint> {
+    unsafe {
+        let idx = ar_str_find(*self.asStr(), needle)
+        if idx < 0 {
+            return Option.None
+        }
+        return Option.Some(idx as uint)
+    }
+}
+
+/// Clones this String into an independently allocated copy.
+public func String.clone(self: ref String): String {
+    return from(*self.asStr())
 }
 
 /// Frees the heap buffer upon destruction.

@@ -1,0 +1,85 @@
+module std.alloc.arena
+
+/// High-performance contiguous Bump Allocator (Arena).
+///
+/// Follows Data-Oriented Design (DoD):
+/// - Allocates a single large memory block up-front.
+/// - Allocation is a pointer bump: O(1) instruction sequence.
+/// - Whole-arena reset is instantaneous O(1) without per-object traversal or individual frees.
+/// - Ideal for AST nodes, compilers, frames, and transient batch jobs.
+
+import std.core.mem as mem
+
+extern "C" {
+    func ar_vec_malloc(size: uint): ptr[u8]
+    func ar_vec_buf_free(p: ptr[u8], size: uint): void
+}
+
+/// Contiguous bump allocation arena.
+public struct Arena {
+    data: ptr[u8]
+    capacity: uint
+    offset: uint
+}
+
+/// Creates a new `Arena` with the specified byte capacity.
+public func new(capacity: uint): Arena {
+    unsafe {
+        let p = ar_vec_malloc(capacity)
+        return Arena {
+            data: p,
+            capacity: capacity,
+            offset: 0,
+        }
+    }
+}
+
+/// Allocates `size` bytes from the arena aligned to `align` boundary.
+///
+/// Returns `Option.Some(ptr)` if space is available, or `Option.None` on out-of-memory.
+public func Arena.alloc(self: mut ref Arena, size: uint, align: uint): Option<ptr[u8]> {
+    let mut aligned = self.offset
+    if align > 1 {
+        let rem = aligned % align
+        if rem != 0 {
+            aligned = aligned + (align - rem)
+        }
+    }
+    if aligned + size > self.capacity {
+        return Option.None
+    }
+    let res = mem.ptrOffset<u8>(self.data, aligned as i32)
+    self.offset = aligned + size
+    return Option.Some(res)
+}
+
+/// Resets the arena, reclaiming all allocated memory instantly in O(1) time.
+public func Arena.reset(self: mut ref Arena): void {
+    self.offset = 0
+}
+
+/// Returns the number of bytes currently allocated in the arena.
+public func Arena.allocatedBytes(self: ref Arena): uint {
+    return self.offset
+}
+
+/// Returns the number of remaining bytes available before exhaustion.
+public func Arena.remainingBytes(self: ref Arena): uint {
+    if self.offset >= self.capacity {
+        return 0
+    }
+    return self.capacity - self.offset
+}
+
+/// Frees the underlying memory buffer held by this arena.
+public func Arena.free(self: mut ref Arena): void {
+    let nullp: ptr[u8] = nil
+    if self.data != nullp {
+        unsafe {
+            ar_vec_buf_free(self.data, self.capacity)
+            self.data = nullp
+            self.capacity = 0
+            self.offset = 0
+        }
+    }
+}

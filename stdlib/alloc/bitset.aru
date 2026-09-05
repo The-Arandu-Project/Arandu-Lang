@@ -1,0 +1,177 @@
+module std.alloc.bitset
+
+import std.alloc.vec as vec
+import std.core.option as option
+
+/// Dense bitset stored as an array of 64-bit words.
+///
+/// Designed for high cache locality and word-parallel set operations (DoD/SoA).
+public struct BitSet {
+    words: vec.Vec<u64>
+    nbits: uint
+}
+
+/// Creates a new empty `BitSet`.
+public func bitsetNew(): BitSet {
+    return BitSet {
+        words: vec.new<u64>(),
+        nbits: 0,
+    }
+}
+
+/// Creates an empty `BitSet` with preallocated capacity for at least `bits` bits.
+public func bitsetWithCapacity(bits: uint): BitSet {
+    let wordCount = (bits + 63) / 64
+    let mut words = vec.withCapacity<u64>(wordCount)
+    let mut i: uint = 0
+    while i < wordCount {
+        vec.push<u64>(words, 0 as u64)
+        i = i + 1
+    }
+    return BitSet {
+        words: words,
+        nbits: bits,
+    }
+}
+
+/// Returns `true` if the bit at `bit` is set.
+public func BitSet.contains(self: ref BitSet, bit: uint): bool {
+    let wordIdx = bit / 64
+    let bitIdx = bit % 64
+    if wordIdx >= vec.len<u64>(self.words) {
+        return false
+    }
+    match vec.get<u64>(self.words, wordIdx) {
+        Some(w) => {
+            let mask: u64 = (1 as u64) << (bitIdx as u64)
+            return (w & mask) != (0 as u64)
+        }
+        None => {
+            return false
+        }
+    }
+}
+
+/// Inserts `bit` into the set, returning `true` if it was not already present.
+public func BitSet.insert(self: mut ref BitSet, bit: uint): bool {
+    let wordIdx = bit / 64
+    let bitIdx = bit % 64
+    while wordIdx >= vec.len<u64>(self.words) {
+        vec.push<u64>(self.words, 0 as u64)
+    }
+    match vec.get<u64>(self.words, wordIdx) {
+        Some(w) => {
+            let mask: u64 = (1 as u64) << (bitIdx as u64)
+            if (w & mask) != (0 as u64) {
+                return false
+            }
+            vec.put<u64>(self.words, wordIdx, w | mask)
+            if bit >= self.nbits {
+                self.nbits = bit + 1
+            }
+            return true
+        }
+        None => {
+            return false
+        }
+    }
+}
+
+/// Removes `bit` from the set, returning `true` if it was present.
+public func BitSet.remove(self: mut ref BitSet, bit: uint): bool {
+    let wordIdx = bit / 64
+    let bitIdx = bit % 64
+    if wordIdx >= vec.len<u64>(self.words) {
+        return false
+    }
+    match vec.get<u64>(self.words, wordIdx) {
+        Some(w) => {
+            let mask: u64 = (1 as u64) << (bitIdx as u64)
+            if (w & mask) == (0 as u64) {
+                return false
+            }
+            vec.put<u64>(self.words, wordIdx, w & (~mask))
+            return true
+        }
+        None => {
+            return false
+        }
+    }
+}
+
+/// Clears all bits in the bitset.
+public func BitSet.clear(self: mut ref BitSet): void {
+    let total = vec.len<u64>(self.words)
+    let mut i: uint = 0
+    while i < total {
+        vec.put<u64>(self.words, i, 0 as u64)
+        i = i + 1
+    }
+    self.nbits = 0
+}
+
+/// Computes the union in-place (`self = self | other`).
+public func BitSet.unionWith(self: mut ref BitSet, other: ref BitSet): void {
+    let otherLen = vec.len<u64>(other.words)
+    while vec.len<u64>(self.words) < otherLen {
+        vec.push<u64>(self.words, 0 as u64)
+    }
+    let mut i: uint = 0
+    while i < otherLen {
+        let wSelf = vec.get<u64>(self.words, i).unwrapOr(0 as u64)
+        let wOther = vec.get<u64>(other.words, i).unwrapOr(0 as u64)
+        vec.put<u64>(self.words, i, wSelf | wOther)
+        i = i + 1
+    }
+    if other.nbits > self.nbits {
+        self.nbits = other.nbits
+    }
+}
+
+/// Computes the intersection in-place (`self = self & other`).
+public func BitSet.intersectWith(self: mut ref BitSet, other: ref BitSet): void {
+    let selfLen = vec.len<u64>(self.words)
+    let otherLen = vec.len<u64>(other.words)
+    let mut i: uint = 0
+    while i < selfLen {
+        if i < otherLen {
+            let wSelf = vec.get<u64>(self.words, i).unwrapOr(0 as u64)
+            let wOther = vec.get<u64>(other.words, i).unwrapOr(0 as u64)
+            vec.put<u64>(self.words, i, wSelf & wOther)
+        } else {
+            vec.put<u64>(self.words, i, 0 as u64)
+        }
+        i = i + 1
+    }
+}
+
+/// Computes the difference in-place (`self = self & ~other`).
+public func BitSet.differenceWith(self: mut ref BitSet, other: ref BitSet): void {
+    let selfLen = vec.len<u64>(self.words)
+    let otherLen = vec.len<u64>(other.words)
+    let mut i: uint = 0
+    while i < selfLen {
+        if i < otherLen {
+            let wSelf = vec.get<u64>(self.words, i).unwrapOr(0 as u64)
+            let wOther = vec.get<u64>(other.words, i).unwrapOr(0 as u64)
+            vec.put<u64>(self.words, i, wSelf & (~wOther))
+        }
+        i = i + 1
+    }
+}
+
+/// Returns the total number of set bits (population count).
+public func BitSet.countOnes(self: ref BitSet): uint {
+    let total = vec.len<u64>(self.words)
+    let mut count: uint = 0
+    let mut i: uint = 0
+    while i < total {
+        let mut w = vec.get<u64>(self.words, i).unwrapOr(0 as u64)
+        while w != (0 as u64) {
+            w = w & (w - (1 as u64))
+            count = count + 1
+        }
+        i = i + 1
+    }
+    return count
+}
