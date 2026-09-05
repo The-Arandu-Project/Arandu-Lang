@@ -345,6 +345,8 @@ Fase 5 — Otimização Global, CodeGen & Ecossistema (v0.4+) · [NÃO INICIADA]
 [ ] REG    Register Allocation (Linear Scan para Cranelift, Graph Coloring para LLVM)
 [ ] GEN    Adaptive Monomorphization (Witness tables para cold paths vs Lazy Monomorphization para loops)
 [ ] ABI    ABI & Layout Stability (repr(C) garantido, fat pointers, stable calling conventions)
+   ├─ [ ] ABI.1   Classificador de ABI System V AMD64 / Calling Conventions (BC.5): classificação de agregados (INTEGER, SSE, MEMORY) para passagem/retorno de structs <= 16 bytes em registradores no Cranelift/LLVM.
+   └─ [ ] DBG     Metadados de Depuração DWARF v5: emissão de seções .debug_info e .debug_line mapeando CST spans e variáveis locais da AMIR para depuração interativa com GDB/LLDB.
 [ ] PAN    Panic & Error Model sem unwinding (abort nativo UD2/BRK, zero metadata overhead)
 [ ] CACHE  Stable Serialization & Cache (.air, .amir, .ameta, reproducible DET builds)
 * Mover json e xml para arandu_ext::serialization
