@@ -195,6 +195,8 @@ pub enum DiagCode {
     T037InvalidBenchmarkContract,
     /// Integer literal cannot be represented by its contextual integer type.
     T038IntegerLiteralOutOfRange,
+    /// Function performs an effect that is not declared in @Effects or is denied by policy.
+    T039UnsatisfiedEffect,
 
     // ── Lowering (L) ──
     L001LoweringUnresolvedSymbol,
@@ -319,6 +321,7 @@ impl DiagCode {
             T036InvalidTestContract,
             T037InvalidBenchmarkContract,
             T038IntegerLiteralOutOfRange,
+            T039UnsatisfiedEffect,
             L001LoweringUnresolvedSymbol,
             G001GenericInstantiationCycle,
             G002GenericInstantiationLimit,
@@ -450,6 +453,7 @@ impl DiagCode {
             DiagCode::T036InvalidTestContract => "T036",
             DiagCode::T037InvalidBenchmarkContract => "T037",
             DiagCode::T038IntegerLiteralOutOfRange => "T038",
+            DiagCode::T039UnsatisfiedEffect => "T039",
             DiagCode::L001LoweringUnresolvedSymbol => "L001",
             DiagCode::G001GenericInstantiationCycle => "G001",
             DiagCode::G002GenericInstantiationLimit => "G002",
