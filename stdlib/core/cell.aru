@@ -1,0 +1,52 @@
+module std.core.cell
+
+/// Core primitive for interior mutability.
+public struct UnsafeCell<T> {
+    value: T
+}
+
+/// Creates a new `UnsafeCell` containing `val`.
+public func unsafeCellNew<T>(val: T): UnsafeCell<T> {
+    return UnsafeCell<T> {
+        value: val,
+    }
+}
+
+/// Unwraps and returns the contained value.
+public func UnsafeCell.intoInner<T>(self: own UnsafeCell<T>): T {
+    return self.value
+}
+
+/// A mutable memory location for copyable types.
+public struct Cell<T> {
+    value: T
+}
+
+/// Creates a new `Cell` containing `val`.
+public func cellNew<T>(val: T): Cell<T> {
+    return Cell<T> {
+        value: val,
+    }
+}
+
+/// Returns a copy of the contained value.
+public func Cell.get<T>(self: ref Cell<T>): T {
+    return self.value
+}
+
+/// Sets the contained value.
+public func Cell.put<T>(self: mut ref Cell<T>, val: T): void {
+    self.value = val
+}
+
+/// Replaces the contained value with `val`, returning the old value.
+public func Cell.replace<T>(self: mut ref Cell<T>, val: T): T {
+    let old = self.value
+    self.value = val
+    return old
+}
+
+/// Unwraps and returns the contained value.
+public func Cell.intoInner<T>(self: own Cell<T>): T {
+    return self.value
+}

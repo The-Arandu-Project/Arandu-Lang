@@ -11,3 +11,16 @@ public enum Poll<T> {
     Ready(T)
     Pending
 }
+
+/// Execution context passed to an asynchronous task's poll step.
+public struct Context {
+    /// Opaque pointer to the runtime waker handle.
+    waker: ptr[void]?
+}
+
+/// A value that can be asynchronously polled to completion.
+public interface Future<T> {
+    /// Attempts to resolve the future to a final value.
+    func poll(self: mut ref Self, ctx: mut ref Context): Poll<T>
+}
+

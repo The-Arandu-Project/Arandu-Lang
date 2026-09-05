@@ -36,3 +36,37 @@ extern "arandu-intrinsic" {
     /// `p` must be a valid, properly aligned pointer with write permissions.
     func ptrWrite<T>(p: ptr[T], val: T) : void
 }
+
+/// Swaps the values pointed to by `x` and `y` in-place without extra allocation.
+///
+/// # Safety
+/// Both `x` and `y` must be valid, properly aligned, non-overlapping pointers.
+public func swap<T>(x: ptr[T], y: ptr[T]): void {
+    unsafe {
+        let tmp = ptrRead(x)
+        ptrWrite(x, ptrRead(y))
+        ptrWrite(y, tmp)
+    }
+}
+
+/// Replaces the value at `dest` with `src`, returning the old value.
+///
+/// # Safety
+/// `dest` must be a valid, properly aligned pointer with write permissions.
+public func replace<T>(dest: ptr[T], src: T): T {
+    unsafe {
+        let old = ptrRead(dest)
+        ptrWrite(dest, src)
+        return old
+    }
+}
+
+/// Replaces the value at `dest` with `Option.None`, returning the previous value.
+///
+/// # Safety
+/// `dest` must be a valid, properly aligned pointer with write permissions.
+public func take<T>(dest: ptr[Option<T>]): Option<T> {
+    return replace<Option<T>>(dest, Option.None)
+}
+
+

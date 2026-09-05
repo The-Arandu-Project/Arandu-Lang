@@ -1,0 +1,18 @@
+module std.core.marker
+
+/// Zero-sized type used to mark that a struct logically owns or refers to `T`.
+public struct PhantomData<T> {}
+
+/// Creates a new `PhantomData` instance.
+public func phantom<T>(): PhantomData<T> {
+    return PhantomData<T> {}
+}
+
+/// Marker interface for types whose memory can be safely duplicated via byte copy.
+public interface Copy {}
+
+/// Marker interface for types that can be safely transferred across concurrency boundaries.
+public interface Send {}
+
+/// Marker interface for types that can be safely referenced concurrently.
+public interface Sync {}

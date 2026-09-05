@@ -11,3 +11,8 @@ import std.core.num as num
 import std.core.char as chars
 import std.core.ascii as ascii
 import std.core.str as strings
+import std.core.hash as hash
+import std.core.iter as iter
+import std.core.cell as cell
+import std.core.marker as marker
+import std.core.atomic as atomic

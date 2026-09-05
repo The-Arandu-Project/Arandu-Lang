@@ -1,0 +1,88 @@
+module std.core.hash
+
+import std.core.slice as slice
+
+/// Streaming hash state interface.
+public interface Hasher {
+    func finish(self: ref Self): u64
+    func write(self: mut ref Self, bytes: []u8): void
+    func writeU8(self: mut ref Self, i: u8): void
+    func writeU16(self: mut ref Self, i: u16): void
+    func writeU32(self: mut ref Self, i: u32): void
+    func writeU64(self: mut ref Self, i: u64): void
+    func writeInt(self: mut ref Self, i: int): void
+}
+
+/// A type that can be hashed into a [`Hasher`].
+public interface Hash {
+    func eq(self: ref Self, other: ref Self): bool
+    func hash<H: Hasher>(self: ref Self, state: mut ref H): void
+}
+
+/// 64-bit FNV-1a non-cryptographic hash state.
+///
+/// Pure stack-allocated struct (8 bytes), zero heap allocations.
+public struct FnvHasher {
+    state: u64
+}
+
+/// Creates a new `FnvHasher` initialized with the FNV-1a 64-bit offset basis.
+public func fnvNew(): FnvHasher {
+    return FnvHasher {
+        state: 14695981039346656037 as u64,
+    }
+}
+
+/// Returns the final 64-bit hash value.
+public func FnvHasher.finish(self: ref FnvHasher): u64 {
+    return self.state
+}
+
+/// Feeds a slice of bytes into the hash state.
+public func FnvHasher.write(self: mut ref FnvHasher, bytes: []u8): void {
+    let mut i: uint = 0
+    let total = slice.len<u8>(bytes)
+    let prime: u64 = 1099511628211 as u64
+    while i < total {
+        let b = bytes[i] as u64
+        self.state = (self.state ^ b) * prime
+        i = i + 1
+    }
+}
+
+/// Hashes a single `u8`.
+public func FnvHasher.writeU8(self: mut ref FnvHasher, i: u8): void {
+    let prime: u64 = 1099511628211 as u64
+    self.state = (self.state ^ (i as u64)) * prime
+}
+
+/// Hashes a `u16` in little-endian order.
+public func FnvHasher.writeU16(self: mut ref FnvHasher, i: u16): void {
+    self.writeU8(i as u8)
+    self.writeU8((i >> 8) as u8)
+}
+
+/// Hashes a `u32` in little-endian order.
+public func FnvHasher.writeU32(self: mut ref FnvHasher, i: u32): void {
+    self.writeU8(i as u8)
+    self.writeU8((i >> 8) as u8)
+    self.writeU8((i >> 16) as u8)
+    self.writeU8((i >> 24) as u8)
+}
+
+/// Hashes a `u64` in little-endian order.
+public func FnvHasher.writeU64(self: mut ref FnvHasher, i: u64): void {
+    self.writeU8(i as u8)
+    self.writeU8((i >> 8) as u8)
+    self.writeU8((i >> 16) as u8)
+    self.writeU8((i >> 24) as u8)
+    self.writeU8((i >> 32) as u8)
+    self.writeU8((i >> 40) as u8)
+    self.writeU8((i >> 48) as u8)
+    self.writeU8((i >> 56) as u8)
+}
+
+/// Hashes a platform-sized `int`.
+public func FnvHasher.writeInt(self: mut ref FnvHasher, i: int): void {
+    self.writeU64(i as u64)
+}
