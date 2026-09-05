@@ -1,0 +1,88 @@
+module std.net
+
+/// High-level, safe TCP networking abstractions.
+///
+/// Integrates with `std.io` (`Read`, `Write`, `IoError`, `IoErrorKind`)
+/// to provide non-blocking and blocking network socket communications.
+
+import std.io as io
+import std.runtime as rt
+
+/// Internet socket address composed of an IP or hostname string and port number.
+public struct SocketAddr {
+    ip: str
+    port: int
+}
+
+/// Creates a new `SocketAddr`.
+public func socketAddr(ip: str, port: int): SocketAddr {
+    return SocketAddr {
+        ip: ip,
+        port: port,
+    }
+}
+
+/// A TCP stream between a local and a remote socket.
+public struct TcpStream {
+    raw: rt.TcpStream
+}
+
+/// A TCP socket server, listening for connections.
+public struct TcpListener {
+    raw: rt.TcpListener
+}
+
+/// Binds a TCP listener to a local port.
+public func TcpListener.bind(port: int): Result<TcpListener, io.IoError> {
+    let l = rt.tcpListen(port)
+    if l.id < 0 {
+        return Result.Err(io.ioError(io.IoErrorKind.AddrInUse, "failed to bind TCP port"))
+    }
+    return Result.Ok(TcpListener { raw: l })
+}
+
+/// Accepts a new incoming connection from this listener.
+public func TcpListener.accept(self: ref TcpListener): Result<TcpStream, io.IoError> {
+    let s = rt.tcpAccept(self.raw)
+    if s.id < 0 {
+        return Result.Err(io.ioError(io.IoErrorKind.ConnectionRefused, "failed to accept TCP connection"))
+    }
+    return Result.Ok(TcpStream { raw: s })
+}
+
+/// Closes the listener socket.
+public func TcpListener.close(self: ref TcpListener): void {
+    rt.tcpCloseListener(self.raw)
+}
+
+/// Opens a TCP connection to a remote host on the specified port.
+public func TcpStream.connect(port: int): Result<TcpStream, io.IoError> {
+    let s = rt.tcpConnect(port)
+    if s.id < 0 {
+        return Result.Err(io.ioError(io.IoErrorKind.ConnectionRefused, "failed to connect to remote host"))
+    }
+    return Result.Ok(TcpStream { raw: s })
+}
+
+/// Reads data from the stream into the provided buffer.
+public func TcpStream.read(self: mut ref TcpStream, buf: ptr[u8], maxLen: int): Result<int, io.IoError> {
+    let n = rt.tcpRead(self.raw, buf, maxLen)
+    if n < 0 {
+        return Result.Err(io.ioError(io.IoErrorKind.BrokenPipe, "tcp read error"))
+    }
+    return Result.Ok(n)
+}
+
+/// Writes data from the provided buffer to the stream.
+public func TcpStream.write(self: mut ref TcpStream, buf: ptr[u8], len: int): Result<int, io.IoError> {
+    let n = rt.tcpWrite(self.raw, buf, len)
+    if n < 0 {
+        return Result.Err(io.ioError(io.IoErrorKind.BrokenPipe, "tcp write error"))
+    }
+    return Result.Ok(n)
+}
+
+/// Closes the stream socket.
+public func TcpStream.close(self: ref TcpStream): void {
+    rt.tcpCloseStream(self.raw)
+}

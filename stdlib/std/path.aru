@@ -1,13 +1,9 @@
 module std.path
 
-/// Minimal 0.1 — path helpers.
+/// Path manipulation utilities.
 ///
-/// | Function      | Status |
-/// |---------------|--------|
-/// | `isEmpty`     | pure |
-/// | `isAbsolute`  | host `std::path::Path::is_absolute` |
-/// | `join`        | host `Path::join` (OS separator / absolute replace) |
-/// | `fileName`    | host `Path::file_name` (empty when none) |
+/// Provides both borrowed zero-copy views (`Path`) and owned buffers (`PathBuf`),
+/// completely avoiding stringly-typed path manipulation.
 
 extern "C" {
     func ar_path_is_absolute(p: str): int
@@ -15,12 +11,88 @@ extern "C" {
     func ar_path_file_name(p: str): str
 }
 
-/// True when the path has zero length.
+/// Zero-copy borrowed view of a filesystem path.
+public struct Path {
+    raw: str
+}
+
+/// Creates a new borrowed `Path` view wrapping `s`.
+public func pathFromStr(s: str): Path {
+    return Path { raw: s }
+}
+
+/// Returns the path string slice.
+public func Path.asStr(self: ref Path): str {
+    return self.raw
+}
+
+/// Returns `true` if the path has zero length.
+public func Path.isEmpty(self: ref Path): bool {
+    return self.raw == ""
+}
+
+/// Returns `true` if `self` is an absolute path on the host OS.
+public func Path.isAbsolute(self: ref Path): bool {
+    if self.raw == "" {
+        return false
+    }
+    unsafe {
+        return ar_path_is_absolute(self.raw) != 0
+    }
+}
+
+/// Returns the final component of the path, or an empty `Path` if none.
+public func Path.fileName(self: ref Path): Path {
+    unsafe {
+        return Path { raw: ar_path_file_name(self.raw) }
+    }
+}
+
+/// Joins two path slices into a new string representation.
+public func Path.joinStr(self: ref Path, other: str): str {
+    unsafe {
+        return ar_path_join(self.raw, other)
+    }
+}
+
+/// Owned filesystem path buffer.
+public struct PathBuf {
+    raw: str
+}
+
+/// Creates a new empty `PathBuf`.
+public func newPathBuf(): PathBuf {
+    return PathBuf { raw: "" }
+}
+
+/// Creates a `PathBuf` initialized with `s`.
+public func pathBufFromStr(s: str): PathBuf {
+    return PathBuf { raw: s }
+}
+
+/// Returns a borrowed `Path` view of the buffer.
+public func PathBuf.asPath(self: ref PathBuf): Path {
+    return Path { raw: self.raw }
+}
+
+/// Returns the underlying string slice.
+public func PathBuf.asStr(self: ref PathBuf): str {
+    return self.raw
+}
+
+/// Appends a path segment to this buffer.
+public func PathBuf.push(self: mut ref PathBuf, segment: str): void {
+    unsafe {
+        self.raw = ar_path_join(self.raw, segment)
+    }
+}
+
+/// True when the path has zero length (free function for backward compatibility).
 public func isEmpty(p: str): bool {
     return p == ""
 }
 
-/// True when `p` is absolute on the host OS. Empty is never absolute.
+/// True when `p` is absolute on the host OS (free function for backward compatibility).
 public func isAbsolute(p: str): bool {
     if p == "" {
         return false
@@ -30,14 +102,14 @@ public func isAbsolute(p: str): bool {
     }
 }
 
-/// Join two path segments.
+/// Join two path segments (free function for backward compatibility).
 public func join(a: str, b: str): str {
     unsafe {
         return ar_path_join(a, b)
     }
 }
 
-/// Final path component, or empty string when none.
+/// Final path component, or empty string when none (free function for backward compatibility).
 public func fileName(p: str): str {
     unsafe {
         return ar_path_file_name(p)

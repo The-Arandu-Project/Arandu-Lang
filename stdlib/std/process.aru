@@ -23,3 +23,53 @@ public func exit(code: int): void {
         ar_process_exit(code)
     }
 }
+
+/// Process termination status.
+public struct ExitStatus {
+    code: int
+}
+
+/// Creates a new `ExitStatus`.
+public func exitStatus(code: int): ExitStatus {
+    return ExitStatus { code: code }
+}
+
+/// Returns `true` if the process terminated successfully (exit code 0).
+public func ExitStatus.success(self: ref ExitStatus): bool {
+    return self.code == 0
+}
+
+/// Returns the exit code of the process.
+public func ExitStatus.code(self: ref ExitStatus): int {
+    return self.code
+}
+
+/// Command builder for configuring and spawning child processes.
+public struct Command {
+    program: str
+}
+
+/// Creates a new `Command` builder for executing `program`.
+public func newCommand(program: str): Command {
+    return Command { program: program }
+}
+
+/// Returns the program to be executed.
+public func Command.program(self: ref Command): str {
+    return self.program
+}
+
+/// Handle to a running or finished child process.
+public struct Child {
+    pid: int
+}
+
+/// Creates a `Child` handle from a process identifier.
+public func childFromPid(pid: int): Child {
+    return Child { pid: pid }
+}
+
+/// Returns the process ID of the child process.
+public func Child.id(self: ref Child): int {
+    return self.pid
+}
