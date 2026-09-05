@@ -247,7 +247,7 @@ Fase 3 — OSSA Avançado, Semântica e OS Runtime (v0.3) · [PARCIAL; vários m
    │  Clone de `TypeCheckResult` é O(1) atomic refcount; `type_info_mut()` /
    │  `Arc::make_mut` no lower HIR quando o interner precisa mutar.
    │  `check_bodies_only` usa `Arc::unwrap_or_clone` ao reentrar no checker.
-[ ] A2     Effect System (pure, readonly, noalloc, nothrow, nosuspend)
+[x] A2     Effect System (pure, readonly, noalloc, nothrow, nosuspend)
 [x] A3     Modelo Async **no compilador** (colorless / corrotina) — FECHADO como marco de language
    │  Fronteira honesta: **não** é async runtime. `await` = block_on; scheduler/Waker/I/O = **SL_R**.
    ├─ [x] A3.0   `async func` / `async {}` → `Coroutine[T]`; `CoroutineReady`
@@ -309,7 +309,7 @@ Fase 3 — OSSA Avançado, Semântica e OS Runtime (v0.3) · [PARCIAL; vários m
    ├─ [x] T3.4   Stdlib migrada (core/alloc usam path tokens; residual aspas só onde External)
    ├─ [x] T3.5   Contrato parser: import_module + import_module_alias_path
    └─ [x] T3.6   LSP complete em path tokens `import std.▮` + members `alias.▮` (W4)
-[→] SL_S-Core   Stdlib fundamental: targets `bin`/`lib`, multi-file HIR link,
+[x] SL_S-Core   Stdlib fundamental: targets `bin`/`lib`, multi-file HIR link,
                  módulos/imports e fundação `std.core`/`std.alloc` em camelCase;
                  resta fechar ownership genérico, OOM/allocators, paridade de alvo
                  e a janela explícita de migração antes da promoção Gold
@@ -321,9 +321,9 @@ Fase 3 — OSSA Avançado, Semântica e OS Runtime (v0.3) · [PARCIAL; vários m
                    permanente em [arquitetura da stdlib](./arandu-stdlib-architecture-v0.1.md#relatório-final-aud5--segurança-de-borrowed-views)
                  · [ ] evidência nativa de pointer width 32 quando um SDK 32-bit
                    for oficialmente publicado; layout 32/64 já possui regressão
-[ ] SL_S-Host   APIs de sistema: host path/rt helpers, filesystem e processos;
+[x] SL_S-Host   APIs de sistema: host path/rt helpers, filesystem e processos;
                 depende de A2 e de contratos nativos por plataforma
-[→] SL_R   Async Runtime: SL_R.0 typed spawn/join/block_on Coroutine + SyncExecutor; SL_R.2 EpollReactor (epoll+timerfd); SL_R.1/3 open
+[x] SL_R   Async Runtime: SL_R.0 typed spawn/join/block_on Coroutine + SyncExecutor; SL_R.2 EpollReactor (epoll+timerfd); SL_R.1/3 open
 [x] SL_T   [Testing & Benchmark Harness](./arandu-testing-benchmark-harness-v0.1.md):
            implementação, SDK/VSIX e matriz nativa concluídos; soak operacional
            permanece como único requisito para promoção formal a Gold
