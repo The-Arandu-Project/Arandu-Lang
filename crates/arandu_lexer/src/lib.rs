@@ -88,10 +88,14 @@ mod tests {
         assert_eq!(identifier_kind("value_2"), Some(TokenKind::IdentValue));
         assert_eq!(identifier_kind("Point"), Some(TokenKind::IdentType));
         assert_eq!(identifier_kind("ação"), Some(TokenKind::IdentValue));
+        assert_eq!(identifier_kind("índice"), Some(TokenKind::IdentValue));
+        assert_eq!(identifier_kind("variável_1"), Some(TokenKind::IdentValue));
         assert_eq!(identifier_kind("2value"), None);
         assert_eq!(identifier_kind("return"), None);
         assert_eq!(identifier_kind("int"), None);
         assert_eq!(identifier_kind("two words"), None);
+        assert_eq!(identifier_kind("🎉_emoji"), None);
+        assert_eq!(identifier_kind("±plusminus"), None);
     }
 
     #[test]

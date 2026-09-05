@@ -43,7 +43,7 @@ pub(crate) fn is_ident_start(ch: char) -> bool {
     if val < 128 {
         (CHAR_PROPERTIES[val as usize] & FLAG_IDENT_START) != 0
     } else {
-        ch.is_alphabetic()
+        unicode_ident::is_xid_start(ch)
     }
 }
 
@@ -53,7 +53,7 @@ pub(crate) fn is_ident_continue(ch: char) -> bool {
     if val < 128 {
         (CHAR_PROPERTIES[val as usize] & FLAG_IDENT_CONTINUE) != 0
     } else {
-        ch.is_alphanumeric()
+        unicode_ident::is_xid_continue(ch)
     }
 }
 
