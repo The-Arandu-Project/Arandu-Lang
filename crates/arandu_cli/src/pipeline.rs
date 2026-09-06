@@ -3,6 +3,7 @@
 //! Enforces: CST (`syntax_tree`) → AST (`parse`) → `resolve` → `type_check` → `lower_amir` → backend.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process;
 
@@ -19,6 +20,11 @@ pub fn finish(result: CliResult) -> ! {
     };
     arandu_base::print_perf_summary();
     arandu_base::finalize_self_profile();
+    // `process::exit` skips destructors, including the standard output
+    // buffers. Flush both streams explicitly so CLI output is not lost on
+    // platforms whose stdout/stderr are block-buffered (notably Windows).
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
     process::exit(code);
 }
 
