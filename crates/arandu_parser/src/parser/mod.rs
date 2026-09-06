@@ -590,11 +590,11 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn advance(&mut self) -> &Token {
-        self.suppression_window += 1;
         self.advance_raw()
     }
 
     pub(super) fn advance_raw(&mut self) -> &Token {
+        self.suppression_window += 1;
         if let Some(split) = self.split_gt.take() {
             self.emit_token_event(&split);
             if self.pos < self.tokens.len() - 1 {

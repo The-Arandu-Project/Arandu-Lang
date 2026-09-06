@@ -3,8 +3,8 @@
 //! Never uses full `Debug` of IR graphs — only deterministic fields (IDs,
 //! spans, diagnostic codes, counts, ordered maps).
 
-use arandu_middle::{Diagnostic, ResolutionResult, SymbolId, SymbolTable};
-use arandu_parser::{ParseError, Program};
+use arandu_middle::{Diagnostic, ResolutionResult, SymbolId, SymbolKind, SymbolTable};
+use arandu_parser::{ParseError, ParseErrorCode, Program};
 use arandu_semantics::amir::AmirProgram;
 use arandu_semantics::TypeCheckResult;
 use blake3::Hasher;
@@ -102,8 +102,9 @@ fn hash_return_borrow_summary(
 }
 
 fn hash_diag(hasher: &mut Hasher, d: &Diagnostic) {
-    // Discriminant name is stable across builds for the same DiagCode variant.
-    hasher.update(format!("{:?}", d.code).as_bytes());
+    // `as_str` is the allocation-free single source of truth for a DiagCode's
+    // public code; formatting the variant name would churn a temporary String.
+    hash_str(hasher, d.code.as_str());
     hasher.update(&[d.severity as u8]);
     hasher.update(&u32_le(d.span.file_id));
     hasher.update(&u32_le(d.span.start));
@@ -151,6 +152,29 @@ fn hash_symbol_id(hasher: &mut Hasher, id: SymbolId) {
     hasher.update(&u32_le(id.local_id.0));
 }
 
+/// Stable, allocation-free discriminant for [`SymbolKind`].
+fn symbol_kind_discriminant(kind: SymbolKind) -> u8 {
+    match kind {
+        SymbolKind::Module => 0,
+        SymbolKind::ImportValue => 1,
+        SymbolKind::ImportType => 2,
+        SymbolKind::Func => 3,
+        SymbolKind::Const => 4,
+        SymbolKind::TypeAlias => 5,
+        SymbolKind::Struct => 6,
+        SymbolKind::Enum => 7,
+        SymbolKind::Interface => 8,
+        SymbolKind::ExternFunc => 9,
+        SymbolKind::Param => 10,
+        SymbolKind::Local => 11,
+        SymbolKind::Field => 12,
+        SymbolKind::EnumVariant => 13,
+        SymbolKind::TypeParam => 14,
+        SymbolKind::NamespaceMember => 15,
+        SymbolKind::AssociatedFunc => 16,
+    }
+}
+
 fn hash_symbol_table(hasher: &mut Hasher, table: &SymbolTable, include_spans: bool) {
     let mut symbols: Vec<_> = table.iter().collect();
     symbols.sort_by_key(|symbol| (symbol.id.file_id, symbol.id.local_id.0));
@@ -158,7 +182,7 @@ fn hash_symbol_table(hasher: &mut Hasher, table: &SymbolTable, include_spans: bo
     for symbol in symbols {
         hash_symbol_id(hasher, symbol.id);
         hash_str(hasher, symbol.name.as_str());
-        hash_str(hasher, &format!("{:?}", symbol.kind));
+        hasher.update(&[symbol_kind_discriminant(symbol.kind)]);
         if include_spans {
             hasher.update(&u32_le(symbol.span.file_id));
             hasher.update(&u32_le(symbol.span.start));
@@ -326,7 +350,15 @@ fn hash_program(program: &Program) -> blake3::Hash {
 fn hash_parse_err(err: &ParseError) -> blake3::Hash {
     let mut h = Hasher::new();
     h.update(&[0]);
-    h.update(format!("{:?}", err.code).as_bytes());
+    h.update(&[match err.code {
+        ParseErrorCode::Lex => 0,
+        ParseErrorCode::ExpectedToken => 1,
+        ParseErrorCode::ExpectedTopLevelDecl => 2,
+        ParseErrorCode::ExpectedExpression => 3,
+        ParseErrorCode::ExpectedType => 4,
+        ParseErrorCode::ExpectedPlace => 5,
+        ParseErrorCode::InvalidResultReturn => 6,
+    }]);
     h.update(&u32_le(err.span.start));
     h.update(&u32_le(err.span.end));
     h.update(err.message.as_bytes());
@@ -725,6 +757,28 @@ impl StableHash for arandu_parser::SyntaxTree {
 #[cfg(test)]
 mod tests {
     use super::StableHash;
+
+    #[test]
+    fn resolution_hash_distinguishes_symbol_kind_with_identical_name_and_span() {
+        use arandu_middle::{ResolutionResult, Span, SymbolKind};
+        let result = |kind| {
+            let mut result = ResolutionResult::cycle_fallback();
+            result
+                .symbols
+                .define(
+                    result.symbols.global_scope(),
+                    "value",
+                    kind,
+                    Span::new(0, 0, 5),
+                )
+                .unwrap();
+            result
+        };
+        let local = result(SymbolKind::Local);
+        let parameter = result(SymbolKind::Param);
+        assert_ne!(local.stable_hash(), parameter.stable_hash());
+        assert_eq!(local.stable_hash(), result(SymbolKind::Local).stable_hash());
+    }
 
     #[test]
     fn program_hash_changes_when_only_a_literal_changes() {

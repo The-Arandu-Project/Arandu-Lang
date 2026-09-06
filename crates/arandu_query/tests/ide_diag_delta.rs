@@ -90,6 +90,61 @@ fn file_ide_diagnostics_fingerprint_stable_on_noop() {
 }
 
 #[test]
+fn parse_failure_reports_syntax_diagnostics_in_ide() {
+    let _guard = COUNTER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut db = DatabaseImpl::new();
+    // A file whose parse fails must NOT yield an empty Problems panel.
+    let file = db.new_file(
+        "broken.aru".into(),
+        "func main(): int { let 1 = 2; return 0 }\n".into(),
+    );
+    let diagnostics = file_ide_diagnostics(&db, file);
+    assert!(
+        !diagnostics.is_empty(),
+        "parse failure must surface syntax diagnostics, got {:?}",
+        **diagnostics
+    );
+
+    // Repeating a request without an edit preserves the diagnostic fingerprint.
+    let fp1 = ide_diags_fingerprint(diagnostics);
+    let d2 = file_ide_diagnostics(&db, file);
+    assert_eq!(fp1, ide_diags_fingerprint(d2));
+
+    // Repairing the file removes the syntax diagnostic.
+    file.set_text(&mut db)
+        .to(Arc::from("func main(): int { let value = 2; return 0 }\n"));
+    let repaired = file_ide_diagnostics(&db, file);
+    assert!(
+        repaired
+            .iter()
+            .all(|d| !d.code.starts_with('P') && !d.code.starts_with("LX")),
+        "repaired file should have no syntax diagnostics, got {:?}",
+        repaired.iter().map(|d| d.code.clone()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn recovering_diagnostics_reuse_parse_and_update_when_first_error_is_unchanged() {
+    use arandu_query::passes::parse_diagnostics;
+    let (mut db, log) = DatabaseImpl::with_rebuild_log();
+    let file = db.new_file(
+        "recover.aru".into(),
+        "func main() { let 1 = 2; let 3 = 4; }".into(),
+    );
+    let first = parse(&db, file).as_ref().unwrap_err().clone();
+    assert_eq!(parse_diagnostics(&db, file).len(), 2);
+    // The query key includes the name and inputs. Both results consume one
+    // parse execution; diagnostics do not run their own CST-to-AST lower.
+    assert_eq!(log.count_executions_matching("parse("), 1);
+    file.set_text(&mut db)
+        .to(Arc::from("func main() { let 1 = 2; let valid = 4; }"));
+    let after = parse(&db, file).as_ref().unwrap_err();
+    assert_eq!(first.span, after.span);
+    assert_eq!(first.message, after.message);
+    assert_eq!(parse_diagnostics(&db, file).len(), 1);
+}
+
+#[test]
 fn file_ide_compose_matches_item_union() {
     let _guard = COUNTER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut db = DatabaseImpl::new();

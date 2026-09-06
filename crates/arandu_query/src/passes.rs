@@ -1,5 +1,6 @@
 use crate::db::HashEq;
 use crate::{ArandCompilerDb, SourceFile};
+use arandu_middle::Diagnostic;
 use arandu_parser::Program;
 use arandu_resolve::ResolutionResult;
 use arandu_semantics::{amir::AmirProgram, TypeCheckResult};
@@ -147,6 +148,12 @@ pub fn syntax_tree(
     HashEq::new(tree)
 }
 
+// Kept separate from lowering diagnostics so importing a parse query does not
+// accidentally publish another file's syntax errors at a caller boundary.
+#[salsa::accumulator]
+#[derive(Debug, Clone)]
+struct ParseDiagnostic(arandu_parser::ParseError);
+
 /// AST for typeck/resolve: **lowered from CST tokens** (no re-lex, no dual parse).
 ///
 /// Memo stores `Arc<Program>` so per-item queries share the same program without deep-clone.
@@ -160,10 +167,35 @@ pub fn parse(
     file: SourceFile,
 ) -> HashEq<Result<Arc<Program>, arandu_parser::ParseError>> {
     let tree = syntax_tree(db, file);
-    match arandu_parser::lower_syntax_to_program(tree, *file.file_id(db)) {
-        Ok(program) => HashEq::new(Ok(Arc::new(program))),
-        Err(err) => HashEq::new(Err(err)),
+    let output = arandu_parser::syntax::lower_syntax_to_program_recovering(tree, *file.file_id(db));
+    let first_error = output.diagnostics.first().cloned();
+    for diagnostic in output.diagnostics {
+        ParseDiagnostic(diagnostic).accumulate(db);
     }
+    match first_error {
+        Some(error) => HashEq::new(Err(error)),
+        None => HashEq::new(Ok(Arc::new(output.program))),
+    }
+}
+
+/// Recovering-parse diagnostics (lex + syntax) for the IDE boundary.
+///
+/// `parse` stops at the first error; this surfaces **all** lexical and
+/// syntactic errors without a re-lex (diagnostics come from the CST tokens).
+/// Used by `file_ide_diagnostics` so the Problems panel is never silently
+/// empty on a malformed file.
+#[salsa::tracked]
+#[tracing::instrument(level = "trace", target = "arandu_query", skip(db), fields(
+    query = "parse_diagnostics",
+    file = ?file.file_id(db),
+))]
+pub fn parse_diagnostics(db: &dyn ArandCompilerDb, file: SourceFile) -> HashEq<Vec<Diagnostic>> {
+    // Reuse the same recovering CST lower that produced parse's result.
+    let diagnostics = parse::accumulated::<ParseDiagnostic>(db, file)
+        .into_iter()
+        .map(|diagnostic| Diagnostic::from(diagnostic.0.clone()))
+        .collect();
+    HashEq::new(diagnostics)
 }
 
 #[salsa::tracked(cycle_result = cycle_recover)]
@@ -192,8 +224,8 @@ pub fn resolve(db: &dyn ArandCompilerDb, file: SourceFile) -> HashEq<ResolutionR
     let program_res = parse(db, file);
     let locals_arc = local_symbols(db, file);
 
-    // Prefer Arc unshare over deep-cloning ResolutionResult when we are the sole owner.
-    let locals_owned = std::sync::Arc::unwrap_or_clone(std::sync::Arc::clone(&locals_arc.value));
+    // The resolver mutates its seed; the memoized local result must stay immutable.
+    let locals_owned = (*locals_arc.value).clone();
     let resolved = match &**program_res {
         Ok(program) => arandu_resolve::resolve_imports_and_bodies(
             &arandu_resolve::SourceDbLoader(db.as_source_db()),
@@ -231,13 +263,11 @@ pub fn module_signatures(db: &dyn ArandCompilerDb, file: SourceFile) -> ModuleSi
 
     let res = match &**program_res {
         Ok(program) => {
-            // Prefer unique ownership of the resolve Arc (no deep clone when sole owner).
-            let ResolutionResult {
-                symbols,
-                resolved,
-                diagnostics,
-                ..
-            } = std::sync::Arc::unwrap_or_clone(std::sync::Arc::clone(&resolved_arc.value));
+            // The checker owns mutable tables. Clone only its inputs, not the
+            // documentation map or other resolution-only metadata.
+            let symbols = resolved_arc.symbols.clone();
+            let resolved = resolved_arc.resolved.clone();
+            let diagnostics = resolved_arc.diagnostics.clone();
             let mut checker = arandu_semantics::TypeChecker::new(
                 symbols,
                 resolved,
