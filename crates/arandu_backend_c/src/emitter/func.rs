@@ -43,6 +43,7 @@ impl<'a> CEmitter<'a> {
                         | AmirRvalue::Alloc(op)
                         | AmirRvalue::ToStr { value: op, .. }
                         | AmirRvalue::BlackBox { value: op, .. }
+                        | AmirRvalue::StrView { owner: op }
                         | AmirRvalue::CoroutineReady { value: op, .. } => {
                             if let AmirOperand::Copy(t) | AmirOperand::Move(t) = op {
                                 used_temps.insert(t.as_usize());
@@ -54,6 +55,20 @@ impl<'a> CEmitter<'a> {
                             }
                             if let AmirOperand::Copy(t) | AmirOperand::Move(t) = right {
                                 used_temps.insert(t.as_usize());
+                            }
+                        }
+                        AmirRvalue::SliceView { owner, data, len } => {
+                            for operand in [owner, data, len] {
+                                if let AmirOperand::Copy(t) | AmirOperand::Move(t) = operand {
+                                    used_temps.insert(t.as_usize());
+                                }
+                            }
+                        }
+                        AmirRvalue::SliceSubslice { slice, start, len } => {
+                            for operand in [slice, start, len] {
+                                if let AmirOperand::Copy(t) | AmirOperand::Move(t) = operand {
+                                    used_temps.insert(t.as_usize());
+                                }
                             }
                         }
                         AmirRvalue::FieldAccess { base, .. } => {
@@ -141,7 +156,9 @@ impl<'a> CEmitter<'a> {
                         used_temps.insert(t.as_usize());
                     }
                 }
-                AmirStmt::Call { lhs, callee, args } => {
+                AmirStmt::Call {
+                    lhs, callee, args, ..
+                } => {
                     if let Some(t) = lhs {
                         used_temps.insert(t.as_usize());
                     }
@@ -176,7 +193,7 @@ impl<'a> CEmitter<'a> {
             }
         }
         for block in &func.blocks {
-            for param in &block.params {
+            for param in func.block_params(block.params) {
                 used_temps.insert(param.id.as_usize());
                 used_locals.insert(param.local.as_usize());
             }

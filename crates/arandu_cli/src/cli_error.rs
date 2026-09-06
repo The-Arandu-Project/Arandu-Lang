@@ -93,13 +93,73 @@ impl CliFailure {
                 let source = std::fs::read_to_string(path).unwrap_or_default();
                 let named_source = miette::NamedSource::new(path.to_string_lossy(), source);
                 for diagnostic in diagnostics {
-                    let report = miette::Report::new(diagnostic.clone())
-                        .with_source_code(named_source.clone());
+                    let mut diag = diagnostic.clone();
+                    if diag.is_ice() {
+                        attach_ice_report_metadata(&mut diag, source_path.as_deref());
+                    }
+                    let report = miette::Report::new(diag).with_source_code(named_source.clone());
                     eprintln!("{report:?}");
                 }
             }
         }
     }
+}
+
+/// Enriches an ICE diagnostic with compiler version info, platform target, and a pre-filled issue URL.
+fn attach_ice_report_metadata(
+    diag: &mut arandu_middle::Diagnostic,
+    source_path: Option<&std::path::Path>,
+) {
+    let phase = diag.code.as_str();
+    let version = env!("CARGO_PKG_VERSION");
+    let target_os = std::env::consts::OS;
+    let target_arch = std::env::consts::ARCH;
+
+    let path_display = source_path
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "<unknown>".to_string());
+
+    let title = format!("ICE in {}: {}", phase, diag.message);
+    let title_encoded = urlencoding_simple(&title);
+    let body = format!(
+        "### Internal Compiler Error Report\n\n\
+        - **Arandu Version:** `{version}`\n\
+        - **Platform:** `{target_os} / {target_arch}`\n\
+        - **Phase / Code:** `{phase}`\n\
+        - **Source:** `{path_display}`\n\n\
+        ### Message\n```\n{}\n```\n",
+        diag.message
+    );
+    let body_encoded = urlencoding_simple(&body);
+    let issue_url = format!(
+        "https://github.com/The-Arandu-Project/Arandu-Lang/issues/new?title={title_encoded}&body={body_encoded}"
+    );
+
+    diag.notes
+        .push("this is an internal compiler bug, not an error in your code".to_string());
+    diag.notes
+        .push(format!("arandu v{version} ({target_os}-{target_arch})"));
+    diag.hints.push(arandu_middle::Hint {
+        message: format!("we would appreciate a bug report: {issue_url}"),
+        replacement: None,
+    });
+}
+
+fn urlencoding_simple(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 2);
+    for b in s.bytes() {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            b' ' => out.push('+'),
+            _ => {
+                use std::fmt::Write;
+                let _ = write!(out, "%{b:02X}");
+            }
+        }
+    }
+    out
 }
 
 pub type CliResult = Result<CliSuccess, CliFailure>;
@@ -118,5 +178,30 @@ mod tests {
             1
         );
         assert_eq!(CliFailure::diagnostics([], None).exit_code(), 1);
+    }
+
+    #[test]
+    fn ice_attaches_clean_notes_and_issue_url() {
+        let mut diag = arandu_middle::Diagnostic::ice(
+            arandu_middle::DiagCode::ICET001,
+            "type resolution loop",
+            arandu_base::Span::new(0, 10, 20),
+        );
+        attach_ice_report_metadata(&mut diag, Some(std::path::Path::new("src/main.aru")));
+        assert!(
+            diag.notes
+                .iter()
+                .any(|n| n.contains("internal compiler bug"))
+        );
+        assert!(diag.hints.iter().any(|h| {
+            h.message
+                .contains("https://github.com/The-Arandu-Project/Arandu-Lang/issues/new")
+        }));
+    }
+
+    #[test]
+    fn urlencoding_handles_special_characters() {
+        assert_eq!(urlencoding_simple("hello world"), "hello+world");
+        assert_eq!(urlencoding_simple("a/b:c"), "a%2Fb%3Ac");
     }
 }

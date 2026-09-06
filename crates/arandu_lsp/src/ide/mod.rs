@@ -286,10 +286,10 @@ mod tests {
         // Resolve via CARGO_MANIFEST_DIR so CI/macOS/other checkouts work
         // (never hard-code a developer machine path).
         let filepath = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../stdlib/std/runtime.aru")
+            .join("../../stdlib/std/net.aru")
             .canonicalize()
-            .expect("resolve stdlib/std/runtime.aru from workspace");
-        let content = std::fs::read_to_string(&filepath).expect("read runtime.aru");
+            .expect("resolve stdlib/std/net.aru from workspace");
+        let content = std::fs::read_to_string(&filepath).expect("read net.aru");
         let path_key = filepath.to_string_lossy().into_owned();
 
         let mut host = AnalysisHost::new();
@@ -316,9 +316,9 @@ mod tests {
             // Semantic token lengths use negotiated UTF-16 code units, not bytes.
             assert_eq!(tok.length, utf16_len(substring));
 
-            // Spot-check: `tcp_listen` public decl in stdlib is a FUNCTION token.
-            // Line is 0-based (LSP semantic tokens); file line 285 → index 284.
-            if substring == "tcp_listen" && current_line == 284 {
+            // Spot-check: `tcpListen` public decl in stdlib is a FUNCTION token.
+            // Line is 0-based (LSP semantic tokens); file line 52 → index 51.
+            if substring == "tcpListen" && current_line == 51 {
                 assert_eq!(tok.token_type, 1); // FUNCTION
             }
         }

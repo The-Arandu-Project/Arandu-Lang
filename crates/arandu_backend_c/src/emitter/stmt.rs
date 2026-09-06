@@ -22,63 +22,64 @@ impl<'a> CEmitter<'a> {
             }
             _ => return false,
         };
-        let bare = name.rsplit(['.', '$']).next().unwrap_or(name);
-        let is_read = bare == "ptrRead" || bare == "ptr_read" || name.contains("ptrRead");
-        let is_write = bare == "ptrWrite" || bare == "ptr_write" || name.contains("ptrWrite");
-        let is_offset = bare == "ptrOffset" || bare == "ptr_offset" || name.contains("ptrOffset");
-        let is_size = bare == "sizeOf" || bare == "size_of" || name.contains("sizeOf");
-        let is_align = bare == "alignOf" || bare == "align_of" || name.contains("alignOf");
+        let kind = arandu_middle::IntrinsicKind::from_name(name);
 
-        if is_read {
-            if args.is_empty() {
-                return true;
+        match kind {
+            Some(arandu_middle::IntrinsicKind::Abort) => {
+                let _ = writeln!(&mut self.output, "    abort();");
+                true
             }
-            let p = self.format_operand(&args[0], func);
-            if let Some(dest) = lhs {
-                let _ = writeln!(&mut self.output, "    t{} = *({});", dest.as_usize(), p);
+            Some(arandu_middle::IntrinsicKind::PtrRead) => {
+                if args.is_empty() {
+                    return true;
+                }
+                let p = self.format_operand(&args[0], func);
+                if let Some(dest) = lhs {
+                    let _ = writeln!(&mut self.output, "    t{} = *({});", dest.as_usize(), p);
+                }
+                true
             }
-            return true;
+            Some(arandu_middle::IntrinsicKind::PtrWrite) => {
+                if args.len() < 2 {
+                    return true;
+                }
+                let p = self.format_operand(&args[0], func);
+                let v = self.format_operand(&args[1], func);
+                let _ = writeln!(&mut self.output, "    *({}) = {};", p, v);
+                true
+            }
+            Some(arandu_middle::IntrinsicKind::PtrOffset) => {
+                if args.len() < 2 {
+                    return true;
+                }
+                let p = self.format_operand(&args[0], func);
+                let i = self.format_operand(&args[1], func);
+                // C pointer arithmetic scales by pointee size when `p` is a typed pointer.
+                if let Some(dest) = lhs {
+                    let _ = writeln!(
+                        &mut self.output,
+                        "    t{} = ({}) + ({});",
+                        dest.as_usize(),
+                        p,
+                        i
+                    );
+                }
+                true
+            }
+            Some(arandu_middle::IntrinsicKind::SizeOf | arandu_middle::IntrinsicKind::AlignOf) => {
+                // Residual only — prefer AMIR fold. Host pointer width for `int`.
+                let n = if kind == Some(arandu_middle::IntrinsicKind::SizeOf) {
+                    self.layout.pointer_width()
+                } else {
+                    self.layout.pointer_width().min(8)
+                };
+                if let Some(dest) = lhs {
+                    let _ = writeln!(&mut self.output, "    t{} = {}ULL;", dest.as_usize(), n);
+                }
+                true
+            }
+            _ => false,
         }
-        if is_write {
-            if args.len() < 2 {
-                return true;
-            }
-            let p = self.format_operand(&args[0], func);
-            let v = self.format_operand(&args[1], func);
-            let _ = writeln!(&mut self.output, "    *({}) = {};", p, v);
-            return true;
-        }
-        if is_offset {
-            if args.len() < 2 {
-                return true;
-            }
-            let p = self.format_operand(&args[0], func);
-            let i = self.format_operand(&args[1], func);
-            // C pointer arithmetic scales by pointee size when `p` is a typed pointer.
-            if let Some(dest) = lhs {
-                let _ = writeln!(
-                    &mut self.output,
-                    "    t{} = ({}) + ({});",
-                    dest.as_usize(),
-                    p,
-                    i
-                );
-            }
-            return true;
-        }
-        if is_size || is_align {
-            // Residual only — prefer AMIR fold. Host pointer width for `int`.
-            let n = if is_size {
-                self.layout.pointer_width()
-            } else {
-                self.layout.pointer_width().min(8)
-            };
-            if let Some(dest) = lhs {
-                let _ = writeln!(&mut self.output, "    t{} = {}ULL;", dest.as_usize(), n);
-            }
-            return true;
-        }
-        false
     }
 
     pub(super) fn emit_stmt(&mut self, stmt: &AmirStmt, func: &AmirFunc) {
@@ -195,8 +196,38 @@ impl<'a> CEmitter<'a> {
                 let rhs_str = self.format_operand(rhs, func);
                 let _ = writeln!(&mut self.output, "    {} = {};", lhs_str, rhs_str);
             }
-            AmirStmt::Call { lhs, callee, args } => {
+            AmirStmt::Call {
+                lhs, callee, args, ..
+            } => {
                 if self.try_emit_mem_intrinsic(lhs, callee, args, func) {
+                    return;
+                }
+                if let AmirOperand::FunctionRef(symbol) = callee
+                    && self
+                        .symbols
+                        .get(*symbol)
+                        .name
+                        .contains("ar_string_push_str")
+                    && let [owner, value] = args.as_slice()
+                {
+                    let owner = self.format_operand(owner, func);
+                    let value = self.format_operand(value, func);
+                    if let Some(dest) = lhs {
+                        let _ = writeln!(
+                            &mut self.output,
+                            "    t{} = ar_string_push_str({}, ({}).ptr, ({}).len);",
+                            dest.as_usize(),
+                            owner,
+                            value,
+                            value
+                        );
+                    } else {
+                        let _ = writeln!(
+                            &mut self.output,
+                            "    ar_string_push_str({}, ({}).ptr, ({}).len);",
+                            owner, value, value
+                        );
+                    }
                     return;
                 }
                 let callee_str = self.format_operand(callee, func);
@@ -221,15 +252,52 @@ impl<'a> CEmitter<'a> {
             }
             AmirStmt::StorageLive(_) | AmirStmt::StorageDead(_) => {}
             AmirStmt::Destroy(place) => {
-                if place.projections.is_empty() {
-                    let ty = self.local_ty(func, place.local);
-                    let ty_id = func.locals[place.local.as_usize()].ty;
-                    if let Some((_, destructor)) = self.gen_drop_glue(ty_id, &ty) {
-                        let destructor =
-                            super::sanitize_c_ident(&self.symbols.get(destructor).name);
-                        let value = self.format_place(place, func);
-                        let _ = writeln!(&mut self.output, "    {destructor}({value});");
+                let local_ty = self.local_ty(func, place.local);
+                let mut current_ty = local_ty;
+                for proj in &place.projections {
+                    match proj {
+                        arandu_middle::amir::AmirProjection::Deref => {
+                            current_ty = match &current_ty {
+                                ArType::Ptr(inner)
+                                | ArType::Ref(inner)
+                                | ArType::RefMut(inner)
+                                | ArType::Nullable(inner) => self.interner.resolve(*inner),
+                                other => other.clone(),
+                            };
+                        }
+                        arandu_middle::amir::AmirProjection::Field(field_sym) => {
+                            let struct_ty = match &current_ty {
+                                ArType::Ptr(inner)
+                                | ArType::Ref(inner)
+                                | ArType::RefMut(inner)
+                                | ArType::Nullable(inner) => self.interner.resolve(*inner),
+                                other => other.clone(),
+                            };
+                            let struct_id = match &struct_ty {
+                                ArType::Named(id, _) => *id,
+                                _ => arandu_middle::SymbolId::DUMMY,
+                            };
+                            let field_name = self
+                                .symbols
+                                .get(*field_sym)
+                                .name
+                                .rsplit('.')
+                                .next()
+                                .unwrap_or("");
+                            if let Some(fields) = self.provider.get_struct_fields(struct_id)
+                                && let Some(f) = fields.get(field_name)
+                            {
+                                current_ty = self.interner.resolve(f.ty);
+                            }
+                        }
+                        arandu_middle::amir::AmirProjection::Index(_) => {}
                     }
+                }
+                let ty_id = self.interner.intern(current_ty.clone());
+                if let Some((_, destructor)) = self.gen_drop_glue(ty_id, &current_ty) {
+                    let destructor = super::sanitize_c_ident(&self.symbols.get(destructor).name);
+                    let value = self.format_place(place, func);
+                    let _ = writeln!(&mut self.output, "    {destructor}({value});");
                 }
             }
             AmirStmt::Nop => {}
@@ -431,7 +499,8 @@ impl<'a> CEmitter<'a> {
         indent: &str,
     ) {
         let target_block = &func.blocks[target.as_usize()];
-        for (param, arg) in target_block.params.iter().zip(args.iter()) {
+        let target_params = func.block_params(target_block.params);
+        for (param, arg) in target_params.iter().zip(args.iter()) {
             let arg_str = self.format_operand(arg, func);
             let _ = writeln!(
                 &mut self.output,

@@ -26,8 +26,8 @@ pub(crate) fn lower_block_raw(
     block: &Block,
 ) -> Result<HirBlock, Diagnostic> {
     let mut statements = Vec::new();
-    for s in &block.statements {
-        statements.push(lower_stmt(type_check, pool, hir_pool, *s)?);
+    for &s in pool.stmt_list(block.statements) {
+        statements.push(lower_stmt(type_check, pool, hir_pool, s)?);
     }
     let statements_range = hir_pool.alloc_stmt_list(&statements);
     Ok(HirBlock {
@@ -88,7 +88,12 @@ fn lower_stmt_raw(
                     .or_else(|| {
                         value_ty_id.and_then(|vid| {
                             match type_check.type_info.type_interner.resolve(vid) {
-                                ArType::Tuple(elems) => elems.get(i).copied(),
+                                ArType::Tuple(elems) => type_check
+                                    .type_info
+                                    .type_interner
+                                    .type_args(elems)
+                                    .get(i)
+                                    .copied(),
                                 _ if bindings.len() == 1 => Some(vid),
                                 _ => None,
                             }
@@ -184,10 +189,10 @@ fn lower_stmt_raw(
             let expr_id = *expr;
             match pool.expr(expr_id) {
                 ExprKind::Match { value, arms } => {
-                    let arm_ids = pool.match_arm_list(*arms).to_vec();
+                    let arm_ids = pool.match_arm_list(*arms);
                     let vid = super::expr::lower_expr(type_check, pool, hir_pool, *value)?;
                     let arms_range =
-                        super::pattern::lower_match_arms(type_check, pool, hir_pool, &arm_ids)?;
+                        super::pattern::lower_match_arms(type_check, pool, hir_pool, arm_ids)?;
                     HirStmtKind::Match {
                         value: vid,
                         arms: arms_range,

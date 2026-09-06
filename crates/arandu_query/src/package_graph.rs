@@ -45,7 +45,13 @@ pub struct MaterializedGitPackage {
 ///
 /// These limits are deliberately independent from the identity-space limits:
 /// they protect CLI/LSP callers from pathological manifests before the graph
-/// can consume unbounded recursion or memory.
+/// Default limit on the maximum number of packages in a graph before failing fast.
+pub const DEFAULT_MAX_PACKAGES: usize = 1024;
+/// Default limit on the maximum number of dependency edges.
+pub const DEFAULT_MAX_DEPENDENCY_EDGES: usize = 8192;
+/// Default limit on the maximum package dependency recursion depth.
+pub const DEFAULT_MAX_DEPTH: usize = 64;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PackageGraphLimits {
     pub max_packages: usize,
@@ -56,9 +62,9 @@ pub struct PackageGraphLimits {
 impl Default for PackageGraphLimits {
     fn default() -> Self {
         Self {
-            max_packages: 1024,
-            max_dependency_edges: 8192,
-            max_depth: 64,
+            max_packages: DEFAULT_MAX_PACKAGES,
+            max_dependency_edges: DEFAULT_MAX_DEPENDENCY_EDGES,
+            max_depth: DEFAULT_MAX_DEPTH,
         }
     }
 }

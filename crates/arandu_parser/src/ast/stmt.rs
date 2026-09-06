@@ -1,11 +1,11 @@
-use super::{Expr, StmtId, TypeExprId};
+use super::{Expr, IndexRange, TypeExprId};
 use arandu_lexer::Span;
 use smol_str::SmolStr;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Block {
     pub span: Span,
-    pub statements: Vec<StmtId>,
+    pub statements: IndexRange,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -38,6 +38,7 @@ pub enum Stmt {
     Expr {
         span: Span,
         expr: Expr,
+        has_semi: bool,
     },
     If {
         span: Span,

@@ -101,7 +101,7 @@ fn use_color() -> bool {
 
 // ── Local time ────────────────────────────────────────────────────────────────
 
-/// Returns `(hour, minute, second)` in local time.
+/// Returns `(hour, minute, second)` in UTC time.
 fn local_hms() -> (u8, u8, u8) {
     // UTC seconds since epoch (portable, no libc needed).
     let secs = std::time::SystemTime::now()

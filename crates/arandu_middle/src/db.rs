@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::layout::DataLayout;
+
 pub type FileId = u32;
 
 #[salsa::input]
@@ -8,6 +10,16 @@ pub struct SourceFile {
     pub file_id: FileId,
     pub text: Arc<str>,
     pub path: Arc<PathBuf>,
+}
+
+/// Salsa input for the compilation target's canonical data layout.
+///
+/// Defaults to `DataLayout::host()`; the CLI sets it from `--layout=` before
+/// running any semantic query. Type checking, MIR lowering and backends read
+/// pointer width / alignment classes from here instead of assuming the host.
+#[salsa::input]
+pub struct TargetConfig {
+    pub data_layout: DataLayout,
 }
 
 /// The common database trait used by middle-end crates (resolve, typeck)

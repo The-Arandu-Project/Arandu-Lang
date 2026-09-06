@@ -15,9 +15,13 @@ fn compile_src(
 ) {
     let program = arandu_parser::parse(src).expect("parse failed");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     let hir = lower_to_hir(&mut tc, &program).expect("HIR lowering failed");
-    let amir = lower_to_amir(&tc, &hir).expect("AMIR lowering failed");
+    let amir = lower_to_amir(&tc, &hir, 64).expect("AMIR lowering failed");
     (
         amir,
         Arc::unwrap_or_clone(tc.symbols),
@@ -41,6 +45,20 @@ fn jit_constant_i32() {
         f()
     };
     assert_eq!(result, 42);
+}
+
+#[test]
+fn jit_signed_negative_cast_preserves_sign() {
+    let src = "func main(): int { let a: i8 = -5 as i8; return a as int; }";
+    let (amir, symbols, type_info) = compile_src(src);
+    let backend = backend_for_test();
+    let module = backend.compile(&amir, &symbols, &type_info).unwrap();
+
+    let result: i64 = unsafe {
+        let f: unsafe fn() -> i64 = module.get_fn("main").unwrap();
+        f()
+    };
+    assert_eq!(result, -5);
 }
 
 #[test]
@@ -276,6 +294,61 @@ fn jit_float_compare() {
         f(2.0, 3.0)
     };
     assert!(!result);
+}
+
+#[test]
+fn jit_ieee754_nan_comparisons() {
+    let src = r#"
+    func cmp_eq(a: float, b: float): bool { return a == b; }
+    func cmp_ne(a: float, b: float): bool { return a != b; }
+    func cmp_lt(a: float, b: float): bool { return a < b; }
+    func cmp_gt(a: float, b: float): bool { return a > b; }
+    func cmp_le(a: float, b: float): bool { return a <= b; }
+    func cmp_ge(a: float, b: float): bool { return a >= b; }
+    "#;
+    let (amir, symbols, type_info) = compile_src(src);
+    let backend = backend_for_test();
+    let module = backend.compile(&amir, &symbols, &type_info).unwrap();
+    let nan = f64::NAN;
+    let one = 1.0;
+
+    unsafe {
+        let f_eq: unsafe fn(f64, f64) -> bool = module.get_fn("cmp_eq").unwrap();
+        let f_ne: unsafe fn(f64, f64) -> bool = module.get_fn("cmp_ne").unwrap();
+        let f_lt: unsafe fn(f64, f64) -> bool = module.get_fn("cmp_lt").unwrap();
+        let f_gt: unsafe fn(f64, f64) -> bool = module.get_fn("cmp_gt").unwrap();
+        let f_le: unsafe fn(f64, f64) -> bool = module.get_fn("cmp_le").unwrap();
+        let f_ge: unsafe fn(f64, f64) -> bool = module.get_fn("cmp_ge").unwrap();
+
+        // IEEE 754-2019: NaN compared to NaN
+        assert!(!f_eq(nan, nan), "nan == nan must be false");
+        assert!(f_ne(nan, nan), "nan != nan must be true");
+        assert!(!f_lt(nan, nan), "nan < nan must be false");
+        assert!(!f_gt(nan, nan), "nan > nan must be false");
+        assert!(!f_le(nan, nan), "nan <= nan must be false");
+        assert!(!f_ge(nan, nan), "nan >= nan must be false");
+
+        // IEEE 754-2019: NaN compared to ordered value
+        assert!(!f_eq(nan, one), "nan == 1.0 must be false");
+        assert!(f_ne(nan, one), "nan != 1.0 must be true");
+        assert!(!f_lt(nan, one), "nan < 1.0 must be false");
+        assert!(!f_gt(nan, one), "nan > 1.0 must be false");
+        assert!(!f_le(nan, one), "nan <= 1.0 must be false");
+        assert!(!f_ge(nan, one), "nan >= 1.0 must be false");
+
+        assert!(!f_eq(one, nan), "1.0 == nan must be false");
+        assert!(f_ne(one, nan), "1.0 != nan must be true");
+        assert!(!f_lt(one, nan), "1.0 < nan must be false");
+        assert!(!f_gt(one, nan), "1.0 > nan must be false");
+        assert!(!f_le(one, nan), "1.0 <= nan must be false");
+        assert!(!f_ge(one, nan), "1.0 >= nan must be false");
+
+        // Standard ordered comparisons
+        assert!(f_eq(one, 1.0), "1.0 == 1.0 must be true");
+        assert!(f_ne(one, 2.0), "1.0 != 2.0 must be true");
+        assert!(f_lt(one, 2.0), "1.0 < 2.0 must be true");
+        assert!(f_gt(2.0, one), "2.0 > 1.0 must be true");
+    }
 }
 
 #[test]
@@ -1174,6 +1247,7 @@ fn jit_ice_indirect_call() {
         lhs: None,
         callee: AmirOperand::Constant(AmirConstant::Bool(true)),
         args: Default::default(),
+        return_borrow: None,
     };
 
     let backend = backend_for_test();
@@ -1370,7 +1444,7 @@ fn jit_gen_insert_get_copy_tuple() {
 
     let interner = TypeInterner::new();
     let int_ty = interner.intern(ArType::Primitive(Primitive::Int));
-    let tuple_ty = interner.intern(ArType::Tuple(vec![int_ty, int_ty]));
+    let tuple_ty = interner.intern(ArType::tuple(&[int_ty, int_ty], &interner));
     let gen_ty = interner.intern(ArType::GenRef);
 
     let mut stmts = AmirStmtTable::new();
@@ -1416,7 +1490,7 @@ fn jit_gen_insert_get_copy_tuple() {
     let block = AmirBasicBlock {
         id: BlockId::from_usize(0),
         statements: DenseRange::new(0, 4),
-        params: vec![],
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     };
     let blocks = vec![block];
@@ -1470,6 +1544,9 @@ fn jit_gen_insert_get_copy_tuple() {
             },
         ],
         blocks,
+
+        block_params: Vec::new(),
+
         stmts,
         cfg,
     };
@@ -1478,10 +1555,9 @@ fn jit_gen_insert_get_copy_tuple() {
         literal_pool: pool,
         extern_funcs: Default::default(),
     };
-    let type_info = {
-        let mut ti = arandu_semantics::TypeInfo::default();
-        ti.type_interner = interner;
-        ti
+    let type_info = arandu_semantics::TypeInfo {
+        type_interner: interner,
+        ..Default::default()
     };
     let backend = backend_for_test();
     let module = backend
@@ -1492,4 +1568,143 @@ fn jit_gen_insert_get_copy_tuple() {
         f()
     };
     assert_eq!(result, 43);
+}
+
+/// Regression guard for the legacy Vec host ABI (`ar_vec_new` / `ar_vec_push` /
+/// `ar_vec_len`). The JIT declares these as imports in `jit/symbols.rs`; compile
+/// never sees the Rust runtime signature, so a declaration drift (wrong arity or
+/// return type) must fail here instead of silently calling a mismatched symbol.
+#[test]
+fn jit_vec_legacy_handle_len_abi() {
+    use arandu_base::span::Span;
+    use arandu_semantics::amir::{
+        AmirBasicBlock, AmirConstant, AmirFunc, AmirOperand, AmirProgram, AmirStmt, AmirStmtTable,
+        AmirTemp, AmirTerminator, BlockId, TempId,
+    };
+    use arandu_semantics::cfg::compute_cfg_edges;
+    use arandu_semantics::layout::DenseRange;
+    use arandu_semantics::literal_pool::AmirLiteralPool;
+    use arandu_semantics::types::{ArType, Primitive, TypeInterner};
+    use arandu_semantics::{SymbolKind, SymbolTable};
+
+    let interner = TypeInterner::new();
+    let int_ty = interner.intern(ArType::Primitive(Primitive::Int));
+
+    let mut symbols = SymbolTable::new(0);
+    let scope = symbols.global_scope();
+    let main_sym = symbols
+        .define(scope, "main", SymbolKind::Func, Span::new(0, 0, 0))
+        .expect("define main");
+    let vec_new_sym = symbols
+        .define(
+            scope,
+            "ar_vec_new",
+            SymbolKind::ExternFunc,
+            Span::new(0, 0, 0),
+        )
+        .expect("define ar_vec_new");
+    let vec_push_sym = symbols
+        .define(
+            scope,
+            "ar_vec_push",
+            SymbolKind::ExternFunc,
+            Span::new(0, 0, 0),
+        )
+        .expect("define ar_vec_push");
+    let vec_len_sym = symbols
+        .define(
+            scope,
+            "ar_vec_len",
+            SymbolKind::ExternFunc,
+            Span::new(0, 0, 0),
+        )
+        .expect("define ar_vec_len");
+
+    let mut pool = AmirLiteralPool::default();
+    let ten = pool.intern_int("10");
+    let twenty = pool.intern_int("20");
+
+    // t1 = ar_vec_new()
+    // ar_vec_push(t1, 10); ar_vec_push(t1, 20)
+    // t0 = ar_vec_len(t1)
+    // return t0
+    let mut stmts = AmirStmtTable::new();
+    stmts.push(AmirStmt::Call {
+        lhs: Some(TempId::from_usize(1)),
+        callee: AmirOperand::FunctionRef(vec_new_sym),
+        args: vec![].into(),
+        return_borrow: None,
+    });
+    stmts.push(AmirStmt::Call {
+        lhs: None,
+        callee: AmirOperand::FunctionRef(vec_push_sym),
+        args: vec![
+            AmirOperand::Copy(TempId::from_usize(1)),
+            AmirOperand::Constant(AmirConstant::Pool(ten)),
+        ]
+        .into(),
+        return_borrow: None,
+    });
+    stmts.push(AmirStmt::Call {
+        lhs: None,
+        callee: AmirOperand::FunctionRef(vec_push_sym),
+        args: vec![
+            AmirOperand::Copy(TempId::from_usize(1)),
+            AmirOperand::Constant(AmirConstant::Pool(twenty)),
+        ]
+        .into(),
+        return_borrow: None,
+    });
+    stmts.push(AmirStmt::Call {
+        lhs: Some(TempId::from_usize(0)),
+        callee: AmirOperand::FunctionRef(vec_len_sym),
+        args: vec![AmirOperand::Copy(TempId::from_usize(1))].into(),
+        return_borrow: None,
+    });
+    let block = AmirBasicBlock {
+        id: BlockId::from_usize(0),
+        statements: DenseRange::new(0, 4),
+        params: DenseRange::empty(),
+        terminator: AmirTerminator::Return,
+    };
+    let cfg = compute_cfg_edges(std::slice::from_ref(&block));
+    let temp = |id: usize| AmirTemp {
+        id: TempId::from_usize(id),
+        ty: int_ty,
+        is_copy: true,
+        is_nullable: false,
+        span: Span::new(0, 0, 0),
+    };
+    let func = AmirFunc {
+        symbol: main_sym,
+        return_type: int_ty,
+        receiver: None,
+        params: vec![],
+        locals: vec![],
+        temps: vec![temp(0), temp(1)],
+        blocks: vec![block],
+
+        block_params: Vec::new(),
+
+        stmts,
+        cfg,
+    };
+    let program = AmirProgram {
+        funcs: vec![func],
+        literal_pool: pool,
+        extern_funcs: Default::default(),
+    };
+    let type_info = arandu_semantics::TypeInfo {
+        type_interner: interner,
+        ..Default::default()
+    };
+    let backend = backend_for_test();
+    let module = backend
+        .compile(&program, &symbols, &type_info)
+        .expect("vec handle ABI JIT compile");
+    let result: i64 = unsafe {
+        let f: unsafe fn() -> i64 = module.get_fn("main").unwrap();
+        f()
+    };
+    assert_eq!(result, 2);
 }

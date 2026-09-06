@@ -61,8 +61,14 @@ pub(crate) fn safe_cleanup_temp_dir(temp_root: &Path, dir: &Path) {
     };
     if let Ok(canonical_dir) = dir.canonicalize() {
         // Ensure the directory is strictly contained within temp_root (no symlink escape)
-        if canonical_dir.starts_with(&canonical_root) && canonical_dir != canonical_root {
-            let _ = std::fs::remove_dir_all(&canonical_dir);
+        if canonical_dir.starts_with(&canonical_root)
+            && canonical_dir != canonical_root
+            && let Err(err) = std::fs::remove_dir_all(&canonical_dir)
+        {
+            eprintln!(
+                "failed to cleanup temp dir {}: {err}",
+                canonical_dir.display()
+            );
         }
     }
 }

@@ -88,7 +88,8 @@ pub fn analyze_local_liveness(func: &AmirFunc) -> LocalLiveness {
     let mut new_out = BitSet::<LocalId>::with_capacity(num_locals);
     let mut new_in = BitSet::<LocalId>::with_capacity(num_locals);
 
-    let max_iterations = num_blocks * num_locals + 1000;
+    let max_iterations =
+        num_blocks * num_locals + crate::analysis_limits::DATAFLOW_FIXPOINT_HEADROOM;
     let mut iterations = 0;
 
     while let Some(block_id) = worklist.pop_front() {
@@ -140,7 +141,7 @@ pub fn analyze_temp_liveness(func: &AmirFunc) -> TempLiveness {
     for block in &func.blocks {
         let mut defined = BitSet::<TempId>::with_capacity(num_temps);
         // Block params are defs at entry (before body uses).
-        for param in &block.params {
+        for param in func.block_params(block.params) {
             defined.insert(param.id);
             block_defs.insert(block.id, param.id);
         }
@@ -166,7 +167,8 @@ pub fn analyze_temp_liveness(func: &AmirFunc) -> TempLiveness {
     let mut new_out = BitSet::<TempId>::with_capacity(num_temps);
     let mut new_in = BitSet::<TempId>::with_capacity(num_temps);
 
-    let max_iterations = num_blocks * num_temps + 1000;
+    let max_iterations =
+        num_blocks * num_temps + crate::analysis_limits::DATAFLOW_FIXPOINT_HEADROOM;
     let mut iterations = 0;
 
     while let Some(block_id) = worklist.pop_front() {

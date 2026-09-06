@@ -92,13 +92,13 @@ AMIR represents the program as a Control Flow Graph (CFG) with explicit control-
 - **Lowered in AMIR:** `match`, `if is`, `defer`/`errdefer`, `?`, `?.`, `?[]`, `??`, `for in`, `alloc`, and `free`.
 - **Result/Option Representation:** Source-level `Result<T,E>` and `Option<T>` lower through `ResultCtor`/tuple ok-err layout without legacy source-level tuple fallback rules.
 - **Definite Initialization:** `passes/definite_init.rs` runs a CFG dataflow analysis and reports O008 for possibly uninitialized local reads.
-- **OSSA Foundation:** AMIR models `copy`, `move`, `borrow`, `borrow_mut`, `destroy`, `StorageLive`, and `StorageDead`; full borrow checking remains future work.
+- **OSSA ownership:** AMIR models `copy`, `move`, `borrow`, `borrow_mut`, `destroy`, `StorageLive`, and `StorageDead`. BV.1 derives a stable structural `ReturnBorrowSummary` from typed AMIR flow, unions only origins that reach each result path, solves recursive calls to fixpoint and carries the converged contract on calls. The narrow `borrow_interfaces` Salsa query cuts off body-only changes while changed contracts invalidate importers. AUD.4 keeps IDE analysis aligned and implicit `Destroy` is elaborated before M2 so O006 observes semantic AMIR. The system remains partial until BV.2 propagates every aggregate holder and BV.3 publishes safe `Slice`/`String` views.
 - **Still unsupported in AMIR lowering:** `catch` (roadmap v0.2 CATCH), unsafe block expressions (v0.2 UNSAFE), lambdas (v0.3 LAMBDA), and async blocks/`await` (v0.3 ASYNC).
 
 ### AMIR v0.2+ (Future)
 
 - **Move Checker Pass**: Promotes the current move/copy annotations into O001/O005/O007 diagnostics over the CFG.
-- **Borrow OSSA**: Adds explicit `end_borrow` and validates shared/mutable borrow conflicts.
+- **Borrow OSSA extensions**: extend the direct AUD.3 return summary to conditional non-escapable carriers such as `Option<ref T>`, `Slice` and string views; the existing direct shared/mutable return and conflict checks are active.
 - **Catch Lowering**: Desugars catch-handlers into explicit CFG branches.
 - **Generational Fallback**: Inserts transparent runtime checks where the static ownership model intentionally falls back.
 - **Unsafe Lowering**: Validates unsafe-only operations and lowers unsafe block expressions.

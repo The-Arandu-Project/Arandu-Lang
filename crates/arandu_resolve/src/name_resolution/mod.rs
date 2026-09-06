@@ -40,7 +40,15 @@ pub fn create_symbol_table_with_prelude(
     tracing::debug!(target: "arandu_resolve", "Creating symbol table with prelude");
     for (module, members) in PRELUDE_MODULE_MEMBERS {
         for member in *members {
-            let _ = table.define_module_member(module, member, span);
+            if let Err(existing) = table.define_module_member(module, member, span) {
+                return Err(vec![crate::Diagnostic::error(
+                    crate::DiagCode::N006ImportConflict,
+                    format!(
+                        "prelude module member `{module}.{member}` conflicts with existing symbol {existing:?}"
+                    ),
+                    span,
+                )]);
+            }
         }
     }
     let global_scope = table.global_scope();
@@ -139,6 +147,7 @@ pub fn resolve_imports_and_bodies(
         // Collect aliases only after package policy accepts the import. A rejected
         // filesystem import must not leave a partially usable namespace behind.
         if let arandu_parser::ImportDecl::ExternalAlias { source, alias, .. } = import {
+            // SmolStr::clone is O(1)
             resolver
                 .import_aliases
                 .insert(alias.clone(), source.clone());
@@ -163,13 +172,19 @@ pub fn resolve_imports_and_bodies(
                             resolver
                                 .import_aliases
                                 .insert(alias.clone(), SmolStr::new(prelude_name));
-                            if let Some(members) =
-                                resolver.symbols.module_members.get(prelude_name).cloned()
-                            {
+                            let prelude_str = SmolStr::new(prelude_name);
+                            let alias_members: Vec<_> = resolver
+                                .symbols
+                                .module_members
+                                .iter()
+                                .filter(|((m, _), _)| m == &prelude_str)
+                                .map(|((_, member), &id)| (member.clone(), id))
+                                .collect();
+                            for (member, id) in alias_members {
                                 resolver
                                     .symbols
                                     .module_members
-                                    .insert(alias.clone(), members);
+                                    .insert((alias.clone(), member), id);
                             }
                         }
                     }
@@ -179,8 +194,7 @@ pub fn resolve_imports_and_bodies(
                             if let Some(&id) = resolver
                                 .symbols
                                 .module_members
-                                .get(prelude_name)
-                                .and_then(|m| m.get(member_name))
+                                .get(&(SmolStr::new(prelude_name), member_name.clone()))
                             {
                                 let import_name = item.alias.as_ref().unwrap_or(&item.name).clone();
                                 let sym = arandu_middle::Symbol {
@@ -190,8 +204,32 @@ pub fn resolve_imports_and_bodies(
                                     span: item.span,
                                     scope: global,
                                     is_public: true,
+                                    lang_item: None,
                                 };
-                                let _ = resolver.symbols.insert_imported(sym);
+                                match resolver.symbols.insert_imported(sym) {
+                                    Ok(Some(placeholder_id)) => {
+                                        if let Some(entry) =
+                                            resolver.imported_symbols.remove(&placeholder_id)
+                                        {
+                                            resolver.imported_symbols.insert(id, entry);
+                                        }
+                                    }
+                                    Ok(None) => {}
+                                    Err(existing) => {
+                                        let existing_span = resolver.symbols.get(existing).span;
+                                        resolver.diagnostics.push(
+                                            arandu_middle::Diagnostic::error(
+                                                arandu_middle::DiagCode::N006ImportConflict,
+                                                format!(
+                                                    "import `{}` conflicts with an existing declaration",
+                                                    import_name
+                                                ),
+                                                item.span,
+                                            )
+                                            .with_label(existing_span, "already defined here"),
+                                        );
+                                    }
+                                }
                             }
                         }
                     }
@@ -230,6 +268,30 @@ pub fn resolve_imports_and_bodies(
                                 .map(|(n, &(id, _))| (n.as_str(), id))
                                 .collect();
                         for (name, &(id, kind)) in &exports.symbols {
+                            let item_lang = match (path.as_str(), name.as_str()) {
+                                (p, "Poll")
+                                    if p.ends_with("core/future.aru") || p == "std.core.future" =>
+                                {
+                                    Some(arandu_middle::symbol_table::LangItem::Poll)
+                                }
+                                (p, "Result")
+                                    if p.ends_with("core/result.aru") || p == "std.core.result" =>
+                                {
+                                    Some(arandu_middle::symbol_table::LangItem::Result)
+                                }
+                                (p, "Option")
+                                    if p.ends_with("core/option.aru") || p == "std.core.option" =>
+                                {
+                                    Some(arandu_middle::symbol_table::LangItem::Option)
+                                }
+                                (p, "Coroutine")
+                                    if p.ends_with("core/coroutine.aru")
+                                        || p == "std.core.coroutine" =>
+                                {
+                                    Some(arandu_middle::symbol_table::LangItem::Coroutine)
+                                }
+                                _ => None,
+                            };
                             let sym = arandu_middle::Symbol {
                                 id,
                                 name: name.clone().into(),
@@ -237,14 +299,20 @@ pub fn resolve_imports_and_bodies(
                                 span: import.span(),
                                 scope: global,
                                 is_public: true, // only public symbols appear in exports
+                                lang_item: item_lang,
                             };
                             resolver.symbols.register_imported_symbol(sym);
+                            if let Some(lang) = item_lang {
+                                resolver.symbols.set_lang_item(id, lang);
+                            }
                             resolver
                                 .symbols
                                 .module_members
-                                .entry(module_name.clone())
-                                .or_default()
-                                .insert(name.clone().into(), id);
+                                .insert((module_name.clone(), name.clone().into()), id);
+                            resolver
+                                .symbols
+                                .module_members
+                                .insert((path.clone().into(), name.clone().into()), id);
                             // Root of T025 across modules: associated methods are
                             // exported as `"Type.method"` but interface satisfaction
                             // looks up `associated_members[TypeId][method]`. Rebuild
@@ -266,9 +334,7 @@ pub fn resolve_imports_and_bodies(
                                     resolver
                                         .symbols
                                         .associated_members
-                                        .entry(type_sym)
-                                        .or_default()
-                                        .insert(smol_str::SmolStr::new(method), id);
+                                        .insert((type_sym, smol_str::SmolStr::new(method)), id);
                                     linked = true;
                                 }
                                 if linked {
@@ -289,6 +355,33 @@ pub fn resolve_imports_and_bodies(
                         for item in items {
                             if let Some(&(id, kind)) = exports.symbols.get(item.name.as_str()) {
                                 let import_name = item.alias.as_ref().unwrap_or(&item.name).clone();
+                                let item_lang = match (path.as_str(), item.name.as_str()) {
+                                    (p, "Poll")
+                                        if p.ends_with("core/future.aru")
+                                            || p == "std.core.future" =>
+                                    {
+                                        Some(arandu_middle::symbol_table::LangItem::Poll)
+                                    }
+                                    (p, "Result")
+                                        if p.ends_with("core/result.aru")
+                                            || p == "std.core.result" =>
+                                    {
+                                        Some(arandu_middle::symbol_table::LangItem::Result)
+                                    }
+                                    (p, "Option")
+                                        if p.ends_with("core/option.aru")
+                                            || p == "std.core.option" =>
+                                    {
+                                        Some(arandu_middle::symbol_table::LangItem::Option)
+                                    }
+                                    (p, "Coroutine")
+                                        if p.ends_with("core/coroutine.aru")
+                                            || p == "std.core.coroutine" =>
+                                    {
+                                        Some(arandu_middle::symbol_table::LangItem::Coroutine)
+                                    }
+                                    _ => None,
+                                };
                                 let sym = arandu_middle::Symbol {
                                     id,
                                     name: import_name.clone(),
@@ -296,7 +389,11 @@ pub fn resolve_imports_and_bodies(
                                     span: item.span,
                                     scope: global,
                                     is_public: true, // only public symbols appear in exports
+                                    lang_item: item_lang,
                                 };
+                                if let Some(lang) = item_lang {
+                                    resolver.symbols.set_lang_item(id, lang);
+                                }
                                 match resolver.symbols.insert_imported(sym) {
                                     Ok(Some(placeholder_id)) => {
                                         if let Some(entry) =
@@ -343,9 +440,7 @@ pub fn resolve_imports_and_bodies(
                                         resolver
                                             .symbols
                                             .associated_members
-                                            .entry(type_sym)
-                                            .or_default()
-                                            .insert(smol_str::SmolStr::new(method), id);
+                                            .insert((type_sym, smol_str::SmolStr::new(method)), id);
                                     }
                                 }
                             } else {

@@ -15,8 +15,8 @@ impl<'a> Resolver<'a> {
     }
 
     pub(crate) fn resolve_block_in_scope(&mut self, scope: ScopeId, pool: &AstPool, block: &Block) {
-        for stmt in &block.statements {
-            self.resolve_stmt(scope, pool, pool.stmt(*stmt));
+        for &stmt in pool.stmt_list(block.statements) {
+            self.resolve_stmt(scope, pool, pool.stmt(stmt));
         }
     }
 

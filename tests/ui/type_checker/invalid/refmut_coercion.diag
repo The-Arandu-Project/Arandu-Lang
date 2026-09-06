@@ -1,5 +1,5 @@
-T003: incompatible type in argument 1: expected '&mut int', found '&int'
+T003: incompatible type in argument 1: expected 'mut ref int', found 'ref int'
   --> tests/ui/type_checker/invalid/refmut_coercion.aru:7:5
-  label: 7:5-7:11 parameter 1 expects '&mut int'
-  label: 7:12-7:17 argument has type '&int'
-  note: flow: argument 1 (&int) → parameter (&mut int expected)
+  label: 7:5-7:11 parameter 1 expects 'mut ref int'
+  label: 7:12-7:17 argument has type 'ref int'
+  note: flow: argument 1 (ref int) → parameter (mut ref int expected)

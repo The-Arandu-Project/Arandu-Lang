@@ -165,7 +165,7 @@ impl<'a> Parser<'a> {
         }
         let literal = self.parse_literal_pattern_expr()?;
         if self.eat_name("RANGE_EXCLUSIVE") || self.eat_name("RANGE_INCLUSIVE") {
-            let inclusive = self.previous().kind.name() == "RANGE_INCLUSIVE";
+            let inclusive = self.previous().kind == TokenKind::RangeInclusive;
             let end = self.parse_literal_pattern_expr()?;
             return Ok(self.pool.alloc_pattern(Pattern::Range {
                 span: self.span_from_mark(start),

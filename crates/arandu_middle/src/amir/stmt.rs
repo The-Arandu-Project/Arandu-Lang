@@ -5,7 +5,12 @@ use crate::index_vec::IndexVec;
 use crate::newtype_index;
 use smallvec::SmallVec;
 
+use crate::types::ReturnBorrowSummary;
+
 newtype_index!(InstrId);
+
+/// Provenance carried by a reference returned from a call.
+pub type CallBorrowDependency = ReturnBorrowSummary;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AmirStmtKind {
@@ -35,6 +40,7 @@ pub enum AmirStmt {
         lhs: Option<TempId>,
         callee: AmirOperand,
         args: SmallVec<[AmirOperand; 4]>,
+        return_borrow: Option<CallBorrowDependency>,
     },
     Free(AmirOperand),
     /// Declares that a stack slot's lifetime is active.

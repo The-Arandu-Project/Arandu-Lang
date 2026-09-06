@@ -4,8 +4,8 @@ module examples.minimal.m14_mem_intrinsics
 import std.core.mem as mem
 
 extern "C" {
-    func ar_vec_malloc(size: u64): ptr[u8]
-    func ar_vec_buf_free(p: ptr[u8], size: u64): void
+    func ar_vec_malloc(size: uint): ptr[u8]
+    func ar_vec_buf_free(p: ptr[u8], size: uint): void
 }
 
 func main(): int {

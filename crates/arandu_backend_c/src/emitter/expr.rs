@@ -15,38 +15,68 @@ impl<'a> CEmitter<'a> {
         match rvalue {
             AmirRvalue::Use(op) => {
                 let op_str = self.format_operand(op, func);
-                let _ = write!(&mut self.output, "{}", op_str);
+                let source_ty = match op {
+                    AmirOperand::Copy(temp) | AmirOperand::Move(temp) => self.temp_ty(func, *temp),
+                    _ => ArType::Error,
+                };
+                let source_is_pointer = matches!(
+                    source_ty,
+                    ArType::Ptr(_) | ArType::Ref(_) | ArType::RefMut(_)
+                );
+                let dest_is_pointer = matches!(
+                    expected_ar_type,
+                    ArType::Ptr(_) | ArType::Ref(_) | ArType::RefMut(_)
+                );
+                if dest_is_pointer {
+                    if source_is_pointer {
+                        let _ = write!(&mut self.output, "({expected_c_type})({op_str})");
+                    } else if matches!(source_ty, ArType::Primitive(_) | ArType::IntLiteral) {
+                        let _ =
+                            write!(&mut self.output, "({expected_c_type})(uintptr_t)({op_str})");
+                    } else {
+                        let _ = write!(&mut self.output, "*({expected_c_type}*)&({op_str})");
+                    }
+                } else if source_is_pointer
+                    && matches!(expected_ar_type, ArType::Primitive(_) | ArType::IntLiteral)
+                {
+                    let _ = write!(&mut self.output, "({expected_c_type})(uintptr_t)({op_str})");
+                } else {
+                    let _ = write!(&mut self.output, "{op_str}");
+                }
             }
             AmirRvalue::BlackBox { value, .. } => {
                 let operand = self.format_operand(value, func);
-                if matches!(expected_ar_type, ArType::Primitive(Primitive::Str)) {
-                    let _ = write!(
-                        &mut self.output,
-                        "({{ volatile {expected_c_type} opaque = ({operand}); opaque; }})"
-                    );
-                } else if expected_c_type == "double" || expected_c_type == "float" {
-                    let _ = write!(
-                        &mut self.output,
-                        "ar_bench_black_box_f64((double)({operand}))"
-                    );
-                } else if expected_c_type.ends_with('*') || expected_c_type == "void*" {
-                    let _ = write!(
-                        &mut self.output,
-                        "({expected_c_type})ar_bench_black_box_ptr((void*)({operand}))"
-                    );
-                } else if matches!(
-                    expected_ar_type,
-                    ArType::Primitive(_) | ArType::IntLiteral | ArType::FloatLiteral
-                ) {
-                    let _ = write!(
-                        &mut self.output,
-                        "({expected_c_type})ar_bench_black_box_i64((int64_t)({operand}))"
-                    );
-                } else {
-                    let _ = write!(
-                        &mut self.output,
-                        "({{ volatile {expected_c_type} opaque = ({operand}); opaque; }})"
-                    );
+                match expected_ar_type {
+                    ArType::Primitive(Primitive::Str) => {
+                        let _ = write!(
+                            &mut self.output,
+                            "({{ volatile {expected_c_type} opaque = ({operand}); opaque; }})"
+                        );
+                    }
+                    ArType::Primitive(Primitive::Float) | ArType::FloatLiteral => {
+                        let _ = write!(
+                            &mut self.output,
+                            "ar_bench_black_box_f64((double)({operand}))"
+                        );
+                    }
+                    ArType::Ptr(_) | ArType::Ref(_) | ArType::RefMut(_) => {
+                        let _ = write!(
+                            &mut self.output,
+                            "({expected_c_type})ar_bench_black_box_ptr((void*)({operand}))"
+                        );
+                    }
+                    ArType::Primitive(_) | ArType::IntLiteral => {
+                        let _ = write!(
+                            &mut self.output,
+                            "({expected_c_type})ar_bench_black_box_i64((int64_t)({operand}))"
+                        );
+                    }
+                    _ => {
+                        let _ = write!(
+                            &mut self.output,
+                            "({{ volatile {expected_c_type} opaque = ({operand}); opaque; }})"
+                        );
+                    }
                 }
             }
             AmirRvalue::Binary { op, left, right } => {
@@ -61,6 +91,21 @@ impl<'a> CEmitter<'a> {
                 } else {
                     let left_str = self.format_operand(left, func);
                     let right_str = self.format_operand(right, func);
+                    let left_ty = match left {
+                        AmirOperand::Copy(t) | AmirOperand::Move(t) => self.temp_ty(func, *t),
+                        _ => ArType::Error,
+                    };
+                    if matches!(left_ty, ArType::Primitive(Primitive::Str)) {
+                        if matches!(op, BinaryOp::Equal) {
+                            let _ =
+                                write!(&mut self.output, "ar_str_eq({}, {})", left_str, right_str);
+                            return;
+                        } else if matches!(op, BinaryOp::NotEqual) {
+                            let _ =
+                                write!(&mut self.output, "!ar_str_eq({}, {})", left_str, right_str);
+                            return;
+                        }
+                    }
                     let op_str = match op {
                         BinaryOp::Add => "+",
                         BinaryOp::Sub => "-",
@@ -105,6 +150,8 @@ impl<'a> CEmitter<'a> {
                         return;
                     }
                 };
+                let base_is_pointer =
+                    matches!(base_ty, ArType::Ptr(_) | ArType::Ref(_) | ArType::RefMut(_));
                 let struct_ty = match base_ty {
                     ArType::Ptr(inner) | ArType::Ref(inner) | ArType::RefMut(inner) => {
                         self.interner.resolve(inner)
@@ -118,10 +165,15 @@ impl<'a> CEmitter<'a> {
                     AmirOperand::Copy(t) | AmirOperand::Move(t) => t.as_usize(),
                     _ => 0,
                 };
+                let address = if base_is_pointer {
+                    format!("t{base_temp}")
+                } else {
+                    format!("&t{base_temp}")
+                };
                 let _ = write!(
                     &mut self.output,
-                    "*({}*)((uint8_t*)&t{} + {})",
-                    expected_c_type, base_temp, offset
+                    "*({}*)((uint8_t*){} + {})",
+                    expected_c_type, address, offset
                 );
             }
             AmirRvalue::Discriminant { value } => {
@@ -138,7 +190,7 @@ impl<'a> CEmitter<'a> {
                 };
                 let _ = write!(
                     &mut self.output,
-                    "*(int64_t*)((uint8_t*)&t{} + 0)",
+                    "({{ int64_t _tag = 0; memcpy(&_tag, (uint8_t*)&t{} + 0, sizeof(_tag)); _tag; }})",
                     base_temp
                 );
             }
@@ -182,8 +234,8 @@ impl<'a> CEmitter<'a> {
                 }
                 let _ = write!(
                     &mut self.output,
-                    "*({}*)((uint8_t*)&t{} + {})",
-                    expected_c_type, base_temp, payload_offset
+                    "({{ {expected_c_type} _payload = {{0}}; memcpy(&_payload, (uint8_t*)&t{} + {}, sizeof(_payload)); _payload; }})",
+                    base_temp, payload_offset
                 );
             }
             AmirRvalue::EnumConstruct {
@@ -226,7 +278,7 @@ impl<'a> CEmitter<'a> {
                     };
                     let _ = write!(
                         &mut self.output,
-                        "*({expected_c_type}*)&(struct {{ {tag_c} tag; {payload_c_ty} payload; }}){{ {}, {} }}",
+                        "({{ {expected_c_type} _res = {{0}}; struct {{ {tag_c} tag; {payload_c_ty} payload; }} _s = {{ {}, {} }}; memcpy(&_res, &_s, sizeof(_s) < sizeof(_res) ? sizeof(_s) : sizeof(_res)); _res; }})",
                         variant_tag, payload_str
                     );
                 } else {
@@ -237,7 +289,7 @@ impl<'a> CEmitter<'a> {
                     };
                     let _ = write!(
                         &mut self.output,
-                        "*({expected_c_type}*)&(struct {{ {tag_c} tag; }}){{ {} }}",
+                        "({{ {expected_c_type} _res = {{0}}; {tag_c} _tag = {}; memcpy(&_res, &_tag, sizeof(_tag) < sizeof(_res) ? sizeof(_tag) : sizeof(_res)); _res; }})",
                         variant_tag
                     );
                 }
@@ -246,38 +298,50 @@ impl<'a> CEmitter<'a> {
                 struct_symbol,
                 fields,
             } => {
-                let _ = write!(&mut self.output, "*({expected_c_type}*)&(struct {{");
-                let struct_ty = arandu_middle::types::ArType::Named(*struct_symbol, Vec::new());
+                let struct_ty = match expected_ar_type {
+                    ArType::Named(id, _) if id == struct_symbol => expected_ar_type.clone(),
+                    _ => arandu_middle::types::ArType::named(*struct_symbol, &[], self.interner),
+                };
                 let layout = self.checked_layout(&struct_ty);
                 let field_defs = self.provider.get_struct_fields(*struct_symbol);
                 let mut resolved_fields = Vec::new();
                 for (i, (name, op)) in fields.iter().enumerate() {
-                    let field_idx = match self.provider.get_struct_field_indices(*struct_symbol) {
-                        Some(indices) => indices.get(name.as_str()).copied().unwrap_or(i),
-                        None => i,
-                    };
+                    let field_idx = self
+                        .provider
+                        .get_struct_fields(*struct_symbol)
+                        .and_then(|m| m.get(name.as_str()))
+                        .map(|f| f.index)
+                        .unwrap_or(i);
                     let offset = layout.field_offsets.get(field_idx).copied().unwrap_or(0);
-                    let field_ty = field_defs
-                        .and_then(|m| m.get(name.as_str()).copied())
-                        .map(|tid| self.interner.resolve(tid))
-                        .unwrap_or(ArType::Error);
+                    let field_ty = if field_defs.is_some() {
+                        self.instantiated_field_ty(&struct_ty, name)
+                    } else {
+                        ArType::Error
+                    };
                     let field_c_ty = self.format_type(&field_ty);
                     let op_str = self.format_operand(op, func);
                     resolved_fields.push((offset, field_c_ty, op_str));
                 }
                 resolved_fields.sort_by_key(|f| f.0);
 
+                let _ = write!(
+                    &mut self.output,
+                    "({{ {expected_c_type} _res = {{0}}; struct {{"
+                );
                 for (offset, field_c_ty, _) in &resolved_fields {
                     let _ = write!(&mut self.output, " {} f_{};", field_c_ty, offset);
                 }
-                let _ = write!(&mut self.output, "}}){{");
+                let _ = write!(&mut self.output, "}} _s = {{");
                 for (i, (_, _, op_str)) in resolved_fields.iter().enumerate() {
                     if i > 0 {
                         let _ = write!(&mut self.output, ", ");
                     }
                     let _ = write!(&mut self.output, "{}", op_str);
                 }
-                let _ = write!(&mut self.output, "}}");
+                let _ = write!(
+                    &mut self.output,
+                    "}}; memcpy(&_res, &_s, sizeof(_s) < sizeof(_res) ? sizeof(_s) : sizeof(_res)); _res; }})"
+                );
             }
             AmirRvalue::Unary { op, operand } => {
                 let op_val = self.format_operand(operand, func);
@@ -295,8 +359,14 @@ impl<'a> CEmitter<'a> {
                     // Load/store the **expected payload C type** (not i64 cast). Casting
                     // block_on_i64 → float/ptr was the root of nonsensical C for non-int.
                     UnaryOp::Await => {
-                        let is_float = expected_c_type == "double" || expected_c_type == "float";
-                        let is_ptr = expected_c_type.ends_with('*') || expected_c_type == "void*";
+                        let is_float = matches!(
+                            expected_ar_type,
+                            ArType::Primitive(Primitive::Float) | ArType::FloatLiteral
+                        );
+                        let is_ptr = matches!(
+                            expected_ar_type,
+                            ArType::Ptr(_) | ArType::Ref(_) | ArType::RefMut(_)
+                        );
                         let helper = if is_float {
                             "ar_co_await_f64"
                         } else if is_ptr {
@@ -337,45 +407,71 @@ impl<'a> CEmitter<'a> {
                 let _ = write!(&mut self.output, "&{}", place_str);
             }
             AmirRvalue::Array { items } => {
-                let elem_ty = match expected_ar_type {
-                    ArType::Array(_, inner) => self.interner.resolve(*inner),
-                    _ => ArType::Error,
-                };
-                let elem_c_ty = self.format_type(&elem_ty);
-                let _ = write!(&mut self.output, "*({expected_c_type}*)&({elem_c_ty}[]){{");
-                for (i, op) in items.iter().enumerate() {
-                    if i > 0 {
-                        let _ = write!(&mut self.output, ", ");
+                if items.is_empty() {
+                    let _ = write!(
+                        &mut self.output,
+                        "({{ {expected_c_type} _res = {{0}}; _res; }})"
+                    );
+                } else {
+                    let elem_ty = match expected_ar_type {
+                        ArType::Array(_, inner) => self.interner.resolve(*inner),
+                        _ => ArType::Error,
+                    };
+                    let elem_c_ty = self.format_type(&elem_ty);
+                    let _ = write!(
+                        &mut self.output,
+                        "({{ {expected_c_type} _res = {{0}}; {elem_c_ty} _arr[] = {{"
+                    );
+                    for (i, op) in items.iter().enumerate() {
+                        if i > 0 {
+                            let _ = write!(&mut self.output, ", ");
+                        }
+                        let op_str = self.format_operand(op, func);
+                        let _ = write!(&mut self.output, "{}", op_str);
                     }
-                    let op_str = self.format_operand(op, func);
-                    let _ = write!(&mut self.output, "{}", op_str);
+                    let _ = write!(
+                        &mut self.output,
+                        "}}; memcpy(&_res, _arr, sizeof(_arr) < sizeof(_res) ? sizeof(_arr) : sizeof(_res)); _res; }})"
+                    );
                 }
-                let _ = write!(&mut self.output, "}}");
             }
             AmirRvalue::Tuple { items } => {
-                let tys = match expected_ar_type {
-                    ArType::Tuple(tys) => tys.as_slice(),
-                    _ => &[],
-                };
-                let _ = write!(&mut self.output, "*({expected_c_type}*)&(struct {{");
-                for (i, _) in items.iter().enumerate() {
-                    let field_ty = if i < tys.len() {
-                        self.interner.resolve(tys[i])
-                    } else {
-                        ArType::Error
+                if items.is_empty() {
+                    let _ = write!(
+                        &mut self.output,
+                        "({{ {expected_c_type} _res = {{0}}; _res; }})"
+                    );
+                } else {
+                    let tys = match expected_ar_type {
+                        ArType::Tuple(tys) => self.interner.type_args(*tys),
+                        _ => Vec::new(),
                     };
-                    let field_c_ty = self.format_type(&field_ty);
-                    let _ = write!(&mut self.output, " {} f_{};", field_c_ty, i);
-                }
-                let _ = write!(&mut self.output, "}}){{");
-                for (i, op) in items.iter().enumerate() {
-                    if i > 0 {
-                        let _ = write!(&mut self.output, ", ");
+                    let _ = write!(
+                        &mut self.output,
+                        "({{ {expected_c_type} _res = {{0}}; struct {{"
+                    );
+                    for (i, _) in items.iter().enumerate() {
+                        let field_ty = if i < tys.len() {
+                            self.interner.resolve(tys[i])
+                        } else {
+                            ArType::Error
+                        };
+                        let field_c_ty = self.format_type(&field_ty);
+                        let _ = write!(&mut self.output, " {} f_{};", field_c_ty, i);
                     }
-                    let op_str = self.format_operand(op, func);
-                    let _ = write!(&mut self.output, "{}", op_str);
+                    let _ = write!(&mut self.output, "}} _s = {{");
+                    for (i, op) in items.iter().enumerate() {
+                        if i > 0 {
+                            let _ = write!(&mut self.output, ", ");
+                        }
+                        let op_str = self.format_operand(op, func);
+                        let _ = write!(&mut self.output, "{}", op_str);
+                    }
+                    let _ = write!(
+                        &mut self.output,
+                        "}}; memcpy(&_res, &_s, sizeof(_s) < sizeof(_res) ? sizeof(_s) : sizeof(_res)); _res; }})"
+                    );
                 }
-                let _ = write!(&mut self.output, "}}");
             }
             AmirRvalue::Len(op) => {
                 let op_str = self.format_operand(op, func);
@@ -396,7 +492,7 @@ impl<'a> CEmitter<'a> {
                     };
                     let _ = write!(
                         &mut self.output,
-                        "*({len_ty}*)((uint8_t*)&{op_str} + {off})"
+                        "({{ {len_ty} _len = 0; memcpy(&_len, (uint8_t*)&{op_str} + {off}, sizeof(_len)); _len; }})"
                     );
                 } else if let ArType::Array(len, _) = op_ty {
                     let _ = write!(&mut self.output, "{}", len);
@@ -408,16 +504,62 @@ impl<'a> CEmitter<'a> {
                     let _ = write!(&mut self.output, "/* invalid Len operand */ 0");
                 }
             }
+            AmirRvalue::SliceView { data, len, .. } => {
+                let data = self.format_operand(data, func);
+                let len = self.format_operand(len, func);
+                let off = self.layout.fat_ptr_len_offset();
+                let len_ty = if self.layout.fat_ptr_len_size() == 4 {
+                    "int32_t"
+                } else {
+                    "int64_t"
+                };
+                let _ = write!(
+                    &mut self.output,
+                    "({{ {expected_c_type} view = {{0}}; void* _ptr = (void*)({data}); {len_ty} _len = ({len_ty})({len}); memcpy((uint8_t*)&view + 0, &_ptr, sizeof(_ptr)); memcpy((uint8_t*)&view + {off}, &_len, sizeof(_len)); view; }})"
+                );
+            }
+            AmirRvalue::SliceSubslice { slice, start, len } => {
+                let slice = self.format_operand(slice, func);
+                let start = self.format_operand(start, func);
+                let len = self.format_operand(len, func);
+                let off = self.layout.fat_ptr_len_offset();
+                let len_ty = if self.layout.fat_ptr_len_size() == 4 {
+                    "int32_t"
+                } else {
+                    "int64_t"
+                };
+                let elem_c = match expected_ar_type {
+                    ArType::Slice(inner) => self.format_type(&self.interner.resolve(*inner)),
+                    _ => std::borrow::Cow::Borrowed("uint8_t"),
+                };
+                let _ = write!(
+                    &mut self.output,
+                    "({{ {expected_c_type} view = {{0}}; void* _orig_ptr = 0; memcpy(&_orig_ptr, (uint8_t*)&{slice} + 0, sizeof(_orig_ptr)); void* _ptr = (void*)((( {elem_c}*)_orig_ptr) + ({start})); {len_ty} _len = ({len_ty})({len}); memcpy((uint8_t*)&view + 0, &_ptr, sizeof(_ptr)); memcpy((uint8_t*)&view + {off}, &_len, sizeof(_len)); view; }})"
+                );
+            }
+            AmirRvalue::StrView { owner } => {
+                let owner = self.format_operand(owner, func);
+                let _ = write!(&mut self.output, "({expected_c_type})({owner})");
+            }
             AmirRvalue::IndexAccess { base, index } => {
                 let base_ty = match base {
                     AmirOperand::Copy(t) | AmirOperand::Move(t) => self.temp_ty(func, *t),
                     _ => ArType::Error,
                 };
-                let elem_ty = match &base_ty {
-                    ArType::Array(_, inner) | ArType::Slice(inner) | ArType::Ptr(inner) => {
+                let deref_ty = match &base_ty {
+                    ArType::Ptr(inner) | ArType::Ref(inner) | ArType::RefMut(inner) => {
                         self.interner.resolve(*inner)
                     }
-                    _ => ArType::Error,
+                    other => other.clone(),
+                };
+                let is_vec = arandu_middle::types::is_vec_type(&deref_ty, self.symbols);
+                let elem_ty = match arandu_middle::types::index_elem_type(
+                    &deref_ty,
+                    self.symbols,
+                    self.interner,
+                ) {
+                    Some(id) => self.interner.resolve(id),
+                    None => ArType::Error,
                 };
                 let elem_c_ty = self.format_type(&elem_ty);
                 let base_str = self.format_operand(base, func);
@@ -429,7 +571,7 @@ impl<'a> CEmitter<'a> {
                         "(({}*){})[{}]",
                         elem_c_ty, base_str, index_str
                     );
-                } else if matches!(base_ty, ArType::Slice(_)) {
+                } else if matches!(base_ty, ArType::Slice(_)) || is_vec {
                     let _ = write!(
                         &mut self.output,
                         "(({}*)(*(void**)((uint8_t*)&{} + 0)))[{}]",
@@ -473,33 +615,12 @@ impl<'a> CEmitter<'a> {
             AmirRvalue::RelativeBorrow { local, .. } => {
                 let _ = write!(&mut self.output, "((void*)(uintptr_t){})", local.as_usize());
             }
-            AmirRvalue::GenInsert { value, .. } => {
-                let v = self.format_operand(value, func);
-                let _ = write!(&mut self.output, "ar_gen_insert_i64((int64_t)({v}))");
-            }
-            AmirRvalue::GenGet { gen_ref, .. } => {
-                let r = self.format_operand(gen_ref, func);
-                let _ = write!(&mut self.output, "ar_gen_get_i64((int64_t)({r}))");
-            }
-            AmirRvalue::GenSet { gen_ref, value, .. } => {
-                let r = self.format_operand(gen_ref, func);
-                let v = self.format_operand(value, func);
-                let _ = write!(
-                    &mut self.output,
-                    "ar_gen_set_i64((int64_t)({r}), (int64_t)({v}))"
-                );
-            }
-            AmirRvalue::GenUpsert { gen_ref, value, .. } => {
-                let r = self.format_operand(gen_ref, func);
-                let v = self.format_operand(value, func);
-                let _ = write!(
-                    &mut self.output,
-                    "ar_gen_upsert_i64((int64_t)({r}), (int64_t)({v}))"
-                );
-            }
-            AmirRvalue::GenRemove { gen_ref, .. } => {
-                let r = self.format_operand(gen_ref, func);
-                let _ = write!(&mut self.output, "ar_gen_remove_i64((int64_t)({r}))");
+            AmirRvalue::GenInsert { .. }
+            | AmirRvalue::GenGet { .. }
+            | AmirRvalue::GenSet { .. }
+            | AmirRvalue::GenUpsert { .. }
+            | AmirRvalue::GenRemove { .. } => {
+                unreachable!("GenRef operations must be lowered as statements via ar_gen_*_raw");
             }
             AmirRvalue::StringInterp { parts } => {
                 // Emit a call to the runtime helper: ar_str_concat_n(n, part0, part1, ..., partN-1)

@@ -54,13 +54,14 @@ impl<'a> Resolver<'a> {
                             span,
                         );
                         // Suggest close matches from the members of that type.
-                        if let Some(id) = type_sym
-                            && let Some(methods) = self.symbols.associated_members.get(&id)
-                        {
+                        if let Some(id) = type_sym {
                             let max_distance = if member.len() <= 4 { 2 } else { 3 };
-                            let best_match = methods
+                            let best_match = self
+                                .symbols
+                                .associated_members
                                 .keys()
-                                .map(|name| {
+                                .filter(|(parent, _)| *parent == id)
+                                .map(|(_, name)| {
                                     let dist = if name.to_lowercase() == member.to_lowercase() {
                                         0
                                     } else {

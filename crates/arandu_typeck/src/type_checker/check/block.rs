@@ -21,28 +21,41 @@ pub fn check_block_tail(
     tail_expected: Option<TypeId>,
 ) -> ArType {
     let mut last_ty = ArType::Void;
-    let len = block.statements.len();
-    for (i, stmt) in block.statements.iter().enumerate() {
-        let stmt = pool.stmt(*stmt);
+    let statements = pool.stmt_list(block.statements);
+    let len = statements.len();
+    for (i, &stmt) in statements.iter().enumerate() {
+        let stmt = pool.stmt(stmt);
         if i == len - 1 {
-            if let Stmt::Expr { expr, span } = stmt {
-                let last_ty_id =
-                    super::super::synth::synth_expr_expected(checker, *expr, tail_expected);
-                last_ty = checker.resolve(last_ty_id);
-                if let Some(expected_id) = tail_expected {
-                    let expected = checker.resolve(expected_id);
-                    if !checker.unify_return_type(&expected, &last_ty) {
-                        checker.add_constraint(
-                            expected,
-                            last_ty.clone(),
-                            ConstraintOrigin::ReturnType {
-                                return_span: *span,
-                                declared_span: checker
-                                    .ctx
-                                    .current_return_decl_span()
-                                    .unwrap_or(*span),
-                            },
-                        );
+            if let Stmt::Expr {
+                expr,
+                span,
+                has_semi,
+            } = stmt
+            {
+                let tail_non_void =
+                    tail_expected.is_some_and(|exp| !matches!(checker.resolve(exp), ArType::Void));
+                if *has_semi && !tail_non_void {
+                    let _ = super::super::synth::synth_expr(checker, *expr);
+                    last_ty = ArType::Void;
+                } else {
+                    let last_ty_id =
+                        super::super::synth::synth_expr_expected(checker, *expr, tail_expected);
+                    last_ty = checker.resolve(last_ty_id);
+                    if let Some(expected_id) = tail_expected {
+                        let expected = checker.resolve(expected_id);
+                        if !checker.unify_return_type(&expected, &last_ty) {
+                            checker.add_constraint(
+                                expected,
+                                last_ty.clone(),
+                                ConstraintOrigin::ReturnType {
+                                    return_span: *span,
+                                    declared_span: checker
+                                        .ctx
+                                        .current_return_decl_span()
+                                        .unwrap_or(*span),
+                                },
+                            );
+                        }
                     }
                 }
             } else {

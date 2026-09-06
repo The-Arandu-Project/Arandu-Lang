@@ -108,7 +108,15 @@ pub fn parse_float_literal(s: &str) -> Option<f64> {
 /// C-compatible spelling of an int lexeme (decimal, no underscores).
 #[must_use]
 pub fn int_literal_c_source(s: &str) -> Option<String> {
-    parse_int_literal(s).map(|v| v.to_string())
+    parse_int_literal(s).map(|v| {
+        if v > i64::MAX as i128 {
+            format!("{v}ULL")
+        } else if v < i64::MIN as i128 {
+            format!("{v}LL")
+        } else {
+            v.to_string()
+        }
+    })
 }
 
 /// C-compatible spelling of a float lexeme (no underscores).

@@ -171,7 +171,7 @@ impl LowerCtx<'_> {
                 from: from_name,
                 moved: !is_copy,
             };
-            self.builder.blocks[block.as_usize()].params.push(param);
+            self.builder.push_block_param(block, param);
             let op = AmirOperand::Copy(temp_id);
             self.incomplete_phis
                 .entry(block)
@@ -203,7 +203,7 @@ impl LowerCtx<'_> {
                     from: from_name,
                     moved: !is_copy,
                 };
-                self.builder.blocks[block.as_usize()].params.push(param);
+                self.builder.push_block_param(block, param);
                 let op = AmirOperand::Copy(temp_id);
                 self.write_variable(block, local, op);
                 self.add_block_parameter_operands(block, local, temp_id);
@@ -291,7 +291,7 @@ impl LowerCtx<'_> {
                 if self.is_suspend_resume_target(block_id) {
                     continue;
                 }
-                let params = self.builder.blocks[block_idx].params.clone();
+                let params = self.builder.block_params(block_id).to_vec();
                 for (param_idx, p) in params.into_iter().enumerate() {
                     if self.redirected_temps.contains_key(&p.id) {
                         continue;
@@ -361,7 +361,7 @@ impl LowerCtx<'_> {
             if self.is_suspend_resume_target(block_id) {
                 continue;
             }
-            let old_params = std::mem::take(&mut self.builder.blocks[block_idx].params);
+            let old_params = self.builder.take_block_params(block_id);
             let mut keep_indices = Vec::new();
             let mut new_params = Vec::new();
             for (i, p) in old_params.into_iter().enumerate() {
@@ -370,7 +370,7 @@ impl LowerCtx<'_> {
                     new_params.push(p);
                 }
             }
-            self.builder.blocks[block_idx].params = new_params;
+            self.builder.set_block_params(block_id, new_params);
 
             let preds = self
                 .builder
@@ -480,6 +480,19 @@ impl LowerCtx<'_> {
             AmirRvalue::Len(value) => {
                 *value = Self::resolve_operand(redirected_temps, *value);
             }
+            AmirRvalue::SliceView { owner, data, len } => {
+                *owner = Self::resolve_operand(redirected_temps, *owner);
+                *data = Self::resolve_operand(redirected_temps, *data);
+                *len = Self::resolve_operand(redirected_temps, *len);
+            }
+            AmirRvalue::SliceSubslice { slice, start, len } => {
+                *slice = Self::resolve_operand(redirected_temps, *slice);
+                *start = Self::resolve_operand(redirected_temps, *start);
+                *len = Self::resolve_operand(redirected_temps, *len);
+            }
+            AmirRvalue::StrView { owner } => {
+                *owner = Self::resolve_operand(redirected_temps, *owner);
+            }
             AmirRvalue::Alloc(value) => {
                 *value = Self::resolve_operand(redirected_temps, *value);
             }
@@ -539,6 +552,7 @@ impl LowerCtx<'_> {
                 lhs: _,
                 callee,
                 args,
+                ..
             } => {
                 *callee = Self::resolve_operand(redirected_temps, *callee);
                 for arg in args {
@@ -624,7 +638,7 @@ impl LowerCtx<'_> {
                 ..
             } => {
                 if *target == target_block {
-                    args.get(param_idx).cloned()
+                    args.get(param_idx).copied()
                 } else {
                     None
                 }
@@ -637,9 +651,9 @@ impl LowerCtx<'_> {
                 ..
             } => {
                 if *if_true == target_block {
-                    true_args.get(param_idx).cloned()
+                    true_args.get(param_idx).copied()
                 } else if *if_false == target_block {
-                    false_args.get(param_idx).cloned()
+                    false_args.get(param_idx).copied()
                 } else {
                     None
                 }
@@ -649,11 +663,11 @@ impl LowerCtx<'_> {
             } => {
                 for (_, dest, target_args) in targets {
                     if *dest == target_block {
-                        return target_args.get(param_idx).cloned();
+                        return target_args.get(param_idx).copied();
                     }
                 }
                 if otherwise.0 == target_block {
-                    otherwise.1.get(param_idx).cloned()
+                    otherwise.1.get(param_idx).copied()
                 } else {
                     None
                 }
@@ -759,7 +773,7 @@ impl LowerCtx<'_> {
         if !self.sealed_blocks.contains(&target) {
             return Vec::new();
         }
-        let params = self.builder.blocks[target.as_usize()].params.clone();
+        let params = self.builder.block_params(target).to_vec();
         let mut args = Vec::new();
         let Some(curr) = self.builder.current_block else {
             return args;

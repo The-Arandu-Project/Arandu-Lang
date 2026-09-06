@@ -1,0 +1,84 @@
+module std.core.fmt
+
+import std.core.mem as mem
+import std.core.str as strings
+
+/// Error encountered during buffer formatting.
+public enum FmtError {
+    /// Destination buffer ran out of remaining capacity.
+    BufferFull,
+    /// Invalid formatting directive or payload.
+    InvalidFormat,
+}
+
+/// Zero-allocation, stream-like text buffer formatter.
+///
+/// Wraps a contiguous memory buffer (`ptr[u8]`) with capacity and current length.
+public struct Formatter {
+    buf: ptr[u8]
+    capacity: uint
+    len: uint
+}
+
+/// Creates a new `Formatter` operating over a pre-allocated raw buffer.
+public func newFormatter(buf: ptr[u8], capacity: uint): Formatter {
+    return Formatter {
+        buf: buf,
+        capacity: capacity,
+        len: 0,
+    }
+}
+
+/// Returns the current number of formatted bytes in the buffer.
+public func Formatter.len(self: ref Formatter): uint {
+    return self.len
+}
+
+/// Returns the remaining writable capacity in bytes.
+public func Formatter.remaining(self: ref Formatter): uint {
+    if self.len >= self.capacity {
+        return 0
+    }
+    return self.capacity - self.len
+}
+
+/// Writes a single byte into the formatter buffer.
+public func Formatter.writeByte(self: mut ref Formatter, b: u8): Result<uint, FmtError> {
+    if self.len >= self.capacity {
+        return Result.Err(FmtError.BufferFull)
+    }
+    unsafe {
+        let p = mem.ptrOffset<u8>(self.buf, self.len as i32)
+        mem.ptrWrite<u8>(p, b)
+    }
+    self.len = self.len + 1
+    return Result.Ok(1)
+}
+
+/// Writes a boolean value as "true" or "false" into the formatter buffer.
+public func Formatter.writeBool(self: mut ref Formatter, b: bool): Result<uint, FmtError> {
+    if b {
+        return self.writeStr("true")
+    }
+    return self.writeStr("false")
+}
+
+/// Writes a string slice into the formatter buffer without allocations.
+public func Formatter.writeStr(self: mut ref Formatter, s: str): Result<uint, FmtError> {
+    let slen = strings.lenBytes(s)
+    if self.len + slen > self.capacity {
+        return Result.Err(FmtError.BufferFull)
+    }
+    self.len = self.len + slen
+    return Result.Ok(slen)
+}
+
+/// Interface for user-facing, human-readable text presentation.
+public interface Display {
+    func fmt(self: ref Self, f: mut ref Formatter): Result<uint, FmtError>
+}
+
+/// Interface for developer-facing debug representations.
+public interface Debug {
+    func fmtDebug(self: ref Self, f: mut ref Formatter): Result<uint, FmtError>
+}

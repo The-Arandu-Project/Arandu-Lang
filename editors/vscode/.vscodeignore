@@ -2,6 +2,7 @@
 .vscodeignore
 tsconfig.json
 eslint.config.mjs
+esbuild.js
 src/**
 node_modules/**
 out/**/*.map

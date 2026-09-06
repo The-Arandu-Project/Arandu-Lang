@@ -1,16 +1,10 @@
 module std.time
 
-/// Minimal 0.1 — **IN optional** clocks (thin).
+/// Clocks and high-precision temporal measurements.
 ///
-/// | Function         | Status |
-/// |------------------|--------|
-/// | `monotonic_ns`   | host-backed steady clock (not wall time) |
-///
-/// Monotonic time is for measuring intervals (timeouts, benchmarks). It is **not**
-/// convertible to calendar date and may reset across reboots/process restarts.
-/// Aligns with Rust `Instant` / POSIX `CLOCK_MONOTONIC` intent.
-///
-/// Not in the default `arandu new` template.
+/// Provides strongly-typed `Instant` (monotonic point in time) and `Duration`
+/// (time interval) representations, preventing unit confusion (seconds vs ms vs ns)
+/// without any heap allocation or object boxing.
 
 extern "C" {
     /// Nanoseconds since an arbitrary process-local epoch.
@@ -18,8 +12,106 @@ extern "C" {
 }
 
 /// Steady-clock nanoseconds (non-decreasing within a process).
-public func monotonic_ns(): int {
+public func monotonicNs(): int {
     unsafe {
         return ar_time_monotonic_ns()
     }
+}
+
+/// Represents a span of time with nanosecond precision.
+public struct Duration {
+    nanos: int
+}
+
+/// Creates a `Duration` from a raw number of nanoseconds.
+public func durationFromNanos(ns: int): Duration {
+    return Duration { nanos: ns }
+}
+
+/// Creates a `Duration` from a number of microseconds.
+public func durationFromMicros(us: int): Duration {
+    return Duration { nanos: us * 1000 }
+}
+
+/// Creates a `Duration` from a number of milliseconds.
+public func durationFromMillis(ms: int): Duration {
+    return Duration { nanos: ms * 1000000 }
+}
+
+/// Creates a `Duration` from a number of seconds.
+public func durationFromSecs(s: int): Duration {
+    return Duration { nanos: s * 1000000000 }
+}
+
+/// Returns the total number of whole seconds in this duration.
+public func Duration.asSecs(self: ref Duration): int {
+    return self.nanos / 1000000000
+}
+
+/// Returns the total number of whole milliseconds in this duration.
+public func Duration.asMillis(self: ref Duration): int {
+    return self.nanos / 1000000
+}
+
+/// Returns the total number of whole microseconds in this duration.
+public func Duration.asMicros(self: ref Duration): int {
+    return self.nanos / 1000
+}
+
+/// Returns the total number of nanoseconds in this duration.
+public func Duration.asNanos(self: ref Duration): int {
+    return self.nanos
+}
+
+/// Returns the subsecond nanosecond part of this duration (0..999_999_999).
+public func Duration.subsecNanos(self: ref Duration): int {
+    return self.nanos % 1000000000
+}
+
+/// Returns `true` if this duration spans 0 nanoseconds.
+public func Duration.isZero(self: ref Duration): bool {
+    return self.nanos == 0
+}
+
+/// Adds two durations together.
+public func Duration.add(self: ref Duration, other: Duration): Duration {
+    return Duration { nanos: self.nanos + other.nanos }
+}
+
+/// Subtracts `other` from `self`, saturating at zero if `other` is greater.
+public func Duration.sub(self: ref Duration, other: Duration): Duration {
+    if self.nanos < other.nanos {
+        return Duration { nanos: 0 }
+    }
+    return Duration { nanos: self.nanos - other.nanos }
+}
+
+/// Measurement of a monotonically non-decreasing clock.
+///
+/// Instants are opaque and only useful for calculating intervals with `elapsed`
+/// or `durationSince`.
+public struct Instant {
+    nanos: int
+}
+
+/// Returns an `Instant` corresponding to "now".
+public func now(): Instant {
+    return Instant { nanos: monotonicNs() }
+}
+
+/// Returns the amount of time elapsed since this instant was created.
+public func Instant.elapsed(self: ref Instant): Duration {
+    let current = monotonicNs()
+    if current < self.nanos {
+        return Duration { nanos: 0 }
+    }
+    return Duration { nanos: current - self.nanos }
+}
+
+/// Returns the amount of time elapsed from another instant to this one.
+public func Instant.durationSince(self: ref Instant, earlier: Instant): Duration {
+    if self.nanos < earlier.nanos {
+        return Duration { nanos: 0 }
+    }
+    return Duration { nanos: self.nanos - earlier.nanos }
 }

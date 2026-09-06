@@ -12,6 +12,21 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
 
         match rvalue {
             AmirRvalue::Use(op) => self.translate_str_operand(op),
+            AmirRvalue::Unary {
+                op: arandu_semantics::ops::UnaryOp::Deref,
+                operand,
+            } => {
+                let address = self.translate_operand(operand, Some(self.ptr_type));
+                let flags = cranelift_codegen::ir::MemFlagsData::new();
+                let ptr = self.builder.ins().load(self.ptr_type, flags, address, 0);
+                let len = self.builder.ins().load(
+                    self.ptr_type,
+                    flags,
+                    address,
+                    self.ptr_type.bytes() as i32,
+                );
+                (ptr, len)
+            }
             AmirRvalue::Load(place) => {
                 if place.projections.is_empty() {
                     if let Some(&(var_ptr, var_len)) = self.str_local_map.get(&place.local) {
@@ -113,13 +128,13 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                         .get(variant)
                         .copied()
                         .unwrap_or(0);
-                    if let Some(variant_shape) = variants.get(tag) {
-                        if let Some(payload_ty_id) = variant_shape.payload_ty {
-                            let payload_ty = self.type_info.resolve_type_id(payload_ty_id);
-                            let payload_layout = self.checked_layout(&payload_ty);
-                            if *index < payload_layout.field_offsets.len() {
-                                payload_offset = payload_layout.field_offsets[*index] as i32;
-                            }
+                    if let Some(variant_shape) = variants.get(tag)
+                        && let Some(payload_ty_id) = variant_shape.payload_ty
+                    {
+                        let payload_ty = self.type_info.resolve_type_id(payload_ty_id);
+                        let payload_layout = self.checked_layout(&payload_ty);
+                        if *index < payload_layout.field_offsets.len() {
+                            payload_offset = payload_layout.field_offsets[*index] as i32;
                         }
                     }
                 }

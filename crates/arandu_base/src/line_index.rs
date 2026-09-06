@@ -1,16 +1,18 @@
+use std::sync::Arc;
+
 /// A map of line start byte offsets in a source file.
 /// Used to perform binary search lookups of line and column numbers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LineIndex {
     pub line_starts: Vec<u32>,
-    pub source: String,
+    pub source: Arc<str>,
 }
 
 impl Default for LineIndex {
     fn default() -> Self {
         Self {
             line_starts: vec![0],
-            source: String::new(),
+            source: Arc::from(""),
         }
     }
 }
@@ -19,6 +21,12 @@ impl LineIndex {
     /// Constructs a `LineIndex` from the given source file contents.
     #[must_use]
     pub fn new(source: &str) -> Self {
+        Self::from_arc(Arc::from(source))
+    }
+
+    /// Constructs a `LineIndex` reusing an existing `Arc<str>` without re-allocating source text.
+    #[must_use]
+    pub fn from_arc(source: Arc<str>) -> Self {
         let mut line_starts = vec![0];
         for (offset, byte) in source.bytes().enumerate() {
             if byte == b'\n' {
@@ -27,7 +35,7 @@ impl LineIndex {
         }
         Self {
             line_starts,
-            source: source.to_string(),
+            source,
         }
     }
 

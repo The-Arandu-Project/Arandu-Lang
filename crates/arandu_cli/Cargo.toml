@@ -5,6 +5,10 @@ edition = "2024"
 license.workspace = true
 authors.workspace = true
 
+[features]
+default = ["self-profile"]
+self-profile = ["arandu_base/self-profile"]
+
 [lints]
 workspace = true
 
@@ -22,6 +26,7 @@ arandu_codegen = { path = "../arandu_codegen" }
 arandu_runtime = { path = "../arandu_runtime" }
 arandu_query = { path = "../arandu_query" }
 arandu_fmt = { path = "../arandu_fmt" }
+arandu_doc = { path = "../arandu_doc" }
 
 arandu_middle = { path = "../arandu_middle" }
 arandu_base = { path = "../arandu_base" }
@@ -32,7 +37,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 rayon = "1.12.0"
 miette = { workspace = true }
-thiserror = { workspace = true }
 petgraph = { workspace = true }
 notify = "8.2.0"
 notify-debouncer-full = "0.7.0"

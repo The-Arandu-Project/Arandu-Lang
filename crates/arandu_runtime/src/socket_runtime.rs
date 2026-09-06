@@ -102,18 +102,21 @@ pub unsafe extern "C" fn ar_rt_tcp_accept(listener: i64) -> i64 {
     if listener < 0 {
         return -1;
     }
-    let mut g = lock();
-    let Some(Some(slot)) = g.get_mut(listener as usize) else {
-        return -1;
-    };
-    let SockKind::Listener(l) = &slot.kind else {
-        return -1;
-    };
-    match l.accept() {
-        Ok((stream, _)) => {
-            drop(g);
-            insert(SockKind::Stream(stream))
+    let cloned_listener = {
+        let mut g = lock();
+        let Some(Some(slot)) = g.get_mut(listener as usize) else {
+            return -1;
+        };
+        let SockKind::Listener(l) = &slot.kind else {
+            return -1;
+        };
+        match l.try_clone() {
+            Ok(cloned) => cloned,
+            Err(_) => return -1,
         }
+    };
+    match cloned_listener.accept() {
+        Ok((stream, _)) => insert(SockKind::Stream(stream)),
         Err(_) => -1,
     }
 }

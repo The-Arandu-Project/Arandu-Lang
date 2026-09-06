@@ -1,0 +1,151 @@
+module std.core.atomic
+
+import std.core.result as result
+
+/// Memory ordering semantics for atomic operations.
+public enum MemoryOrder {
+    Relaxed,
+    Acquire,
+    Release,
+    AcqRel,
+    SeqCst,
+}
+
+/// A boolean type which can be safely shared and mutated atomically.
+public struct AtomicBool {
+    val: bool
+}
+
+/// Creates a new `AtomicBool`.
+public func atomicBoolNew(val: bool): AtomicBool {
+    return AtomicBool {
+        val: val,
+    }
+}
+
+/// Loads a value from the atomic boolean.
+public func AtomicBool.load(self: ref AtomicBool, order: MemoryOrder): bool {
+    return self.val
+}
+
+/// Stores a value into the atomic boolean.
+public func AtomicBool.store(self: mut ref AtomicBool, val: bool, order: MemoryOrder): void {
+    self.val = val
+}
+
+/// Stores a value into the atomic boolean, returning the previous value.
+public func AtomicBool.swap(self: mut ref AtomicBool, val: bool, order: MemoryOrder): bool {
+    let old = self.val
+    self.val = val
+    return old
+}
+
+/// An integer type which can be safely shared and mutated atomically.
+public struct AtomicInt {
+    val: int
+}
+
+/// Creates a new `AtomicInt`.
+public func atomicIntNew(val: int): AtomicInt {
+    return AtomicInt {
+        val: val,
+    }
+}
+
+/// Loads a value from the atomic integer.
+public func AtomicInt.load(self: ref AtomicInt, order: MemoryOrder): int {
+    return self.val
+}
+
+/// Stores a value into the atomic integer.
+public func AtomicInt.store(self: mut ref AtomicInt, val: int, order: MemoryOrder): void {
+    self.val = val
+}
+
+/// Stores a value into the atomic integer, returning the previous value.
+public func AtomicInt.swap(self: mut ref AtomicInt, val: int, order: MemoryOrder): int {
+    let old = self.val
+    self.val = val
+    return old
+}
+
+/// Adds to the current value, returning the previous value.
+public func AtomicInt.fetchAdd(self: mut ref AtomicInt, val: int, order: MemoryOrder): int {
+    let old = self.val
+    self.val = self.val + val
+    return old
+}
+
+/// Subtracts from the current value, returning the previous value.
+public func AtomicInt.fetchSub(self: mut ref AtomicInt, val: int, order: MemoryOrder): int {
+    let old = self.val
+    self.val = self.val - val
+    return old
+}
+
+/// Compares and exchanges the value if it matches `expected`.
+public func AtomicInt.compareExchange(self: mut ref AtomicInt, expected: int, desired: int, success: MemoryOrder, failure: MemoryOrder): Result<int, int> {
+    if self.val == expected {
+        self.val = desired
+        return Result.Ok(expected)
+    }
+    return Result.Err(self.val)
+}
+
+/// An unsigned integer type which can be safely shared and mutated atomically.
+public struct AtomicUint {
+    val: uint
+}
+
+/// Creates a new `AtomicUint`.
+public func atomicUintNew(val: uint): AtomicUint {
+    return AtomicUint {
+        val: val,
+    }
+}
+
+/// Loads a value from the atomic unsigned integer.
+public func AtomicUint.load(self: ref AtomicUint, order: MemoryOrder): uint {
+    return self.val
+}
+
+/// Stores a value into the atomic unsigned integer.
+public func AtomicUint.store(self: mut ref AtomicUint, val: uint, order: MemoryOrder): void {
+    self.val = val
+}
+
+/// Adds to the current value, returning the previous value.
+public func AtomicUint.fetchAdd(self: mut ref AtomicUint, val: uint, order: MemoryOrder): uint {
+    let old = self.val
+    self.val = self.val + val
+    return old
+}
+
+/// Subtracts from the current value, returning the previous value.
+public func AtomicUint.fetchSub(self: mut ref AtomicUint, val: uint, order: MemoryOrder): uint {
+    let old = self.val
+    self.val = self.val - val
+    return old
+}
+
+/// An atomic pointer type.
+public struct AtomicPtr<T> {
+    val: ptr[T]
+}
+
+/// Creates a new `AtomicPtr`.
+public func atomicPtrNew<T>(val: ptr[T]): AtomicPtr<T> {
+    return AtomicPtr<T> {
+        val: val,
+    }
+}
+
+/// Loads a pointer from the atomic pointer.
+public func AtomicPtr.load<T>(self: ref AtomicPtr<T>, order: MemoryOrder): ptr[T] {
+    return self.val
+}
+
+/// Stores a pointer into the atomic pointer.
+public func AtomicPtr.store<T>(self: mut ref AtomicPtr<T>, val: ptr[T], order: MemoryOrder): void {
+    self.val = val
+}

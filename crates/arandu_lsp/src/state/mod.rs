@@ -8,8 +8,6 @@ pub mod types;
 pub mod vfs_ops;
 
 pub use discovery::discover_aru_files;
-#[allow(unused_imports)]
-pub use types::PackageState;
 pub use types::{DocInfo, ServerState};
 
 #[cfg(test)]
@@ -143,7 +141,7 @@ mod tests {
             "import editor_gold.util as util\n",
             "import std.path as path\n",
             "func main(): int {\n",
-            "    if path.is_empty(\"\") { return util.answer() }\n",
+            "    if path.isEmpty(\"\") { return util.answer() }\n",
             "    return 0\n",
             "}\n",
         );
@@ -259,10 +257,7 @@ mod tests {
         assert!(diagnostics.is_empty(), "stale diagnostics: {diagnostics:?}");
         let tc = arandu_query::passes::type_check(state.host.db(), main);
         assert!(
-            tc.symbols
-                .module_members
-                .get("util")
-                .is_some_and(|members| members.contains_key("answer")),
+            tc.symbols.lookup_module_member("util", "answer").is_some(),
             "created module members must be available to completion"
         );
         let call = main_text.find("util.answer").expect("util call");
@@ -365,7 +360,7 @@ mod tests {
                     &snap,
                     &[crate::ide::DocSnap {
                         source,
-                        path: Arc::new(path.clone()),
+                        path: Arc::new(path),
                         uri: uri.clone(),
                     }],
                     "overlay",

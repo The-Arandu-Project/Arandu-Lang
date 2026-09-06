@@ -67,21 +67,120 @@ pub fn expand_type_args_with_defaults(
 /// Expand defaults on a `Named` type when args are a trailing subset of params.
 #[must_use]
 pub fn expand_named_with_defaults(checker: &mut TypeChecker<'_>, ty: ArType) -> ArType {
-    let ArType::Named(id, args) = &ty else {
-        return ty;
-    };
-    if !checker.type_info.generic_params.contains_key(id) {
-        return ty;
+    match ty {
+        ArType::Named(id, args) => {
+            let arg_ids: Vec<TypeId> = checker.type_info.type_interner.type_args(args);
+            let provided: Vec<ArType> = arg_ids
+                .into_iter()
+                .map(|a| {
+                    let resolved = checker.resolve(a);
+                    expand_named_with_defaults(checker, resolved)
+                })
+                .collect();
+            let expanded = if checker.type_info.generic_params.contains_key(&id) {
+                expand_type_args_with_defaults(checker, id, &provided).unwrap_or(provided)
+            } else {
+                provided
+            };
+            let arg_ids: Vec<TypeId> = expanded.into_iter().map(|t| checker.intern(t)).collect();
+            ArType::named(id, &arg_ids, &checker.type_info.type_interner)
+        }
+        ArType::Func(params, ret) => {
+            let params_ids: Vec<TypeId> = checker.type_info.type_interner.type_args(params);
+            let new_params: Vec<TypeId> = params_ids
+                .into_iter()
+                .map(|p| {
+                    let p_ty = checker.resolve(p);
+                    let p_exp = expand_named_with_defaults(checker, p_ty);
+                    checker.intern(p_exp)
+                })
+                .collect();
+            let ret_ty = checker.resolve(ret);
+            let ret_exp = expand_named_with_defaults(checker, ret_ty);
+            let ret_id = checker.intern(ret_exp);
+            ArType::func(&new_params, ret_id, &checker.type_info.type_interner)
+        }
+        ArType::Ref(inner) => {
+            let inner_ty = checker.resolve(inner);
+            let expanded = expand_named_with_defaults(checker, inner_ty);
+            let tid = checker.intern(expanded);
+            ArType::Ref(tid)
+        }
+        ArType::RefMut(inner) => {
+            let inner_ty = checker.resolve(inner);
+            let expanded = expand_named_with_defaults(checker, inner_ty);
+            let tid = checker.intern(expanded);
+            ArType::RefMut(tid)
+        }
+        ArType::Ptr(inner) => {
+            let inner_ty = checker.resolve(inner);
+            let expanded = expand_named_with_defaults(checker, inner_ty);
+            let tid = checker.intern(expanded);
+            ArType::Ptr(tid)
+        }
+        ArType::Slice(inner) => {
+            let inner_ty = checker.resolve(inner);
+            let expanded = expand_named_with_defaults(checker, inner_ty);
+            let tid = checker.intern(expanded);
+            ArType::Slice(tid)
+        }
+        ArType::Array(n, inner) => {
+            let inner_ty = checker.resolve(inner);
+            let expanded = expand_named_with_defaults(checker, inner_ty);
+            let tid = checker.intern(expanded);
+            ArType::Array(n, tid)
+        }
+        ArType::Nullable(inner) => {
+            let inner_ty = checker.resolve(inner);
+            let expanded = expand_named_with_defaults(checker, inner_ty);
+            let tid = checker.intern(expanded);
+            ArType::Nullable(tid)
+        }
+        ArType::Option(inner) => {
+            let inner_ty = checker.resolve(inner);
+            let expanded = expand_named_with_defaults(checker, inner_ty);
+            let tid = checker.intern(expanded);
+            ArType::Option(tid)
+        }
+        ArType::Coroutine(inner) => {
+            let inner_ty = checker.resolve(inner);
+            let expanded = expand_named_with_defaults(checker, inner_ty);
+            let tid = checker.intern(expanded);
+            ArType::Coroutine(tid)
+        }
+        ArType::Poll(inner) => {
+            let inner_ty = checker.resolve(inner);
+            let expanded = expand_named_with_defaults(checker, inner_ty);
+            let tid = checker.intern(expanded);
+            ArType::Poll(tid)
+        }
+        ArType::Range(inner) => {
+            let inner_ty = checker.resolve(inner);
+            let expanded = expand_named_with_defaults(checker, inner_ty);
+            let tid = checker.intern(expanded);
+            ArType::Range(tid)
+        }
+        ArType::Result(ok, err) => {
+            let ok_ty = checker.resolve(ok);
+            let err_ty = checker.resolve(err);
+            let ok_exp = expand_named_with_defaults(checker, ok_ty);
+            let err_exp = expand_named_with_defaults(checker, err_ty);
+            let ok_id = checker.intern(ok_exp);
+            let err_id = checker.intern(err_exp);
+            ArType::Result(ok_id, err_id)
+        }
+        ArType::Tuple(elems) => {
+            let elems_ids: Vec<TypeId> = checker.type_info.type_interner.type_args(elems);
+            let mut new_elems = Vec::with_capacity(elems_ids.len());
+            for e in elems_ids {
+                let e_ty = checker.resolve(e);
+                let e_exp = expand_named_with_defaults(checker, e_ty);
+                new_elems.push(checker.intern(e_exp));
+            }
+            ArType::tuple(&new_elems, &checker.type_info.type_interner)
+        }
+        other => other,
     }
-    let provided: Vec<ArType> = args.iter().map(|&a| checker.resolve(a)).collect();
-    let Some(expanded) = expand_type_args_with_defaults(checker, *id, &provided) else {
-        return ty;
-    };
-    if expanded.len() == provided.len() {
-        return ty;
-    }
-    let arg_ids: Vec<TypeId> = expanded.into_iter().map(|t| checker.intern(t)).collect();
-    ArType::Named(*id, arg_ids)
 }
 
 #[must_use]
@@ -107,10 +206,10 @@ pub fn struct_fields_instantiated(
     let subst = build_subst(&params, &generic_args);
     let res: FxHashMap<String, ArType> = fields
         .iter()
-        .map(|(name, &tid)| {
-            let ty = checker.resolve(tid);
+        .map(|f| {
+            let ty = checker.resolve(f.ty);
             let inst = instantiate_type(&ty, &subst, &mut checker.type_info.type_interner);
-            (name.clone(), inst)
+            (f.name.to_string(), inst)
         })
         .collect();
     Some(res)
@@ -159,13 +258,13 @@ pub fn synth_generic_instantiation(
                     let inner_id = checker.intern(inner);
                     let err_id = checker.intern(ArType::Err);
                     let result_id = checker.intern(ArType::Result(inner_id, err_id));
-                    ArType::Func(vec![inner_id], result_id)
+                    ArType::func(&[inner_id], result_id, &checker.type_info.type_interner)
                 }
                 "Err" => {
                     let err_id = checker.intern(ArType::Err);
                     let void_id = checker.intern(ArType::Void);
                     let result_id = checker.intern(ArType::Result(void_id, err_id));
-                    ArType::Func(vec![err_id], result_id)
+                    ArType::func(&[err_id], result_id, &checker.type_info.type_interner)
                 }
                 _ => {
                     checker.diagnostics.push(crate::Diagnostic::error(
@@ -195,7 +294,7 @@ pub fn synth_generic_instantiation(
             let inner = arg_tys[0].clone();
             let inner_id = checker.intern(inner);
             let opt_id = checker.intern(ArType::Option(inner_id));
-            return ArType::Func(vec![inner_id], opt_id);
+            return ArType::func(&[inner_id], opt_id, &checker.type_info.type_interner);
         }
     }
 
@@ -287,6 +386,9 @@ fn resolve_generic_callee_symbol(
                 .copied()
         }),
         ExprKind::Field { base, field } => {
+            if let Some(sym) = checker.resolved.expr_symbol(callee) {
+                return Some(sym);
+            }
             // Namespace free/extern generic: `mem.sizeOf<T>` / `mem.alignOf<T>`.
             // Must resolve before method dispatch — `mem` is a Module, not a value type.
             if let ExprKind::Path { path } = checker.pool.expr(*base)
@@ -301,7 +403,9 @@ fn resolve_generic_callee_symbol(
                 .unwrap_or_else(|| crate::passes::type_checker::synth::synth_expr(checker, *base));
             let base_ty = checker.resolve(base_ty_id);
             let actual_base_ty = match &base_ty {
-                ArType::Nullable(inner) => checker.resolve(*inner),
+                ArType::Nullable(inner) | ArType::Ref(inner) | ArType::RefMut(inner) => {
+                    checker.resolve(*inner)
+                }
                 other => other.clone(),
             };
             let struct_id = match &actual_base_ty {
@@ -312,10 +416,20 @@ fn resolve_generic_callee_symbol(
                 },
                 _ => None,
             };
-            if let Some(struct_id) = struct_id
-                && let Some(sym) = checker.symbols.lookup_associated_member(struct_id, field)
-            {
-                return Some(sym);
+            if let Some(struct_id) = struct_id {
+                if let Some(sym) = checker.symbols.lookup_associated_member(struct_id, field) {
+                    return Some(sym);
+                }
+                if let Some(constraints) = checker.type_info.param_constraints.get(&struct_id) {
+                    for bound in constraints.iter() {
+                        if let Some(sym) = checker
+                            .symbols
+                            .lookup_associated_member(bound.iface_sym, field)
+                        {
+                            return Some(sym);
+                        }
+                    }
+                }
             }
             checker.resolved.expr_symbol(callee)
         }
@@ -342,11 +456,12 @@ fn expand_aliases_rec(checker: &mut TypeChecker<'_>, ty: ArType, depth: usize) -
             if is_alias {
                 if let Some(target_tid) = checker.decl_type_id(symbol_id) {
                     let target_ty = checker.resolve(target_tid);
+                    let arg_ids: Vec<TypeId> = checker.type_info.type_interner.type_args(args);
                     let params = checker.type_info.generic_params.get(&symbol_id);
                     let target_expanded = if let Some(params) = params {
                         let subst = arandu_middle::types::build_subst_ids(
                             params,
-                            &args,
+                            &arg_ids,
                             &checker.type_info.type_interner,
                         );
                         arandu_middle::types::substitute_type(
@@ -362,13 +477,14 @@ fn expand_aliases_rec(checker: &mut TypeChecker<'_>, ty: ArType, depth: usize) -
                     ArType::Error
                 }
             } else {
+                let arg_ids: Vec<TypeId> = checker.type_info.type_interner.type_args(args);
                 let mut expanded_args = Vec::new();
-                for &arg in &args {
+                for arg in arg_ids {
                     let arg_ty = checker.resolve(arg);
                     let expanded_arg = expand_aliases_rec(checker, arg_ty, depth + 1);
                     expanded_args.push(checker.intern(expanded_arg));
                 }
-                ArType::Named(symbol_id, expanded_args)
+                ArType::named(symbol_id, &expanded_args, &checker.type_info.type_interner)
             }
         }
         ArType::Nullable(inner) => {
@@ -429,24 +545,30 @@ fn expand_aliases_rec(checker: &mut TypeChecker<'_>, ty: ArType, depth: usize) -
             ArType::RefMut(checker.intern(expanded))
         }
         ArType::Tuple(tys) => {
+            let tys_ids: Vec<TypeId> = checker.type_info.type_interner.type_args(tys);
             let mut expanded_tys = Vec::new();
-            for &t in &tys {
+            for t in tys_ids {
                 let t_ty = checker.resolve(t);
                 let expanded_t = expand_aliases_rec(checker, t_ty, depth + 1);
                 expanded_tys.push(checker.intern(expanded_t));
             }
-            ArType::Tuple(expanded_tys)
+            ArType::tuple(&expanded_tys, &checker.type_info.type_interner)
         }
         ArType::Func(params, ret) => {
+            let params_ids: Vec<TypeId> = checker.type_info.type_interner.type_args(params);
             let mut expanded_params = Vec::new();
-            for &p in &params {
+            for p in params_ids {
                 let p_ty = checker.resolve(p);
                 let expanded_p = expand_aliases_rec(checker, p_ty, depth + 1);
                 expanded_params.push(checker.intern(expanded_p));
             }
             let ret_ty = checker.resolve(ret);
             let expanded_ret = expand_aliases_rec(checker, ret_ty, depth + 1);
-            ArType::Func(expanded_params, checker.intern(expanded_ret))
+            ArType::func(
+                &expanded_params,
+                checker.intern(expanded_ret),
+                &checker.type_info.type_interner,
+            )
         }
         other => other,
     }
@@ -477,7 +599,13 @@ mod tests {
         resolved.define(span1, sym1);
         resolved.define(span2, sym2);
 
-        let checker = TypeChecker::new(symbols, resolved, Vec::new(), &pool);
+        let checker = TypeChecker::new(
+            symbols,
+            resolved,
+            Vec::new(),
+            &pool,
+            crate::type_checker::TargetInfo { pointer_width: 64 },
+        );
 
         let param1 = GenericParam {
             span: span1,
@@ -509,11 +637,18 @@ mod tests {
             span: Span::new(0, 0, 0),
             scope: arandu_middle::ScopeId(0),
             is_public: true,
+            lang_item: None,
         };
         symbols.register_imported_symbol(struct_sym);
 
         let resolved = ResolvedNames::default();
-        let mut checker = TypeChecker::new(symbols, resolved, Vec::new(), &pool);
+        let mut checker = TypeChecker::new(
+            symbols,
+            resolved,
+            Vec::new(),
+            &pool,
+            crate::type_checker::TargetInfo { pointer_width: 64 },
+        );
 
         let param_sym = SymbolId::new(1, 1);
         checker
@@ -521,9 +656,19 @@ mod tests {
             .generic_params
             .insert(struct_id, Arc::new(vec![param_sym]));
 
-        let param_type_id = checker.intern(ArType::Named(param_sym, Vec::new()));
-        let mut fields_map = rustc_hash::FxHashMap::default();
-        fields_map.insert("x".to_string(), param_type_id);
+        let param_type_id = checker.intern(ArType::named(
+            param_sym,
+            &[],
+            &checker.type_info.type_interner,
+        ));
+        let fields_map = arandu_middle::layout::StructFields::from_entries([
+            arandu_middle::layout::StructFieldInfo {
+                name: "x".into(),
+                symbol: None,
+                ty: param_type_id,
+                index: 0,
+            },
+        ]);
         checker
             .type_info
             .struct_fields
@@ -534,5 +679,94 @@ mod tests {
 
         let field_x_ty = fields.get("x").unwrap();
         assert_eq!(field_x_ty, &ArType::Primitive(Primitive::Int));
+    }
+
+    #[test]
+    fn test_expand_named_with_defaults_recursive() {
+        let pool = AstPool::default();
+        let symbols = SymbolTable::new(0);
+        let resolved = ResolvedNames::default();
+        let mut checker = TypeChecker::new(
+            symbols,
+            resolved,
+            Vec::new(),
+            &pool,
+            crate::type_checker::TargetInfo { pointer_width: 64 },
+        );
+
+        let container_sym = SymbolId::new(1, 0);
+        let param_t = SymbolId::new(1, 1);
+        let param_a = SymbolId::new(1, 2);
+        let default_allocator_sym = SymbolId::new(1, 3);
+        let default_alloc_tid = checker.intern(ArType::named(
+            default_allocator_sym,
+            &[],
+            &checker.type_info.type_interner,
+        ));
+
+        checker
+            .type_info
+            .generic_params
+            .insert(container_sym, Arc::new(vec![param_t, param_a]));
+        checker
+            .type_info
+            .generic_defaults
+            .insert(param_a, default_alloc_tid);
+
+        let int_tid = checker.intern(ArType::Primitive(Primitive::Int));
+        // Container<int> (missing default allocator parameter A)
+        let container_partial_tid = checker.intern(ArType::named(
+            container_sym,
+            &[int_tid],
+            &checker.type_info.type_interner,
+        ));
+
+        // 1. Direct Named: Container<int> -> Container<int, DefaultAllocator>
+        let container_ty =
+            ArType::named(container_sym, &[int_tid], &checker.type_info.type_interner);
+        let expanded = expand_named_with_defaults(&mut checker, container_ty);
+        assert_eq!(
+            expanded,
+            ArType::named(
+                container_sym,
+                &[int_tid, default_alloc_tid],
+                &checker.type_info.type_interner
+            )
+        );
+
+        // 2. Ref: ref Container<int> -> ref Container<int, DefaultAllocator>
+        let ref_ty = ArType::Ref(container_partial_tid);
+        let expanded_ref = expand_named_with_defaults(&mut checker, ref_ty);
+        let expected_expanded_container_tid = checker.intern(ArType::named(
+            container_sym,
+            &[int_tid, default_alloc_tid],
+            &checker.type_info.type_interner,
+        ));
+        assert_eq!(expanded_ref, ArType::Ref(expected_expanded_container_tid));
+
+        // 3. Option: Option<Container<int>> -> Option<Container<int, DefaultAllocator>>
+        let opt_ty = ArType::Option(container_partial_tid);
+        let expanded_opt = expand_named_with_defaults(&mut checker, opt_ty);
+        assert_eq!(
+            expanded_opt,
+            ArType::Option(expected_expanded_container_tid)
+        );
+
+        // 4. Tuple: (int, ref Container<int>)
+        let tup_ty = ArType::tuple(
+            &[int_tid, checker.intern(ArType::Ref(container_partial_tid))],
+            &checker.type_info.type_interner,
+        );
+        let expanded_tup = expand_named_with_defaults(&mut checker, tup_ty);
+        assert_eq!(
+            expanded_tup,
+            ArType::tuple(
+                &[
+                    int_tid,
+                    checker.intern(ArType::Ref(expected_expanded_container_tid))
+                ],
+                &checker.type_info.type_interner,
+            )
+        );
     }
 }

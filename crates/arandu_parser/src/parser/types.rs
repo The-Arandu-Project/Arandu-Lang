@@ -38,7 +38,7 @@ impl<'a> Parser<'a> {
         if !self.eat_name("LT") {
             return Ok(SmallVec::new());
         }
-        let params_vec = self.parse_comma_separated_list("GT", 1, |parser| {
+        let params_vec = self.parse_generic_list(1, |parser| {
             let start = parser.mark();
             let name = parser.expect_ident_type()?;
             let constraints = if parser.eat_name("COLON") {
@@ -59,14 +59,14 @@ impl<'a> Parser<'a> {
                 default,
             })
         })?;
-        self.expect_name("GT")?;
+        self.expect_gt()?;
         Ok(params_vec.into())
     }
 
     pub(super) fn parse_generic_args(&mut self) -> Result<IndexRange, ParseError> {
         self.expect_name("LT")?;
-        let args = self.parse_comma_separated_list("GT", 1, super::Parser::parse_type)?;
-        self.expect_name("GT")?;
+        let args = self.parse_generic_list(1, super::Parser::parse_type)?;
+        self.expect_gt()?;
         let range = self.pool.alloc_type_expr_list(&args);
         Ok(range)
     }
@@ -99,10 +99,10 @@ impl<'a> Parser<'a> {
         Ok(items)
     }
 
-    pub(super) fn parse_constraint_list(&mut self) -> Result<Vec<TypeName>, ParseError> {
-        let mut constraints = vec![self.parse_type_name()?];
+    pub(super) fn parse_constraint_list(&mut self) -> Result<Vec<TypeExprId>, ParseError> {
+        let mut constraints = vec![self.parse_type()?];
         while self.eat_name("PLUS") {
-            constraints.push(self.parse_type_name()?);
+            constraints.push(self.parse_type()?);
         }
         Ok(constraints)
     }
@@ -135,7 +135,94 @@ impl<'a> Parser<'a> {
             let is_receiver = name == "self";
             let ty = if is_receiver {
                 if parser.eat_name("COLON") {
-                    parser.parse_type()?
+                    let type_start = parser.mark();
+                    if parser.eat_name("KW_REF") {
+                        if parser.can_start_type() {
+                            let inner = parser.parse_type()?;
+                            let span = parser.span_from_mark(type_start);
+                            parser.pool.alloc_type_expr(TypeExpr::Ref { span, inner })
+                        } else {
+                            let receiver = method_receiver.ok_or_else(|| {
+                                ParseError::new(
+                                    ParseErrorCode::ExpectedType,
+                                    "receiver parameter 'self' requires an explicit type here",
+                                    parser.current(),
+                                    parser.file_id,
+                                    parser.source,
+                                )
+                            })?;
+                            let empty_args = parser.pool.alloc_type_expr_list(&[]);
+                            let named = parser.pool.alloc_type_expr(TypeExpr::Named {
+                                span: receiver.span,
+                                name: receiver.clone(),
+                                args: empty_args,
+                            });
+                            let span = parser.span_from_mark(type_start);
+                            parser
+                                .pool
+                                .alloc_type_expr(TypeExpr::Ref { span, inner: named })
+                        }
+                    } else if parser.eat_name("KW_MUT") {
+                        if parser.eat_name("KW_REF") {
+                            if parser.can_start_type() {
+                                let inner = parser.parse_type()?;
+                                let span = parser.span_from_mark(type_start);
+                                parser
+                                    .pool
+                                    .alloc_type_expr(TypeExpr::RefMut { span, inner })
+                            } else {
+                                let receiver = method_receiver.ok_or_else(|| {
+                                    ParseError::new(
+                                        ParseErrorCode::ExpectedType,
+                                        "receiver parameter 'self' requires an explicit type here",
+                                        parser.current(),
+                                        parser.file_id,
+                                        parser.source,
+                                    )
+                                })?;
+                                let empty_args = parser.pool.alloc_type_expr_list(&[]);
+                                let named = parser.pool.alloc_type_expr(TypeExpr::Named {
+                                    span: receiver.span,
+                                    name: receiver.clone(),
+                                    args: empty_args,
+                                });
+                                let span = parser.span_from_mark(type_start);
+                                parser
+                                    .pool
+                                    .alloc_type_expr(TypeExpr::RefMut { span, inner: named })
+                            }
+                        } else {
+                            return Err(ParseError::new(
+                                ParseErrorCode::ExpectedToken,
+                                "expected `ref` after `mut` in receiver type",
+                                parser.current(),
+                                parser.file_id,
+                                parser.source,
+                            ));
+                        }
+                    } else if parser.eat_name("KW_OWN") {
+                        if parser.can_start_type() {
+                            parser.parse_type()?
+                        } else {
+                            let receiver = method_receiver.ok_or_else(|| {
+                                ParseError::new(
+                                    ParseErrorCode::ExpectedType,
+                                    "receiver parameter 'self' requires an explicit type here",
+                                    parser.current(),
+                                    parser.file_id,
+                                    parser.source,
+                                )
+                            })?;
+                            let empty_args = parser.pool.alloc_type_expr_list(&[]);
+                            parser.pool.alloc_type_expr(TypeExpr::Named {
+                                span: receiver.span,
+                                name: receiver.clone(),
+                                args: empty_args,
+                            })
+                        }
+                    } else {
+                        parser.parse_type()?
+                    }
                 } else {
                     let receiver = method_receiver.ok_or_else(|| {
                         ParseError::new(
@@ -215,6 +302,22 @@ impl<'a> Parser<'a> {
 
     pub(super) fn parse_type_primary(&mut self) -> Result<TypeExprId, ParseError> {
         let start = self.mark();
+        // Canonical ownership spelling: `own T`, `ref T`, `mut ref T`.
+        // `own` is semantically the default and therefore lowers directly to T.
+        if self.eat_name("KW_OWN") {
+            return self.parse_type();
+        }
+        if self.eat_name("KW_REF") {
+            let inner = self.parse_type()?;
+            let span = self.span_from_mark(start);
+            return Ok(self.pool.alloc_type_expr(TypeExpr::Ref { span, inner }));
+        }
+        if self.eat_name("KW_MUT") {
+            self.expect_name("KW_REF")?;
+            let inner = self.parse_type()?;
+            let span = self.span_from_mark(start);
+            return Ok(self.pool.alloc_type_expr(TypeExpr::RefMut { span, inner }));
+        }
         // `&mut T` / `&T` (F2.0 safe references)
         if self.eat_name("AMP") {
             let is_mut = self.eat_name("KW_MUT");
@@ -291,8 +394,46 @@ impl<'a> Parser<'a> {
             }));
         }
         if self.eat_name("LPAREN") {
-            let ty = self.parse_type()?;
+            let mut params = Vec::new();
+            let mut saw_comma = false;
+            if !self.at_kind_name("RPAREN") {
+                loop {
+                    params.push(self.parse_type()?);
+                    if !self.eat_name("COMMA") {
+                        break;
+                    }
+                    saw_comma = true;
+                    if self.at_kind_name("RPAREN") {
+                        break;
+                    }
+                }
+            }
             self.expect_name("RPAREN")?;
+            if self.eat_name("ARROW") {
+                let result_start = self.mark();
+                let result_ty = self.parse_type()?;
+                let result = ResultType::Single {
+                    span: self.span_from_mark(result_start),
+                    ty: result_ty,
+                };
+                let span = self.span_from_mark(start);
+                let params = self.pool.alloc_type_expr_list(&params);
+                return Ok(self.pool.alloc_type_expr(TypeExpr::Func {
+                    span,
+                    params,
+                    result: Some(result),
+                }));
+            }
+            if saw_comma || params.len() != 1 {
+                return Err(ParseError::new(
+                    ParseErrorCode::ExpectedToken,
+                    "expected '->' after function type parameters",
+                    self.current(),
+                    self.file_id,
+                    self.source,
+                ));
+            }
+            let ty = params[0];
             let span = self.span_from_mark(start);
             return Ok(self
                 .pool
@@ -406,6 +547,12 @@ impl<'a> Parser<'a> {
                 TokenKind::Lt => depth += 1,
                 TokenKind::Gt => {
                     depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return Some(index);
+                    }
+                }
+                TokenKind::ShiftRight => {
+                    depth = depth.saturating_sub(2);
                     if depth == 0 {
                         return Some(index);
                     }

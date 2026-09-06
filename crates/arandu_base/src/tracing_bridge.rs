@@ -12,44 +12,44 @@
 //! - `RUST_LOG` still works as an escape hatch for ad-hoc debugging.
 
 use std::path::PathBuf;
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "self-profile"))]
 use std::{
     collections::HashMap,
     fmt,
     sync::{Mutex, OnceLock},
     time::Instant,
 };
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "self-profile"))]
 use tracing::{
     Event, Id, Subscriber,
     field::{Field, Visit},
     span::Attributes,
 };
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "self-profile"))]
 use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::{EnvFilter, Registry, prelude::*};
 
 // ── Static helpers (lazy-init via OnceLock) ───────────────────────────
 
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "self-profile"))]
 fn base_time() -> &'static Instant {
     static BASE: OnceLock<Instant> = OnceLock::new();
     BASE.get_or_init(Instant::now)
 }
 
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "self-profile"))]
 fn span_map() -> &'static Mutex<HashMap<Id, SpanMeta>> {
     static MAP: OnceLock<Mutex<HashMap<Id, SpanMeta>>> = OnceLock::new();
     MAP.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "self-profile"))]
 fn entry_map() -> &'static Mutex<HashMap<Id, Instant>> {
     static MAP: OnceLock<Mutex<HashMap<Id, Instant>>> = OnceLock::new();
     MAP.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "self-profile"))]
 struct SpanMeta {
     name: &'static str,
     target: &'static str,
@@ -61,12 +61,12 @@ struct SpanMeta {
 // (called from `print_perf_summary()`).  This avoids the Drop-on-global-leak
 // problem that would leave the JSON array unclosed.
 
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "self-profile"))]
 static SELF_PROFILE_PATH: OnceLock<PathBuf> = OnceLock::new();
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "self-profile"))]
 static SELF_PROFILE_EVENTS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
 
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "self-profile"))]
 fn self_profile_events() -> &'static Mutex<Vec<String>> {
     SELF_PROFILE_EVENTS.get_or_init(|| Mutex::new(Vec::new()))
 }
@@ -75,7 +75,7 @@ fn self_profile_events() -> &'static Mutex<Vec<String>> {
 ///
 /// Should be called exactly once, at the end of compilation.
 pub fn finalize_self_profile() {
-    #[cfg(debug_assertions)]
+    #[cfg(all(debug_assertions, feature = "self-profile"))]
     {
         let path = match SELF_PROFILE_PATH.get() {
             Some(p) => p,
@@ -118,7 +118,7 @@ pub struct TracingConfig {
 ///
 /// Must be called exactly once, before any compilation begins.
 pub fn init_tracing(cfg: TracingConfig) {
-    #[cfg(debug_assertions)]
+    #[cfg(all(debug_assertions, feature = "self-profile"))]
     if let Some(ref path) = cfg.self_profile {
         let _ = SELF_PROFILE_PATH.set(path.clone());
     }
@@ -135,7 +135,7 @@ pub fn init_tracing(cfg: TracingConfig) {
 
     let subscriber = Registry::default().with(fmt_layer);
 
-    #[cfg(debug_assertions)]
+    #[cfg(all(debug_assertions, feature = "self-profile"))]
     {
         if cfg.self_profile.is_some() {
             subscriber.with(SelfProfileLayer).init();
@@ -144,10 +144,12 @@ pub fn init_tracing(cfg: TracingConfig) {
         }
     }
 
-    #[cfg(not(debug_assertions))]
+    #[cfg(not(all(debug_assertions, feature = "self-profile")))]
     {
         if cfg.self_profile.is_some() {
-            eprintln!("Warning: self-profiling is only supported in debug/development builds.");
+            eprintln!(
+                "Warning: self-profiling requires a debug/development build with the `self-profile` Cargo feature."
+            );
         }
         subscriber.init();
     }
@@ -205,14 +207,13 @@ fn flags_to_env_filter(cfg: &TracingConfig) -> EnvFilter {
 // `finalize_self_profile()`.  Compatible with Perfetto UI and
 // chrome://tracing (Trace Event Format v2, `ph="X"` complete events).
 //
-// TODO(perf): for release builds consider feature-gating this entire layer
-// behind `cfg(debug_assertions)` or a Cargo feature to avoid paying the
-// `Instant::now()` cost on every span entry/exit in production.
+// The layer is excluded unless both debug assertions and the opt-in Cargo
+// feature are active, so production builds pay no span bookkeeping cost.
 
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "self-profile"))]
 struct SelfProfileLayer;
 
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "self-profile"))]
 impl<S: Subscriber> Layer<S> for SelfProfileLayer {
     fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, _ctx: Context<'_, S>) {
         let meta = attrs.metadata();

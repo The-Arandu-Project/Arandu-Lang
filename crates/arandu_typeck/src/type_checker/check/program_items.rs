@@ -5,6 +5,7 @@ use super::super::TypeChecker;
 use super::super::synth::synth_expr;
 use super::func::check_func_body;
 use super::validate::validate_top_level_any;
+use crate::type_checker::TargetInfo;
 use crate::{NodeKey, ResolvedNames, SymbolId};
 use arandu_parser::{FuncDecl, Program, TopLevelDecl};
 use std::sync::Arc;
@@ -114,8 +115,9 @@ pub fn check_func_body_only(
     signatures: &TypeCheckResult,
     program: &Program,
     func_sym: SymbolId,
+    target_info: TargetInfo,
 ) -> TypeCheckResult {
-    check_item_body_only(signatures, program, func_sym)
+    check_item_body_only(signatures, program, func_sym, target_info)
 }
 
 /// Type-check **one** top-level item body/validate phase (P2).
@@ -133,12 +135,14 @@ pub fn check_item_body_only(
     signatures: &TypeCheckResult,
     program: &Program,
     item_sym: SymbolId,
+    target_info: TargetInfo,
 ) -> TypeCheckResult {
     let mut checker = TypeChecker::new(
         Arc::unwrap_or_clone(Arc::clone(&signatures.symbols)),
         Arc::unwrap_or_clone(Arc::clone(&signatures.resolved)),
         Vec::new(),
         &program.pool,
+        target_info,
     );
     checker.type_info = Arc::unwrap_or_clone(Arc::clone(&signatures.type_info));
 
@@ -165,7 +169,9 @@ fn check_one_item_body(checker: &mut TypeChecker<'_>, program: &Program, decl: &
         }
         TopLevelDecl::Extern(extern_decl) => {
             validate_top_level_any(checker, decl);
-            if extern_decl.abi == "arandu-intrinsic" {
+            if arandu_parser::AbiKind::from_abi_str(&extern_decl.abi)
+                == arandu_parser::AbiKind::AranduIntrinsic
+            {
                 let module_name = program
                     .module
                     .as_ref()
@@ -198,12 +204,14 @@ fn check_one_item_body(checker: &mut TypeChecker<'_>, program: &Program, decl: &
 pub fn check_non_func_bodies_only(
     signatures: &TypeCheckResult,
     program: &Program,
+    target_info: TargetInfo,
 ) -> TypeCheckResult {
     let mut checker = TypeChecker::new(
         Arc::unwrap_or_clone(Arc::clone(&signatures.symbols)),
         Arc::unwrap_or_clone(Arc::clone(&signatures.resolved)),
         Vec::new(),
         &program.pool,
+        target_info,
     );
     checker.type_info = Arc::unwrap_or_clone(Arc::clone(&signatures.type_info));
 

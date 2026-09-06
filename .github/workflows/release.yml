@@ -537,3 +537,58 @@ jobs:
           path: rc-evidence.md
           if-no-files-found: error
           retention-days: 90
+
+  publish-stdlib-docs:
+    name: S3 / Publish stdlib docs & sync website
+    needs: [publish, rc-report]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install repository toolchain
+        run: rustup show active-toolchain
+
+      - name: Generate stdlib documentation JSON
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --locked -p arandu_cli -- doc stdlib/ --format=json --out-dir=target/stdlib_docs
+
+      - name: Package documentation archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          tarball="arandu-stdlib-docs-${GITHUB_REF_NAME}.tar.gz"
+          tar -czf "$tarball" -C target/stdlib_docs .
+          sha256sum "$tarball" > "${tarball}.sha256"
+
+      - name: Upload documentation to GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tarball="arandu-stdlib-docs-${GITHUB_REF_NAME}.tar.gz"
+          gh release upload "$GITHUB_REF_NAME" "$tarball" "${tarball}.sha256" --repo "$GITHUB_REPOSITORY"
+
+      - name: Dispatch release notification to website repository
+        shell: bash
+        env:
+          DISPATCH_TOKEN: ${{ secrets.WEBSITE_DISPATCH_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          echo "Notifying The-Arandu-Project/website about $GITHUB_REF_NAME..."
+          curl -s -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $DISPATCH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/The-Arandu-Project/website/dispatches \
+            -d "{\"event_type\": \"arandu-release\", \"client_payload\": {\"version\": \"$version\", \"tag\": \"$GITHUB_REF_NAME\"}}" || {
+              echo "Notice: repository_dispatch could not be sent (check WEBSITE_DISPATCH_TOKEN secret). Continuing release."
+            }

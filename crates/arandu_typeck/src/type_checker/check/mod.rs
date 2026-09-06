@@ -9,7 +9,7 @@ pub mod program_items;
 mod stmt;
 mod validate;
 
-pub use block::check_block;
+pub use block::{check_block, check_block_tail};
 pub use condition::check_condition;
 pub use func::check_func_body;
 pub use program::{check_bodies, check_signatures};

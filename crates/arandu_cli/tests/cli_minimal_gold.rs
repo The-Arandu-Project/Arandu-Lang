@@ -156,19 +156,16 @@ fn minimal_gold_check_and_run() {
 }
 
 #[test]
-fn ptr_compat_module_checks() {
-    // P0.1: broken twin fixed — offset uses ptrOffset.
+fn pointer_module_checks() {
     let dir = std::env::temp_dir();
-    let file = dir.join("arandu_minimal_ptr.aru");
+    let file = dir.join("arandu_minimal_pointer.aru");
     std::fs::write(
         &file,
         r#"
-module tests.minimal.ptr
-import std.core.ptr as p
+module tests.minimal.pointer
 import std.core.pointer as pointer
 
 func main(): int {
-    // Module resolves; no need to call offset without a real pointer.
     return 0
 }
 "#,
@@ -182,7 +179,54 @@ func main(): int {
         .unwrap();
     assert!(
         out.status.success(),
-        "ptr compat: {}",
+        "pointer module: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn core_numeric_and_unicode_boundaries_run() {
+    let (max, min) = if usize::BITS == 64 {
+        ("9223372036854775807", "-9223372036854775807 - 1")
+    } else {
+        ("2147483647", "-2147483647 - 1")
+    };
+    let source = format!(
+        r#"
+module tests.stdlib.boundaries
+import std.core.num as num
+import std.core.char as chars
+
+func main(): int {{
+    let max: int = {max}
+    let min: int = {min}
+    match num.checkedAdd(max, 1) {{
+        Some(_) => {{ return 6 }}
+        None => {{}}
+    }}
+    match num.checkedSub(min, 1) {{
+        Some(_) => {{ return 1 }}
+        None => {{}}
+    }}
+    match num.checkedMul(min, -1) {{
+        Some(_) => {{ return 2 }}
+        None => {{}}
+    }}
+    if num.saturatingAdd(max, 1) != max {{ return 3 }}
+    if num.saturatingSub(min, 1) != min {{ return 4 }}
+    if chars.lenUtf8('é') != 2 as u32 {{ return 5 }}
+    return 0
+}}
+"#
+    );
+    let file = std::env::temp_dir().join("arandu_stdlib_boundaries.aru");
+    std::fs::write(&file, source).unwrap();
+
+    let out = run_cli(&["run", file.to_str().unwrap()]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stdlib boundaries: {}",
         String::from_utf8_lossy(&out.stderr)
     );
 }

@@ -37,7 +37,10 @@ pub fn check_bodies(checker: &mut TypeChecker<'_>, program: &Program) {
                     checker.record_decl_type(*symbol_id, val_ty);
                 }
             }
-            TopLevelDecl::Extern(extern_decl) if extern_decl.abi == "arandu-intrinsic" => {
+            TopLevelDecl::Extern(extern_decl)
+                if arandu_parser::AbiKind::from_abi_str(&extern_decl.abi)
+                    == arandu_parser::AbiKind::AranduIntrinsic =>
+            {
                 let module_name = program
                     .module
                     .as_ref()
@@ -111,28 +114,6 @@ fn duplicate_module_member_info(checker: &mut TypeChecker<'_>, program: &Program
             }
             if let Some(fields) = checker.type_info.struct_fields.get(&free_id).cloned() {
                 checker.type_info.struct_fields.insert(member_id, fields);
-            }
-            if let Some(field_syms) = checker
-                .type_info
-                .struct_field_symbols
-                .get(&free_id)
-                .cloned()
-            {
-                checker
-                    .type_info
-                    .struct_field_symbols
-                    .insert(member_id, field_syms);
-            }
-            if let Some(field_idxs) = checker
-                .type_info
-                .struct_field_indices
-                .get(&free_id)
-                .cloned()
-            {
-                checker
-                    .type_info
-                    .struct_field_indices
-                    .insert(member_id, field_idxs);
             }
         }
     }

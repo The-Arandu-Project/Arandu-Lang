@@ -119,7 +119,7 @@ pub fn lower_type_expr_ctx(
                 None => ArType::Void,
             };
             let ret_id = interner.intern(ret);
-            ArType::Func(param_types, ret_id)
+            ArType::func(&param_types, ret_id, interner)
         }
         TypeExpr::Group { inner, .. } => lower_type_expr_ctx(*inner, ctx, interner),
     }
@@ -160,7 +160,7 @@ pub fn lower_result_type_ctx(
                     interner.intern(ty)
                 })
                 .collect();
-            ArType::Tuple(tys)
+            ArType::tuple(&tys, interner)
         }
     }
 }
@@ -192,7 +192,7 @@ pub fn lower_named_type(
                 interner.intern(ty)
             })
             .collect();
-        ArType::Named(symbol_id, generic_args)
+        ArType::named(symbol_id, &generic_args, interner)
     } else {
         // Name was not resolved — name resolver already emitted an error.
         ArType::Error
@@ -479,7 +479,7 @@ mod tests {
         };
         assert_eq!(
             lower_type_expr_ctx(id, &ctx, &mut i),
-            ArType::Named(sym, vec![])
+            ArType::named(sym, &[], &i)
         );
     }
 
@@ -536,7 +536,7 @@ mod tests {
         let result = lower_type_expr_ctx(id, &ctx, &mut i);
         let int_tid = i.intern(ArType::Primitive(Primitive::Int));
         let void_tid = i.intern(ArType::Void);
-        assert_eq!(result, ArType::Func(vec![int_tid], void_tid));
+        assert_eq!(result, ArType::func(&[int_tid], void_tid, &i));
     }
 
     #[test]
@@ -572,7 +572,7 @@ mod tests {
         let result = lower_type_expr_ctx(id, &ctx, &mut i);
         let int_tid = i.intern(ArType::Primitive(Primitive::Int));
         let bool_tid = i.intern(ArType::Primitive(Primitive::Bool));
-        assert_eq!(result, ArType::Func(vec![int_tid], bool_tid));
+        assert_eq!(result, ArType::func(&[int_tid], bool_tid, &i));
     }
 
     // ── lower_result_type ──

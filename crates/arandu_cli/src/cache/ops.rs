@@ -8,7 +8,7 @@ use arandu_query::{CacheDigest, CacheLayout};
 use sha2::{Digest as _, Sha256};
 
 use super::store::{is_lower_hex, is_plain_directory};
-use super::types::{CacheScanLimits, CacheStoreError, validate_limits};
+use super::types::{COPY_BUFFER_SIZE, CacheScanLimits, CacheStoreError, validate_limits};
 
 #[derive(Debug, Default)]
 pub(crate) struct ArchiveScan {
@@ -169,7 +169,7 @@ fn hash_file_bounded(path: &Path, expected_len: u64) -> Result<CacheDigest, Cach
         .map_err(|error| CacheStoreError::io("open cached archive", path, error))?;
     let mut hasher = Sha256::new();
     let mut remaining = expected_len;
-    let mut buffer = [0_u8; 32 * 1024];
+    let mut buffer = [0_u8; COPY_BUFFER_SIZE];
     while remaining > 0 {
         let requested = usize::try_from(remaining)
             .unwrap_or(buffer.len())

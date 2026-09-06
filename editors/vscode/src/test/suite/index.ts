@@ -1,8 +1,13 @@
 import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import * as vscode from 'vscode';
 
-const TIMEOUT_MS = 10_000;
+// A cold Windows Extension Host may spend more than ten seconds creating its
+// log channel and activating installed extensions. Polling still returns as
+// soon as the requested product evidence appears; this is only the hard E2E
+// failure bound, not an unconditional delay.
+const TIMEOUT_MS = 30_000;
 
 interface AranduExtensionApi {
     getRuntimeState(): { state: string; observedCrashCount: number };
@@ -26,15 +31,18 @@ export async function run(): Promise<void> {
     try {
         const workspace = vscode.workspace.workspaceFolders?.[0];
         assert.ok(workspace, 'Extension Host test requires a workspace');
-        const uri = vscode.Uri.joinPath(workspace.uri, 'main.aru');
-        const document = await vscode.workspace.openTextDocument(uri);
-        await vscode.window.showTextDocument(document);
 
         const extension = vscode.extensions.getExtension('arandu.arandu-lang');
         assert.ok(extension, 'Arandu extension was not installed in the Extension Host');
         if (process.env.ARANDU_EXPECT_INSTALLED_EXTENSION === '1') {
+            const installedRoot = process.env.ARANDU_INSTALLED_EXTENSIONS_ROOT;
+            assert.ok(installedRoot, 'installed extension root was not provided by the harness');
+            const relativeExtensionPath = path.relative(installedRoot, extension.extensionPath);
             assert.equal(
-                extension.extensionPath.includes('installed-extensions-'),
+                relativeExtensionPath !== ''
+                    && !relativeExtensionPath.startsWith(`..${path.sep}`)
+                    && relativeExtensionPath !== '..'
+                    && !path.isAbsolute(relativeExtensionPath),
                 true,
                 `test loaded a development extension instead of the installed VSIX: ${extension.extensionPath}`
             );
@@ -51,6 +59,9 @@ export async function run(): Promise<void> {
         await poll(() => api.getDiscoveredTestCount() > 0 ? true : undefined);
         assert.equal(await api.testRunFirstDiscovered(), 'passed');
 
+        const uri = vscode.Uri.joinPath(workspace.uri, 'main.aru');
+        const document = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(document);
         const diagnostics = await poll(() => {
             const current = vscode.languages.getDiagnostics(uri);
             return current.some(diagnostic => diagnosticCode(diagnostic) === 'N001') ? current : undefined;
@@ -61,13 +72,19 @@ export async function run(): Promise<void> {
         assert.equal(unresolved.source, 'arandu');
         assert.ok(unresolved.range.end.isAfter(unresolved.range.start));
 
+        const completionUri = vscode.Uri.joinPath(workspace.uri, 'completion.aru');
+        const completionDocument = await vscode.workspace.openTextDocument(completionUri);
+        await vscode.window.showTextDocument(completionDocument);
+        const completionPosition = new vscode.Position(0, 2);
         const completions = await poll(async () => {
             const result = await vscode.commands.executeCommand<vscode.CompletionList>(
                 'vscode.executeCompletionItemProvider',
-                uri,
-                new vscode.Position(0, 4)
+                completionUri,
+                completionPosition
             );
-            return result && result.items.length > 0 ? result : undefined;
+            return result?.items.some(item => completionItemLabel(item) === 'func')
+                ? result
+                : undefined;
         });
         assert.ok(completions.items.some(item => completionItemLabel(item) === 'func'));
 
@@ -104,11 +121,13 @@ export async function run(): Promise<void> {
         const afterRestart = await poll(() =>
             vscode.commands.executeCommand<vscode.CompletionList>(
                 'vscode.executeCompletionItemProvider',
-                uri,
-                new vscode.Position(0, 4)
-            ).then(result => result && result.items.length > 0 ? result : undefined)
+                completionUri,
+                completionPosition
+            ).then(result => result?.items.some(item => completionItemLabel(item) === 'func')
+                ? result
+                : undefined)
         );
-        assert.ok(afterRestart.items.length > 0);
+        assert.ok(afterRestart.items.some(item => completionItemLabel(item) === 'func'));
 
         const crashesBefore = api.getRuntimeState().observedCrashCount;
         await api.testCrashServer();
@@ -117,11 +136,16 @@ export async function run(): Promise<void> {
         const afterCrashRecovery = await poll(() =>
             vscode.commands.executeCommand<vscode.CompletionList>(
                 'vscode.executeCompletionItemProvider',
-                uri,
-                new vscode.Position(0, 4)
-            ).then(result => result && result.items.length > 0 ? result : undefined)
+                completionUri,
+                completionPosition
+            ).then(result => result?.items.some(item => completionItemLabel(item) === 'func')
+                ? result
+                : undefined)
         );
-        assert.ok(afterCrashRecovery.items.length > 0, 'completion must recover after a real server crash');
+        assert.ok(
+            afterCrashRecovery.items.some(item => completionItemLabel(item) === 'func'),
+            'Arandu completion must recover after a real server crash'
+        );
     } finally {
         await configuration.update('server.path', undefined, vscode.ConfigurationTarget.Global);
         await configuration.update('cli.path', undefined, vscode.ConfigurationTarget.Global);

@@ -32,10 +32,7 @@ pub fn install_ctrlc_handler() {
     }
     #[cfg(unix)]
     {
-        // Simple atomic flag update for signals on Unix
-        thread::spawn(|| {
-            // Signal handling thread fallback if needed
-        });
+        // On Unix, default SIGINT terminates process group or can be caught if needed.
     }
 }
 

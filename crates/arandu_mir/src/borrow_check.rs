@@ -166,23 +166,21 @@ fn check_stmt(
             }
         },
         AmirStmt::Store { lhs, rhs } => {
-            if lhs.projections.is_empty() {
-                // Mutation of the place while borrowed.
-                if place_borrowed(lhs.local, live, facts, block) {
-                    diags.push((
+            // Mutation of the place (whole struct or projected field/element) while borrowed.
+            if place_borrowed(lhs.local, live, facts, point) {
+                diags.push((
+                    block,
+                    conflict_diag(
+                        lhs.local,
+                        func,
+                        symbols,
+                        facts,
+                        live,
+                        "mutable borrow conflict",
+                        "cannot assign while value is borrowed",
                         block,
-                        conflict_diag(
-                            lhs.local,
-                            func,
-                            symbols,
-                            facts,
-                            live,
-                            "mutable borrow conflict",
-                            "cannot assign while value is borrowed",
-                            block,
-                        ),
-                    ));
-                }
+                    ),
+                ));
             }
             check_operand_move(rhs, point, live, facts, temp_origins, func, symbols, diags);
         }
@@ -205,7 +203,7 @@ fn check_stmt(
             check_operand_move(op, point, live, facts, temp_origins, func, symbols, diags);
         }
         AmirStmt::Destroy(place) => {
-            if place_borrowed(place.local, live, facts, block) {
+            if place_borrowed(place.local, live, facts, point) {
                 diags.push((
                     block,
                     destroy_diag(place.local, func, symbols, facts, live, block),
@@ -226,8 +224,8 @@ fn check_new_loan(
     symbols: &SymbolTable,
     diags: &mut Vec<(BlockId, Diagnostic)>,
 ) {
-    let active_shared = active_kind(place, LoanKind::Shared, live, facts, point.block);
-    let active_excl = active_kind(place, LoanKind::Exclusive, live, facts, point.block);
+    let active_shared = active_kind(place, LoanKind::Shared, live, facts, point);
+    let active_excl = active_kind(place, LoanKind::Exclusive, live, facts, point);
 
     let conflict = match kind {
         // `&` conflicts only with active `&mut`
@@ -375,7 +373,7 @@ fn check_operand_move(
     let Some(local) = temp_origins.get(temp.as_usize()).copied().flatten() else {
         return;
     };
-    if place_borrowed(local, live, facts, point.block) {
+    if place_borrowed(local, live, facts, point) {
         diags.push((
             point.block,
             move_while_borrowed_diag(local, func, symbols, facts, live, point.block),
@@ -387,10 +385,10 @@ fn place_borrowed(
     local: LocalId,
     live: &BitSet<TempId>,
     facts: &FuncBorrowFacts,
-    current_block: BlockId,
+    point: ProgramPoint,
 ) -> bool {
-    active_kind(local, LoanKind::Shared, live, facts, current_block)
-        || active_kind(local, LoanKind::Exclusive, live, facts, current_block)
+    active_kind(local, LoanKind::Shared, live, facts, point)
+        || active_kind(local, LoanKind::Exclusive, live, facts, point)
 }
 
 fn active_kind(
@@ -398,13 +396,13 @@ fn active_kind(
     kind: LoanKind,
     live: &BitSet<TempId>,
     facts: &FuncBorrowFacts,
-    current_block: BlockId,
+    point: ProgramPoint,
 ) -> bool {
-    for loan in &facts.loans {
+    for (loan_index, loan) in facts.loans.iter().enumerate() {
         if loan.place_local != local || loan.kind != kind {
             continue;
         }
-        if loan_holders_live(loan, live, facts, current_block) {
+        if loan_holders_live(loan_index, loan, live, facts, point) {
             return true;
         }
     }
@@ -412,10 +410,11 @@ fn active_kind(
 }
 
 fn loan_holders_live(
+    loan_index: usize,
     loan: &Loan,
     live: &BitSet<TempId>,
     facts: &FuncBorrowFacts,
-    current_block: BlockId,
+    point: ProgramPoint,
 ) -> bool {
     for t in loan.holder_temps.iter() {
         if live.contains(t) {
@@ -423,8 +422,15 @@ fn loan_holders_live(
         }
     }
     for l in loan.holder_locals.iter() {
-        if facts.local_live.live_in(current_block).contains(l)
-            || facts.local_live.live_out(current_block).contains(l)
+        let structurally_present = facts
+            .local_holders_at
+            .get(point.block.as_usize())
+            .and_then(|points| points.get(point.stmt_index))
+            .and_then(|loans| loans.get(loan_index))
+            .is_some_and(|holders| holders.contains(l));
+        if structurally_present
+            && (facts.local_live.live_in(point.block).contains(l)
+                || facts.local_live.live_out(point.block).contains(l))
         {
             return true;
         }
@@ -444,6 +450,12 @@ fn compute_temp_live_before(func: &AmirFunc, temp_live: &TempLiveness) -> Vec<Ve
         let mut live_before = vec![BitSet::with_capacity(num_temps); n + 1];
 
         let mut live = temp_live.live_out(block.id).clone();
+        // `Return` consumes the conventional return register (`TempId(0)`).
+        // The terminator has no explicit operand in AMIR, so seed it here or a
+        // returned borrow appears dead before epilogue `Destroy` statements.
+        if matches!(block.terminator, AmirTerminator::Return) && !func.temps.is_empty() {
+            live.insert(TempId::from_usize(0));
+        }
         // Before terminator:
         live_before[n] = live.clone();
         // Reverse statements.
@@ -509,7 +521,7 @@ fn temp_origins_from_loads(func: &AmirFunc) -> Vec<Option<LocalId>> {
     let mut origins = vec![None; func.temps.len()];
     let mut changed = true;
     let mut iterations = 0;
-    while changed && iterations < 100 {
+    while changed && iterations < crate::analysis_limits::TEMP_ORIGIN_SOLVER_MAX_PASSES {
         changed = false;
         iterations += 1;
         for block in &func.blocks {
@@ -588,7 +600,26 @@ fn first_loan_span(
         if loan.place_local != local {
             continue;
         }
-        if !loan_holders_live(loan, live, facts, current_block) {
+        let Some(loan_index) = facts
+            .loans
+            .iter()
+            .position(|candidate| std::ptr::eq(candidate, loan))
+        else {
+            continue;
+        };
+        if !loan_holders_live(
+            loan_index,
+            loan,
+            live,
+            facts,
+            ProgramPoint {
+                block: current_block,
+                stmt_index: facts
+                    .local_holders_at
+                    .get(current_block.as_usize())
+                    .map_or(0, |points| points.len().saturating_sub(1)),
+            },
+        ) {
             continue;
         }
         // Prefer a holder temp span.

@@ -118,6 +118,13 @@ pub struct TestFramePayload {
     pub event: TestEventV1,
 }
 
+#[derive(Serialize)]
+pub struct TestFramePayloadRef<'a> {
+    pub schema: &'a str,
+    pub sequence: u64,
+    pub event: &'a TestEventV1,
+}
+
 /// Effective benchmark configuration recorded with every result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BenchmarkConfigV1 {
@@ -155,6 +162,13 @@ struct BenchmarkFramePayload {
     event: BenchmarkEventV1,
 }
 
+#[derive(Serialize)]
+struct BenchmarkFramePayloadRef<'a> {
+    schema: &'a str,
+    sequence: u64,
+    event: &'a BenchmarkEventV1,
+}
+
 /// Write one versioned benchmark event using the SL_T framing contract.
 pub fn write_benchmark_frame<W: Write>(
     writer: &mut W,
@@ -164,10 +178,10 @@ pub fn write_benchmark_frame<W: Write>(
     if event.sequence != sequence {
         return Err("benchmark frame sequence mismatch".to_string());
     }
-    let bytes = serde_json::to_vec(&BenchmarkFramePayload {
-        schema: BENCH_PROTOCOL_V1.to_string(),
+    let bytes = serde_json::to_vec(&BenchmarkFramePayloadRef {
+        schema: BENCH_PROTOCOL_V1,
         sequence,
-        event: event.clone(),
+        event,
     })
     .map_err(|error| format!("serialize benchmark frame: {error}"))?;
     if bytes.len() > MAX_FRAME_PAYLOAD_SIZE {
@@ -247,10 +261,10 @@ pub fn write_frame<W: Write>(
             event.sequence
         ));
     }
-    let payload = TestFramePayload {
-        schema: TEST_PROTOCOL_V1.into(),
+    let payload = TestFramePayloadRef {
+        schema: TEST_PROTOCOL_V1,
         sequence,
-        event: event.clone(),
+        event,
     };
     let json_bytes =
         serde_json::to_vec(&payload).map_err(|err| format!("serialize frame error: {err}"))?;

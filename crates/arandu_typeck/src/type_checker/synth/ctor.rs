@@ -330,7 +330,8 @@ pub(crate) fn synth_variant_sugar(
                 checker.intern(ArType::Error)
             }
         },
-        ArType::Named(enum_id, ref expected_args) => {
+        ArType::Named(enum_id, expected_args) => {
+            let expected_args = checker.type_info.type_interner.type_args(expected_args);
             let enum_name = checker.symbols.get(enum_id).name.clone();
             let Some(variant_sym) = checker.symbols.lookup_associated_member(enum_id, name) else {
                 checker.diagnostics.push(crate::Diagnostic::error(
@@ -352,6 +353,7 @@ pub(crate) fn synth_variant_sugar(
                 cached.clone()
             } else {
                 let res = if let Some(ArType::Func(params, ret)) = checker.decl_type(variant_sym) {
+                    let params = checker.type_info.type_interner.type_args(params);
                     let mut inst_params = params.clone();
                     let mut inst_ret = ret;
                     if !expected_args.is_empty()
@@ -580,7 +582,12 @@ pub(crate) fn synth_method_call(
             crate::type_checker::types::Primitive::Str,
         ));
         if base_ty.is_to_str_v01() {
-            let func_id = checker.intern(ArType::Func(vec![actual_base_ty_id], str_id));
+            let func_ty = ArType::func(
+                &[actual_base_ty_id],
+                str_id,
+                &checker.type_info.type_interner,
+            );
+            let func_id = checker.intern(func_ty);
             checker.record_expr_type(callee, func_id);
             return Some(str_id);
         }
@@ -628,29 +635,54 @@ pub(crate) fn synth_method_call(
         .lookup_associated_member(effective_id, method);
 
     let mut resolved_method = None;
+    let mut method_generic_params = Vec::new();
     if method_sym.is_none()
         && let Some(sid) = struct_id
         && let Some(constraints) = checker.type_info.param_constraints.get(&sid)
     {
-        for &iface_sym in constraints.iter() {
-            if let Some(iface_info) = checker.type_info.interfaces.get(&iface_sym)
-                && let Some((_, method_tid)) = iface_info.methods.iter().find(|(m, _)| m == method)
+        for bound in constraints.iter() {
+            if let Some(iface_info) = checker.type_info.interfaces.get(&bound.iface_sym)
+                && let Some(m) = iface_info.methods.iter().find(|m| m.name == method)
             {
-                resolved_method = Some(checker.resolve(*method_tid));
+                let raw_sig = checker.resolve(m.sig_id);
+                let inst_sig = crate::type_checker::types::interfaces::instantiate_interface_method(
+                    checker,
+                    bound.iface_sym,
+                    &bound.type_args,
+                    &base_resolved,
+                    &raw_sig,
+                );
+                resolved_method = Some(inst_sig);
+                method_generic_params = m.generic_params.clone();
                 break;
             }
+        }
+    } else if let Some(sym) = method_sym
+        && let Some(gp) = checker.type_info.generic_params.get(&sym)
+    {
+        if let Some(sid) = struct_id
+            && let Some(struct_gp) = checker.type_info.generic_params.get(&sid)
+        {
+            if gp.len() >= struct_gp.len() {
+                method_generic_params = gp[struct_gp.len()..].to_vec();
+            } else {
+                method_generic_params = gp.to_vec();
+            }
+        } else {
+            method_generic_params = gp.to_vec();
         }
     }
 
     let (params, ret, method_sym_recorded) = if let Some(method_sig) = resolved_method {
         if let ArType::Func(params, ret) = method_sig {
+            let params = checker.type_info.type_interner.type_args(params);
             // Interface methods may declare an explicit `self`/`Self` receiver or
             // only the free-style payload (`Allocator.alloc(size, align)`).
             // Drop a leading `Self` formal if present, then always prepend the
             // concrete receiver so call sites stay uniform (TYP.2).
             let payload = if params
                 .first()
-                .is_some_and(|&p| is_self_type_formal(checker, p))
+                .is_some_and(|&p| is_receiver_type_formal(checker, p, actual_base_ty_id))
             {
                 params[1..].to_vec()
             } else {
@@ -666,7 +698,7 @@ pub(crate) fn synth_method_call(
     } else if let Some(sym) = method_sym {
         let method_ty = checker.decl_type(sym)?;
         let (params, ret) = match &method_ty {
-            ArType::Func(params, ret) => (params.clone(), *ret),
+            ArType::Func(params, ret) => (checker.type_info.type_interner.type_args(*params), *ret),
             _ => return None,
         };
         (params, ret, Some(sym))
@@ -697,7 +729,7 @@ pub(crate) fn synth_method_call(
     // Instantiate template method type with the receiver's concrete type args
     // so `BoxG<int>.get` sees `Func([BoxG<int>], int)` not `Func([BoxG<T>], T)`.
     // For Result/Option, substitute T/E from the builtin type shape.
-    let (params, ret) = if let Some(sid) = struct_id {
+    let (mut params, mut ret) = if let Some(sid) = struct_id {
         instantiate_method_sig_for_receiver(
             checker,
             sid,
@@ -748,7 +780,7 @@ pub(crate) fn synth_method_call(
         );
     }
 
-    let explicit_params = &params[1..];
+    let mut explicit_params = params[1..].to_vec();
     let arg_ids = checker.pool.expr_list(args).to_vec();
     if explicit_params.len() != arg_ids.len() {
         let struct_name = checker.symbols.get(effective_id).name.clone();
@@ -764,6 +796,29 @@ pub(crate) fn synth_method_call(
         .with_label(field_span, "call target is here")
         .with_label(call_span, format!("{} arguments provided", arg_ids.len()));
         checker.diagnostics.push(diag);
+    }
+
+    if !method_generic_params.is_empty() && explicit_params.len() == arg_ids.len() {
+        let arg_tys: Vec<TypeId> = arg_ids
+            .iter()
+            .copied()
+            .map(|aid| super::expr::synth_expr(checker, aid))
+            .collect();
+        if let Some((ip, ir)) = super::expr::infer_and_instantiate_func(
+            checker,
+            &method_generic_params,
+            &explicit_params,
+            ret,
+            &arg_tys,
+            None,
+        ) {
+            let mut new_params = Vec::with_capacity(ip.len() + 1);
+            new_params.push(params[0]);
+            new_params.extend(ip);
+            params = new_params;
+            explicit_params = params[1..].to_vec();
+            ret = ir;
+        }
     }
 
     for (i, arg_id) in arg_ids.iter().copied().enumerate() {
@@ -785,7 +840,8 @@ pub(crate) fn synth_method_call(
     if let Some(sym) = method_sym_recorded {
         checker.resolved.value_ref(field_span, sym);
     }
-    let func_id = checker.intern(ArType::Func(params, ret));
+    let func_ty = ArType::func(&params, ret, &checker.type_info.type_interner);
+    let func_id = checker.intern(func_ty);
     checker.record_expr_type(callee, func_id);
 
     Some(ret)
@@ -877,10 +933,16 @@ fn instantiate_method_sig_for_receiver(
         }
     }
     let (recv_args_ids, recv_args) = match checker.resolve(base_id) {
-        ArType::Named(id, args) if id == struct_id => (
-            args.clone(),
-            args.iter().map(|&a| checker.resolve(a)).collect::<Vec<_>>(),
-        ),
+        ArType::Named(id, args) if id == struct_id => {
+            let arg_vec = checker.type_info.type_interner.type_args(args);
+            (
+                arg_vec.clone(),
+                arg_vec
+                    .iter()
+                    .map(|&a| checker.resolve(a))
+                    .collect::<Vec<_>>(),
+            )
+        }
         _ => return (params, ret),
     };
     if recv_args.is_empty() {
@@ -928,11 +990,15 @@ fn instantiate_method_sig_for_receiver(
     res
 }
 
-/// True when a formal is the interface receiver type `Self` (or a ref to it).
-fn is_self_type_formal(checker: &TypeChecker<'_>, tid: TypeId) -> bool {
+/// True when a formal matches the receiver type (or a ref/deref of it).
+fn is_receiver_type_formal(checker: &TypeChecker<'_>, tid: TypeId, base_id: TypeId) -> bool {
+    if checker.unify_ids(tid, base_id) {
+        return true;
+    }
     match checker.resolve(tid) {
-        ArType::Named(id, _) => checker.symbols.get(id).name == "Self",
-        ArType::Ref(inner) | ArType::RefMut(inner) => is_self_type_formal(checker, inner),
+        ArType::Ref(inner) | ArType::RefMut(inner) | ArType::Ptr(inner) => {
+            checker.unify_ids(inner, base_id) || is_receiver_type_formal(checker, inner, base_id)
+        }
         _ => false,
     }
 }
@@ -948,11 +1014,14 @@ fn contains_generic_params(
             if gp.contains(id) {
                 return true;
             }
-            args.iter()
+            interner
+                .type_args(*args)
+                .iter()
                 .any(|&a| contains_generic_params(&interner.resolve(a), gp, interner))
         }
         ArType::Func(params, ret) => {
-            params
+            interner
+                .type_args(*params)
                 .iter()
                 .any(|&p| contains_generic_params(&interner.resolve(p), gp, interner))
                 || contains_generic_params(&interner.resolve(*ret), gp, interner)
@@ -973,7 +1042,8 @@ fn contains_generic_params(
             contains_generic_params(&interner.resolve(*ok), gp, interner)
                 || contains_generic_params(&interner.resolve(*err), gp, interner)
         }
-        ArType::Tuple(tys) => tys
+        ArType::Tuple(tys) => interner
+            .type_args(*tys)
             .iter()
             .any(|&t| contains_generic_params(&interner.resolve(t), gp, interner)),
         _ => false,

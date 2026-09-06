@@ -150,14 +150,15 @@ mod tests {
 }
 
 use rustc_hash::FxHashMap;
+use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
 use arandu_lexer::Span;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct LocalSymbolId(pub u32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SymbolId {
     pub file_id: crate::db::FileId,
     pub local_id: LocalSymbolId,
@@ -177,10 +178,10 @@ impl SymbolId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ScopeId(pub u32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SymbolKind {
     Module,
     ImportValue,
@@ -230,6 +231,23 @@ impl SymbolKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum LangItem {
+    Option,
+    OptionSome,
+    OptionNone,
+    Result,
+    ResultOk,
+    ResultErr,
+    Poll,
+    PollReady,
+    PollPending,
+    Coroutine,
+    String,
+    Vec,
+}
+
 #[derive(Debug, Clone)]
 pub struct Symbol {
     pub id: SymbolId,
@@ -240,6 +258,8 @@ pub struct Symbol {
     /// `true` when the defining declaration used `public` (or is a prelude/extern API).
     /// Used by `exported_symbols` so private names do not cross module boundaries.
     pub is_public: bool,
+    /// Canonical core item classification (zero-indirection, 1 byte).
+    pub lang_item: Option<LangItem>,
 }
 
 #[derive(Debug, Clone)]
@@ -248,18 +268,31 @@ pub struct Scope {
     symbols: Vec<SymbolId>,
 }
 
+/// Flat, contiguous struct of canonical core type symbols.
+/// Stored inline in SymbolTable (DOD layout: zero heap indirection, single cache line).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BuiltinTypes {
+    pub option: Option<SymbolId>,
+    pub result: Option<SymbolId>,
+    pub poll: Option<SymbolId>,
+    pub coroutine: Option<SymbolId>,
+    pub string: Option<SymbolId>,
+    pub vec: Option<SymbolId>,
+}
+
 #[derive(Debug, Clone)]
 pub struct SymbolTable {
     pub file_id: crate::db::FileId,
     scopes: Vec<Scope>,
     symbols: Vec<Symbol>,
     pub imported_symbols: FxHashMap<SymbolId, Symbol>,
-    pub module_members: FxHashMap<SmolStr, FxHashMap<SmolStr, SymbolId>>,
-    pub associated_members: FxHashMap<SymbolId, FxHashMap<SmolStr, SymbolId>>,
+    pub module_members: FxHashMap<(SmolStr, SmolStr), SymbolId>,
+    pub associated_members: FxHashMap<(SymbolId, SmolStr), SymbolId>,
     /// Type-parameter symbols for named types (`struct` / `enum` / …), in declaration order.
     /// Used so methods on `Box<T>` can import `T` into their type scope.
     pub type_params: FxHashMap<SymbolId, smallvec::SmallVec<[SymbolId; 4]>>,
     global_scope_id: ScopeId,
+    pub builtins: BuiltinTypes,
     pub builtin_alloc: Option<SymbolId>,
     pub builtin_free: Option<SymbolId>,
 }
@@ -285,12 +318,17 @@ impl SymbolTable {
             associated_members: FxHashMap::default(),
             type_params: FxHashMap::default(),
             global_scope_id: ScopeId(0),
+            builtins: BuiltinTypes::default(),
             builtin_alloc: None,
             builtin_free: None,
         }
     }
 
-    #[tracing::instrument(level = "trace", target = "arandu_middle", skip(self, other))]
+    /// Merges definitions and scopes from another `SymbolTable` into `self`.
+    ///
+    /// Preserves local IDs, parent pointers, and public flags. Remaps symbol
+    /// IDs in scopes, module members, and associated members to match the new
+    /// table.
     pub fn merge_from(&mut self, other: SymbolTable) {
         let self_symbols_len = self.symbols.len() as u32;
         let self_scopes_len = self.scopes.len() as u32;
@@ -344,23 +382,20 @@ impl SymbolTable {
                 span: old_symbol.span,
                 scope: new_scope,
                 is_public: old_symbol.is_public,
+                lang_item: old_symbol.lang_item,
             });
         }
 
         // 3. Merge other module members
-        for (module, members) in other.module_members {
-            let entry = self.module_members.entry(module).or_default();
-            for (member, old_symbol_id) in members {
-                entry.insert(member, map_symbol(old_symbol_id));
-            }
+        for ((module, member), old_symbol_id) in other.module_members {
+            self.module_members
+                .insert((module, member), map_symbol(old_symbol_id));
         }
 
         // 4. Merge other associated members
-        for (ty, members) in other.associated_members {
-            let entry = self.associated_members.entry(ty).or_default();
-            for (member, old_symbol_id) in members {
-                entry.insert(member, map_symbol(old_symbol_id));
-            }
+        for ((ty, member), old_symbol_id) in other.associated_members {
+            self.associated_members
+                .insert((map_symbol(ty), member), map_symbol(old_symbol_id));
         }
 
         // 5. Merge type-parameter tables
@@ -369,6 +404,79 @@ impl SymbolTable {
                 params.into_iter().map(map_symbol).collect();
             self.type_params.insert(map_symbol(type_id), mapped);
         }
+
+        // 6. Merge canonical builtins
+        if self.builtin_alloc.is_none() {
+            self.builtin_alloc = other.builtin_alloc.map(map_symbol);
+        }
+        if self.builtin_free.is_none() {
+            self.builtin_free = other.builtin_free.map(map_symbol);
+        }
+        if self.builtins.option.is_none() {
+            self.builtins.option = other.builtins.option.map(map_symbol);
+        }
+        if self.builtins.result.is_none() {
+            self.builtins.result = other.builtins.result.map(map_symbol);
+        }
+        if self.builtins.poll.is_none() {
+            self.builtins.poll = other.builtins.poll.map(map_symbol);
+        }
+        if self.builtins.coroutine.is_none() {
+            self.builtins.coroutine = other.builtins.coroutine.map(map_symbol);
+        }
+        if self.builtins.string.is_none() {
+            self.builtins.string = other.builtins.string.map(map_symbol);
+        }
+        if self.builtins.vec.is_none() {
+            self.builtins.vec = other.builtins.vec.map(map_symbol);
+        }
+    }
+
+    pub fn set_lang_item(&mut self, sym: SymbolId, item: LangItem) {
+        if sym.file_id == self.file_id {
+            if let Some(s) = self.symbols.get_mut(sym.local_id.0 as usize) {
+                s.lang_item = Some(item);
+            }
+        } else if let Some(s) = self.imported_symbols.get_mut(&sym) {
+            s.lang_item = Some(item);
+        }
+        match item {
+            LangItem::Option => self.builtins.option = Some(sym),
+            LangItem::Result => self.builtins.result = Some(sym),
+            LangItem::Poll => self.builtins.poll = Some(sym),
+            LangItem::Coroutine => self.builtins.coroutine = Some(sym),
+            LangItem::String => self.builtins.string = Some(sym),
+            LangItem::Vec => self.builtins.vec = Some(sym),
+            _ => {}
+        }
+    }
+
+    #[must_use]
+    pub fn is_poll_type(&self, sym: SymbolId) -> bool {
+        self.try_get(sym).and_then(|s| s.lang_item) == Some(LangItem::Poll)
+            || Some(sym) == self.builtins.poll
+            || self.lookup_module_member("std.core.future", "Poll") == Some(sym)
+    }
+
+    #[must_use]
+    pub fn is_result_type(&self, sym: SymbolId) -> bool {
+        self.try_get(sym).and_then(|s| s.lang_item) == Some(LangItem::Result)
+            || Some(sym) == self.builtins.result
+            || self.lookup_module_member("std.core.result", "Result") == Some(sym)
+    }
+
+    #[must_use]
+    pub fn is_option_type(&self, sym: SymbolId) -> bool {
+        self.try_get(sym).and_then(|s| s.lang_item) == Some(LangItem::Option)
+            || Some(sym) == self.builtins.option
+            || self.lookup_module_member("std.core.option", "Option") == Some(sym)
+    }
+
+    #[must_use]
+    pub fn is_coroutine_type(&self, sym: SymbolId) -> bool {
+        self.try_get(sym).and_then(|s| s.lang_item) == Some(LangItem::Coroutine)
+            || Some(sym) == self.builtins.coroutine
+            || self.lookup_module_member("std.core.coroutine", "Coroutine") == Some(sym)
     }
 
     /// Record ordered type parameters for a named type (struct/enum/alias).
@@ -500,6 +608,7 @@ impl SymbolTable {
             span,
             scope,
             is_public,
+            lang_item: None,
         });
         self.scope_mut(scope).symbols.push(id);
         Ok(id)
@@ -618,17 +727,14 @@ impl SymbolTable {
             true,
         )?;
         self.module_members
-            .entry(module.into())
-            .or_default()
-            .insert(member.into(), id);
+            .insert((module.into(), member.into()), id);
         Ok(id)
     }
 
     #[must_use]
     pub fn lookup_module_member(&self, module: &str, member: &str) -> Option<SymbolId> {
         self.module_members
-            .get(module)
-            .and_then(|m| m.get(member))
+            .get(&(SmolStr::new(module), SmolStr::new(member)))
             .copied()
     }
 
@@ -664,17 +770,14 @@ impl SymbolTable {
             is_public,
         )?;
         self.associated_members
-            .entry(parent_id)
-            .or_default()
-            .insert(member.into(), id);
+            .insert((parent_id, member.into()), id);
         Ok(id)
     }
 
     #[must_use]
     pub fn lookup_associated_member(&self, parent_id: SymbolId, member: &str) -> Option<SymbolId> {
         self.associated_members
-            .get(&parent_id)
-            .and_then(|m| m.get(member))
+            .get(&(parent_id, SmolStr::new(member)))
             .copied()
     }
 

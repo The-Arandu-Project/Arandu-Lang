@@ -31,8 +31,11 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 }
             }
             AmirStmt::Store { lhs, rhs } => {
-                let lhs_ty = self.local_ar_ty(lhs.local);
-                if matches!(&lhs_ty, ArType::Primitive(Primitive::Str)) {
+                let place_ty = self.place_ar_ty(lhs);
+                let rhs_ty = self.get_operand_ar_type(rhs);
+                let is_str = matches!(&place_ty, ArType::Primitive(Primitive::Str))
+                    || matches!(&rhs_ty, ArType::Primitive(Primitive::Str));
+                if is_str {
                     let (ptr_val, len_val) = self.translate_str_operand(rhs);
                     if lhs.projections.is_empty() {
                         if let Some(&(var_ptr, var_len)) = self.str_local_map.get(&lhs.local) {
@@ -55,13 +58,7 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                         );
                     }
                 } else {
-                    let lhs_ar = self
-                        .current_func
-                        .locals
-                        .get(lhs.local.as_usize())
-                        .map(|l| self.resolve_ty(l.ty))
-                        .unwrap_or(ArType::Error);
-                    let expected_ty = match clif_type(&lhs_ar, self.ptr_type) {
+                    let expected_ty = match clif_type(&place_ty, self.ptr_type) {
                         ClifType::Concrete(ty) => Some(ty),
                         ClifType::Void => None,
                     };
@@ -70,13 +67,15 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                     let val = self.translate_rvalue(
                         &arandu_semantics::amir::AmirRvalue::Use(*rhs),
                         expected_ty,
-                        Some(&lhs_ar),
+                        Some(&place_ty),
                     );
                     self.translate_store_place(lhs, val);
                 }
             }
 
-            AmirStmt::Call { lhs, callee, args } => {
+            AmirStmt::Call {
+                lhs, callee, args, ..
+            } => {
                 self.translate_call(lhs, callee, args);
             }
             AmirStmt::Free(op) => {
@@ -85,24 +84,35 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
             }
             AmirStmt::StorageLive(_) | AmirStmt::StorageDead(_) => {}
             AmirStmt::Destroy(place) => {
-                if place.projections.is_empty() {
-                    let ty = self.local_ar_ty(place.local);
-                    let ty_id = self.current_func.locals[place.local.as_usize()].ty;
-                    if let ArType::Named(_, _) = ty
-                        && let Some(destructor) = self.type_info.destructor_instances.get(&ty_id)
-                        && let Some(&var) = self.local_map.get(&place.local)
-                    {
-                        let name = self.symbol_table.get(*destructor).name.as_str();
-                        if let Some(&id) = self.func_ids.get(name) {
-                            let ptr_val = self.builder.use_var(var);
-                            let function = self.module.declare_func_in_func(id, self.builder.func);
-                            self.builder.ins().call(function, &[ptr_val]);
+                let ty = self.place_ar_ty(place);
+                let ty_id = self.type_info.type_interner.intern(ty.clone());
+                if let ArType::Named(_, _) = ty
+                    && let Some(destructor) = self.type_info.destructor_instances.get(&ty_id)
+                {
+                    let name = self.symbol_table.get(*destructor).name.as_str();
+                    if let Some(&id) = self.func_ids.get(name) {
+                        let ptr_val = if place.projections.is_empty() {
+                            if let Some(&var) = self.local_map.get(&place.local) {
+                                self.builder.use_var(var)
+                            } else {
+                                self.translate_place_address_for_load(place).0
+                            }
                         } else {
-                            self.record_ice(
-                                format!("missing @Destructor function '{name}'"),
-                                self.local_span(place.local),
-                            );
-                        }
+                            let (addr, offset) = self.translate_place_address_for_load(place);
+                            self.builder.ins().load(
+                                self.ptr_type,
+                                cranelift_codegen::ir::MemFlagsData::new(),
+                                addr,
+                                offset,
+                            )
+                        };
+                        let function = self.module.declare_func_in_func(id, self.builder.func);
+                        self.builder.ins().call(function, &[ptr_val]);
+                    } else {
+                        self.record_ice(
+                            format!("missing @Destructor function '{name}'"),
+                            self.local_span(place.local),
+                        );
                     }
                 }
             }

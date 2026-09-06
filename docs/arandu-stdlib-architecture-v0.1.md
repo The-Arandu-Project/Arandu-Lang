@@ -80,8 +80,8 @@ Esta camada é **estritamente livre de dependências externas**. Ela não assume
 ### Estrutura de Módulos
 ```text
 arandu_core
- ├─ mem          # Operações cruas de memória, alinhamento, layout de tipos
- ├─ ptr          # Ponteiros brutos, safe wrappers, manipulação direta
+ ├─ mem          # Operações unsafe de memória, alinhamento e layout de tipos
+ ├─ pointer      # Identidade segura de ponteiros (`null`/`isNull`)
  ├─ option       # Opcionalidade canônica (Option<T>)
  ├─ result       # Tratamento de erro monádico (Result<T, E>)
  ├─ iter         # Iteradores puros, adaptadores lazy combinatoriais
@@ -97,7 +97,7 @@ arandu_core
  ├─ borrow       # Abstrações de empréstimo (Borrow, BorrowMut)
  ├─ fmt          # Formatação e diagnostics de baixo nível (Debug, Display, formatting engines)
  ├─ panic        # Handlers básicos de pânico e asserções estáticas
- ├─ intrinsics   # abort, abort_generational_mismatch (traps; zero heap)
+ ├─ intrinsics   # abort, abortGenerationalMismatch (traps; zero heap)
  ├─ simd         # Tipos vetoriais e primitivas portáveis de SIMD (Fase A7)
  ├─ atomic       # Tipos atômicos puros suportados pelo hardware
  └─ arch         # Especificações arquiteturais específicas (x86_64, AArch64, RISC-V)
@@ -131,7 +131,7 @@ arandu_alloc
 ```
 
 > **F2.3 / GenRef:** `gen_arena` is the only place dynamic generational tables live.
-> Trap on mismatch is `std.core.intrinsics.abort_generational_mismatch`.
+> Trap on mismatch is `std.core.intrinsics.abortGenerationalMismatch`.
 > Compiler ABI: `docs/arandu-genref-gold-rfc-v0.1.md`.
 
 ### Filosofia de Alocadores Customizados
@@ -269,11 +269,108 @@ O marco definitivo de maturidade da linguagem Arandu é o **Self-Hosting**: a ca
 4. **Desempenho Paritário ou Superior**:
    O tempo de compilação do compilador Arandu compilado por ele mesmo deve ser inferior a 3 segundos para cold-builds inteiros do próprio compilador, validando a arquitetura linear e orientada a dados (A5–A11).
 
+## Relatório final AUD.5 — segurança de borrowed views
+
+**Decisão após BV.1–BV.3:** borrowed views estruturais são **suportadas** na
+superfície pública implementada. `[]T` é o tipo canônico de slice seguro;
+`Vec.asSlice`, `String.asStr`, `String.asBytes`, `Slice.get`, `first`, `last`,
+`subslice` e a iteração mínima preservam a dependência do owner no compilador.
+O ABI continua sendo somente `ptr + len` e não leva lifetime para o runtime.
+
+Essa decisão promove o componente de borrowed views, não toda a campanha
+`SL_S-Core`: allocator genérico, drop de payloads não triviais e evidência
+nativa de todos os targets distribuídos continuam sendo gates independentes.
+
+### Matriz de capacidade
+
+| Superfície | Classificação | Evidência e limite |
+| --- | --- | --- |
+| Borrow local `ref T`/`mut ref T` | **Suportado** | loans têm owner, kind, holders e live range; conflitos de move, mutação e destroy emitem O002/O003/O006 |
+| Retorno direto ou união de parâmetros emprestados | **Suportado em BV.1** | interface derivada do fluxo contém somente origens alcançáveis; retorno de local é O010 |
+| Forwarding, import e especialização genérica | **Suportado em BV.1** | testes CLI/query cobrem composição, recursão, import, genérico e hash canônico |
+| Incrementalidade e IDE | **Suportado para o contrato BV.1** | mudança do summary invalida caller; mudança só de corpo para no `borrow_interfaces` HashEq |
+| `Use`, `Load`, `Store` e block args intraprocedurais | **Suportado em BV.2** | holders estruturais atravessam construção, projeção, overwrite e joins por fixpoint |
+| Receiver/método, projeções de campo e suspensão | **Suportado no contrato modelado** | receivers preservam origem; borrow absoluto escondido em carrier não atravessa `await` |
+| Caminhos de `Option`, `Result`, tuple, struct e enum | **Suportado em BV.2** | carriers herdam não-escapabilidade e copy/move estruturalmente |
+| `[]T` e views de `String` | **Suportado em BV.3** | API segura usa proveniência compile-time; construção raw fica confinada aos intrínsecos internos |
+| Retorno com múltiplas origens possíveis | **Suportado em BV.1** | branches fazem união apenas das fontes que chegam ao retorno; candidato só compatível pelo tipo é excluído |
+| Closure escapável, global/heap e ida-e-volta por ponteiro cru | **Ausente** | não existe vínculo estático recuperável; ponteiro cru continua obrigação `unsafe` |
+
+“Ausente” não significa que o compilador aceita silenciosamente o caso. Nos
+casos que alcançam a superfície segura, a política é **fail-closed**: rejeitar
+é preferível a fabricar uma origem, promover para GenRef ou transformar um
+ponteiro tipado em referência aparentemente segura.
+
+### Resultado dos gates
+
+| Gate da auditoria | Resultado |
+| --- | --- |
+| Origem direta preservada por call/forwarding/genérico/import | **Passou** |
+| O002/O003/O006/O010 nascem e desaparecem após cache hit | **Passou** |
+| Summary participa de hash, invalidação e early-cutoff Salsa | **Passou** |
+| Diagnóstico CLI/LSP equivalente, estruturado e sem publicação stale | **Passou** |
+| Relatório AMIR determinístico localiza fronteiras de perda | **Passou** |
+| Carriers, CFG, projeções, múltiplas origens e suspensão | **Passou para as formas públicas existentes** |
+| Views seguras `Slice.get`, `String.asStr` e `String.asBytes` | **Passou** |
+| Paridade C/Cranelift do corpus BV.3 | **Passou localmente; matriz nativa do PR é a evidência de promoção** |
+
+### Decisão arquitetural permanente
+
+1. A sintaxe canônica permanece `T`/`own T`, `ref T` e `mut ref T`; não será
+   adicionada sintaxe de lifetime enquanto um caso real não exigir isso.
+2. `ReturnBorrowSummary` estrutural e de múltiplas fontes é a fronteira pública
+   desde BV.1; não contém spans, `TypeId` ou ordem incidental de mapa.
+3. `Option`/`Result` e demais carriers propagam a dependência não escapável em
+   construção, match, cópia, phi e chamada.
+4. O layout `ptr + len` de `[]T` e `ref str` é independente da prova: origem,
+   exclusividade e live range existem apenas até a validação anterior ao backend.
+5. GenRef, RC/ARC e heap promotion não substituem uma prova de borrowed view.
+6. APIs de ponteiro só contam como alternativa quando forem publicamente
+   `unsafe` e documentarem a obrigação do chamador.
+
+### Dívida técnica e sequência futura
+
+- manter construção raw de slice inacessível ao código seguro até a linguagem
+  possuir funções públicas `unsafe` com contrato verificável;
+- ampliar o corpus quando closures escapáveis se tornarem sintaxe pública;
+- provar os artefatos nos runners nativos da distribuição antes de marcar a
+  campanha inteira como Gold;
+- adicionar views mutáveis somente com um RFC separado para `mut []T` e regras
+  explícitas de exclusividade e iteração.
+
 ## PONTOS DE MELHORIA (O que não está no roadmap)
 
 Grande parte deste documento ainda é design, não promessa implementada. Metas
 numéricas de self-hosting precisam de corpus, hardware e protocolo de benchmark
 definidos antes de se tornarem gate.
+
+O primeiro corte de `SL_S-Core` estabelece os seguintes contratos concretos:
+
+- nomes públicos de funções e métodos usam `camelCase`;
+- `char` representa um Unicode scalar em 32 bits em layout, C e Cranelift;
+- `Option`/`Result` consomem `self` ao retirar payloads possuídos;
+- `[]T` é uma borrowed view segura, copiável localmente e não escapável; seu ABI
+  é `ptr + len`, enquanto a origem fica em summaries/holders compile-time.
+  `Slice.get` retorna `Option<ref T>` e a construção raw não é API pública;
+- `ref T`/`mut ref T` são os tipos de referência segura da linguagem; `*expr` é a
+  operação de dereference correspondente. Para `ptr[T]`, `*expr` permanece
+  permitido somente em `unsafe`;
+- a auditoria AUD.0–AUD.5 possui evidência AMIR determinística para loans,
+  holders, escapes e perdas de origem. Retornos diretos são suportados por
+  `ReturnBorrowSummary`; BV.1 adicionou múltiplas origens, BV.2 propagou holders
+  estruturais e BV.3 publicou as APIs de `[]T` e `String`;
+- `std.core.pointer` expõe somente identidade segura. Aritmética, leitura e
+  escrita de ponteiros permanecem intrínsecos `unsafe`;
+- aritmética checked de `int` testa limites antes da operação e deriva os
+  limites da largura do target.
+
+Ainda impedem a promoção de toda `SL_S-Core` para Gold: allocator genérico real,
+política uniforme de OOM nas coleções, drop de payloads não triviais e cobertura
+nativa dos targets oficialmente publicados. `String.pushStr` já é fallible e
+mantém o valor original em overflow/OOM.
+O alias histórico `std.core.ptr` foi removido porque oferecia aritmética de
+ponteiro através de uma função aparentemente segura; uma compatibilidade futura
+só pode voltar junto de funções públicas `unsafe` no contrato da linguagem.
 
 ## Futuro e Próximos Passos
 

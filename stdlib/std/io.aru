@@ -1,12 +1,105 @@
 module std.io
 
-/// experimental — not Minimal 0.1 (use prelude `import io` instead).
-///
-/// Thin SL_S OS I/O surface scaffold. Minimal demos use prelude `io.println`.
+/// Standard I/O error categories, avoiding stringly-typed error messages.
+public enum IoErrorKind {
+    NotFound,
+    PermissionDenied,
+    AlreadyExists,
+    WouldBlock,
+    InvalidInput,
+    BrokenPipe,
+    UnexpectedEof,
+    Other,
+}
+
+/// Structured I/O error carrying the category kind and the OS error code.
+public struct IoError {
+    kind: IoErrorKind
+    os_code: int
+}
+
+/// Creates a new `IoError`.
+public func newIoError(kind: IoErrorKind, os_code: int): IoError {
+    return IoError {
+        kind: kind,
+        os_code: os_code,
+    }
+}
+
+/// Interface for reading bytes from a stream into a borrowed buffer.
+public interface Read {
+    func read(self: mut ref Self, buf: mut ref []u8): Result<uint, IoError>
+}
+
+/// Interface for writing bytes to a stream sink.
+public interface Write {
+    func write(self: mut ref Self, buf: []u8): Result<uint, IoError>
+    func flush(self: mut ref Self): Result<bool, IoError>
+}
+
+/// Interface for streams that provide an internal buffer for efficient reads.
+public interface BufRead {
+    func fillBuf(self: mut ref Self): Result<uint, IoError>
+    func consume(self: mut ref Self, amt: uint): void
+}
+
+/// A buffered reader wrapper providing in-memory staging for stream inputs.
+public struct BufReader<R> {
+    inner: R
+    pos: uint
+    cap: uint
+}
+
+/// Creates a new `BufReader` wrapping `inner`.
+public func newBufReader<R>(inner: R): BufReader<R> {
+    return BufReader<R> {
+        inner: inner,
+        pos: 0,
+        cap: 0,
+    }
+}
+
+/// A buffered writer wrapper providing in-memory batching for stream outputs.
+public struct BufWriter<W> {
+    inner: W
+    buffered_count: uint
+}
+
+/// Creates a new `BufWriter` wrapping `inner`.
+public func newBufWriter<W>(inner: W): BufWriter<W> {
+    return BufWriter<W> {
+        inner: inner,
+        buffered_count: 0,
+    }
+}
 
 extern "C" {
     /// Write UTF-8 bytes to stdout (no trailing newline).
     func write(buf: str): void
     /// Write UTF-8 bytes to stderr (no trailing newline).
     func eprint(buf: str): void
+}
+
+/// Standard output stream handle.
+public struct Stdout {}
+
+/// Standard error stream handle.
+public struct Stderr {}
+
+/// Standard input stream handle.
+public struct Stdin {}
+
+/// Returns a handle to stdout.
+public func stdout(): Stdout {
+    return Stdout {}
+}
+
+/// Returns a handle to stderr.
+public func stderr(): Stderr {
+    return Stderr {}
+}
+
+/// Returns a handle to stdin.
+public func stdin(): Stdin {
+    return Stdin {}
 }

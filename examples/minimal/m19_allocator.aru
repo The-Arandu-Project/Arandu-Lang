@@ -5,17 +5,17 @@ module examples.minimal.m19_allocator
 import std.alloc.allocator_api as aapi
 
 func work(): Result<int, aapi.AllocError> {
-    let p = aapi.global_alloc(16 as u64)?
-    let q = aapi.global_realloc(p, 16 as u64, 32 as u64)?
-    aapi.global_dealloc(q, 32 as u64)
+    let p = aapi.globalAlloc(16)?
+    let q = aapi.globalRealloc(p, 16, 32)?
+    aapi.globalDealloc(q, 32)
 
-    let mut arena = aapi.bump_new(64 as u64)?
-    let _a = aapi.bump_alloc(arena, 8 as u64, 8 as u64)?
-    let _b = aapi.bump_alloc(arena, 8 as u64, 8 as u64)?
-    let rem = aapi.bump_remaining(arena) as int
-    aapi.bump_reset(arena)
-    let rem2 = aapi.bump_remaining(arena) as int
-    aapi.bump_destroy(arena)
+    let mut arena = aapi.bumpNew(64)?
+    let _a = aapi.bumpAlloc(arena, 8, 8)?
+    let _b = aapi.bumpAlloc(arena, 8, 8)?
+    let rem = aapi.bumpRemaining(arena) as int
+    aapi.bumpReset(arena)
+    let rem2 = aapi.bumpRemaining(arena) as int
+    aapi.bumpDestroy(arena)
     // 48 + 64 = 112
     return Result.Ok(rem + rem2)
 }

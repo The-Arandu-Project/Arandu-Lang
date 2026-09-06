@@ -1,11 +1,90 @@
 module std.fs
 
-/// experimental — not Minimal 0.1
-///
-/// Thin SL_S filesystem scaffold (declarations only; host ABI not Minimal-complete).
-/// Do not use from `arandu new` templates. Track: PROMOTE when hosts land.
+/// Options for opening and creating files.
+public struct OpenOptions {
+    read: bool
+    write: bool
+    create: bool
+    truncate: bool
+    append: bool
+}
+
+/// Creates default `OpenOptions` configured for reading.
+public func readOnly(): OpenOptions {
+    return OpenOptions {
+        read: true,
+        write: false,
+        create: false,
+        truncate: false,
+        append: false,
+    }
+}
+
+/// Creates default `OpenOptions` configured for writing (create and truncate).
+public func writeOnly(): OpenOptions {
+    return OpenOptions {
+        read: false,
+        write: true,
+        create: true,
+        truncate: true,
+        append: false,
+    }
+}
+
+/// An open file handle wrapping an OS file descriptor.
+public struct File {
+    fd: int
+}
 
 extern "C" {
-    /// Returns true if `path` exists (host ABI TBD).
     func exists(path: str): bool
+    func ar_fs_open(path: str, flags: int, mode: int): int
+    func ar_fs_read(fd: int, buf: ptr[u8], count: uint): int
+    func ar_fs_write(fd: int, buf: ptr[u8], count: uint): int
+    func ar_fs_close(fd: int): int
+}
+
+/// Returns `true` if `path` exists on the host filesystem.
+public func fileExists(path: str): bool {
+    unsafe {
+        return exists(path)
+    }
+}
+
+/// Closes the file descriptor.
+public func File.close(self: mut ref File): void {
+    if self.fd >= 0 {
+        unsafe {
+            ar_fs_close(self.fd)
+        }
+        self.fd = -1
+    }
+}
+
+/// Metadata information about a file or directory.
+public struct Metadata {
+    file_size: uint
+    is_dir: bool
+    is_file: bool
+    readonly: bool
+}
+
+/// Returns the size of the file in bytes.
+public func Metadata.size(self: ref Metadata): uint {
+    return self.file_size
+}
+
+/// Returns `true` if this metadata describes a directory.
+public func Metadata.isDir(self: ref Metadata): bool {
+    return self.is_dir
+}
+
+/// Returns `true` if this metadata describes a regular file.
+public func Metadata.isFile(self: ref Metadata): bool {
+    return self.is_file
+}
+
+/// Returns `true` if this file is read-only.
+public func Metadata.isReadonly(self: ref Metadata): bool {
+    return self.readonly
 }

@@ -98,7 +98,7 @@ pub fn parse_block_tokens(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>) -> Option
             let close = cur.bump()?;
             return Some(Block {
                 span: ctx.span(start, close.start + close.len),
-                statements,
+                statements: ctx.pool.alloc_stmt_list(&statements),
             });
         }
         if cur.at_end() {
@@ -166,7 +166,7 @@ pub fn parse_stmt_tokens(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>) -> Option<
         _ => {
             // expr stmt
             let expr = try_hand_lower_expr(ctx, cur, 0)?;
-            let _ = cur.eat(TokenKind::Semicolon);
+            let has_semi = cur.eat(TokenKind::Semicolon);
             let end = ctx.pool.expr_span(expr).end;
             let span = ctx.span(start, end);
             if matches!(
@@ -175,7 +175,11 @@ pub fn parse_stmt_tokens(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>) -> Option<
             ) {
                 Some(ctx.pool.alloc_stmt(Stmt::Match { span, expr }))
             } else {
-                Some(ctx.pool.alloc_stmt(Stmt::Expr { span, expr }))
+                Some(ctx.pool.alloc_stmt(Stmt::Expr {
+                    span,
+                    expr,
+                    has_semi,
+                }))
             }
         }
     }
@@ -199,11 +203,12 @@ fn lower_ident_stmt(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>, start: u32) -> 
         }
     }
     let expr = try_hand_lower_expr(ctx, cur, 0)?;
-    let _ = cur.eat(TokenKind::Semicolon);
+    let has_semi = cur.eat(TokenKind::Semicolon);
     let end = ctx.pool.expr_span(expr).end;
     Some(ctx.pool.alloc_stmt(Stmt::Expr {
         span: ctx.span(start, end),
         expr,
+        has_semi,
     }))
 }
 
@@ -373,6 +378,27 @@ fn parse_condition(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>) -> Option<Condit
             .map(|t| t.start + t.len)
             .unwrap_or(cond_toks[0].start),
     );
+    if matches!(cond_toks[0].kind, TokenKind::KwLet)
+        && let Some(eq_idx) = cond_toks
+            .iter()
+            .position(|t| matches!(t.kind, TokenKind::Equal))
+    {
+        let mut pcur = Cursor::new(&cond_toks[1..eq_idx]);
+        let pattern = parse_pattern(ctx, &mut pcur)?;
+        if !pcur.at_end() {
+            return None;
+        }
+        let mut ecur = Cursor::new(&cond_toks[eq_idx + 1..]);
+        let expr = try_hand_lower_expr(ctx, &mut ecur, 0)?;
+        if !ecur.at_end() {
+            return None;
+        }
+        return Some(Condition::Is {
+            span,
+            expr,
+            pattern,
+        });
+    }
     if let Some(is_idx) = cond_toks
         .iter()
         .position(|t| matches!(t.kind, TokenKind::KwIs))
@@ -430,7 +456,7 @@ fn lower_if(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>, start: u32) -> Option<S
             let nested = lower_if(ctx, cur, cur.peek()?.start)?;
             Some(Block {
                 span: ctx.pool.stmt_span(nested),
-                statements: vec![nested],
+                statements: ctx.pool.alloc_stmt_list(&[nested]),
             })
         } else {
             Some(parse_block_tokens(ctx, cur)?)

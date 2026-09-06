@@ -13,10 +13,10 @@ pub(crate) fn register_prelude(checker: &mut TypeChecker<'_>, _program: &Program
     let result_str_err = checker.intern(ArType::Result(str_id, err_literal_id));
     let result_void_err = checker.intern(ArType::Result(void_id, err_literal_id));
 
-    let println_ty = ArType::Func(vec![str_id], void_id);
-    let create_ty = ArType::Func(vec![str_id], result_str_err);
-    let remove_ty = ArType::Func(vec![str_id], result_void_err);
-    let err_new_ty = ArType::Func(vec![str_id], err_literal_id);
+    let println_ty = ArType::func(&[str_id], void_id, &checker.type_info.type_interner);
+    let create_ty = ArType::func(&[str_id], result_str_err, &checker.type_info.type_interner);
+    let remove_ty = ArType::func(&[str_id], result_void_err, &checker.type_info.type_interner);
+    let err_new_ty = ArType::func(&[str_id], err_literal_id, &checker.type_info.type_interner);
 
     for (module, members_with_types) in [
         (

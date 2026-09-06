@@ -101,7 +101,7 @@ fn thread_block(func: &mut AmirFunc, bid: BlockId) -> bool {
 fn resolve_goto_chain(func: &AmirFunc, mut block: BlockId) -> BlockId {
     loop {
         let b = func.block(block);
-        if !b.statements.is_empty() || !b.params.is_empty() {
+        if !b.statements.is_empty() || !func.block_params(b.params).is_empty() {
             return block;
         }
         match &b.terminator {
@@ -155,7 +155,7 @@ fn merge_block_candidate(
     }
 
     // Gate 2: successor phis/block-params cannot be dropped on the floor.
-    if !func.block(succ).params.is_empty() {
+    if !func.block_params(func.block(succ).params).is_empty() {
         return Ok(false);
     }
 
@@ -287,6 +287,7 @@ fn remove_unreachable_blocks(
     }
 
     let mut new_blocks: Vec<AmirBasicBlock> = Vec::with_capacity(reachable_count);
+    let mut new_block_params: Vec<crate::amir::BlockParam> = Vec::new();
     for old in 0..n {
         if !reachable[old] {
             continue;
@@ -299,10 +300,13 @@ fn remove_unreachable_blocks(
             &mut func.blocks[old].terminator,
             AmirTerminator::Unreachable,
         );
+        let param_start = new_block_params.len();
+        new_block_params.extend_from_slice(func.block_params(func.blocks[old].params));
+        let param_len = new_block_params.len() - param_start;
         new_blocks.push(AmirBasicBlock {
             id: new_id,
             statements: func.blocks[old].statements,
-            params: std::mem::take(&mut func.blocks[old].params),
+            params: DenseRange::new(param_start, param_len),
             terminator: remap_terminator(old_term, &old_to_new),
         });
     }
@@ -334,6 +338,7 @@ fn remove_unreachable_blocks(
     }
 
     func.blocks = new_blocks;
+    func.block_params = new_block_params;
     func.stmts = new_stmts;
 
     for (block, range) in func.blocks.iter_mut().zip(new_ranges) {
@@ -462,7 +467,7 @@ mod tests {
         AmirBasicBlock {
             id: BlockId::from_usize(id),
             statements: range,
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Return,
         }
     }
@@ -477,6 +482,7 @@ mod tests {
             locals: Vec::new(),
             temps: vec![int_temp(0)],
             blocks,
+            block_params: Vec::new(),
             stmts,
             cfg,
         }
@@ -492,7 +498,7 @@ mod tests {
                 AmirBasicBlock {
                     id: bbid(0),
                     statements: DenseRange::empty(),
-                    params: Vec::new(),
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Goto {
                         target: bbid(1),
                         args: Vec::new(),
@@ -501,7 +507,7 @@ mod tests {
                 AmirBasicBlock {
                     id: bbid(1),
                     statements: DenseRange::empty(),
-                    params: Vec::new(),
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Goto {
                         target: bbid(2),
                         args: Vec::new(),
@@ -558,7 +564,7 @@ mod tests {
                 AmirBasicBlock {
                     id: bbid(0),
                     statements: DenseRange::new(0, 1),
-                    params: Vec::new(),
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Goto {
                         target: bbid(1),
                         args: Vec::new(),
@@ -567,7 +573,7 @@ mod tests {
                 AmirBasicBlock {
                     id: bbid(1),
                     statements: DenseRange::new(1, 1),
-                    params: Vec::new(),
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Return,
                 },
             ],
@@ -612,7 +618,7 @@ mod tests {
                 AmirBasicBlock {
                     id: bbid(0),
                     statements: DenseRange::empty(),
-                    params: Vec::new(),
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Goto {
                         target: bbid(1),
                         args: Vec::new(),
@@ -655,7 +661,7 @@ mod tests {
                 AmirBasicBlock {
                     id: bbid(0),
                     statements: DenseRange::empty(),
-                    params: Vec::new(),
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Suspend {
                         future: AmirOperand::Copy(TempId::from_usize(0)),
                         resume: bbid(1),
@@ -665,19 +671,21 @@ mod tests {
                 AmirBasicBlock {
                     id: bbid(1),
                     statements: DenseRange::empty(),
-                    params: vec![crate::amir::BlockParam {
-                        id: TempId::from_usize(2),
-                        local: LocalId::from_usize(0),
-                        ty: intern_ty(ArType::Primitive(Primitive::Int)),
-                        from: None,
-                        moved: false,
-                    }],
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Return,
                 },
             ],
             st,
         );
         func.temps = vec![int_temp(0), int_temp(1), int_temp(2)];
+        func.block_params = vec![crate::amir::BlockParam {
+            id: TempId::from_usize(2),
+            local: LocalId::from_usize(0),
+            ty: intern_ty(ArType::Primitive(Primitive::Int)),
+            from: None,
+            moved: false,
+        }];
+        func.blocks[1].params = DenseRange::new(0, 1);
         func.cfg = compute_cfg_edges(&func.blocks);
 
         let bump = bumpalo::Bump::new();
@@ -691,7 +699,7 @@ mod tests {
             ),
             "Suspend frontier must survive simplify_cfg"
         );
-        assert!(!func.block(bbid(1)).params.is_empty());
+        assert!(!func.block_params(func.block(bbid(1)).params).is_empty());
     }
 
     /// Goto with jump args into a param block is not fallthrough — refuse merge.
@@ -703,7 +711,7 @@ mod tests {
                 AmirBasicBlock {
                     id: bbid(0),
                     statements: DenseRange::empty(),
-                    params: Vec::new(),
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Goto {
                         target: bbid(1),
                         args: vec![AmirOperand::Copy(TempId::from_usize(0))],
@@ -712,19 +720,21 @@ mod tests {
                 AmirBasicBlock {
                     id: bbid(1),
                     statements: DenseRange::empty(),
-                    params: vec![crate::amir::BlockParam {
-                        id: TempId::from_usize(1),
-                        local: LocalId::from_usize(0),
-                        ty: intern_ty(ArType::Primitive(Primitive::Int)),
-                        from: None,
-                        moved: false,
-                    }],
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Return,
                 },
             ],
             st,
         );
         func.temps = vec![int_temp(0), int_temp(1)];
+        func.block_params = vec![crate::amir::BlockParam {
+            id: TempId::from_usize(1),
+            local: LocalId::from_usize(0),
+            ty: intern_ty(ArType::Primitive(Primitive::Int)),
+            from: None,
+            moved: false,
+        }];
+        func.blocks[1].params = DenseRange::new(0, 1);
         func.cfg = compute_cfg_edges(&func.blocks);
         let bump = bumpalo::Bump::new();
         let _ = simplify_cfg(&mut func, &bump).unwrap();
@@ -745,7 +755,7 @@ mod tests {
                 AmirBasicBlock {
                     id: bbid(0),
                     statements: DenseRange::empty(),
-                    params: Vec::new(),
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Goto {
                         target: bbid(1),
                         args: Vec::new(),
@@ -754,7 +764,7 @@ mod tests {
                 AmirBasicBlock {
                     id: bbid(1),
                     statements: DenseRange::empty(),
-                    params: Vec::new(),
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Goto {
                         target: bbid(2),
                         args: Vec::new(),
@@ -784,7 +794,7 @@ mod tests {
                 AmirBasicBlock {
                     id: bbid(0),
                     statements: shared,
-                    params: Vec::new(),
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Goto {
                         target: bbid(1),
                         args: Vec::new(),
@@ -793,7 +803,7 @@ mod tests {
                 AmirBasicBlock {
                     id: bbid(1),
                     statements: shared,
-                    params: Vec::new(),
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Return,
                 },
             ],

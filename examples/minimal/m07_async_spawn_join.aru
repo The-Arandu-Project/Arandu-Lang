@@ -1,13 +1,13 @@
 module examples.minimal.m07_async_spawn_join
 
-import std.runtime as rt
+import std.runtime.executor as rt
 
 async func answer(): int {
     return 42
 }
 
 func main(): int {
-    let ex = rt.new_sync_executor()
+    let ex = rt.newSyncExecutor()
     let h = rt.spawn(ex, answer())
     return rt.join(ex, h)
 }

@@ -320,7 +320,11 @@ func main() {
 "#;
         let program = arandu_parser::parse(src).expect("parse failed");
         let resolution = arandu_resolve::resolve_for_test(0, &program);
-        let mut tc = crate::passes::type_checker::type_check(resolution, &program);
+        let mut tc = crate::passes::type_checker::type_check(
+            resolution,
+            &program,
+            arandu_typeck::type_checker::TargetInfo { pointer_width: 64 },
+        );
         assert!(
             tc.diagnostics.is_empty(),
             "type check failed: {:?}",
@@ -354,7 +358,11 @@ func main() {
 
         let program = arandu_parser::parse(&src).expect("parse failed");
         let resolution = arandu_resolve::resolve_for_test(0, &program);
-        let mut tc = crate::passes::type_checker::type_check(resolution, &program);
+        let mut tc = crate::passes::type_checker::type_check(
+            resolution,
+            &program,
+            arandu_typeck::type_checker::TargetInfo { pointer_width: 64 },
+        );
         assert!(
             tc.diagnostics.is_empty(),
             "type check failed: {:?}",

@@ -1,12 +1,38 @@
-// arandu_core::pointer — Minimal 0.1 **canonical** pointer helpers.
+// arandu_core::pointer — Minimal 0.1 canonical pointer helpers.
 //
 // Layer: thin wrappers over `std.core.mem` intrinsics (no heap).
 
 module std.core.pointer
 
-import std.core.mem as mem
-
-/// Pointer arithmetic: advance `p` by `count` elements of `T`.
-public func offset<T>(p: ptr[T], count: i32): ptr[T] {
-    return mem.ptrOffset<T>(p, count)
+/// Returns a null pointer (`nil`) typed as `ptr[T]`.
+///
+/// # Examples
+/// ```arandu
+/// let p = pointer.null<int>()
+/// pointer.isNull(p) // true
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func null<T>(): ptr[T]? {
+    return nil
 }
+
+/// Returns `true` if the pointer `p` is null (`nil`).
+///
+/// # Examples
+/// ```arandu
+/// let p = pointer.null<int>()
+/// pointer.isNull(p) // true
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func isNull<T>(p: ptr[T]?): bool {
+    let nullp: ptr[T]? = nil
+    return p == nullp
+}
+
+// Dereference and pointer arithmetic intentionally remain in `std.core.mem`.
+// Those operations are compiler intrinsics and require explicit acknowledgement
+// of validity, alignment, and lifetime invariants via `unsafe` blocks.

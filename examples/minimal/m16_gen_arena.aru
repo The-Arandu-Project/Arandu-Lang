@@ -6,7 +6,7 @@ import std.alloc.gen_arena as arena
 
 func main(): int {
     let mut a = arena.new<int>()
-    if !arena.is_empty(a) {
+    if !arena.isEmpty(a) {
         return 90
     }
 
@@ -85,7 +85,7 @@ func main(): int {
     // 10+40+30+3 = 83
     let sum = g0b + g3 + g2b + (arena.len(a) as int)
     arena.destroy(a)
-    if !arena.is_empty(a) {
+    if !arena.isEmpty(a) {
         return 11
     }
     return sum

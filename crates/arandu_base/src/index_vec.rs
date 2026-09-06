@@ -176,6 +176,7 @@ macro_rules! newtype_index {
             #[must_use]
             #[inline]
             pub const fn from_usize(v: usize) -> Self {
+                debug_assert!(v <= u32::MAX as usize, "index overflow for newtype_index");
                 Self(v as u32)
             }
         }
@@ -188,7 +189,7 @@ macro_rules! newtype_index {
 
             #[inline]
             fn from_usize(value: usize) -> Self {
-                Self(value as u32)
+                Self::from_usize(value)
             }
         }
     };
@@ -217,5 +218,18 @@ mod tests {
         let range = vec.push_many([2, 3, 4]);
         assert_eq!(range, TestId(1)..TestId(4));
         assert_eq!(vec.as_slice(), &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    #[cfg_attr(
+        debug_assertions,
+        should_panic(expected = "index overflow for newtype_index")
+    )]
+    fn from_usize_overflow_panics_in_debug() {
+        if !cfg!(debug_assertions) {
+            return;
+        }
+        let _ = TestId::from_usize((u32::MAX as usize) + 1);
     }
 }

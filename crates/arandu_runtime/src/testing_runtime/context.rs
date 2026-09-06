@@ -118,7 +118,12 @@ pub fn init_test_context(id: &str, seed: u64, temp_root: Option<PathBuf>) {
     let root = temp_root.unwrap_or_else(|| {
         let default_dir =
             std::env::temp_dir().join(format!("arandu-test-ctx-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&default_dir);
+        if let Err(err) = std::fs::create_dir_all(&default_dir) {
+            eprintln!(
+                "failed to create test context dir {}: {err}",
+                default_dir.display()
+            );
+        }
         default_dir
     });
     let ctx = TestContext::new(id.to_string(), seed, root);

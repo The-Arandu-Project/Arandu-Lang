@@ -87,22 +87,30 @@ pub fn unify(a: &ArType, b: &ArType, interner: &TypeInterner) -> bool {
         (ArType::Primitive(pa), ArType::Primitive(pb)) => pa == pb,
         (ArType::Named(id_a, args_a), ArType::Named(id_b, args_b)) => {
             id_a == id_b
-                && args_a.len() == args_b.len()
-                && args_a.iter().zip(args_b).all(|(&x, &y)| {
-                    if x == y {
-                        return true;
-                    }
-                    unify(&interner.resolve(x), &interner.resolve(y), interner)
-                })
+                && args_a.len == args_b.len
+                && interner
+                    .type_args(*args_a)
+                    .iter()
+                    .zip(interner.type_args(*args_b).iter())
+                    .all(|(&x, &y)| {
+                        if x == y {
+                            return true;
+                        }
+                        unify(&interner.resolve(x), &interner.resolve(y), interner)
+                    })
         }
         (ArType::Func(params_a, ret_a), ArType::Func(params_b, ret_b)) => {
-            params_a.len() == params_b.len()
-                && params_a.iter().zip(params_b).all(|(&x, &y)| {
-                    if x == y {
-                        return true;
-                    }
-                    unify(&interner.resolve(x), &interner.resolve(y), interner)
-                })
+            params_a.len == params_b.len
+                && interner
+                    .type_args(*params_a)
+                    .iter()
+                    .zip(interner.type_args(*params_b).iter())
+                    .all(|(&x, &y)| {
+                        if x == y {
+                            return true;
+                        }
+                        unify(&interner.resolve(x), &interner.resolve(y), interner)
+                    })
                 && (*ret_a == *ret_b
                     || unify(
                         &interner.resolve(*ret_a),
@@ -165,13 +173,17 @@ pub fn unify(a: &ArType, b: &ArType, interner: &TypeInterner) -> bool {
 
         (ArType::GenRef, ArType::GenRef) => true,
         (ArType::Tuple(types_a), ArType::Tuple(types_b)) => {
-            types_a.len() == types_b.len()
-                && types_a.iter().zip(types_b).all(|(&x, &y)| {
-                    if x == y {
-                        return true;
-                    }
-                    unify(&interner.resolve(x), &interner.resolve(y), interner)
-                })
+            types_a.len == types_b.len
+                && interner
+                    .type_args(*types_a)
+                    .iter()
+                    .zip(interner.type_args(*types_b).iter())
+                    .all(|(&x, &y)| {
+                        if x == y {
+                            return true;
+                        }
+                        unify(&interner.resolve(x), &interner.resolve(y), interner)
+                    })
         }
         (ArType::Result(ok_a, err_a), ArType::Result(ok_b, err_b)) => {
             (*ok_a == *ok_b || unify(&interner.resolve(*ok_a), &interner.resolve(*ok_b), interner))
@@ -310,19 +322,24 @@ pub fn is_assignable(actual: &ArType, expected: &ArType, interner: &TypeInterner
         (ArType::Primitive(pa), ArType::Primitive(pb)) => pa == pb,
         (ArType::Named(id_a, args_a), ArType::Named(id_b, args_b)) => {
             id_a == id_b
-                && args_a.len() == args_b.len()
-                && args_a.iter().zip(args_b).all(|(&x, &y)| {
-                    if x == y {
-                        return true;
-                    }
-                    is_assignable(&interner.resolve(x), &interner.resolve(y), interner)
-                })
+                && args_a.len == args_b.len
+                && interner
+                    .type_args(*args_a)
+                    .iter()
+                    .zip(interner.type_args(*args_b).iter())
+                    .all(|(&x, &y)| {
+                        if x == y {
+                            return true;
+                        }
+                        is_assignable(&interner.resolve(x), &interner.resolve(y), interner)
+                    })
         }
         (ArType::Func(params_a, ret_a), ArType::Func(params_b, ret_b)) => {
-            params_a.len() == params_b.len()
-                && params_a
+            params_a.len == params_b.len
+                && interner
+                    .type_args(*params_a)
                     .iter()
-                    .zip(params_b)
+                    .zip(interner.type_args(*params_b).iter())
                     .all(|(&x, &y)| unify(&interner.resolve(x), &interner.resolve(y), interner))
                 && is_assignable(
                     &interner.resolve(*ret_a),
@@ -372,13 +389,17 @@ pub fn is_assignable(actual: &ArType, expected: &ArType, interner: &TypeInterner
                 )
         }
         (ArType::Tuple(types_a), ArType::Tuple(types_b)) => {
-            types_a.len() == types_b.len()
-                && types_a.iter().zip(types_b).all(|(&x, &y)| {
-                    if x == y {
-                        return true;
-                    }
-                    is_assignable(&interner.resolve(x), &interner.resolve(y), interner)
-                })
+            types_a.len == types_b.len
+                && interner
+                    .type_args(*types_a)
+                    .iter()
+                    .zip(interner.type_args(*types_b).iter())
+                    .all(|(&x, &y)| {
+                        if x == y {
+                            return true;
+                        }
+                        is_assignable(&interner.resolve(x), &interner.resolve(y), interner)
+                    })
         }
         (ArType::Result(ok_a, err_a), ArType::Result(ok_b, err_b)) => {
             (*ok_a == *ok_b

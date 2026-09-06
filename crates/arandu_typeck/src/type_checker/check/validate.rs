@@ -256,8 +256,8 @@ fn validate_simple_stmt(checker: &mut TypeChecker<'_>, stmt: &SimpleStmt) {
 }
 
 fn validate_block(checker: &mut TypeChecker<'_>, pool: &AstPool, block: &Block) {
-    for stmt in &block.statements {
-        let stmt = pool.stmt(*stmt);
+    for &stmt in pool.stmt_list(block.statements) {
+        let stmt = pool.stmt(stmt);
         match stmt {
             Stmt::VarDecl {
                 bindings, value, ..
@@ -402,8 +402,8 @@ fn validate_decl_type_constraints(checker: &mut TypeChecker<'_>, decl: &TopLevel
                 let mut visited = rustc_hash::FxHashSet::default();
                 let mut has_infinite_cycle = false;
                 if let Some(fields) = checker.type_info.struct_fields.get(&struct_id).cloned() {
-                    for &field_tid in fields.values() {
-                        let field_ty = checker.resolve(field_tid);
+                    for f in fields.iter() {
+                        let field_ty = checker.resolve(f.ty);
                         if type_contains_named_without_indirection(
                             &field_ty,
                             struct_id,
@@ -495,7 +495,12 @@ fn validate_type_expr_constraints(
                     .get(&struct_or_enum_id)
                     .cloned()
             {
-                let arg_tys: Vec<ArType> = arg_ids.iter().map(|&id| checker.resolve(id)).collect();
+                let interner = &checker.type_info.type_interner;
+                let arg_tys: Vec<ArType> = interner
+                    .type_args(arg_ids)
+                    .iter()
+                    .map(|&id| checker.resolve(id))
+                    .collect();
                 crate::type_checker::types::interfaces::check_instantiation_constraints(
                     checker,
                     struct_or_enum_id,
@@ -549,8 +554,8 @@ fn type_contains_named_without_indirection(
             }
             if visited.insert(*id) {
                 if let Some(fields) = provider.get_struct_fields(*id) {
-                    for &field_tid in fields.values() {
-                        let field_ty = interner.resolve(field_tid);
+                    for f in fields.iter() {
+                        let field_ty = interner.resolve(f.ty);
                         if type_contains_named_without_indirection(
                             &field_ty, target_id, interner, provider, visited,
                         ) {
@@ -563,7 +568,7 @@ fn type_contains_named_without_indirection(
             false
         }
         ArType::Tuple(tys) => {
-            for &tid in tys {
+            for &tid in interner.type_args(*tys).iter() {
                 let inner = interner.resolve(tid);
                 if type_contains_named_without_indirection(
                     &inner, target_id, interner, provider, visited,

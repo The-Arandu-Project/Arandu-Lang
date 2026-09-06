@@ -18,13 +18,6 @@ impl super::HirExprId {
     }
 }
 
-impl super::HirBlockId {
-    #[allow(dead_code)]
-    pub(super) fn pretty_print_to(&self, out: &mut String, indent: usize, ctx: &HirPrettyCtx<'_>) {
-        ctx.pool.block(*self).pretty_print_to(out, indent, ctx);
-    }
-}
-
 impl super::HirDeclId {
     pub(super) fn pretty_print_to(&self, out: &mut String, indent: usize, ctx: &HirPrettyCtx<'_>) {
         ctx.pool.decl(*self).pretty_print_to(out, indent, ctx);
@@ -34,15 +27,6 @@ impl super::HirDeclId {
 impl super::HirPatternId {
     pub(super) fn pretty_print_to(&self, out: &mut String, indent: usize, ctx: &HirPrettyCtx<'_>) {
         ctx.pool.pattern(*self).pretty_print_to(out, indent, ctx);
-    }
-}
-
-impl super::HirFieldPatternId {
-    #[allow(dead_code)]
-    pub(super) fn pretty_print_to(&self, out: &mut String, indent: usize, ctx: &HirPrettyCtx<'_>) {
-        ctx.pool
-            .field_pattern(*self)
-            .pretty_print_to(out, indent, ctx);
     }
 }
 

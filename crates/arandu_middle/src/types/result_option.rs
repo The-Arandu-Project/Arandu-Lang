@@ -1,5 +1,7 @@
 use arandu_parser::{ResultType, TypeExprId, TypeName};
 
+use crate::SymbolTable;
+
 use super::ar_type::ArType;
 use super::lower::LowerCtx;
 use super::type_interner::{TypeId, TypeInterner};
@@ -49,13 +51,62 @@ pub fn result_ok_err_id(id: TypeId, interner: &TypeInterner) -> Option<(ArType, 
 }
 
 #[must_use]
-pub fn is_result_type(ty: &ArType, interner: &TypeInterner) -> bool {
-    result_ok_err(ty, interner).is_some()
+pub fn result_ok_err_ids(ty: &ArType) -> Option<(TypeId, TypeId)> {
+    match ty {
+        ArType::Result(ok, err) => Some((*ok, *err)),
+        _ => None,
+    }
+}
+
+/// Extract ok/err TypeIds from an interned `Result<T,E>` without allocating or cloning ArType trees.
+#[must_use]
+pub fn result_ok_err_id_fast(id: TypeId, interner: &TypeInterner) -> Option<(TypeId, TypeId)> {
+    interner.with_type(id, |ty| match ty {
+        ArType::Result(ok, err) => Some((*ok, *err)),
+        _ => None,
+    })
+}
+
+#[must_use]
+pub fn is_result_type(ty: &ArType, _interner: &TypeInterner) -> bool {
+    matches!(ty, ArType::Result(_, _))
 }
 
 #[must_use]
 pub fn is_option_type(ty: &ArType) -> bool {
     matches!(ty, ArType::Option(_))
+}
+
+/// Is this a `Vec<T>` nominal type? Matches both the bare `Vec` and the
+/// qualified `std.*.Vec` surfaces, requiring exactly one type argument.
+///
+/// Centralized so typeck, AMIR lowering and both backends agree on what
+/// "is a vector" means (previously copy-pasted at 7 call sites).
+#[must_use]
+pub fn is_vec_type(ty: &ArType, symbols: &SymbolTable) -> bool {
+    match ty {
+        ArType::Named(sym_id, args) => {
+            (symbols.get(*sym_id).name == "Vec" || symbols.get(*sym_id).name.ends_with(".Vec"))
+                && args.len == 1
+        }
+        _ => false,
+    }
+}
+
+/// Element type of an indexable collection (`[T]`, `[]T`, `Vec<T>`, `ptr[T]`)
+/// when the resolved base type is one of those; otherwise `None`.
+#[must_use]
+pub fn index_elem_type(
+    ty: &ArType,
+    symbols: &SymbolTable,
+    interner: &TypeInterner,
+) -> Option<TypeId> {
+    match ty {
+        ArType::Array(_, inner) | ArType::Slice(inner) | ArType::Ptr(inner) => Some(*inner),
+        ArType::Named(_, args) if is_vec_type(ty, symbols) => Some(interner.type_args(*args)[0]),
+        ArType::Ref(inner) | ArType::RefMut(inner) => Some(*inner),
+        _ => None,
+    }
 }
 
 /// Types that support the `?` operator.
@@ -73,7 +124,8 @@ pub fn try_ok_type(ty: &ArType, interner: &TypeInterner) -> Option<ArType> {
 
 #[must_use]
 pub fn is_tryable_type(ty: &ArType, interner: &TypeInterner) -> bool {
-    try_ok_type(ty, interner).is_some()
+    matches!(ty, ArType::Result(_, _) | ArType::Option(_))
+        || (matches!(ty, ArType::Nullable(_)) && !is_err_type(ty, interner))
 }
 
 pub(crate) fn lower_builtin_generic(
@@ -83,19 +135,12 @@ pub(crate) fn lower_builtin_generic(
     interner: &mut TypeInterner,
 ) -> Option<ArType> {
     let resolved_sym = ctx.resolved.type_refs.get(&name.span.into()).copied()?;
-    let global = ctx.symbols.global_scope();
-
-    let result_sym = ctx.symbols.lookup_type(global, "Result");
-    let option_sym = ctx.symbols.lookup_type(global, "Option");
-    let coroutine_sym = ctx.symbols.lookup_type(global, "Coroutine");
-    let poll_sym = ctx.symbols.lookup_type(global, "Poll");
-
     let lowered: Vec<ArType> = args
         .iter()
         .map(|&a| super::lower::lower_type_expr_ctx(a, ctx, interner))
         .collect();
 
-    if Some(resolved_sym) == result_sym && lowered.len() == 2 {
+    if ctx.symbols.is_result_type(resolved_sym) && lowered.len() == 2 {
         let mut it = lowered.into_iter();
         if let (Some(ok), Some(err)) = (it.next(), it.next()) {
             let ok_id = interner.intern(ok);
@@ -104,7 +149,7 @@ pub(crate) fn lower_builtin_generic(
         } else {
             None
         }
-    } else if Some(resolved_sym) == option_sym && lowered.len() == 1 {
+    } else if ctx.symbols.is_option_type(resolved_sym) && lowered.len() == 1 {
         let mut it = lowered.into_iter();
         if let Some(inner) = it.next() {
             let id = interner.intern(inner);
@@ -112,7 +157,7 @@ pub(crate) fn lower_builtin_generic(
         } else {
             None
         }
-    } else if Some(resolved_sym) == coroutine_sym && lowered.len() == 1 {
+    } else if ctx.symbols.is_coroutine_type(resolved_sym) && lowered.len() == 1 {
         let mut it = lowered.into_iter();
         if let Some(inner) = it.next() {
             let id = interner.intern(inner);
@@ -120,7 +165,7 @@ pub(crate) fn lower_builtin_generic(
         } else {
             None
         }
-    } else if Some(resolved_sym) == poll_sym && lowered.len() == 1 {
+    } else if ctx.symbols.is_poll_type(resolved_sym) && lowered.len() == 1 {
         let mut it = lowered.into_iter();
         if let Some(inner) = it.next() {
             let id = interner.intern(inner);
@@ -366,5 +411,111 @@ mod tests {
             scope: crate::ScopeId(0),
             resolved: Box::leak(resolved),
         }
+    }
+
+    // ── is_vec_type ──
+
+    #[test]
+    fn vec_type_with_one_arg_recognized() {
+        let i = interner();
+        let mut symbols = crate::SymbolTable::new(0);
+        let vec_sym = symbols
+            .define(
+                crate::ScopeId(0),
+                "Vec",
+                crate::SymbolKind::Struct,
+                arandu_lexer::Span::new(0, 0, 0),
+            )
+            .unwrap();
+        let ty = ArType::named(vec_sym, &[i.intern(ArType::Primitive(Primitive::Int))], &i);
+        assert!(is_vec_type(&ty, &symbols));
+    }
+
+    #[test]
+    fn qualified_vec_type_recognized() {
+        let i = interner();
+        let mut symbols = crate::SymbolTable::new(0);
+        let vec_sym = symbols
+            .define(
+                crate::ScopeId(0),
+                "std.alloc.vec.Vec",
+                crate::SymbolKind::Struct,
+                arandu_lexer::Span::new(0, 0, 0),
+            )
+            .unwrap();
+        let ty = ArType::named(vec_sym, &[i.intern(ArType::Primitive(Primitive::Int))], &i);
+        assert!(is_vec_type(&ty, &symbols));
+    }
+
+    #[test]
+    fn non_vec_named_not_recognized() {
+        let i = interner();
+        let mut symbols = crate::SymbolTable::new(0);
+        let other_sym = symbols
+            .define(
+                crate::ScopeId(0),
+                "Widget",
+                crate::SymbolKind::Struct,
+                arandu_lexer::Span::new(0, 0, 0),
+            )
+            .unwrap();
+        let ty = ArType::named(
+            other_sym,
+            &[i.intern(ArType::Primitive(Primitive::Int))],
+            &i,
+        );
+        assert!(!is_vec_type(&ty, &symbols));
+    }
+
+    #[test]
+    fn vec_with_wrong_arity_not_recognized() {
+        let i = interner();
+        let mut symbols = crate::SymbolTable::new(0);
+        let vec_sym = symbols
+            .define(
+                crate::ScopeId(0),
+                "Vec",
+                crate::SymbolKind::Struct,
+                arandu_lexer::Span::new(0, 0, 0),
+            )
+            .unwrap();
+        let int_id = i.intern(ArType::Primitive(Primitive::Int));
+        let ty = ArType::named(vec_sym, &[int_id, int_id], &i);
+        assert!(!is_vec_type(&ty, &symbols));
+    }
+
+    #[test]
+    fn non_named_not_recognized() {
+        let i = interner();
+        let symbols = crate::SymbolTable::new(0);
+        let int_id = i.intern(ArType::Primitive(Primitive::Int));
+        assert!(!is_vec_type(&ArType::Slice(int_id), &symbols));
+        assert!(!is_vec_type(&ArType::Primitive(Primitive::Int), &symbols));
+    }
+
+    // ── index_elem_type ──
+
+    #[test]
+    fn index_elem_arrays_slices_vecs() {
+        let i = interner();
+        let mut symbols = crate::SymbolTable::new(0);
+        let int_id = i.intern(ArType::Primitive(Primitive::Int));
+
+        let arr = ArType::Array(4, int_id);
+        assert_eq!(index_elem_type(&arr, &symbols, &i), Some(int_id));
+
+        let slice = ArType::Slice(int_id);
+        assert_eq!(index_elem_type(&slice, &symbols, &i), Some(int_id));
+
+        let vec_sym = symbols
+            .define(
+                crate::ScopeId(0),
+                "Vec",
+                crate::SymbolKind::Struct,
+                arandu_lexer::Span::new(0, 0, 0),
+            )
+            .unwrap();
+        let vec = ArType::named(vec_sym, &[int_id], &i);
+        assert_eq!(index_elem_type(&vec, &symbols, &i), Some(int_id));
     }
 }

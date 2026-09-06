@@ -4,6 +4,7 @@ pub mod dataflow;
 pub mod db;
 pub mod debounce;
 pub mod doc_store;
+pub mod docs;
 pub mod edit_vfs;
 pub mod explain;
 pub mod highlight;
@@ -34,6 +35,7 @@ pub use dataflow::{
 };
 pub use db::{ArandCompilerDb, DatabaseImpl, RegistryMetrics, SourceFile};
 pub use doc_store::{DocumentId, DocumentStore, OpenDocument};
+pub use docs::{file_doctests, item_doc, module_doc};
 pub use explain::{any_execute, RebuildCounts, RebuildEvent, RebuildLog};
 pub use highlight::{
     compute_highlights, file_highlights, highlights_in_range, HlKind, HlToken, MOD_DECLARATION,
@@ -58,7 +60,10 @@ pub use rename::{prepare_rename, rename_occurrences, validate_rename, RenameErro
 // re-export for tests/CLI convenience
 pub use debounce::{DebouncedMap, DEFAULT_DEBOUNCE};
 pub use edit_vfs::{EditVfs, Vfs};
-pub use passes::{file_typeck_view, item_body_typeck, lower_amir, syntax_tree, LowerAmirArtifacts};
+pub use passes::{
+    borrow_interfaces, file_typeck_view, item_body_typeck, lower_amir, syntax_tree,
+    BorrowInterfaces, LowerAmirArtifacts,
+};
 pub use stable_hash::StableHash;
 pub use stdlib::{
     import_path_on_disk, is_stdlib_root, resolve_exe_path, resolve_stdlib_root, StdlibNotFound,

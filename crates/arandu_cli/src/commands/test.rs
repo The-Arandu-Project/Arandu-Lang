@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::artifact;
 use crate::cli_error::{CliFailure, CliResult, CliSuccess};
-use crate::pipeline::{open_entry_file, pipeline_lower};
+use crate::pipeline::{ensure_host_jit_layout, open_entry_file, pipeline_lower};
 use crate::project::{self, ProjectFlags};
 use crate::test_runner;
 
@@ -53,7 +53,7 @@ pub fn project_test_sources(
         .parent()
         .ok_or_else(|| format!("entry {} has no source directory", ctx.entry_path.display()))?;
     for (directory, target) in [
-        (source_root.to_path_buf(), ctx.target_kind),
+        (source_root.to_path_buf(), ctx.target_kind.as_str()),
         (ctx.root.join("tests"), "test"),
     ] {
         if !directory.is_dir() {
@@ -83,6 +83,7 @@ pub fn project_test_sources(
     Ok(sources.into_iter().collect())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_project_test_list(
     start: &Path,
     flags: &ProjectFlags,
@@ -91,8 +92,11 @@ pub fn cmd_project_test_list(
     filter: Option<&str>,
     harness_child: bool,
     runner: &test_runner::RunnerOptions,
+    data_layout: arandu_middle::layout::DataLayout,
+    doc_tests: bool,
 ) -> CliResult {
     let mut db = arandu_query::DatabaseImpl::new();
+    db.set_target_config(data_layout);
     let ctx = project::load_project(&mut db, start, flags).map_err(|error| {
         CliFailure::operational("load test project", Some(start.to_path_buf()), error)
     })?;
@@ -123,19 +127,35 @@ pub fn cmd_project_test_list(
             ));
         }
         let text = file.text(&db);
-        for case in arandu_query::file_test_manifest(&db, file).iter() {
-            let id = format!("{}::{module}::{}", ctx.name, case.name);
-            let (line, column_utf16) = discovery_position(text, case.span.start);
-            discovered.push(DiscoveryCase {
-                id: id.clone(),
-                path: discovery_path(&ctx.root, &path),
-                line,
-                column_utf16,
-            });
-            registry.insert(arandu_codegen::testing::TestEntry {
-                id,
-                function: case.name.to_string(),
-            });
+        if doc_tests {
+            for (idx, doctest) in arandu_query::file_doctests(&db, file).iter().enumerate() {
+                let id = format!("{}::{module}::doctest_{idx}", ctx.name);
+                discovered.push(DiscoveryCase {
+                    id: id.clone(),
+                    path: discovery_path(&ctx.root, &path),
+                    line: doctest.line_offset,
+                    column_utf16: 0,
+                });
+                registry.insert(arandu_codegen::testing::TestEntry {
+                    id,
+                    function: format!("doctest_{idx}"),
+                });
+            }
+        } else {
+            for case in arandu_query::file_test_manifest(&db, file).iter() {
+                let id = format!("{}::{module}::{}", ctx.name, case.name);
+                let (line, column_utf16) = discovery_position(text, case.span.start);
+                discovered.push(DiscoveryCase {
+                    id: id.clone(),
+                    path: discovery_path(&ctx.root, &path),
+                    line,
+                    column_utf16,
+                });
+                registry.insert(arandu_codegen::testing::TestEntry {
+                    id,
+                    function: case.name.to_string(),
+                });
+            }
         }
     }
     let cases: Vec<String> = registry.iter().map(|entry| entry.id.clone()).collect();
@@ -169,7 +189,7 @@ pub fn cmd_project_test_list(
                 .unwrap_or(0);
             let temp_root = std::env::var_os("ARANDU_TEST_TEMP_ROOT").map(PathBuf::from);
             arandu_runtime::testing_runtime::init_test_context(exact, sequence, temp_root);
-            let result = run_exact_test(&ctx, exact);
+            let result = run_exact_test(&ctx, exact, data_layout);
             let outcome = arandu_runtime::testing_runtime::finish_test_context();
 
             let (status, failure) =
@@ -278,7 +298,11 @@ pub fn cmd_project_test_list(
     Ok(CliSuccess::Done)
 }
 
-pub fn run_exact_test(ctx: &project::ProjectContext, exact: &str) -> CliResult {
+pub fn run_exact_test(
+    ctx: &project::ProjectContext,
+    exact: &str,
+    data_layout: arandu_middle::layout::DataLayout,
+) -> CliResult {
     let function = exact.rsplit("::").next().unwrap_or_default();
     let sources = project_test_sources(ctx).map_err(|error| {
         CliFailure::operational("discover test sources", Some(ctx.root.clone()), error)
@@ -289,11 +313,13 @@ pub fn run_exact_test(ctx: &project::ProjectContext, exact: &str) -> CliResult {
             continue;
         }
         let mut db = arandu_query::DatabaseImpl::new();
+        db.set_target_config(data_layout);
         db.set_stdlib_root(ctx.stdlib.path.clone());
         crate::pipeline::register_stdlib_sources(&mut db, &ctx.stdlib.path);
         let (file, filepath) =
             open_entry_file(&db, &mut arandu_base::SourceRegistry::default(), &path);
         let artifacts = pipeline_lower(&db, file, &filepath);
+        ensure_host_jit_layout(data_layout)?;
         let backend = arandu_backend_cranelift::CraneliftBackend::try_new()
             .map_err(|diag| CliFailure::diagnostics([diag], Some(path.clone())))?;
         let output = arandu_semantics::CodegenBackend::compile(

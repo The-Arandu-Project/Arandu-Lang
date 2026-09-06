@@ -185,6 +185,26 @@ fn parse_type_alias() {
 }
 
 #[test]
+fn disambiguates_grouped_and_function_types() {
+    let source = concat!(
+        "module test\n",
+        "type Grouped = (int)\n",
+        "type Callback = (int, str) -> bool\n",
+        "type Factory = () -> (int)\n",
+        "type Higher = ((int) -> str, bool) -> int\n",
+    );
+    let result = parse_to_string(source).unwrap();
+    let stripped = strip_spans(&result);
+    assert!(stripped.contains("GroupType"), "{stripped}");
+    assert!(stripped.contains("FuncType"), "{stripped}");
+
+    assert!(
+        parse_to_string("module test\ntype NotATuple = (int, str)\n").is_err(),
+        "comma-separated parenthesized types require a function arrow"
+    );
+}
+
+#[test]
 fn parse_interface_decl() {
     let source = "module test\ninterface Printable {\n    func print(): void\n}\n";
     let result = parse_to_string(source).unwrap();

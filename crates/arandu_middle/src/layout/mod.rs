@@ -6,6 +6,8 @@ use crate::SymbolId;
 use crate::index_vec::IdIndex;
 use crate::types::{ArType, Primitive, TypeId, TypeInterner};
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
+use smol_str::SmolStr;
 
 /// A compact contiguous range into a dense backing table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -144,10 +146,75 @@ pub struct EnumPayloadShape {
     pub payload_ty: Option<TypeId>,
 }
 
+/// One struct field: dense metadata folding name, symbol, type and index into
+/// a single ordered entry. Replaces three parallel name-keyed maps
+/// (`struct_fields` / `struct_field_symbols` / `struct_field_indices`).
+///
+/// `symbol` is optional because resolution may not have produced a definition
+/// symbol for a malformed field; the type-based maps historically stayed
+/// populated in that case.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StructFieldInfo {
+    pub name: SmolStr,
+    pub symbol: Option<SymbolId>,
+    pub ty: TypeId,
+    pub index: usize,
+}
+
+/// Ordered field table for one struct: `fields` in declaration order plus a
+/// `by_name` index for O(1) lookups. Shared across typeck shards via `Arc`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StructFields {
+    pub fields: SmallVec<[StructFieldInfo; 6]>,
+    by_name: FxHashMap<SmolStr, usize>,
+}
+
+impl StructFields {
+    /// Empty field table.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            fields: SmallVec::new(),
+            by_name: FxHashMap::default(),
+        }
+    }
+
+    /// Build a field table from declaration-order entries, indexing by name.
+    #[must_use]
+    pub fn from_entries(entries: impl IntoIterator<Item = StructFieldInfo>) -> Self {
+        let mut table = Self::new();
+        for entry in entries {
+            table.by_name.insert(entry.name.clone(), table.fields.len());
+            table.fields.push(entry);
+        }
+        table
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.fields.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.fields.is_empty()
+    }
+
+    /// Look up a field by name.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&StructFieldInfo> {
+        self.by_name.get(name).map(|&idx| &self.fields[idx])
+    }
+
+    /// Iterate fields in declaration order.
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &StructFieldInfo> + '_ {
+        self.fields.iter()
+    }
+}
+
 /// Decoupled metadata provider to resolve struct fields and generic parameters.
 pub trait StructLayoutProvider {
-    fn get_struct_fields(&self, struct_id: SymbolId) -> Option<&FxHashMap<String, TypeId>>;
-    fn get_struct_field_indices(&self, struct_id: SymbolId) -> Option<&FxHashMap<String, usize>>;
+    fn get_struct_fields(&self, struct_id: SymbolId) -> Option<&StructFields>;
     fn get_generic_params(&self, struct_id: SymbolId) -> Option<&[SymbolId]>;
     fn get_enum_variants(&self, enum_id: SymbolId) -> Option<Vec<EnumPayloadShape>>;
 
@@ -278,11 +345,7 @@ impl LayoutEngine {
     ) -> Result<TypeLayout, LayoutError> {
         Ok(match ty {
             ArType::Primitive(p) => match p {
-                Primitive::I8
-                | Primitive::U8
-                | Primitive::Byte
-                | Primitive::Bool
-                | Primitive::Char => TypeLayout {
+                Primitive::I8 | Primitive::U8 | Primitive::Byte | Primitive::Bool => TypeLayout {
                     size: 1,
                     align: 1,
                     field_offsets: Vec::new(),
@@ -293,6 +356,11 @@ impl LayoutEngine {
                     field_offsets: Vec::new(),
                 },
                 Primitive::I32 | Primitive::U32 | Primitive::F32 => TypeLayout {
+                    size: 4,
+                    align: 4,
+                    field_offsets: Vec::new(),
+                },
+                Primitive::Char => TypeLayout {
                     size: 4,
                     align: 4,
                     field_offsets: Vec::new(),
@@ -412,11 +480,12 @@ impl LayoutEngine {
                 }
             }
             ArType::Tuple(tys) => {
+                let ty_ids = interner.type_args(*tys).to_vec();
                 let mut current_offset = 0;
                 let mut max_align = 1;
-                let mut field_offsets = Vec::with_capacity(tys.len());
+                let mut field_offsets = Vec::with_capacity(ty_ids.len());
 
-                for &ty_id in tys {
+                for &ty_id in &ty_ids {
                     let layout = self.layout_of(ty_id, interner, provider)?;
                     max_align = max_align.max(layout.align);
                     current_offset =
@@ -440,62 +509,52 @@ impl LayoutEngine {
             }
             ArType::Named(symbol_id, generic_args) => {
                 if let Some(fields_def) = provider.get_struct_fields(*symbol_id) {
-                    if let Some(indices_def) = provider.get_struct_field_indices(*symbol_id) {
-                        // Only `idx` and field TypeId are needed after the sort.
-                        let mut fields_with_indices: Vec<(usize, TypeId)> = Vec::new();
-                        for (name, &tid) in fields_def {
-                            if let Some(&idx) = indices_def.get(name) {
-                                fields_with_indices.push((idx, tid));
-                            }
-                        }
-                        fields_with_indices.sort_by_key(|x| x.0);
+                    // Field entries already carry their index; keep the sort to
+                    // stay robust against out-of-order table construction.
+                    let mut fields_with_indices: Vec<(usize, TypeId)> =
+                        fields_def.iter().map(|f| (f.index, f.ty)).collect();
+                    fields_with_indices.sort_by_key(|x| x.0);
 
-                        let generic_params = provider.get_generic_params(*symbol_id).unwrap_or(&[]);
-                        let subst: FxHashMap<SymbolId, TypeId> = generic_params
-                            .iter()
-                            .copied()
-                            .zip(generic_args.iter().copied())
-                            .collect();
+                    let generic_params = provider.get_generic_params(*symbol_id).unwrap_or(&[]);
+                    let arg_ids = interner.type_args(*generic_args);
+                    let subst: FxHashMap<SymbolId, TypeId> = generic_params
+                        .iter()
+                        .copied()
+                        .zip(arg_ids.iter().copied())
+                        .collect();
 
-                        let mut current_offset = 0;
-                        let mut max_align = 1;
-                        let mut field_offsets = Vec::with_capacity(fields_with_indices.len());
+                    let mut current_offset = 0;
+                    let mut max_align = 1;
+                    let mut field_offsets = Vec::with_capacity(fields_with_indices.len());
 
-                        for (_, tid) in fields_with_indices {
-                            let ty = interner.resolve(tid);
-                            let substituted = substitute(&ty, &subst, interner);
-                            let layout = self.layout_of_type(&substituted, interner, provider)?;
-                            max_align = max_align.max(layout.align);
-                            current_offset = self.align_up(
-                                current_offset,
-                                layout.align,
-                                LayoutOperation::FieldOffset,
-                            )?;
-                            field_offsets.push(current_offset);
-                            current_offset = self.checked_add(
-                                current_offset,
-                                layout.size,
-                                LayoutOperation::FieldOffset,
-                            )?;
-                        }
-
-                        let total_size = self.align_up(
+                    for (_, tid) in fields_with_indices {
+                        let ty = interner.resolve(tid);
+                        let substituted = substitute(&ty, &subst, interner);
+                        let layout = self.layout_of_type(&substituted, interner, provider)?;
+                        max_align = max_align.max(layout.align);
+                        current_offset = self.align_up(
                             current_offset,
-                            max_align,
-                            LayoutOperation::AggregatePadding,
+                            layout.align,
+                            LayoutOperation::FieldOffset,
                         )?;
+                        field_offsets.push(current_offset);
+                        current_offset = self.checked_add(
+                            current_offset,
+                            layout.size,
+                            LayoutOperation::FieldOffset,
+                        )?;
+                    }
 
-                        TypeLayout {
-                            size: total_size,
-                            align: max_align,
-                            field_offsets,
-                        }
-                    } else {
-                        TypeLayout {
-                            size: 0,
-                            align: 1,
-                            field_offsets: Vec::new(),
-                        }
+                    let total_size = self.align_up(
+                        current_offset,
+                        max_align,
+                        LayoutOperation::AggregatePadding,
+                    )?;
+
+                    TypeLayout {
+                        size: total_size,
+                        align: max_align,
+                        field_offsets,
                     }
                 } else if let Some(variants) = provider.get_enum_variants(*symbol_id) {
                     let tag_size = self.pointer_width();
@@ -610,10 +669,12 @@ impl LayoutEngine {
         rhs: u64,
         operation: LayoutOperation,
     ) -> Result<u64, LayoutError> {
-        let value = lhs.checked_add(rhs).ok_or(LayoutError::SizeOverflow {
-            operation,
-            limit: self.data_layout.object_size_bound(),
-        })?;
+        let value = lhs
+            .checked_add(rhs)
+            .ok_or_else(|| LayoutError::SizeOverflow {
+                operation,
+                limit: self.data_layout.object_size_bound(),
+            })?;
         self.check_object_size(value, operation)
     }
 
@@ -623,10 +684,12 @@ impl LayoutEngine {
         rhs: u64,
         operation: LayoutOperation,
     ) -> Result<u64, LayoutError> {
-        let value = lhs.checked_mul(rhs).ok_or(LayoutError::SizeOverflow {
-            operation,
-            limit: self.data_layout.object_size_bound(),
-        })?;
+        let value = lhs
+            .checked_mul(rhs)
+            .ok_or_else(|| LayoutError::SizeOverflow {
+                operation,
+                limit: self.data_layout.object_size_bound(),
+            })?;
         self.check_object_size(value, operation)
     }
 
@@ -640,10 +703,13 @@ impl LayoutEngine {
             return Err(LayoutError::InvalidAlignment { align });
         }
         let mask = align - 1;
-        let padded = value.checked_add(mask).ok_or(LayoutError::SizeOverflow {
-            operation,
-            limit: self.data_layout.object_size_bound(),
-        })? & !mask;
+        let padded = value
+            .checked_add(mask)
+            .ok_or_else(|| LayoutError::SizeOverflow {
+                operation,
+                limit: self.data_layout.object_size_bound(),
+            })?
+            & !mask;
         self.check_object_size(padded, operation)
     }
 
@@ -667,7 +733,8 @@ fn substitute(ty: &ArType, subst: &FxHashMap<SymbolId, TypeId>, interner: &TypeI
             if let Some(&concrete_id) = subst.get(id) {
                 interner.resolve(concrete_id)
             } else {
-                let new_args = args
+                let arg_ids = interner.type_args(*args).to_vec();
+                let new_args: Vec<TypeId> = arg_ids
                     .iter()
                     .map(|&arg_id| {
                         let arg_ty = interner.resolve(arg_id);
@@ -675,11 +742,13 @@ fn substitute(ty: &ArType, subst: &FxHashMap<SymbolId, TypeId>, interner: &TypeI
                         interner.lookup(&substituted_arg).unwrap_or(arg_id)
                     })
                     .collect();
-                ArType::Named(*id, new_args)
+                let range = interner.push_type_args(&new_args);
+                ArType::Named(*id, range)
             }
         }
         ArType::Func(params, ret) => {
-            let new_params = params
+            let param_ids = interner.type_args(*params).to_vec();
+            let new_params: Vec<TypeId> = param_ids
                 .iter()
                 .map(|&param_id| {
                     let param_ty = interner.resolve(param_id);
@@ -690,7 +759,8 @@ fn substitute(ty: &ArType, subst: &FxHashMap<SymbolId, TypeId>, interner: &TypeI
             let ret_ty = interner.resolve(*ret);
             let substituted_ret = substitute(&ret_ty, subst, interner);
             let new_ret = interner.lookup(&substituted_ret).unwrap_or(*ret);
-            ArType::Func(new_params, new_ret)
+            let range = interner.push_type_args(&new_params);
+            ArType::Func(range, new_ret)
         }
         ArType::Nullable(inner) => {
             let inner_ty = interner.resolve(*inner);
@@ -729,7 +799,8 @@ fn substitute(ty: &ArType, subst: &FxHashMap<SymbolId, TypeId>, interner: &TypeI
             ArType::RefMut(new_inner)
         }
         ArType::Tuple(tys) => {
-            let new_tys = tys
+            let ty_ids = interner.type_args(*tys).to_vec();
+            let new_tys: Vec<TypeId> = ty_ids
                 .iter()
                 .map(|&ty_id| {
                     let item_ty = interner.resolve(ty_id);
@@ -737,7 +808,8 @@ fn substitute(ty: &ArType, subst: &FxHashMap<SymbolId, TypeId>, interner: &TypeI
                     interner.lookup(&substituted_item).unwrap_or(ty_id)
                 })
                 .collect();
-            ArType::Tuple(new_tys)
+            let range = interner.push_type_args(&new_tys);
+            ArType::Tuple(range)
         }
         ArType::Result(ok, err) => {
             let ok_ty = interner.resolve(*ok);

@@ -548,6 +548,36 @@ impl LowerCtx<'_> {
             return Ok(tag);
         }
 
+        if let Some((_, _, tag)) = self
+            .tc
+            .type_info
+            .enum_variant_by_name(symbols, enum_id, variant)
+        {
+            return Ok(tag);
+        }
+
+        if symbols.is_option_type(enum_id) {
+            match variant {
+                "None" => return Ok(0),
+                "Some" => return Ok(1),
+                _ => {}
+            }
+        }
+        if symbols.is_result_type(enum_id) {
+            match variant {
+                "Ok" => return Ok(0),
+                "Err" => return Ok(1),
+                _ => {}
+            }
+        }
+        if symbols.is_poll_type(enum_id) {
+            match variant {
+                "Ready" => return Ok(0),
+                "Pending" => return Ok(1),
+                _ => {}
+            }
+        }
+
         // Slow fallback: resolve by name. Used when variant_symbol is None
         // (e.g. TypeTuple patterns) or when the pre-computed map was not
         // populated (should not happen in practice after collect_type_shapes).

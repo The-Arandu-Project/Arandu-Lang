@@ -1,20 +1,29 @@
 use rustc_hash::FxHashMap;
 
 use arandu_lexer::Span;
-use arandu_parser::{FuncSignature, GenericParam, TypeName, WhereItem};
+use arandu_parser::{FuncSignature, GenericParam, WhereItem};
+use smallvec::SmallVec;
 
 use super::unify;
 use super::{ArType, LowerCtx, TypeId};
-use super::{GenericSubst, TypeInterner, build_subst, substitute_type};
+use super::{GenericSubst, build_subst, substitute_type};
 use crate::passes::type_checker::TypeChecker;
+use crate::type_checker::info::InterfaceConstraint;
 use crate::{ScopeId, SymbolId, SymbolKind};
 use arandu_middle::types::lower::{lower_result_type_ctx, lower_type_expr_ctx};
 
 #[derive(Debug, Clone)]
+pub struct InterfaceMethod {
+    pub name: smol_str::SmolStr,
+    pub sig_id: crate::type_checker::types::TypeId,
+    pub generic_params: Vec<SymbolId>,
+}
+
+#[derive(Debug, Clone)]
 pub struct InterfaceInfo {
-    /// Method name → interned function type **without** receiver
-    /// (`ArType::Func` stored as `TypeId`).
-    pub methods: Vec<(smol_str::SmolStr, crate::type_checker::types::TypeId)>,
+    pub self_param: Option<SymbolId>,
+    /// Method specifications for the interface.
+    pub methods: Vec<InterfaceMethod>,
 }
 
 /// Collect interface method signatures and per-type-parameter trait constraints.
@@ -115,20 +124,43 @@ fn collect_interface(checker: &mut TypeChecker, decl: &arandu_parser::InterfaceD
         checker
             .type_info
             .generic_params
-            .insert(iface_sym, std::sync::Arc::new(type_param_symbols.clone()));
+            .insert(iface_sym, std::sync::Arc::new(type_param_symbols));
     }
+
+    let self_span = arandu_lexer::Span::new(decl.span.file_id, decl.span.start, decl.span.start);
+    let self_param = checker
+        .resolved
+        .definitions
+        .get(&crate::NodeKey::from(self_span))
+        .copied();
 
     let mut methods = Vec::new();
     for member in &decl.members {
         let sig_ty = lower_func_signature(checker, member, iface_scope);
         let sig_id = checker.intern(sig_ty);
-        methods.push((member.name.clone(), sig_id));
+        let generic_params = super::extract_generic_param_symbols(checker, &member.generic_params);
+        methods.push(InterfaceMethod {
+            name: member.name.clone(),
+            sig_id,
+            generic_params,
+        });
+        collect_decl_constraints(
+            checker,
+            &member.generic_params,
+            &member.where_clause,
+            member.span,
+            None,
+            iface_scope,
+        );
     }
 
-    checker
-        .type_info
-        .interfaces
-        .insert(iface_sym, InterfaceInfo { methods });
+    checker.type_info.interfaces.insert(
+        iface_sym,
+        InterfaceInfo {
+            self_param,
+            methods,
+        },
+    );
 
     collect_decl_constraints(
         checker,
@@ -158,7 +190,7 @@ fn lower_func_signature(checker: &mut TypeChecker, sig: &FuncSignature, scope: S
         ArType::Void
     };
     let ret_id = checker.type_info.type_interner.intern(ret);
-    ArType::Func(param_types, ret_id)
+    ArType::func(&param_types, ret_id, &checker.type_info.type_interner)
 }
 
 fn collect_decl_constraints(
@@ -169,11 +201,7 @@ fn collect_decl_constraints(
     decl_symbol: Option<SymbolId>,
     scope: ScopeId,
 ) {
-    let param_symbols = if let Some(_decl_sym) = decl_symbol {
-        super::extract_generic_param_symbols(checker, generic_params)
-    } else {
-        Vec::new()
-    };
+    let param_symbols = super::extract_generic_param_symbols(checker, generic_params);
 
     if !param_symbols.is_empty()
         && let Some(decl_sym) = decl_symbol
@@ -207,14 +235,14 @@ fn collect_decl_constraints(
             let tid = checker.type_info.type_interner.intern(def_ty);
             checker.type_info.generic_defaults.insert(param_sym, tid);
         }
-        for constraint in &gp.constraints {
-            if let Some(iface_sym) = resolve_interface_constraint(checker, constraint, scope) {
+        for &constraint in &gp.constraints {
+            if let Some(bound) = resolve_interface_constraint(checker, constraint, scope) {
                 let entry = checker
                     .type_info
                     .param_constraints
                     .entry(param_sym)
                     .or_insert_with(|| std::sync::Arc::new(Vec::new()));
-                std::sync::Arc::make_mut(entry).push(iface_sym);
+                std::sync::Arc::make_mut(entry).push(bound);
             }
         }
     }
@@ -231,14 +259,14 @@ fn collect_decl_constraints(
             ));
             continue;
         };
-        for constraint in &item.constraints {
-            if let Some(iface_sym) = resolve_interface_constraint(checker, constraint, scope) {
+        for &constraint in &item.constraints {
+            if let Some(bound) = resolve_interface_constraint(checker, constraint, scope) {
                 let entry = checker
                     .type_info
                     .param_constraints
                     .entry(param_sym)
                     .or_insert_with(|| std::sync::Arc::new(Vec::new()));
-                std::sync::Arc::make_mut(entry).push(iface_sym);
+                std::sync::Arc::make_mut(entry).push(bound);
             }
         }
     }
@@ -248,32 +276,58 @@ fn collect_decl_constraints(
 
 fn resolve_interface_constraint(
     checker: &mut TypeChecker,
-    type_name: &TypeName,
-    _scope: ScopeId,
-) -> Option<SymbolId> {
-    let key = crate::NodeKey::from(type_name.span);
+    constraint_id: arandu_parser::TypeExprId,
+    scope: ScopeId,
+) -> Option<InterfaceConstraint> {
+    let expr = checker.pool.type_expr(constraint_id);
+    let (name, args) = match expr {
+        arandu_parser::TypeExpr::Named { name, args, .. } => (name, *args),
+        _ => {
+            let span = checker.pool.type_expr_span(constraint_id);
+            checker.diagnostics.push(crate::Diagnostic::error(
+                crate::DiagCode::T011GenericConstraintNotSatisfied,
+                "expected interface name in constraint".to_string(),
+                span,
+            ));
+            return None;
+        }
+    };
+    let key = crate::NodeKey::from(name.span);
     let Some(sym) = checker.resolved.type_refs.get(&key).copied() else {
         checker.diagnostics.push(crate::Diagnostic::error(
             crate::DiagCode::N002UndefinedType,
-            format!("unknown constraint type '{}'", type_name.path.join(".")),
-            type_name.span,
+            format!("unknown constraint type '{}'", name.path.join(".")),
+            name.span,
         ));
         return None;
     };
-    match checker.symbols.get(sym).kind {
-        SymbolKind::Interface => Some(sym),
-        _ => {
-            checker.diagnostics.push(crate::Diagnostic::error(
-                crate::DiagCode::T011GenericConstraintNotSatisfied,
-                format!(
-                    "'{}' is not an interface and cannot be used as a type constraint",
-                    type_name.path.join(".")
-                ),
-                type_name.span,
-            ));
-            None
-        }
+    if checker.symbols.get(sym).kind != SymbolKind::Interface {
+        checker.diagnostics.push(crate::Diagnostic::error(
+            crate::DiagCode::T011GenericConstraintNotSatisfied,
+            format!(
+                "'{}' is not an interface and cannot be used as a type constraint",
+                name.path.join(".")
+            ),
+            name.span,
+        ));
+        return None;
     }
+    let arg_expr_ids = checker.pool.type_expr_list(args).to_vec();
+    let ctx = LowerCtx {
+        pool: checker.pool,
+        symbols: &checker.symbols,
+        scope,
+        resolved: &checker.resolved,
+    };
+    let mut type_args = SmallVec::<[TypeId; 2]>::new();
+    for arg_expr in arg_expr_ids {
+        let ty = lower_type_expr_ctx(arg_expr, &ctx, &mut checker.type_info.type_interner);
+        type_args.push(checker.type_info.type_interner.intern(ty));
+    }
+    Some(InterfaceConstraint {
+        iface_sym: sym,
+        type_args,
+    })
 }
 
 /// After monomorphic instantiation, verify each type argument satisfies its constraints.
@@ -289,11 +343,16 @@ pub(crate) fn check_instantiation_constraints(
         let Some(constraints) = constraints else {
             continue;
         };
-        for &iface_sym in constraints.iter() {
-            if !type_satisfies_interface(checker, arg_ty, iface_sym, span) {
-                let iface_name = checker.symbols.get(iface_sym).name.clone();
+        for bound in constraints.iter() {
+            if !type_satisfies_interface(checker, arg_ty, bound.iface_sym, &bound.type_args, span) {
+                let iface_name = checker
+                    .symbols
+                    .try_get(bound.iface_sym)
+                    .map(|s| s.name.to_string())
+                    .unwrap_or_else(|| "Interface".to_string());
                 let ty_display = arg_ty.display(&checker.symbols, &checker.type_info.type_interner);
-                let detail = missing_methods_note(checker, arg_ty, iface_sym);
+                let detail =
+                    missing_methods_note(checker, arg_ty, bound.iface_sym, &bound.type_args);
                 // Put the method-level root cause in the primary message (notes are easy to miss).
                 let diag = crate::Diagnostic::error(
                     crate::DiagCode::T025InterfaceNotSatisfied,
@@ -314,8 +373,9 @@ fn missing_methods_note(
     checker: &mut TypeChecker,
     concrete: &ArType,
     iface_sym: SymbolId,
+    bound_type_args: &[TypeId],
 ) -> String {
-    let missing = missing_interface_methods(checker, concrete, iface_sym);
+    let missing = missing_interface_methods(checker, concrete, iface_sym, bound_type_args);
     if missing.is_empty() {
         "required method signatures are incompatible".to_string()
     } else {
@@ -327,6 +387,7 @@ pub(crate) fn type_satisfies_interface(
     checker: &mut TypeChecker,
     concrete: &ArType,
     iface_sym: SymbolId,
+    bound_type_args: &[TypeId],
     _span: Span,
 ) -> bool {
     // Free type parameters are not concrete types. A param `A: Allocator` is an
@@ -335,11 +396,14 @@ pub(crate) fn type_satisfies_interface(
     // restates `A` (Vec, GenArena) even when constraints were well-formed.
     if let ArType::Named(id, args) = concrete
         && args.is_empty()
-        && checker.symbols.get(*id).kind == SymbolKind::TypeParam
+        && checker
+            .symbols
+            .try_get(*id)
+            .is_some_and(|s| s.kind == SymbolKind::TypeParam)
     {
         // Satisfied iff this param lists `iface_sym` among its constraints.
         if let Some(cs) = checker.type_info.param_constraints.get(id) {
-            return cs.contains(&iface_sym);
+            return cs.iter().any(|b| b.iface_sym == iface_sym);
         }
         return false;
     }
@@ -351,27 +415,23 @@ pub(crate) fn type_satisfies_interface(
         return false;
     };
 
-    let iface_subst = interface_subst_for_concrete(checker, iface_sym, concrete);
-
-    // We can iterate and borrow interner mutably inside the loop
-    // Collect (name, required TypeId) first — avoids holding borrow across resolve.
     let method_specs: Vec<_> = iface.methods.clone();
-    for (method, required_id) in method_specs {
+    for m in method_specs {
+        let method = m.name;
+        let required_id = m.sig_id;
         let required = checker.resolve(required_id);
         let required_inst =
-            substitute_type(&required, &iface_subst, &checker.type_info.type_interner);
+            instantiate_interface_method(checker, iface_sym, bound_type_args, concrete, &required);
         let Some(provided) = lookup_method_type(checker, type_id, &method) else {
             return false;
         };
         // Interface may list `self: Self`; impl methods always have a receiver.
         // Compare payloads only (TYP.2).
-        let required_stripped = strip_interface_receiver(required_inst, checker);
+        let self_param = iface.self_param;
+        let required_stripped =
+            strip_interface_receiver(required_inst, checker, Some(concrete), self_param);
         let provided_stripped = strip_impl_receiver(provided, checker);
-        if !method_types_compatible(
-            &required_stripped,
-            &provided_stripped,
-            &checker.type_info.type_interner,
-        ) {
+        if !method_types_compatible(&required_stripped, &provided_stripped, checker) {
             return false;
         }
     }
@@ -383,6 +443,7 @@ fn missing_interface_methods(
     checker: &mut TypeChecker,
     concrete: &ArType,
     iface_sym: SymbolId,
+    bound_type_args: &[TypeId],
 ) -> Vec<String> {
     let Some(iface) = checker.type_info.interfaces.get(&iface_sym) else {
         return vec!["<interface not collected>".to_string()];
@@ -391,27 +452,29 @@ fn missing_interface_methods(
         return vec!["<non-nominal type>".to_string()];
     };
 
-    let iface_subst = interface_subst_for_concrete(checker, iface_sym, concrete);
-
+    let self_param = iface.self_param;
     let mut missing = Vec::new();
     let method_specs: Vec<_> = iface.methods.clone();
-    for (method, required_id) in method_specs {
+    for m in method_specs {
+        let method = m.name;
+        let required_id = m.sig_id;
         let required = checker.resolve(required_id);
         let required_inst =
-            substitute_type(&required, &iface_subst, &checker.type_info.type_interner);
+            instantiate_interface_method(checker, iface_sym, bound_type_args, concrete, &required);
         let Some(provided) = lookup_method_type(checker, type_id, &method) else {
             let mut similar = Vec::new();
-            if let Some(methods) = checker.symbols.associated_members.get(&type_id) {
-                let max_distance = if method.len() <= 4 { 2 } else { 3 };
-                for prov_name in methods.keys() {
-                    let dist = if prov_name.to_lowercase() == method.to_lowercase() {
-                        0
-                    } else {
-                        strsim::levenshtein(method.as_str(), prov_name)
-                    };
-                    if dist <= max_distance {
-                        similar.push(prov_name.to_string());
-                    }
+            let max_distance = if method.len() <= 4 { 2 } else { 3 };
+            for (type_sym, prov_name) in checker.symbols.associated_members.keys() {
+                if *type_sym != type_id {
+                    continue;
+                }
+                let dist = if prov_name.to_lowercase() == method.to_lowercase() {
+                    0
+                } else {
+                    strsim::levenshtein(method.as_str(), prov_name)
+                };
+                if dist <= max_distance {
+                    similar.push(prov_name.to_string());
                 }
             }
             if !similar.is_empty() {
@@ -424,13 +487,10 @@ fn missing_interface_methods(
             }
             continue;
         };
-        let required_stripped = strip_interface_receiver(required_inst, checker);
+        let required_stripped =
+            strip_interface_receiver(required_inst, checker, Some(concrete), self_param);
         let provided_stripped = strip_impl_receiver(provided, checker);
-        if !method_types_compatible(
-            &required_stripped,
-            &provided_stripped,
-            &checker.type_info.type_interner,
-        ) {
+        if !method_types_compatible(&required_stripped, &provided_stripped, checker) {
             missing.push(format!("{method} (signature mismatch)"));
         }
     }
@@ -442,6 +502,48 @@ fn concrete_type_id(ty: &ArType) -> Option<SymbolId> {
         ArType::Named(id, _) => Some(*id),
         _ => None,
     }
+}
+
+pub(crate) fn peel_base_type(checker: &TypeChecker<'_>, mut ty: ArType) -> ArType {
+    for _ in 0..4 {
+        match ty {
+            ArType::Nullable(inner)
+            | ArType::Ref(inner)
+            | ArType::RefMut(inner)
+            | ArType::Ptr(inner) => {
+                ty = checker.resolve(inner);
+            }
+            other => return other,
+        }
+    }
+    ty
+}
+
+pub(crate) fn instantiate_interface_method(
+    checker: &TypeChecker<'_>,
+    iface_sym: SymbolId,
+    bound_type_args: &[TypeId],
+    receiver_ty: &ArType,
+    method_ty: &ArType,
+) -> ArType {
+    let base_recv = peel_base_type(checker, receiver_ty.clone());
+    let mut subst = GenericSubst::default();
+    if let Some(iface_params) = checker.type_info.generic_params.get(&iface_sym) {
+        if !bound_type_args.is_empty() {
+            for (&param_sym, &arg_tid) in iface_params.iter().zip(bound_type_args.iter()) {
+                subst.push((param_sym, checker.resolve(arg_tid)));
+            }
+        } else {
+            let concrete_subst = interface_subst_for_concrete(checker, iface_sym, &base_recv);
+            subst.extend(concrete_subst);
+        }
+    }
+    if let Some(iface_info) = checker.type_info.interfaces.get(&iface_sym)
+        && let Some(self_sym) = iface_info.self_param
+    {
+        subst.push((self_sym, base_recv));
+    }
+    substitute_type(method_ty, &subst, &checker.type_info.type_interner)
 }
 
 fn interface_subst_for_concrete(
@@ -456,16 +558,14 @@ fn interface_subst_for_concrete(
         return GenericSubst::default();
     }
     if let ArType::Named(_, args) = concrete
-        && args.len() == iface_params.len()
+        && args.len as usize == iface_params.len()
     {
-        let resolved_args: Vec<ArType> = args
+        let arg_ids = checker.type_info.type_interner.type_args(*args);
+        let resolved_args: Vec<ArType> = arg_ids
             .iter()
             .map(|&a| checker.type_info.type_interner.resolve(a))
             .collect();
         return build_subst(iface_params, &resolved_args);
-    }
-    if iface_params.len() == 1 {
-        return build_subst(iface_params, std::slice::from_ref(concrete));
     }
     GenericSubst::default()
 }
@@ -475,18 +575,29 @@ fn lookup_method_type(checker: &TypeChecker, type_id: SymbolId, method: &str) ->
     checker.decl_type(sym)
 }
 
-/// Drop leading `Self` / `&Self` / `&mut Self` from an interface method formal.
-fn strip_interface_receiver(ty: ArType, checker: &TypeChecker<'_>) -> ArType {
+/// Drop leading `Self` / `&Self` / `&mut Self` (or concrete receiver type) from an interface method formal.
+fn strip_interface_receiver(
+    ty: ArType,
+    checker: &TypeChecker<'_>,
+    concrete_base: Option<&ArType>,
+    self_param: Option<SymbolId>,
+) -> ArType {
     let ArType::Func(params, ret) = ty else {
         return ty;
     };
-    if params.is_empty() {
-        return ArType::Func(params, ret);
+    let params_ids = checker.type_info.type_interner.type_args(params);
+    if params_ids.is_empty() {
+        return ArType::func(&params_ids, ret, &checker.type_info.type_interner);
     }
-    if is_self_type(checker, params[0]) {
-        ArType::Func(params[1..].to_vec(), ret)
+    let first_is_recv = is_self_type(checker, params_ids[0], self_param)
+        || concrete_base.is_some_and(|base| {
+            let p_base = peel_base_type(checker, checker.resolve(params_ids[0]));
+            unify(&p_base, base, &checker.type_info.type_interner)
+        });
+    if first_is_recv {
+        ArType::func(&params_ids[1..], ret, &checker.type_info.type_interner)
     } else {
-        ArType::Func(params, ret)
+        ArType::func(&params_ids, ret, &checker.type_info.type_interner)
     }
 }
 
@@ -495,43 +606,84 @@ fn strip_impl_receiver(ty: ArType, checker: &TypeChecker<'_>) -> ArType {
     let ArType::Func(params, ret) = ty else {
         return ty;
     };
-    if params.is_empty() {
-        return ArType::Func(params, ret);
+    let params_ids = checker.type_info.type_interner.type_args(params);
+    if params_ids.is_empty() {
+        return ArType::func(&params_ids, ret, &checker.type_info.type_interner);
     }
-    // Always peel first: impl methods are `Type.m(self, …)`. Also peel Self
-    // if somehow present.
     let _ = checker;
-    ArType::Func(params[1..].to_vec(), ret)
+    ArType::func(&params_ids[1..], ret, &checker.type_info.type_interner)
 }
 
-fn is_self_type(checker: &TypeChecker<'_>, tid: TypeId) -> bool {
+fn is_self_type(checker: &TypeChecker<'_>, tid: TypeId, self_param: Option<SymbolId>) -> bool {
+    let Some(self_sym) = self_param else {
+        return false;
+    };
     match checker.resolve(tid) {
-        ArType::Named(id, _) => checker.symbols.get(id).name == "Self",
-        ArType::Ref(inner) | ArType::RefMut(inner) => is_self_type(checker, inner),
+        ArType::Named(id, _) => id == self_sym,
+        ArType::Ref(inner) | ArType::RefMut(inner) => is_self_type(checker, inner, self_param),
         _ => false,
     }
 }
 
-fn method_types_compatible(required: &ArType, provided: &ArType, interner: &TypeInterner) -> bool {
+fn method_types_compatible(
+    required: &ArType,
+    provided: &ArType,
+    checker: &TypeChecker<'_>,
+) -> bool {
+    let interner = &checker.type_info.type_interner;
     match (required, provided) {
         (ArType::Func(req_params, req_ret), ArType::Func(prov_params, prov_ret)) => {
-            if req_params.len() != prov_params.len() {
+            let req_ids = interner.type_args(*req_params);
+            let prov_ids = interner.type_args(*prov_params);
+            if req_ids.len() != prov_ids.len() {
                 return false;
             }
-            req_params.iter().zip(prov_params.iter()).all(|(&a, &b)| {
+            req_ids.iter().zip(prov_ids.iter()).all(|(&a, &b)| {
                 if a == b {
                     return true;
                 }
                 let ty_a = interner.resolve(a);
                 let ty_b = interner.resolve(b);
-                unify(&ty_a, &ty_b, interner)
+                type_compat_or_unify(&ty_a, &ty_b, checker)
             }) && (*req_ret == *prov_ret || {
                 let ty_a = interner.resolve(*req_ret);
                 let ty_b = interner.resolve(*prov_ret);
-                unify(&ty_a, &ty_b, interner)
+                type_compat_or_unify(&ty_a, &ty_b, checker)
             })
         }
-        _ => unify(required, provided, interner),
+        _ => type_compat_or_unify(required, provided, checker),
+    }
+}
+
+fn type_compat_or_unify(a: &ArType, b: &ArType, checker: &TypeChecker<'_>) -> bool {
+    let interner = &checker.type_info.type_interner;
+    if unify(a, b, interner) {
+        return true;
+    }
+    match (a, b) {
+        (ArType::Named(id_a, _), ArType::Named(id_b, _)) => {
+            let is_param_a = checker
+                .symbols
+                .try_get(*id_a)
+                .map(|s| s.kind == SymbolKind::TypeParam)
+                .unwrap_or(true);
+            let is_param_b = checker
+                .symbols
+                .try_get(*id_b)
+                .map(|s| s.kind == SymbolKind::TypeParam)
+                .unwrap_or(true);
+            is_param_a && is_param_b
+        }
+        (ArType::Ref(x), ArType::Ref(y)) => {
+            type_compat_or_unify(&checker.resolve(*x), &checker.resolve(*y), checker)
+        }
+        (ArType::RefMut(x), ArType::RefMut(y)) => {
+            type_compat_or_unify(&checker.resolve(*x), &checker.resolve(*y), checker)
+        }
+        (ArType::Ptr(x), ArType::Ptr(y)) => {
+            type_compat_or_unify(&checker.resolve(*x), &checker.resolve(*y), checker)
+        }
+        _ => false,
     }
 }
 
@@ -551,7 +703,13 @@ mod tests {
         let pool = AstPool::default();
         let symbols = SymbolTable::new(0);
         let resolved = ResolvedNames::default();
-        let mut checker = TypeChecker::new(symbols, resolved, Vec::new(), &pool);
+        let mut checker = TypeChecker::new(
+            symbols,
+            resolved,
+            Vec::new(),
+            &pool,
+            crate::type_checker::TargetInfo { pointer_width: 64 },
+        );
 
         let program = Program {
             span: Span::new(0, 0, 0),
@@ -579,6 +737,7 @@ mod tests {
             span: Span::new(0, 0, 0),
             scope: ScopeId(0),
             is_public: true,
+            lang_item: None,
         };
         symbols.register_imported_symbol(iface_symbol);
 
@@ -590,6 +749,7 @@ mod tests {
             span: Span::new(0, 0, 0),
             scope: ScopeId(0),
             is_public: true,
+            lang_item: None,
         };
         symbols.register_imported_symbol(struct_symbol);
 
@@ -601,6 +761,7 @@ mod tests {
             span: Span::new(0, 0, 0),
             scope: ScopeId(0),
             is_public: true,
+            lang_item: None,
         };
         symbols.register_imported_symbol(self_symbol);
 
@@ -612,25 +773,42 @@ mod tests {
             span: Span::new(0, 0, 0),
             scope: ScopeId(0),
             is_public: true,
+            lang_item: None,
         };
         symbols.register_imported_symbol(method_symbol);
 
         let mut associated = rustc_hash::FxHashMap::default();
-        associated.insert("read".into(), method_sym_id);
-        symbols.associated_members.insert(struct_sym_id, associated);
+        associated.insert((struct_sym_id, "read".into()), method_sym_id);
+        symbols.associated_members = associated;
 
         let resolved = ResolvedNames::default();
-        let mut checker = TypeChecker::new(symbols, resolved, Vec::new(), &pool);
-
-        let self_type_id = checker.intern(ArType::Named(struct_sym_id, Vec::new()));
-        let self_interface_type_id = checker.intern(ArType::Named(self_sym_id, Vec::new()));
-        let req_method_type = ArType::Func(
-            vec![self_interface_type_id],
-            checker.intern(ArType::Primitive(Primitive::Int)),
+        let mut checker = TypeChecker::new(
+            symbols,
+            resolved,
+            Vec::new(),
+            &pool,
+            crate::type_checker::TargetInfo { pointer_width: 64 },
         );
-        let prov_method_type = ArType::Func(
-            vec![self_type_id],
+
+        let self_type_id = checker.intern(ArType::named(
+            struct_sym_id,
+            &[],
+            &checker.type_info.type_interner,
+        ));
+        let self_interface_type_id = checker.intern(ArType::named(
+            self_sym_id,
+            &[],
+            &checker.type_info.type_interner,
+        ));
+        let req_method_type = ArType::func(
+            &[self_interface_type_id],
             checker.intern(ArType::Primitive(Primitive::Int)),
+            &checker.type_info.type_interner,
+        );
+        let prov_method_type = ArType::func(
+            &[self_type_id],
+            checker.intern(ArType::Primitive(Primitive::Int)),
+            &checker.type_info.type_interner,
         );
         let req_method_type_id = checker.intern(req_method_type);
         let prov_method_type_id = checker.intern(prov_method_type);
@@ -641,15 +819,21 @@ mod tests {
             .insert(method_sym_id, prov_method_type_id);
 
         let iface_info = InterfaceInfo {
-            methods: vec![("read".into(), req_method_type_id)],
+            self_param: Some(self_sym_id),
+            methods: vec![InterfaceMethod {
+                name: "read".into(),
+                sig_id: req_method_type_id,
+                generic_params: Vec::new(),
+            }],
         };
         checker.type_info.interfaces.insert(iface_sym, iface_info);
 
-        let concrete = ArType::Named(struct_sym_id, Vec::new());
+        let concrete = ArType::named(struct_sym_id, &[], &checker.type_info.type_interner);
         assert!(type_satisfies_interface(
             &mut checker,
             &concrete,
             iface_sym,
+            &[],
             Span::new(0, 0, 0)
         ));
 
@@ -658,10 +842,11 @@ mod tests {
             &mut checker,
             &concrete,
             iface_sym,
+            &[],
             Span::new(0, 0, 0)
         ));
 
-        let missing = missing_interface_methods(&mut checker, &concrete, iface_sym);
+        let missing = missing_interface_methods(&mut checker, &concrete, iface_sym, &[]);
         assert_eq!(missing, vec!["read".to_string()]);
     }
 }

@@ -235,30 +235,37 @@ pub fn cmd_doctor(flags: &ProjectFlags) -> i32 {
         },
     );
 
-    // [LLVM] release backend (reserved convention)
-    categories.push(DoctorCategory {
-        status: DoctorStatus::Skip,
-        title: "LLVM backend (release)".into(),
-        details: vec![
-            DoctorDetail::Info("not implemented yet".into()),
-            DoctorDetail::Info(
-                "convention is fixed: `build` → Cranelift, `build --release` → LLVM".into(),
-            ),
-            DoctorDetail::Hint(
-                "`arandu_cli build --release` exits with a clear error until LLVM lands".into(),
-            ),
-        ],
-    });
+    // [Cranelift] release AOT backend
+    categories.push(
+        match arandu_backend_cranelift::CraneliftObjectBackend::host_release() {
+            Ok(_) => DoctorCategory {
+                status: DoctorStatus::Ok,
+                title: "Cranelift backend (release AOT)".into(),
+                details: vec![
+                    DoctorDetail::Info("host ISA initialized with speed optimization".into()),
+                    DoctorDetail::Info("used by `build --release` with AMIR O2".into()),
+                ],
+            },
+            Err(diag) => DoctorCategory {
+                status: DoctorStatus::Fail,
+                title: "Cranelift backend (release AOT)".into(),
+                details: vec![DoctorDetail::Error(format!(
+                    "failed to initialize release ISA ({})",
+                    diag.message
+                ))],
+            },
+        },
+    );
 
     // Env extras only in verbose
-    if flags.verbose {
-        if let Ok(val) = std::env::var(STDLIB_ENV) {
-            categories.push(DoctorCategory {
-                status: DoctorStatus::Ok,
-                title: format!("Environment ({STDLIB_ENV})"),
-                details: vec![DoctorDetail::Info(val)],
-            });
-        }
+    if flags.verbose
+        && let Ok(val) = std::env::var(STDLIB_ENV)
+    {
+        categories.push(DoctorCategory {
+            status: DoctorStatus::Ok,
+            title: format!("Environment ({STDLIB_ENV})"),
+            details: vec![DoctorDetail::Info(val)],
+        });
     }
 
     // ── Print Flutter-style report ──────────────────────────────────────
@@ -347,10 +354,10 @@ fn print_category(cat: &DoctorCategory, color: bool, verbose: bool) {
     if !show_all && !verbose {
         // Compact mode: one-line category is enough when healthy; still show
         // first info line for Skip so users know why it is blank.
-        if matches!(cat.status, DoctorStatus::Skip) {
-            if let Some(DoctorDetail::Info(msg)) = cat.details.first() {
-                println!("    • {msg}");
-            }
+        if matches!(cat.status, DoctorStatus::Skip)
+            && let Some(DoctorDetail::Info(msg)) = cat.details.first()
+        {
+            println!("    • {msg}");
         }
         return;
     }

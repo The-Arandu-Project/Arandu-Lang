@@ -9,9 +9,9 @@ pub mod types;
 pub use discovery::resolve_cache_layout;
 pub use store::CacheStore;
 pub use types::{
-    CACHE_DIR_ENV, CacheInspect, CachePrune, CachePublish, CacheScanLimits, CacheStoreError,
-    CacheVerify, DEFAULT_SCAN_BYTES, DEFAULT_SCAN_ENTRIES, TreeLimits, TreeVerification,
-    parse_scan_flags,
+    CACHE_DIR_ENV, COPY_BUFFER_SIZE, CacheInspect, CachePrune, CachePublish, CacheScanLimits,
+    CacheStoreError, CacheVerify, DEFAULT_SCAN_BYTES, DEFAULT_SCAN_ENTRIES, TreeLimits,
+    TreeVerification, parse_scan_flags,
 };
 
 #[cfg(test)]
@@ -123,10 +123,15 @@ mod tests {
         assert_eq!(fallback, Path::new("/home/test/.cache/arandu"));
     }
 
+    fn temp_store_fixture(name: &str) -> (CacheStore, CacheLayout) {
+        let layout = temp_layout(name);
+        let store = CacheStore::new(layout.clone());
+        (store, layout)
+    }
+
     #[test]
     fn archive_publish_is_verified_and_immutable() {
-        let layout = temp_layout("immutable");
-        let store = CacheStore::new(layout.clone());
+        let (store, layout) = temp_store_fixture("immutable");
         let bytes = b"canonical package archive";
         let digest = CacheDigest::sha256(bytes);
 
@@ -147,8 +152,7 @@ mod tests {
 
     #[test]
     fn corrupt_entry_is_quarantined_and_repaired_under_lock() {
-        let layout = temp_layout("repair");
-        let store = CacheStore::new(layout.clone());
+        let (store, layout) = temp_store_fixture("repair");
         let bytes = b"verified package";
         let digest = CacheDigest::sha256(bytes);
         let archive = layout.archive(digest);
@@ -167,8 +171,8 @@ mod tests {
 
     #[test]
     fn concurrent_publishers_converge_on_one_verified_object() {
-        let layout = temp_layout("concurrent");
-        let store = Arc::new(CacheStore::new(layout.clone()));
+        let (store, layout) = temp_store_fixture("concurrent");
+        let store = Arc::new(store);
         let bytes: Arc<[u8]> = Arc::from(&b"shared package archive"[..]);
         let digest = CacheDigest::sha256(&bytes);
         let barrier = Arc::new(Barrier::new(8));
@@ -202,10 +206,9 @@ mod tests {
 
     #[test]
     fn stale_staging_file_is_not_a_cache_hit() {
-        let layout = temp_layout("stale");
+        let (store, layout) = temp_store_fixture("stale");
         fs::create_dir_all(layout.staging()).unwrap();
         fs::write(layout.staging().join("interrupted.tmp"), b"partial").unwrap();
-        let store = CacheStore::new(layout.clone());
         let bytes = b"complete archive";
         let digest = CacheDigest::sha256(bytes);
 
@@ -220,9 +223,8 @@ mod tests {
 
     #[test]
     fn tree_publish_is_content_addressed_revalidated_and_repaired() {
-        let layout = temp_layout("tree-publish");
+        let (store, layout) = temp_store_fixture("tree-publish");
         fs::create_dir_all(layout.staging()).unwrap();
-        let store = CacheStore::new(layout.clone());
         let source = "public func value(): int { return 1 }\n";
 
         let first = layout.staging().join("first");

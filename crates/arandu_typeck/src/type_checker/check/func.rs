@@ -14,9 +14,16 @@ fn func_name_key(decl: &FuncDecl) -> crate::NodeKey {
 }
 
 fn validate_method_receiver(checker: &mut TypeChecker<'_>, decl: &FuncDecl) {
-    let arandu_parser::FuncName::Method { receiver, span, .. } = &decl.name else {
+    let arandu_parser::FuncName::Method { receiver, .. } = &decl.name else {
         return;
     };
+    // `Type.name` is the namespace representation for both instance methods
+    // and associated functions. Only a member that explicitly declares
+    // `self` participates in receiver validation; members without `self` are
+    // associated functions such as `Point.new(...)`.
+    if !decl.params.first().is_some_and(|param| param.is_receiver) {
+        return;
+    }
     let mut recv_ty =
         checker.lower_named_type(receiver.span, receiver, &[], checker.symbols.global_scope());
     // Only generic *structs* parameterize `self` (e.g. List<T>.push). Method type
@@ -28,35 +35,20 @@ fn validate_method_receiver(checker: &mut TypeChecker<'_>, decl: &FuncDecl) {
     {
         let mut new_args = Vec::new();
         for &param_sym in struct_params.iter() {
-            let arg_ty = ArType::Named(param_sym, vec![]);
+            let arg_ty = ArType::named(param_sym, &[], &checker.type_info.type_interner);
             new_args.push(checker.intern(arg_ty));
         }
-        recv_ty = ArType::Named(struct_id, new_args);
+        recv_ty = ArType::named(struct_id, &new_args, &checker.type_info.type_interner);
     }
-    let Some(first) = decl.params.first() else {
-        checker.diagnostics.push(crate::Diagnostic::error(
-            crate::DiagCode::T021MethodSelfRequired,
-            "method must declare a receiver parameter `self`",
-            *span,
-        ));
-        return;
-    };
-    if !first.is_receiver {
-        checker.diagnostics.push(crate::Diagnostic::error(
-            crate::DiagCode::T021MethodSelfRequired,
-            "first parameter of a method must be `self`",
-            first.span,
-        ));
-        return;
-    }
-    if first.ownership.is_none() {
-        checker.diagnostics.push(crate::Diagnostic::error(
-            crate::DiagCode::T021MethodSelfRequired,
-            "receiver `self` requires an ownership qualifier (`shared`, `mut`, or `own`)",
-            first.span,
-        ));
-    }
+    let first = &decl.params[0];
     let mut self_ty = checker.lower_type_expr(first.ty, checker.symbols.global_scope());
+    // Canonical receiver syntax carries ownership in the type (`self: ref T`
+    // or `self: mut ref T`). Legacy prefix ownership is applied later. Compare
+    // the associated nominal type against the unwrapped receiver here.
+    self_ty = match self_ty {
+        ArType::Ref(inner) | ArType::RefMut(inner) => checker.resolve(inner),
+        other => other,
+    };
     if let ArType::Named(struct_id, ref args) = self_ty
         && args.is_empty()
         && let Some(struct_params) = checker.type_info.generic_params.get(&struct_id).cloned()
@@ -64,10 +56,10 @@ fn validate_method_receiver(checker: &mut TypeChecker<'_>, decl: &FuncDecl) {
     {
         let mut new_args = Vec::new();
         for &param_sym in struct_params.iter() {
-            let arg_ty = ArType::Named(param_sym, vec![]);
+            let arg_ty = ArType::named(param_sym, &[], &checker.type_info.type_interner);
             new_args.push(checker.intern(arg_ty));
         }
-        self_ty = ArType::Named(struct_id, new_args);
+        self_ty = ArType::named(struct_id, &new_args, &checker.type_info.type_interner);
     }
     if !super::super::types::unify(&recv_ty, &self_ty, &checker.type_info.type_interner) {
         checker.add_constraint(
@@ -124,10 +116,10 @@ pub fn check_func_body(checker: &mut TypeChecker<'_>, decl: &FuncDecl) {
         {
             let mut new_args = Vec::new();
             for &param_sym in struct_params.iter() {
-                let arg_ty = ArType::Named(param_sym, vec![]);
+                let arg_ty = ArType::named(param_sym, &[], &checker.type_info.type_interner);
                 new_args.push(checker.intern(arg_ty));
             }
-            param_ty = ArType::Named(struct_id, new_args);
+            param_ty = ArType::named(struct_id, &new_args, &checker.type_info.type_interner);
         }
 
         let mut param_ty_id = checker.intern(param_ty);
@@ -143,8 +135,33 @@ pub fn check_func_body(checker: &mut TypeChecker<'_>, decl: &FuncDecl) {
 
     let ret_id = checker.intern(ret_ty);
     checker.ctx.push_return(ret_id, return_decl_span);
+    let func_key = func_name_key(decl);
+    let func_symbol = checker.resolved.definitions.get(&func_key).copied();
+    let old_effects = checker.current_observed_effects;
+    checker.current_observed_effects = arandu_middle::EffectFlags::NONE;
+
     // SYN.1: last expression in the function body is an implicit return.
     super::block::check_block_tail(checker, checker.pool, &decl.body, Some(ret_id));
     checker.ctx.pop_return();
     checker.type_scope_id = None;
+
+    if let Some(symbol_id) = func_symbol {
+        let declared = checker.type_info.function_effects.get(&symbol_id).copied();
+        if let Some(declared_flags) = declared {
+            let missing = checker.current_observed_effects.difference(declared_flags);
+            if !missing.is_empty() {
+                let names = missing.to_names().join(", ");
+                checker.diagnostics.push(arandu_middle::Diagnostic::error(
+                    arandu_middle::DiagCode::T039UnsatisfiedEffect,
+                    format!("function performs undeclared effect '{names}'"),
+                    decl.span,
+                ));
+            }
+        }
+        let total = declared
+            .unwrap_or(arandu_middle::EffectFlags::NONE)
+            .union(checker.current_observed_effects);
+        checker.type_info.function_effects.insert(symbol_id, total);
+    }
+    checker.current_observed_effects = old_effects.union(checker.current_observed_effects);
 }

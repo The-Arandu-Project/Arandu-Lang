@@ -1,17 +1,17 @@
 module examples.minimal.m15_vec_capacity
 
-// PROMOTE-L6 closeout: with_capacity, capacity, reserve, growth, empty pop.
+// PROMOTE-L6 closeout: withCapacity, capacity, reserve, growth, empty pop.
 import std.alloc.vec as vec
 
 func main(): int {
-    // with_capacity pre-allocates (may round up geometrically).
-    let mut v = vec.with_capacity<int>(4 as u64)
+    // withCapacity pre-allocates (may round up geometrically).
+    let mut v = vec.withCapacity<int>(4)
     let c0 = vec.capacity(v)
     if c0 < 4 {
         vec.destroy(v)
         return 10
     }
-    if !vec.is_empty(v) {
+    if !vec.isEmpty(v) {
         vec.destroy(v)
         return 11
     }
@@ -29,7 +29,7 @@ func main(): int {
     vec.push(v, 1)
     vec.push(v, 2)
     // reserve(6) from len=2 → need capacity ≥ 8
-    vec.reserve(v, 6 as u64)
+    vec.reserve(v, 6)
     if vec.capacity(v) < 8 {
         vec.destroy(v)
         return 13
@@ -45,20 +45,17 @@ func main(): int {
     vec.push(v, 9)
     vec.push(v, 10)
     let n = vec.len(v) as int
-    // n should be 10 (2 + 8 more after reserve pushes... wait we had 2, then 8 more = 10)
-    let last = vec.get(v, 9 as u64)
+    let last = vec.get(v, 9)
     match last {
         Some(x) => {
             vec.clear(v)
-            if !vec.is_empty(v) {
+            if !vec.isEmpty(v) {
                 vec.destroy(v)
                 return 14
             }
             // capacity retained after clear
             let cap = vec.capacity(v) as int
             vec.destroy(v)
-            // 10 + 10 + cap(>=8) → use 10 + 10 + (cap >= 8 ? 1 : 0) simplified:
-            // return n + x + 1 if cap ok → 10+10+1=21 when cap>=8
             if cap < 8 {
                 return 15
             }

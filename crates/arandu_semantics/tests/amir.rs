@@ -49,7 +49,11 @@ fn test_amir_golden_files() {
             panic!("failed to parse {name}: {err:?}");
         });
         let resolution = resolve_for_test(0, &program);
-        let mut tc = type_check(resolution, &program);
+        let mut tc = type_check(
+            resolution,
+            &program,
+            arandu_semantics::TargetInfo { pointer_width: 64 },
+        );
         let errors: Vec<_> = tc
             .diagnostics
             .iter()
@@ -62,7 +66,7 @@ fn test_amir_golden_files() {
         let hir = lower_to_hir(&mut tc, &program).expect("HIR lowering failed");
         hir.validate_invariants(&hir.pool, &tc.symbols)
             .unwrap_or_else(|err| panic!("HIR invariant validation failed for {name}: {err:?}"));
-        let amir = lower_to_amir(&tc, &hir).expect("AMIR lowering failed");
+        let amir = lower_to_amir(&tc, &hir, 64).expect("AMIR lowering failed");
         let amir_issues = validate_amir_program(&amir, &tc.symbols, &tc.type_info.type_interner);
         assert!(
             amir_issues.is_empty(),
@@ -89,7 +93,11 @@ func main() {
 "#;
     let program = arandu_parser::parse(src).expect("parse failed");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     let x_symbol = tc
         .symbols
         .iter()
@@ -97,7 +105,7 @@ func main() {
         .map(|symbol| symbol.id)
         .expect("missing field symbol");
     let hir = lower_to_hir(&mut tc, &program).expect("HIR lowering failed");
-    let amir = lower_to_amir(&tc, &hir).expect("AMIR lowering failed");
+    let amir = lower_to_amir(&tc, &hir, 64).expect("AMIR lowering failed");
 
     let func = &amir.funcs[0];
     let has_symbol_projection = func.blocks.iter().any(|block| {
@@ -129,10 +137,14 @@ func main() {
 "#;
     let program = arandu_parser::parse(src).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     assert!(tc.diagnostics.is_empty(), "{:?}", tc.diagnostics);
     let hir = lower_to_hir(&mut tc, &program).expect("HIR");
-    let amir = lower_to_amir(&tc, &hir).expect("AMIR");
+    let amir = lower_to_amir(&tc, &hir, 64).expect("AMIR");
 
     let destructor = tc.type_info.destructors.values().copied().next().unwrap();
     for func in &amir.funcs {
@@ -146,6 +158,63 @@ func main() {
             assert_eq!(destroys, 0, "destructor must not recursively drop own self");
         } else if tc.symbols.get(func.symbol).name == "main" {
             assert_eq!(destroys, 1, "live resource must be destroyed exactly once");
+        }
+    }
+}
+
+#[test]
+fn nested_composite_struct_elaborates_recursive_drop_glue() {
+    let src = r#"
+struct ResourceA { handle: ptr[u8] }
+@Destructor
+func ResourceA.close(own self): void {}
+
+struct ResourceB { handle: ptr[u8] }
+@Destructor
+func ResourceB.close(own self): void {}
+
+struct Container {
+    a: ResourceA
+    b: ResourceB
+}
+
+func main() {
+    let c = Container {
+        a: ResourceA { handle: nil },
+        b: ResourceB { handle: nil },
+    }
+}
+"#;
+    let program = arandu_parser::parse(src).expect("parse");
+    let resolution = resolve_for_test(0, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
+    assert!(tc.diagnostics.is_empty(), "{:?}", tc.diagnostics);
+    let hir = lower_to_hir(&mut tc, &program).expect("HIR");
+    let amir = lower_to_amir(&tc, &hir, 64).expect("AMIR");
+
+    for func in &amir.funcs {
+        if tc.symbols.get(func.symbol).name == "main" {
+            let destroys: Vec<_> = func
+                .blocks
+                .iter()
+                .flat_map(|block| func.block_stmts(block.id))
+                .filter_map(|stmt| match stmt {
+                    AmirStmt::Destroy(p) => Some(p),
+                    _ => None,
+                })
+                .collect();
+            // Both fields of Container (b and a in reverse order) must be destroyed!
+            assert_eq!(
+                destroys.len(),
+                2,
+                "composite struct without explicit destructor must destroy its 2 destructible fields"
+            );
+            assert_eq!(destroys[0].projections.len(), 1);
+            assert_eq!(destroys[1].projections.len(), 1);
         }
     }
 }
@@ -165,9 +234,13 @@ func main() {
 "#;
     let program = arandu_parser::parse(src).expect("parse failed");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     let hir = lower_to_hir(&mut tc, &program).expect("HIR lowering failed");
-    let diagnostics = lower_to_amir(&tc, &hir).expect_err("expected use after move diagnostic");
+    let diagnostics = lower_to_amir(&tc, &hir, 64).expect_err("expected use after move diagnostic");
 
     assert!(
         diagnostics
@@ -188,9 +261,13 @@ func main() {
 "#;
     let program = arandu_parser::parse(src).expect("parse failed");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     let hir = lower_to_hir(&mut tc, &program).expect("HIR lowering failed");
-    let amir = lower_to_amir(&tc, &hir).expect("AMIR lowering failed");
+    let amir = lower_to_amir(&tc, &hir, 64).expect("AMIR lowering failed");
     let pretty = amir.pretty_print(&tc.symbols, &tc.type_info.type_interner);
     assert!(
         !pretty.contains("move _"),
@@ -215,9 +292,13 @@ func main(cond: bool) {
 "#;
     let program = arandu_parser::parse(src).expect("parse failed");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     let hir = lower_to_hir(&mut tc, &program).expect("HIR lowering failed");
-    let diagnostics = lower_to_amir(&tc, &hir).expect_err("expected branch move diagnostic");
+    let diagnostics = lower_to_amir(&tc, &hir, 64).expect_err("expected branch move diagnostic");
 
     assert!(
         diagnostics
@@ -241,9 +322,13 @@ func main(cond: bool) {
 "#;
     let program = arandu_parser::parse(src).expect("parse failed");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     let hir = lower_to_hir(&mut tc, &program).expect("HIR lowering failed");
-    let amir = lower_to_amir(&tc, &hir).expect("OSSA lowering failed");
+    let amir = lower_to_amir(&tc, &hir, 64).expect("OSSA lowering failed");
 
     assert!(!amir.funcs.is_empty());
     let func = &amir.funcs[0];
@@ -283,10 +368,10 @@ func main(cond: bool) {
         .expect("loop header not found");
 
     assert_eq!(
-        loop_header.params.len(),
+        func.block_params(loop_header.params).len(),
         2,
         "esperado exatamente 2 block-params (acc, i) no header do loop, achou {}",
-        loop_header.params.len()
+        func.block_params(loop_header.params).len()
     );
 }
 
@@ -309,7 +394,7 @@ fn empty_block(id: usize, _predecessors: &[usize], successors: &[usize]) -> Amir
     AmirBasicBlock {
         id: BlockId::from_usize(id),
         statements: DenseRange::empty(),
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: term,
     }
 }
@@ -377,6 +462,7 @@ fn test_func(
         locals,
         temps,
         blocks,
+        block_params: Vec::new(),
         stmts,
         cfg,
     }
@@ -451,7 +537,7 @@ fn local_liveness_uses_dense_bitsets() {
         vec![AmirBasicBlock {
             id: BlockId::from_usize(0),
             statements: DenseRange::new(first.as_usize(), second.as_usize() - first.as_usize() + 1),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Return,
         }],
         stmts,
@@ -477,7 +563,7 @@ fn dce_tracks_used_temps_with_dense_bitsets() {
     let func_block = AmirBasicBlock {
         id: BlockId::from_usize(0),
         statements: DenseRange::new(first.as_usize(), 2),
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     };
     let mut func = test_func(
@@ -502,7 +588,7 @@ fn validate_amir_rejects_poison_temp_with_icegen002() {
     let func_block = AmirBasicBlock {
         id: BlockId::from_usize(0),
         statements: DenseRange::new(0, 0),
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     };
     // TYP-1: poison Error type must ICE when validated with the interner.
@@ -550,7 +636,7 @@ fn validate_amir_rejects_edge_argument_count_mismatch() {
         AmirBasicBlock {
             id: BlockId::from_usize(0),
             statements: DenseRange::empty(),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Goto {
                 target: BlockId::from_usize(1),
                 args: Vec::new(),
@@ -559,22 +645,24 @@ fn validate_amir_rejects_edge_argument_count_mismatch() {
         AmirBasicBlock {
             id: BlockId::from_usize(1),
             statements: DenseRange::empty(),
-            params: vec![BlockParam {
-                id: temp(0),
-                local: local(0),
-                ty,
-                from: None,
-                moved: false,
-            }],
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Return,
         },
     ];
-    let func = test_func(
+    let mut func = test_func(
         vec![test_local(0, 1)],
         vec![AmirTemp { ty, ..test_temp(0) }],
         blocks,
         AmirStmtTable::new(),
     );
+    func.block_params = vec![BlockParam {
+        id: temp(0),
+        local: local(0),
+        ty,
+        from: None,
+        moved: false,
+    }];
+    func.blocks[1].params = DenseRange::new(0, 1);
 
     let issues =
         arandu_middle::amir_validate::validate_amir_func(&func, &validation_symbols(), &interner);
@@ -594,7 +682,7 @@ fn validate_amir_rejects_edge_argument_type_mismatch() {
         AmirBasicBlock {
             id: BlockId::from_usize(0),
             statements: DenseRange::empty(),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Goto {
                 target: BlockId::from_usize(1),
                 args: vec![AmirOperand::Copy(temp(0))],
@@ -603,17 +691,11 @@ fn validate_amir_rejects_edge_argument_type_mismatch() {
         AmirBasicBlock {
             id: BlockId::from_usize(1),
             statements: DenseRange::empty(),
-            params: vec![BlockParam {
-                id: temp(1),
-                local: local(0),
-                ty: bool_ty,
-                from: None,
-                moved: false,
-            }],
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Return,
         },
     ];
-    let func = test_func(
+    let mut func = test_func(
         vec![test_local(0, 1)],
         vec![
             AmirTemp {
@@ -628,6 +710,14 @@ fn validate_amir_rejects_edge_argument_type_mismatch() {
         blocks,
         AmirStmtTable::new(),
     );
+    func.block_params = vec![BlockParam {
+        id: temp(1),
+        local: local(0),
+        ty: bool_ty,
+        from: None,
+        moved: false,
+    }];
+    func.blocks[1].params = DenseRange::new(0, 1);
 
     let issues =
         arandu_middle::amir_validate::validate_amir_func(&func, &validation_symbols(), &interner);
@@ -647,16 +737,10 @@ fn validate_amir_rejects_block_parameter_temp_type_mismatch() {
     let blocks = vec![AmirBasicBlock {
         id: BlockId::from_usize(0),
         statements: DenseRange::empty(),
-        params: vec![BlockParam {
-            id: temp(0),
-            local: local(0),
-            ty: bool_ty,
-            from: None,
-            moved: false,
-        }],
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     }];
-    let func = test_func(
+    let mut func = test_func(
         vec![test_local(0, 1)],
         vec![AmirTemp {
             ty: int_ty,
@@ -665,6 +749,14 @@ fn validate_amir_rejects_block_parameter_temp_type_mismatch() {
         blocks,
         AmirStmtTable::new(),
     );
+    func.block_params = vec![BlockParam {
+        id: temp(0),
+        local: local(0),
+        ty: bool_ty,
+        from: None,
+        moved: false,
+    }];
+    func.blocks[0].params = DenseRange::new(0, 1);
 
     let issues =
         arandu_middle::amir_validate::validate_amir_func(&func, &validation_symbols(), &interner);
@@ -706,7 +798,7 @@ fn validate_amir_rejects_inconsistent_gen_payload_and_handle_types() {
     let blocks = vec![AmirBasicBlock {
         id: BlockId::from_usize(0),
         statements: DenseRange::new(0, 2),
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     }];
     let func = AmirFunc {
@@ -740,6 +832,9 @@ fn validate_amir_rejects_inconsistent_gen_payload_and_handle_types() {
         ],
         cfg: arandu_semantics::cfg::compute_cfg_edges(&blocks),
         blocks,
+
+        block_params: Vec::new(),
+
         stmts,
     };
     let program = arandu_semantics::amir::AmirProgram {
@@ -768,19 +863,19 @@ fn validate_amir_rejects_overlapping_and_out_of_bounds_statement_ranges() {
         AmirBasicBlock {
             id: BlockId::from_usize(0),
             statements: DenseRange::new(0, 1),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Return,
         },
         AmirBasicBlock {
             id: BlockId::from_usize(1),
             statements: DenseRange::new(0, 1),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Unreachable,
         },
         AmirBasicBlock {
             id: BlockId::from_usize(2),
             statements: DenseRange::new(1, 1),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Unreachable,
         },
     ];
@@ -819,9 +914,13 @@ fn temp_ids_are_dense_and_positional() {
             let src = std::fs::read_to_string(&path).unwrap();
             let program = arandu_parser::parse(&src).expect("Failed to parse");
             let resolution = resolve_for_test(0, &program);
-            let mut tc = type_check(resolution, &program);
+            let mut tc = type_check(
+                resolution,
+                &program,
+                arandu_semantics::TargetInfo { pointer_width: 64 },
+            );
             let hir = lower_to_hir(&mut tc, &program).expect("HIR lowering failed");
-            let amir = lower_to_amir(&tc, &hir).expect("AMIR lowering failed");
+            let amir = lower_to_amir(&tc, &hir, 64).expect("AMIR lowering failed");
 
             for func in &amir.funcs {
                 for (i, temp) in func.temps.iter().enumerate() {
@@ -858,7 +957,11 @@ func main(): int {
 "#;
     let program = arandu_parser::parse(src).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     assert!(
         tc.diagnostics
             .iter()
@@ -867,7 +970,7 @@ func main(): int {
         tc.diagnostics
     );
     let hir = lower_to_hir(&mut tc, &program).expect("hir");
-    let amir = lower_to_amir(&tc, &hir).expect("amir");
+    let amir = lower_to_amir(&tc, &hir, 64).expect("amir");
     let func = &amir.funcs[0];
     let x = func
         .locals

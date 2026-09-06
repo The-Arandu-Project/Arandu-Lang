@@ -40,15 +40,16 @@ pub fn substitute_type(ty: &ArType, subst: &GenericSubst, interner: &TypeInterne
             if let Some((_, concrete)) = subst.iter().find(|(param, _)| param == id) {
                 return concrete.clone();
             }
-            let new_args: Vec<TypeId> = args
+            let old_args = interner.type_args(*args);
+            let new_args: Vec<TypeId> = old_args
                 .iter()
                 .map(|&a| {
-                    let resolved = interner.resolve(a).clone();
+                    let resolved = interner.resolve(a);
                     let substituted = substitute_type(&resolved, subst, interner);
                     interner.intern(substituted)
                 })
                 .collect();
-            ArType::Named(*id, new_args)
+            ArType::named(*id, &new_args, interner)
         }
         ArType::Nullable(inner) => {
             let resolved = interner.resolve(*inner);
@@ -118,29 +119,31 @@ pub fn substitute_type(ty: &ArType, subst: &GenericSubst, interner: &TypeInterne
             ArType::Array(*n, id)
         }
         ArType::Tuple(items) => {
-            let new_items: Vec<TypeId> = items
+            let old_items = interner.type_args(*items);
+            let new_items: Vec<TypeId> = old_items
                 .iter()
                 .map(|&t| {
-                    let resolved = interner.resolve(t).clone();
+                    let resolved = interner.resolve(t);
                     let substituted = substitute_type(&resolved, subst, interner);
                     interner.intern(substituted)
                 })
                 .collect();
-            ArType::Tuple(new_items)
+            ArType::tuple(&new_items, interner)
         }
         ArType::Func(params, ret) => {
-            let new_params: Vec<TypeId> = params
+            let old_params = interner.type_args(*params);
+            let new_params: Vec<TypeId> = old_params
                 .iter()
                 .map(|&p| {
-                    let resolved = interner.resolve(p).clone();
+                    let resolved = interner.resolve(p);
                     let substituted = substitute_type(&resolved, subst, interner);
                     interner.intern(substituted)
                 })
                 .collect();
-            let resolved_ret = interner.resolve(*ret).clone();
+            let resolved_ret = interner.resolve(*ret);
             let subst_ret = substitute_type(&resolved_ret, subst, interner);
             let ret_id = interner.intern(subst_ret);
-            ArType::Func(new_params, ret_id)
+            ArType::func(&new_params, ret_id, interner)
         }
         _ => ty.clone(),
     }
@@ -203,7 +206,7 @@ mod tests {
             &[SymbolId::new(0, 1)],
             &[ArType::Primitive(super::super::Primitive::Int)],
         );
-        let ty = ArType::Named(SymbolId::new(0, 1), vec![]);
+        let ty = ArType::named(SymbolId::new(0, 1), &[], &i);
         let result = substitute_type(&ty, &subst, &i);
         assert_eq!(result, ArType::Primitive(super::super::Primitive::Int));
     }
@@ -215,16 +218,16 @@ mod tests {
             &[SymbolId::new(0, 1)],
             &[ArType::Primitive(super::super::Primitive::Int)],
         );
-        let ty = ArType::Named(SymbolId::new(0, 2), vec![]);
+        let ty = ArType::named(SymbolId::new(0, 2), &[], &i);
         let result = substitute_type(&ty, &subst, &i);
-        assert_eq!(result, ArType::Named(SymbolId::new(0, 2), vec![]));
+        assert_eq!(result, ArType::named(SymbolId::new(0, 2), &[], &i));
     }
 
     #[test]
     fn substitute_named_with_generic_args() {
         let i = new_interner();
-        let inner = i.intern(ArType::Named(SymbolId::new(0, 1), vec![]));
-        let ty = ArType::Named(SymbolId::new(0, 3), vec![inner]);
+        let inner = i.intern(ArType::named(SymbolId::new(0, 1), &[], &i));
+        let ty = ArType::named(SymbolId::new(0, 3), &[inner], &i);
         let subst = build_subst(
             &[SymbolId::new(0, 1)],
             &[ArType::Primitive(super::super::Primitive::Int)],
@@ -233,14 +236,14 @@ mod tests {
         let expected_inner = i.intern(ArType::Primitive(super::super::Primitive::Int));
         assert_eq!(
             result,
-            ArType::Named(SymbolId::new(0, 3), vec![expected_inner])
+            ArType::named(SymbolId::new(0, 3), &[expected_inner], &i)
         );
     }
 
     #[test]
     fn substitute_nullable() {
         let i = new_interner();
-        let inner = i.intern(ArType::Named(SymbolId::new(0, 1), vec![]));
+        let inner = i.intern(ArType::named(SymbolId::new(0, 1), &[], &i));
         let ty = ArType::Nullable(inner);
         let subst = build_subst(
             &[SymbolId::new(0, 1)],
@@ -254,7 +257,7 @@ mod tests {
     #[test]
     fn substitute_option() {
         let i = new_interner();
-        let inner = i.intern(ArType::Named(SymbolId::new(0, 1), vec![]));
+        let inner = i.intern(ArType::named(SymbolId::new(0, 1), &[], &i));
         let ty = ArType::Option(inner);
         let subst = build_subst(
             &[SymbolId::new(0, 1)],
@@ -268,8 +271,8 @@ mod tests {
     #[test]
     fn substitute_result() {
         let i = new_interner();
-        let ok_inner = i.intern(ArType::Named(SymbolId::new(0, 1), vec![]));
-        let err_inner = i.intern(ArType::Named(SymbolId::new(0, 2), vec![]));
+        let ok_inner = i.intern(ArType::named(SymbolId::new(0, 1), &[], &i));
+        let err_inner = i.intern(ArType::named(SymbolId::new(0, 2), &[], &i));
         let ty = ArType::Result(ok_inner, err_inner);
         let subst = build_subst(
             &[SymbolId::new(0, 1), SymbolId::new(0, 2)],
@@ -287,7 +290,7 @@ mod tests {
     #[test]
     fn substitute_slice() {
         let i = new_interner();
-        let inner = i.intern(ArType::Named(SymbolId::new(0, 1), vec![]));
+        let inner = i.intern(ArType::named(SymbolId::new(0, 1), &[], &i));
         let ty = ArType::Slice(inner);
         let subst = build_subst(
             &[SymbolId::new(0, 1)],
@@ -301,7 +304,7 @@ mod tests {
     #[test]
     fn substitute_array() {
         let i = new_interner();
-        let inner = i.intern(ArType::Named(SymbolId::new(0, 1), vec![]));
+        let inner = i.intern(ArType::named(SymbolId::new(0, 1), &[], &i));
         let ty = ArType::Array(4, inner);
         let subst = build_subst(
             &[SymbolId::new(0, 1)],
@@ -315,7 +318,7 @@ mod tests {
     #[test]
     fn substitute_ptr() {
         let i = new_interner();
-        let inner = i.intern(ArType::Named(SymbolId::new(0, 1), vec![]));
+        let inner = i.intern(ArType::named(SymbolId::new(0, 1), &[], &i));
         let ty = ArType::Ptr(inner);
         let subst = build_subst(
             &[SymbolId::new(0, 1)],
@@ -329,9 +332,9 @@ mod tests {
     #[test]
     fn substitute_tuple() {
         let i = new_interner();
-        let a = i.intern(ArType::Named(SymbolId::new(0, 1), vec![]));
-        let b = i.intern(ArType::Named(SymbolId::new(0, 2), vec![]));
-        let ty = ArType::Tuple(vec![a, b]);
+        let a = i.intern(ArType::named(SymbolId::new(0, 1), &[], &i));
+        let b = i.intern(ArType::named(SymbolId::new(0, 2), &[], &i));
+        let ty = ArType::tuple(&[a, b], &i);
         let subst = build_subst(
             &[SymbolId::new(0, 1), SymbolId::new(0, 2)],
             &[
@@ -342,15 +345,15 @@ mod tests {
         let result = substitute_type(&ty, &subst, &i);
         let expected_a = i.intern(ArType::Primitive(super::super::Primitive::Int));
         let expected_b = i.intern(ArType::Primitive(super::super::Primitive::Bool));
-        assert_eq!(result, ArType::Tuple(vec![expected_a, expected_b]));
+        assert_eq!(result, ArType::tuple(&[expected_a, expected_b], &i));
     }
 
     #[test]
     fn substitute_func() {
         let i = new_interner();
-        let param = i.intern(ArType::Named(SymbolId::new(0, 1), vec![]));
-        let ret = i.intern(ArType::Named(SymbolId::new(0, 2), vec![]));
-        let ty = ArType::Func(vec![param], ret);
+        let param = i.intern(ArType::named(SymbolId::new(0, 1), &[], &i));
+        let ret = i.intern(ArType::named(SymbolId::new(0, 2), &[], &i));
+        let ty = ArType::func(&[param], ret, &i);
         let subst = build_subst(
             &[SymbolId::new(0, 1), SymbolId::new(0, 2)],
             &[
@@ -361,7 +364,7 @@ mod tests {
         let result = substitute_type(&ty, &subst, &i);
         let expected_param = i.intern(ArType::Primitive(super::super::Primitive::Int));
         let expected_ret = i.intern(ArType::Primitive(super::super::Primitive::Bool));
-        assert_eq!(result, ArType::Func(vec![expected_param], expected_ret));
+        assert_eq!(result, ArType::func(&[expected_param], expected_ret, &i));
     }
 
     #[test]
@@ -384,7 +387,7 @@ mod tests {
     #[test]
     fn substitute_range() {
         let i = new_interner();
-        let inner = i.intern(ArType::Named(SymbolId::new(0, 1), vec![]));
+        let inner = i.intern(ArType::named(SymbolId::new(0, 1), &[], &i));
         let ty = ArType::Range(inner);
         let subst = build_subst(
             &[SymbolId::new(0, 1)],

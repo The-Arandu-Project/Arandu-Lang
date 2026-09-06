@@ -1,0 +1,162 @@
+module std.core.cmp
+
+/// Comparison ordering result between two values.
+public enum Ordering {
+    /// The first value is less than the second.
+    Less,
+    /// Both values are equal.
+    Equal,
+    /// The first value is greater than the second.
+    Greater,
+}
+
+/// Returns `true` if this ordering is `Less`.
+public func Ordering.isLess(self: Ordering): bool {
+    match self {
+        Less => {
+            return true
+        }
+        _ => {
+            return false
+        }
+    }
+}
+
+/// Returns `true` if this ordering is `Equal`.
+public func Ordering.isEqual(self: Ordering): bool {
+    match self {
+        Equal => {
+            return true
+        }
+        _ => {
+            return false
+        }
+    }
+}
+
+/// Returns `true` if this ordering is `Greater`.
+public func Ordering.isGreater(self: Ordering): bool {
+    match self {
+        Greater => {
+            return true
+        }
+        _ => {
+            return false
+        }
+    }
+}
+
+/// Returns `self` unless it is `Equal`, in which case it returns `other`.
+public func Ordering.then(self: Ordering, other: Ordering): Ordering {
+    match self {
+        Equal => {
+            return other
+        }
+        _ => {
+            return self
+        }
+    }
+}
+
+/// Structural equality interface.
+public interface PartialEq {
+    func eq(self: ref Self, other: ref Self): bool
+}
+
+/// Strict equivalence relation interface.
+public interface Eq {
+    func eq(self: ref Self, other: ref Self): bool
+}
+
+/// Total ordering interface producing [`Ordering`].
+public interface Ord {
+    func cmp(self: ref Self, other: ref Self): Ordering
+}
+
+/// Returns the minimum of two integer values.
+///
+/// # Examples
+/// ```arandu
+/// cmp.min(10, 20) // 10
+/// cmp.min(30, 15) // 15
+/// cmp.min(-5, -2) // -5
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func min(a: int, b: int): int {
+    if a < b {
+        return a
+    }
+    return b
+}
+
+/// Returns the maximum of two integer values.
+///
+/// # Examples
+/// ```arandu
+/// cmp.max(10, 20) // 20
+/// cmp.max(30, 15) // 30
+/// cmp.max(-5, -2) // -2
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func max(a: int, b: int): int {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+/// Restricts an integer value to the closed interval `[minVal, maxVal]`.
+///
+/// - If `val < minVal`, returns `minVal`.
+/// - If `val > maxVal`, returns `maxVal`.
+/// - Otherwise, returns `val` unchanged.
+///
+/// # Examples
+/// ```arandu
+/// cmp.clamp(5, 0, 10)   // 5  (within bounds)
+/// cmp.clamp(-3, 0, 10)  // 0  (below minimum)
+/// cmp.clamp(15, 0, 10)  // 10 (above maximum)
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func clamp(val: int, minVal: int, maxVal: int): int {
+    if val < minVal {
+        return minVal
+    }
+    if val > maxVal {
+        return maxVal
+    }
+    return val
+}
+
+/// Returns the minimum of two values according to their [`Ord`] implementation.
+public func minBy<T: Ord>(a: T, b: T): T {
+    if (ref a).cmp(ref b).isLess() {
+        return a
+    }
+    return b
+}
+
+/// Returns the maximum of two values according to their [`Ord`] implementation.
+public func maxBy<T: Ord>(a: T, b: T): T {
+    if (ref a).cmp(ref b).isGreater() {
+        return a
+    }
+    return b
+}
+
+/// Restricts a value to the closed interval `[minVal, maxVal]` according to its [`Ord`] implementation.
+public func clampBy<T: Ord>(val: T, minVal: T, maxVal: T): T {
+    if (ref val).cmp(ref minVal).isLess() {
+        return minVal
+    }
+    if (ref val).cmp(ref maxVal).isGreater() {
+        return maxVal
+    }
+    return val
+}

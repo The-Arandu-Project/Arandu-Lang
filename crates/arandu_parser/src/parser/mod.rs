@@ -95,7 +95,7 @@ pub fn parse_token_stream(
                 imports: Vec::new(),
                 decls: Vec::new(),
                 docs: Vec::new(),
-                pool: parser.pool.clone(),
+                pool: std::mem::take(&mut parser.pool),
             }
         }
     };
@@ -131,6 +131,7 @@ pub struct Parser<'a> {
     pub suppression_window: u32,
     /// Optional event sink for green-tree construction (F1 event-driven CST).
     pub(crate) events: Option<Vec<crate::syntax::events::ParseEvent>>,
+    pub(crate) split_gt: Option<Token>,
 }
 
 #[derive(Debug, Clone)]
@@ -154,6 +155,7 @@ impl<'a> Parser<'a> {
             file_id: 0,
             suppression_window: 0,
             events: None,
+            split_gt: None,
         }
     }
 
@@ -261,7 +263,7 @@ impl<'a> Parser<'a> {
             if self.at_kind_name("EOF") {
                 break;
             }
-            if self.at_kind_name("KW_IMPORT") || self.at_kind_name("KW_FROM") {
+            if self.at_kind_name("KW_IMPORT") || self.at_soft_keyword("from") {
                 self.start_node(SyntaxKind::IMPORT_ITEM);
                 match self.parse_import() {
                     Ok(import) => {
@@ -276,10 +278,12 @@ impl<'a> Parser<'a> {
                 }
                 continue;
             }
-            match self.parse_top_level_decl() {
-                Ok(decl) => {
-                    let decl_id = self.pool.alloc_decl(decl);
-                    decls.push(decl_id);
+            match self.parse_top_level_decls() {
+                Ok(parsed_decls) => {
+                    for decl in parsed_decls {
+                        let decl_id = self.pool.alloc_decl(decl);
+                        decls.push(decl_id);
+                    }
                 }
                 Err(err) => {
                     self.report_error(err);
@@ -307,7 +311,10 @@ impl<'a> Parser<'a> {
             || self.current().span(self.file_id),
             |token| token.span(self.file_id),
         );
-        let end_span = if self.pos == start {
+        let end_span = if self.split_gt.is_some() {
+            let tok = &self.tokens[self.pos];
+            Span::new(self.file_id, tok.start, tok.start + 1)
+        } else if self.pos == start {
             start_span
         } else {
             self.tokens
@@ -410,6 +417,11 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Ok(name)
             }
+            kind if is_contextual_module_segment(kind) => {
+                let name = SmolStr::new(self.current_text());
+                self.advance();
+                Ok(name)
+            }
             _ => Err(ParseError::expected(
                 ParseErrorCode::ExpectedToken,
                 "expected identifier",
@@ -447,17 +459,16 @@ impl<'a> Parser<'a> {
     pub(super) fn expect_name(&mut self, name: &str) -> Result<(), ParseError> {
         if self.at_kind_name(name) {
             self.advance();
-            Ok(())
-        } else {
-            Err(ParseError::expected(
-                ParseErrorCode::ExpectedToken,
-                format!("expected {name}"),
-                self.current(),
-                self.file_id,
-                self.source,
-                token_expectation_names(name),
-            ))
+            return Ok(());
         }
+        Err(ParseError::expected(
+            ParseErrorCode::ExpectedToken,
+            format!("expected {name}"),
+            self.current(),
+            self.file_id,
+            self.source,
+            token_expectation_names(name),
+        ))
     }
 
     pub(super) fn eat_name(&mut self, name: &str) -> bool {
@@ -467,6 +478,59 @@ impl<'a> Parser<'a> {
         } else {
             false
         }
+    }
+
+    pub(super) fn at_gt(&self) -> bool {
+        matches!(self.current().kind, TokenKind::Gt | TokenKind::ShiftRight)
+    }
+
+    pub(super) fn eat_gt(&mut self) -> bool {
+        if let Some(split) = self.split_gt.take() {
+            self.suppression_window += 1;
+            self.emit_token_event(&split);
+            if self.pos < self.tokens.len() - 1 {
+                self.pos += 1;
+            }
+            return true;
+        }
+        if self.tokens[self.pos].kind == TokenKind::ShiftRight {
+            self.suppression_window += 1;
+            let tok = self.tokens[self.pos];
+            let first = Token {
+                kind: TokenKind::Gt,
+                start: tok.start,
+                len: 1,
+                inserted: false,
+            };
+            let second = Token {
+                kind: TokenKind::Gt,
+                start: tok.start + 1,
+                len: 1,
+                inserted: false,
+            };
+            self.emit_token_event(&first);
+            self.split_gt = Some(second);
+            return true;
+        }
+        if self.tokens[self.pos].kind == TokenKind::Gt {
+            self.advance();
+            return true;
+        }
+        false
+    }
+
+    pub(super) fn expect_gt(&mut self) -> Result<(), ParseError> {
+        if self.eat_gt() {
+            return Ok(());
+        }
+        Err(ParseError::expected(
+            ParseErrorCode::ExpectedToken,
+            "expected GT",
+            self.current(),
+            self.file_id,
+            self.source,
+            token_expectation_names("GT"),
+        ))
     }
 
     pub(super) fn expect_kind(&mut self, kind: TokenKind) -> Result<(), ParseError> {
@@ -499,8 +563,18 @@ impl<'a> Parser<'a> {
         self.current().kind.name() == name
     }
 
+    /// Soft keywords lex as plain identifiers but keep a keyword meaning in
+    /// specific positions (e.g. `from` inside import syntax).
+    pub(super) fn at_soft_keyword(&self, word: &str) -> bool {
+        self.current().kind == TokenKind::IdentValue && self.token_text(self.current()) == word
+    }
+
     pub(super) fn current(&self) -> &Token {
-        &self.tokens[self.pos]
+        if let Some(ref tok) = self.split_gt {
+            tok
+        } else {
+            &self.tokens[self.pos]
+        }
     }
 
     pub(super) fn token_text(&self, token: &Token) -> &str {
@@ -521,6 +595,17 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn advance_raw(&mut self) -> &Token {
+        if let Some(split) = self.split_gt.take() {
+            self.emit_token_event(&split);
+            if self.pos < self.tokens.len() - 1 {
+                self.pos += 1;
+            }
+            return if self.pos > 0 {
+                &self.tokens[self.pos - 1]
+            } else {
+                &self.tokens[0]
+            };
+        }
         let idx = self.pos;
         let token = self.tokens[idx];
         self.emit_token_event(&token);
@@ -676,8 +761,15 @@ static TOKEN_INFO_TABLE: [TokenInfo; TokenKind::COUNT] = {
             TokenKind::TypeErr => Some("Err"),
             _ => None,
         };
-        let is_type =
-            prim.is_some() || matches!(kind, TokenKind::IdentType | TokenKind::IdentValue);
+        let is_type = prim.is_some()
+            || matches!(
+                kind,
+                TokenKind::IdentType
+                    | TokenKind::IdentValue
+                    | TokenKind::KwOwn
+                    | TokenKind::KwRef
+                    | TokenKind::KwMut
+            );
         let is_contextual = matches!(
             kind,
             TokenKind::IdentType
@@ -712,6 +804,7 @@ static TOKEN_INFO_TABLE: [TokenInfo; TokenKind::COUNT] = {
                 | TokenKind::KwOwn
                 | TokenKind::KwMut
                 | TokenKind::KwShared
+                | TokenKind::KwRef
                 | TokenKind::KwSelf
                 | TokenKind::KwPtr
                 | TokenKind::KwDefer
@@ -795,6 +888,10 @@ pub(super) fn merge_text_parts(parts: Vec<StringPart>) -> Vec<StringPart> {
 
 pub(super) fn is_contextual_module_segment(kind: &TokenKind) -> bool {
     TOKEN_INFO_TABLE[kind.index()].is_contextual_module_segment
+}
+
+pub(crate) fn is_primitive_type_token(kind: &TokenKind) -> bool {
+    TOKEN_INFO_TABLE[kind.index()].primitive_type_name.is_some()
 }
 
 pub(super) fn span_between(start: Span, end: Span) -> Span {

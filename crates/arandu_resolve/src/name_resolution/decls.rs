@@ -167,6 +167,8 @@ impl<'a> Resolver<'a> {
     }
 
     pub(crate) fn define_generics(&mut self, scope: ScopeId, generics: &[GenericParam]) {
+        // Pass 1: Bind all type parameter names into scope first so forward/mutual
+        // references between type parameters (e.g. `<I: Iterator<Item>, Item>`) resolve.
         for generic in generics {
             // Methods on generic types restate receiver params (`func Vec.push<T, A>(…)`).
             // Those names were already bound via `import_receiver_type_params` to the
@@ -176,18 +178,15 @@ impl<'a> Resolver<'a> {
                 && self.symbols.get(existing).kind == SymbolKind::TypeParam
             {
                 self.resolved.define(generic.span, existing);
-                for constraint in &generic.constraints {
-                    self.resolve_type_name(scope, constraint);
-                }
-                // T2.1: still resolve default type expr on restated params if present.
-                if let Some(def_ty) = generic.default {
-                    self.resolve_type_expr(scope, def_ty);
-                }
-                continue;
+            } else {
+                self.define(scope, &generic.name, SymbolKind::TypeParam, generic.span);
             }
-            self.define(scope, &generic.name, SymbolKind::TypeParam, generic.span);
+        }
+
+        // Pass 2: Resolve constraints and default types now that all parameters are in scope.
+        for generic in generics {
             for constraint in &generic.constraints {
-                self.resolve_type_name(scope, constraint);
+                self.resolve_type_expr(scope, *constraint);
             }
             // T2.1: default type arg (`A = GlobalAllocator`) must be name-resolved
             // so typeck can lower it into `generic_defaults`.
@@ -230,7 +229,7 @@ impl<'a> Resolver<'a> {
             },
         );
         for constraint in &item.constraints {
-            self.resolve_type_name(scope, constraint);
+            self.resolve_type_expr(scope, *constraint);
         }
     }
 
@@ -258,7 +257,13 @@ impl<'a> Resolver<'a> {
 
     pub(crate) fn resolve_enum_variant(&mut self, scope: ScopeId, variant: &EnumVariant) {
         self.resolve_attrs(scope, &variant.attrs);
-        self.define(scope, &variant.name, SymbolKind::EnumVariant, variant.span);
+        if let Some(&canonical_id) = self
+            .resolved
+            .definitions
+            .get(&crate::NodeKey::from(variant.span))
+        {
+            self.symbols.bind_existing(scope, canonical_id);
+        }
         match &variant.payload {
             Some(EnumPayload::Tuple { types, .. }) => {
                 for ty in self.pool.type_expr_list(*types) {
@@ -300,9 +305,7 @@ impl<'a> Resolver<'a> {
             {
                 self.symbols
                     .associated_members
-                    .entry(struct_sym)
-                    .or_default()
-                    .insert(name.clone(), method_sym);
+                    .insert((struct_sym, name.clone()), method_sym);
             }
         }
     }

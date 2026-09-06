@@ -27,7 +27,7 @@ public struct Benchmark {
 }
 
 /// Continue the calibrated benchmark loop while the current sample needs work.
-public func Benchmark.loop(mut self): bool {
+public func Benchmark.loop(self: mut ref Benchmark): bool {
     unsafe {
         return ar_bench_loop(self.handle) != 0
     }

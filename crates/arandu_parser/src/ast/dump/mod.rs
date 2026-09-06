@@ -93,7 +93,7 @@ pub(super) fn dump_generic_params(pool: &AstPool, params: &[GenericParam]) -> St
                 let constraints = param
                     .constraints
                     .iter()
-                    .map(decl::dump_type_name)
+                    .map(|c| dump_constraint(pool, *c))
                     .collect::<Vec<_>>()
                     .join(" + ");
                 format!("{} {}: {constraints}", dump_span(param.span), param.name)
@@ -110,7 +110,16 @@ pub(super) fn dump_generic_params(pool: &AstPool, params: &[GenericParam]) -> St
     format!("<{params_str}>")
 }
 
-pub(super) fn dump_where_clause(where_clause: &[WhereItem]) -> String {
+fn dump_constraint(pool: &AstPool, c: crate::TypeExprId) -> String {
+    match pool.type_expr(c) {
+        crate::TypeExpr::Named { name, args, .. } if pool.type_expr_list(*args).is_empty() => {
+            decl::dump_type_name(name)
+        }
+        _ => decl::dump_type(pool.type_expr(c), pool),
+    }
+}
+
+pub(super) fn dump_where_clause(pool: &AstPool, where_clause: &[WhereItem]) -> String {
     if where_clause.is_empty() {
         return String::new();
     }
@@ -120,7 +129,7 @@ pub(super) fn dump_where_clause(where_clause: &[WhereItem]) -> String {
             let constraints = item
                 .constraints
                 .iter()
-                .map(decl::dump_type_name)
+                .map(|c| dump_constraint(pool, *c))
                 .collect::<Vec<_>>()
                 .join(" + ");
             format!("{} {}: {constraints}", dump_span(item.span), item.name)
@@ -159,8 +168,8 @@ pub(super) fn dump_unary(op: UnaryOp) -> &'static str {
         UnaryOp::Not => "!",
         UnaryOp::BitNot => "~",
         UnaryOp::Await => "await",
-        UnaryOp::Ref => "&",
-        UnaryOp::RefMut => "&mut",
+        UnaryOp::Ref => "ref ",
+        UnaryOp::RefMut => "mut ref ",
         UnaryOp::Deref => "*",
     }
 }

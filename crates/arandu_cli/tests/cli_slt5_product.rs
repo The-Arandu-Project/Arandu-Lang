@@ -23,7 +23,12 @@ fn create_project(tmp: &std::path::Path) -> std::path::PathBuf {
         .current_dir(tmp)
         .output()
         .expect("create project");
-    assert!(created.status.success());
+    assert!(
+        created.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&created.stdout),
+        String::from_utf8_lossy(&created.stderr)
+    );
     let project = tmp.join("product_gold");
     fs::write(
         project.join("src/main.aru"),

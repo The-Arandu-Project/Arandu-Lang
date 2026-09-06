@@ -94,9 +94,10 @@ pub fn expand_specializations<'bump>(
         if args.is_empty() || !template_funcs.contains_key(&destructor) {
             continue;
         }
+        let arg_ids = tc.type_info.type_interner.type_args(args);
         let key = InstantiationKey {
             symbol: destructor,
-            type_args: bump.alloc_slice_copy(&args),
+            type_args: bump.alloc_slice_copy(&arg_ids),
         };
         if !worklist.iter().any(|existing| existing == &key) {
             worklist.push_back(key);
@@ -583,10 +584,20 @@ fn specialize_free_func(
             receiver_kind: p.receiver_kind,
         });
     }
-    let func_ty = ArType::Func(param_tids, ret_ty);
+    let func_ty = ArType::func(&param_tids, ret_ty, &tc.type_info.type_interner);
     let func_ty_id = tc.type_info.type_interner.intern(func_ty);
     tc.type_info_mut()
         .record_decl_type(new_func_sym, func_ty_id);
+    if let Some(summary) = tc
+        .type_info
+        .return_borrow_summaries
+        .get(&key.symbol)
+        .cloned()
+    {
+        tc.type_info_mut()
+            .return_borrow_summaries
+            .insert(new_func_sym, summary);
+    }
     let specializes_destructor = tc
         .type_info
         .destructors

@@ -205,7 +205,6 @@ KW_CONST
 KW_TYPE
 KW_MODULE
 KW_IMPORT
-KW_FROM
 KW_AS
 KW_PUBLIC
 KW_EXTERN
@@ -249,6 +248,12 @@ Invariant:
 
 - `Err` is a primitive type token despite starting uppercase.
 - Keywords cannot be used as identifiers in v0.1.
+- **Soft keyword `from`**: `from` lexes as an ordinary value identifier
+  (`IDENT`), not as `KW_FROM`. The parser recognizes a `from` identifier in
+  import position (`{ a, b } from <path>`) as the import keyword, so
+  `func from(...)`, `String.from`, variable and field names are legal. The
+  `KW_FROM` token kind is retired; it is never produced by the lexer (the
+  enum variant is kept as a sentinel for CST/import reconstruction).
 
 ### Numeric Literals
 
@@ -550,7 +555,7 @@ PLUS MINUS STAR SLASH PERCENT AMP PIPE CARET
 SHIFT_LEFT SHIFT_RIGHT
 EQUAL
 KW_IF KW_ELSE KW_FOR KW_WHILE KW_MATCH KW_FUNC KW_STRUCT KW_ENUM
-KW_INTERFACE KW_EXTERN KW_IMPORT KW_FROM KW_WHERE KW_CATCH
+KW_INTERFACE KW_EXTERN KW_IMPORT KW_WHERE KW_CATCH
 KW_DEFER KW_ERRDEFER KW_UNSAFE KW_ASYNC KW_AWAIT
 ```
 

@@ -36,7 +36,9 @@ fn enum_variant_symbol_ids(
         if *parent_enum != enum_id {
             continue;
         }
-        let sym = checker.symbols.get(*variant_id);
+        let Some(sym) = checker.symbols.try_get(*variant_id) else {
+            continue;
+        };
         if sym.kind == arandu_middle::SymbolKind::AssociatedFunc {
             ids.insert(*variant_id);
         }
@@ -109,13 +111,21 @@ pub fn check_match_exhaustiveness(
 
     // Compute missing variants. String names are only materialised here,
     // which is the cold (error) path.
-    let enum_name = &checker.symbols.get(enum_id).name;
+    let enum_name = checker
+        .symbols
+        .try_get(enum_id)
+        .map(|s| s.name.as_str())
+        .unwrap_or("enum");
     let prefix = format!("{}.", enum_name);
     let mut missing: Vec<String> = all_variants
         .difference(&covered)
         .map(|&sym| {
-            let full = &checker.symbols.get(sym).name;
-            full.strip_prefix(&prefix).unwrap_or(full).to_string()
+            if let Some(s) = checker.symbols.try_get(sym) {
+                let full = &s.name;
+                full.strip_prefix(&prefix).unwrap_or(full).to_string()
+            } else {
+                "variant".to_string()
+            }
         })
         .collect();
 

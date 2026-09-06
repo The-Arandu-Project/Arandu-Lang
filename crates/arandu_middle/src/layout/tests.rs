@@ -1,4 +1,5 @@
 use super::*;
+use crate::hir::pool::IndexRange;
 use crate::newtype_index;
 
 struct LayoutEngine(super::LayoutEngine);
@@ -67,10 +68,7 @@ fn typed_iteration_returns_dense_ids() {
 
 struct MockProvider;
 impl StructLayoutProvider for MockProvider {
-    fn get_struct_fields(&self, _struct_id: SymbolId) -> Option<&FxHashMap<String, TypeId>> {
-        None
-    }
-    fn get_struct_field_indices(&self, _struct_id: SymbolId) -> Option<&FxHashMap<String, usize>> {
+    fn get_struct_fields(&self, _struct_id: SymbolId) -> Option<&StructFields> {
         None
     }
     fn get_generic_params(&self, _struct_id: SymbolId) -> Option<&[SymbolId]> {
@@ -164,18 +162,14 @@ fn gen_payload_layout_preserves_zero_sized_void_contract() {
 }
 
 struct StructMockProvider {
-    fields: FxHashMap<SymbolId, FxHashMap<String, TypeId>>,
-    field_indices: FxHashMap<SymbolId, FxHashMap<String, usize>>,
+    fields: FxHashMap<SymbolId, StructFields>,
     generic_params: FxHashMap<SymbolId, Vec<SymbolId>>,
     enum_variants: FxHashMap<SymbolId, Vec<EnumPayloadShape>>,
 }
 
 impl StructLayoutProvider for StructMockProvider {
-    fn get_struct_fields(&self, struct_id: SymbolId) -> Option<&FxHashMap<String, TypeId>> {
+    fn get_struct_fields(&self, struct_id: SymbolId) -> Option<&StructFields> {
         self.fields.get(&struct_id)
-    }
-    fn get_struct_field_indices(&self, struct_id: SymbolId) -> Option<&FxHashMap<String, usize>> {
-        self.field_indices.get(&struct_id)
     }
     fn get_generic_params(&self, struct_id: SymbolId) -> Option<&[SymbolId]> {
         self.generic_params.get(&struct_id).map(|v| v.as_slice())
@@ -197,7 +191,7 @@ fn test_all_primitive_layouts() {
             (Primitive::U8, 1, 1),
             (Primitive::Byte, 1, 1),
             (Primitive::Bool, 1, 1),
-            (Primitive::Char, 1, 1),
+            (Primitive::Char, 4, 4),
             (Primitive::I16, 2, 2),
             (Primitive::U16, 2, 2),
             (Primitive::I32, 4, 4),
@@ -324,7 +318,7 @@ fn aggregate_layout_rejects_offset_that_crosses_target_bound() {
     let provider = MockProvider;
     let byte = interner.intern(ArType::Primitive(Primitive::U8));
     let almost_full = interner.intern(ArType::Array((1_u64 << 31) - 1, byte));
-    let tuple = interner.intern(ArType::Tuple(vec![almost_full, byte]));
+    let tuple = interner.intern(ArType::tuple(&[almost_full, byte], &interner));
 
     assert_eq!(
         engine.try_layout_of(tuple, &interner, &provider),
@@ -359,7 +353,7 @@ fn test_func_layout() {
     let interner = TypeInterner::new();
     let provider = MockProvider;
     let int_id = interner.intern(ArType::Primitive(Primitive::Int));
-    let func_ty = ArType::Func(vec![int_id, int_id], int_id);
+    let func_ty = ArType::func(&[int_id, int_id], int_id, &interner);
     let tid = interner.intern(func_ty);
     let layout = engine.layout_of(tid, &interner, &provider);
     assert_eq!(layout.size, 8);
@@ -388,7 +382,7 @@ fn test_tuple_layout() {
     let u8_id = interner.intern(ArType::Primitive(Primitive::U8));
     let i32_id = interner.intern(ArType::Primitive(Primitive::I32));
     let u8_2 = interner.intern(ArType::Primitive(Primitive::U8));
-    let tuple_ty = ArType::Tuple(vec![u8_id, i32_id, u8_2]);
+    let tuple_ty = ArType::tuple(&[u8_id, i32_id, u8_2], &interner);
     let tid = interner.intern(tuple_ty);
     let layout = engine.layout_of(tid, &interner, &provider);
     // u8 at 0, i32 at 4 (align 4), u8 at 8, total = 12 (aligned to 4)
@@ -450,22 +444,16 @@ fn test_zst_allocator_field_adds_no_size() {
 
     // Setup mock provider for ZST
     let mut provider = StructMockProvider {
-        fields: FxHashMap::<SymbolId, FxHashMap<String, TypeId>>::default(),
-        field_indices: FxHashMap::<SymbolId, FxHashMap<String, usize>>::default(),
+        fields: FxHashMap::<SymbolId, StructFields>::default(),
         generic_params: FxHashMap::<SymbolId, Vec<SymbolId>>::default(),
         enum_variants: FxHashMap::<SymbolId, Vec<EnumPayloadShape>>::default(),
     };
 
     // Create ZST struct "GlobalAllocator"
     let zst_id = SymbolId::new(0, 100);
-    provider
-        .fields
-        .insert(zst_id, FxHashMap::<String, TypeId>::default()); // No fields = ZST
-    provider
-        .field_indices
-        .insert(zst_id, FxHashMap::<String, usize>::default());
+    provider.fields.insert(zst_id, StructFields::new()); // No fields = ZST
 
-    let zst_ty = ArType::Named(zst_id, vec![]);
+    let zst_ty = ArType::Named(zst_id, IndexRange::empty());
     let zst_tid = interner.intern(zst_ty);
     let zst_layout = engine.layout_of(zst_tid, &interner, &provider);
     assert_eq!(zst_layout.size, 0); // ZST has 0 size
@@ -473,34 +461,36 @@ fn test_zst_allocator_field_adds_no_size() {
 
     // Create Vec struct with ZST field
     let vec_id = SymbolId::new(0, 101);
-    let mut vec_fields = FxHashMap::<String, TypeId>::default();
-    vec_fields.insert(
-        "data".to_string(),
-        interner.intern(ArType::Primitive(Primitive::I64)),
-    ); // simplified pointer
-    vec_fields.insert(
-        "len".to_string(),
-        interner.intern(ArType::Primitive(Primitive::U64)),
-    );
-    vec_fields.insert(
-        "capacity".to_string(),
-        interner.intern(ArType::Primitive(Primitive::U64)),
-    );
-    vec_fields.insert(
-        "allocator".to_string(),
-        interner.intern(ArType::Named(zst_id, vec![])),
-    );
-
-    let mut vec_indices = FxHashMap::<String, usize>::default();
-    vec_indices.insert("data".to_string(), 0);
-    vec_indices.insert("len".to_string(), 1);
-    vec_indices.insert("capacity".to_string(), 2);
-    vec_indices.insert("allocator".to_string(), 3);
+    let vec_fields = StructFields::from_entries([
+        StructFieldInfo {
+            name: "data".into(),
+            symbol: None,
+            ty: interner.intern(ArType::Primitive(Primitive::I64)),
+            index: 0,
+        },
+        StructFieldInfo {
+            name: "len".into(),
+            symbol: None,
+            ty: interner.intern(ArType::Primitive(Primitive::U64)),
+            index: 1,
+        },
+        StructFieldInfo {
+            name: "capacity".into(),
+            symbol: None,
+            ty: interner.intern(ArType::Primitive(Primitive::U64)),
+            index: 2,
+        },
+        StructFieldInfo {
+            name: "allocator".into(),
+            symbol: None,
+            ty: interner.intern(ArType::Named(zst_id, IndexRange::empty())),
+            index: 3,
+        },
+    ]);
 
     provider.fields.insert(vec_id, vec_fields);
-    provider.field_indices.insert(vec_id, vec_indices);
 
-    let vec_ty = ArType::Named(vec_id, vec![]);
+    let vec_ty = ArType::Named(vec_id, IndexRange::empty());
     let vec_tid = interner.intern(vec_ty);
     let vec_layout = engine.layout_of(vec_tid, &interner, &provider);
 
@@ -538,39 +528,37 @@ fn test_struct_layout_and_padding() {
 
     let struct_sym = SymbolId::new(0, 1234);
 
-    let mut fields = FxHashMap::<String, TypeId>::default();
-    fields.insert(
-        "a".to_string(),
-        interner.intern(ArType::Primitive(Primitive::U8)),
-    );
-    fields.insert(
-        "b".to_string(),
-        interner.intern(ArType::Primitive(Primitive::I32)),
-    );
-    fields.insert(
-        "c".to_string(),
-        interner.intern(ArType::Primitive(Primitive::U8)),
-    );
+    let fields = StructFields::from_entries([
+        StructFieldInfo {
+            name: "a".into(),
+            symbol: None,
+            ty: interner.intern(ArType::Primitive(Primitive::U8)),
+            index: 0,
+        },
+        StructFieldInfo {
+            name: "b".into(),
+            symbol: None,
+            ty: interner.intern(ArType::Primitive(Primitive::I32)),
+            index: 1,
+        },
+        StructFieldInfo {
+            name: "c".into(),
+            symbol: None,
+            ty: interner.intern(ArType::Primitive(Primitive::U8)),
+            index: 2,
+        },
+    ]);
 
-    let mut field_indices = FxHashMap::<String, usize>::default();
-    field_indices.insert("a".to_string(), 0);
-    field_indices.insert("b".to_string(), 1);
-    field_indices.insert("c".to_string(), 2);
-
-    let mut fields_map = FxHashMap::<SymbolId, FxHashMap<String, TypeId>>::default();
+    let mut fields_map = FxHashMap::<SymbolId, StructFields>::default();
     fields_map.insert(struct_sym, fields);
-
-    let mut indices_map = FxHashMap::<SymbolId, FxHashMap<String, usize>>::default();
-    indices_map.insert(struct_sym, field_indices);
 
     let provider = StructMockProvider {
         fields: fields_map,
-        field_indices: indices_map,
         generic_params: FxHashMap::<SymbolId, Vec<SymbolId>>::default(),
         enum_variants: FxHashMap::<SymbolId, Vec<EnumPayloadShape>>::default(),
     };
 
-    let struct_ty = ArType::Named(struct_sym, Vec::new());
+    let struct_ty = ArType::Named(struct_sym, IndexRange::empty());
     let struct_id = interner.intern(struct_ty);
 
     let layout = engine.layout_of(struct_id, &interner, &provider);
@@ -588,7 +576,7 @@ fn test_struct_missing_fields_fallback() {
     let engine = LayoutEngine::new(8);
     let interner = TypeInterner::new();
     let struct_sym = SymbolId::new(0, 9999);
-    let struct_ty = ArType::Named(struct_sym, Vec::new());
+    let struct_ty = ArType::Named(struct_sym, IndexRange::empty());
     let struct_id = interner.intern(struct_ty);
     let provider = MockProvider;
     let layout = engine.layout_of(struct_id, &interner, &provider);
@@ -605,32 +593,29 @@ fn test_struct_generic_substitution() {
     let struct_sym = SymbolId::new(0, 42);
     let param_sym = SymbolId::new(0, 1);
 
-    let param_ty = interner.intern(ArType::Named(param_sym, vec![]));
+    let param_ty = interner.intern(ArType::Named(param_sym, IndexRange::empty()));
 
-    let mut fields = FxHashMap::<String, TypeId>::default();
-    fields.insert("value".to_string(), param_ty);
+    let fields = StructFields::from_entries([StructFieldInfo {
+        name: "value".into(),
+        symbol: None,
+        ty: param_ty,
+        index: 0,
+    }]);
 
-    let mut field_indices = FxHashMap::<String, usize>::default();
-    field_indices.insert("value".to_string(), 0);
-
-    let mut fields_map = FxHashMap::<SymbolId, FxHashMap<String, TypeId>>::default();
+    let mut fields_map = FxHashMap::<SymbolId, StructFields>::default();
     fields_map.insert(struct_sym, fields);
-
-    let mut indices_map = FxHashMap::<SymbolId, FxHashMap<String, usize>>::default();
-    indices_map.insert(struct_sym, field_indices);
 
     let mut generic_params = FxHashMap::<SymbolId, Vec<SymbolId>>::default();
     generic_params.insert(struct_sym, vec![param_sym]);
 
     let provider = StructMockProvider {
         fields: fields_map,
-        field_indices: indices_map,
         generic_params,
         enum_variants: FxHashMap::<SymbolId, Vec<EnumPayloadShape>>::default(),
     };
 
     let concrete_int = interner.intern(ArType::Primitive(Primitive::I32));
-    let struct_ty = ArType::Named(struct_sym, vec![concrete_int]);
+    let struct_ty = ArType::named(struct_sym, &[concrete_int], &interner);
     let struct_id = interner.intern(struct_ty);
 
     let layout = engine.layout_of(struct_id, &interner, &provider);
@@ -638,4 +623,127 @@ fn test_struct_generic_substitution() {
     assert_eq!(layout.align, 4);
     assert_eq!(layout.field_offsets, vec![0]);
     assert_eq!(layout.size, 4);
+}
+
+#[test]
+fn test_target_32bit_vec_and_string_evidence() {
+    let interner = TypeInterner::new();
+
+    // Struct mimicking Vec[T] / String: { ptr, len: uint, cap: uint }
+    let struct_sym = SymbolId::new(0, 100);
+    let u8_tid = interner.intern(ArType::Primitive(Primitive::U8));
+    let ptr_u8_tid = interner.intern(ArType::Ptr(u8_tid));
+    let uint_tid = interner.intern(ArType::Primitive(Primitive::Uint));
+
+    let fields = StructFields::from_entries([
+        StructFieldInfo {
+            name: "data".into(),
+            symbol: None,
+            ty: ptr_u8_tid,
+            index: 0,
+        },
+        StructFieldInfo {
+            name: "len".into(),
+            symbol: None,
+            ty: uint_tid,
+            index: 1,
+        },
+        StructFieldInfo {
+            name: "capacity".into(),
+            symbol: None,
+            ty: uint_tid,
+            index: 2,
+        },
+    ]);
+
+    let mut fields_map = FxHashMap::<SymbolId, StructFields>::default();
+    fields_map.insert(struct_sym, fields);
+
+    let provider = StructMockProvider {
+        fields: fields_map,
+        generic_params: FxHashMap::default(),
+        enum_variants: FxHashMap::default(),
+    };
+
+    let struct_ty = ArType::Named(struct_sym, IndexRange::empty());
+    let struct_id = interner.intern(struct_ty);
+
+    // 64-bit target: ptr=8, uint=8, cap=8 -> size=24, align=8, offsets=[0, 8, 16]
+    let engine_64 = LayoutEngine::new(8);
+    let layout_64 = engine_64.layout_of(struct_id, &interner, &provider);
+    assert_eq!(layout_64.size, 24);
+    assert_eq!(layout_64.align, 8);
+    assert_eq!(layout_64.field_offsets, vec![0, 8, 16]);
+
+    // 32-bit generic target: ptr=4, uint=4, cap=4 -> size=12, align=4, offsets=[0, 4, 8]
+    let engine_32 = LayoutEngine::new(4);
+    let layout_32 = engine_32.layout_of(struct_id, &interner, &provider);
+    assert_eq!(layout_32.size, 12);
+    assert_eq!(layout_32.align, 4);
+    assert_eq!(layout_32.field_offsets, vec![0, 4, 8]);
+
+    // 32-bit i686 SysV target: size=12, align=4, offsets=[0, 4, 8]
+    let engine_i686 = LayoutEngine::from_data_layout(DataLayout::i686_sysv());
+    let layout_i686 = engine_i686.layout_of(struct_id, &interner, &provider);
+    assert_eq!(layout_i686.size, 12);
+    assert_eq!(layout_i686.align, 4);
+    assert_eq!(layout_i686.field_offsets, vec![0, 4, 8]);
+}
+
+#[test]
+fn test_target_32bit_mixed_alignment_evidence() {
+    let interner = TypeInterner::new();
+
+    // Struct with mixed types: { a: u8, b: u64, c: u32 }
+    let struct_sym = SymbolId::new(0, 101);
+    let u8_tid = interner.intern(ArType::Primitive(Primitive::U8));
+    let u64_tid = interner.intern(ArType::Primitive(Primitive::U64));
+    let u32_tid = interner.intern(ArType::Primitive(Primitive::U32));
+
+    let fields = StructFields::from_entries([
+        StructFieldInfo {
+            name: "a".into(),
+            symbol: None,
+            ty: u8_tid,
+            index: 0,
+        },
+        StructFieldInfo {
+            name: "b".into(),
+            symbol: None,
+            ty: u64_tid,
+            index: 1,
+        },
+        StructFieldInfo {
+            name: "c".into(),
+            symbol: None,
+            ty: u32_tid,
+            index: 2,
+        },
+    ]);
+
+    let mut fields_map = FxHashMap::<SymbolId, StructFields>::default();
+    fields_map.insert(struct_sym, fields);
+
+    let provider = StructMockProvider {
+        fields: fields_map,
+        generic_params: FxHashMap::default(),
+        enum_variants: FxHashMap::default(),
+    };
+
+    let struct_ty = ArType::Named(struct_sym, IndexRange::empty());
+    let struct_id = interner.intern(struct_ty);
+
+    // In 64-bit: a@0, pad 7, b@8, c@16, pad 4 -> size=24, align=8
+    let engine_64 = LayoutEngine::new(8);
+    let layout_64 = engine_64.layout_of(struct_id, &interner, &provider);
+    assert_eq!(layout_64.size, 24);
+    assert_eq!(layout_64.align, 8);
+    assert_eq!(layout_64.field_offsets, vec![0, 8, 16]);
+
+    // In i686 SysV (where u64 align is 4!): a@0, pad 3, b@4, c@12 -> size=16, align=4
+    let engine_i686 = LayoutEngine::from_data_layout(DataLayout::i686_sysv());
+    let layout_i686 = engine_i686.layout_of(struct_id, &interner, &provider);
+    assert_eq!(layout_i686.size, 16);
+    assert_eq!(layout_i686.align, 4);
+    assert_eq!(layout_i686.field_offsets, vec![0, 4, 12]);
 }

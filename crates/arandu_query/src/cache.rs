@@ -64,7 +64,8 @@ impl FromStr for CacheDigest {
             return Err(CacheDigestError::NonCanonicalHex);
         }
         let mut bytes = [0_u8; 32];
-        for (index, pair) in hex.as_bytes().chunks_exact(2).enumerate() {
+        let (chunks, _) = hex.as_bytes().as_chunks::<2>();
+        for (index, pair) in chunks.iter().enumerate() {
             let pair = std::str::from_utf8(pair).map_err(|_| CacheDigestError::NonCanonicalHex)?;
             bytes[index] =
                 u8::from_str_radix(pair, 16).map_err(|_| CacheDigestError::NonCanonicalHex)?;

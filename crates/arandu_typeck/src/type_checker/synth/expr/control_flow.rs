@@ -33,6 +33,7 @@ pub(super) fn synth_control_flow_expr(
     _expr: ExprId,
     kind: &ExprKind,
     span: Span,
+    expected: Option<TypeId>,
 ) -> Option<TypeId> {
     match kind {
         ExprKind::Lambda { .. } => {
@@ -64,10 +65,15 @@ pub(super) fn synth_control_flow_expr(
         }
         ExprKind::AsyncBlock { block } => {
             let block_id = *block;
-            let block_ty = crate::type_checker::check::check_block(
+            let expected_inner = expected.and_then(|exp| match checker.resolve(exp) {
+                ArType::Coroutine(inner) => Some(inner),
+                _ => None,
+            });
+            let block_ty = crate::type_checker::check::check_block_tail(
                 checker,
                 checker.pool,
                 checker.pool.block(block_id),
+                expected_inner,
             );
             let inner_id = checker.intern(block_ty);
             Some(checker.intern(ArType::Coroutine(inner_id)))
@@ -105,7 +111,7 @@ pub(super) fn synth_control_flow_expr(
             if !types::unify(&then_ty, &else_ty, &checker.type_info.type_interner) {
                 checker.add_constraint(
                     then_ty.clone(),
-                    else_ty.clone(),
+                    else_ty,
                     ConstraintOrigin::IfBranches {
                         then_span: checker.pool.block(then_id).span,
                         else_span: checker.pool.block(else_id).span,

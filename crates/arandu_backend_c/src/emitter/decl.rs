@@ -61,7 +61,7 @@ impl<'a> CEmitter<'a> {
             return "int".to_string();
         }
         let ret = self.interner.resolve(func.return_type);
-        self.format_type(&ret)
+        self.format_type(&ret).into_owned()
     }
 
     pub(super) fn emit_str_literals(&mut self) {
@@ -94,9 +94,9 @@ impl<'a> CEmitter<'a> {
         }
         let name = self.format_type(ty);
         // Never redefine C/stdlib primitive types as blob structs (e.g. `double`).
-        if self.emitted_types.contains(&name)
+        if self.emitted_types.contains(name.as_ref())
             || matches!(
-                name.as_str(),
+                name.as_ref(),
                 "void"
                     | "bool"
                     | "float"
@@ -120,7 +120,7 @@ impl<'a> CEmitter<'a> {
             let ret_ty = self.interner.resolve(*ret);
             self.ensure_type_emitted(&ret_ty);
             let mut params_c_tys = Vec::new();
-            for &p in params {
+            for &p in self.interner.type_args(*params).iter() {
                 let p_ty = self.interner.resolve(p);
                 self.ensure_type_emitted(&p_ty);
                 params_c_tys.push(self.format_type(&p_ty));
@@ -136,7 +136,7 @@ impl<'a> CEmitter<'a> {
                 "typedef {} (*{})({});",
                 ret_c_ty, name, params_str
             );
-            self.emitted_types.insert(name);
+            self.emitted_types.insert(name.into_owned());
             return;
         }
 
@@ -144,17 +144,17 @@ impl<'a> CEmitter<'a> {
         if layout.size > 0 {
             let _ = writeln!(
                 &mut self.output,
-                "typedef struct {{ _Alignas({}) uint8_t memory[{}]; }} {};",
+                "typedef struct AR_MAY_ALIAS {{ _Alignas({}) uint8_t memory[{}]; }} {};",
                 layout.align, layout.size, name
             );
         } else {
             let _ = writeln!(
                 &mut self.output,
-                "typedef struct {{ uint8_t empty; }} {};",
+                "typedef struct AR_MAY_ALIAS {{ uint8_t empty; }} {};",
                 name
             ); // C doesn't like zero sized structs sometimes
         }
-        self.emitted_types.insert(name);
+        self.emitted_types.insert(name.into_owned());
     }
 
     pub(super) fn emit_func_decl(&mut self, func: &AmirFunc) {

@@ -9,7 +9,6 @@
 //! them as JIT imports through the re-exports below, so existing
 //! `arandu_backend_cranelift::<module>_runtime` paths keep working.
 
-#![allow(clippy::collapsible_if)]
 pub mod abi;
 pub mod aot;
 pub mod jit;
@@ -23,7 +22,9 @@ pub use arandu_runtime::{
     supervisor_runtime, testing_runtime, to_str_runtime, vec_runtime, waker_runtime,
 };
 
-pub use crate::aot::{CraneliftObjectBackend, ObjectArtifact};
+pub use crate::aot::{
+    AotOptimization, CraneliftObjectBackend, ObjectArtifact, aot_triple_for_pointer_width,
+};
 pub use crate::jit::CompiledModule;
 
 use crate::jit::AranduJit;

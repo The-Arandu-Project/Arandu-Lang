@@ -278,7 +278,7 @@ mod tests {
             })
             .expect("background job must queue");
         }
-        let tx = order_tx.clone();
+        let tx = order_tx;
         pool.spawn(Priority::Interactive, None, move |_| {
             tx.send(0).expect("record interactive order")
         })
@@ -388,8 +388,8 @@ mod tests {
         .expect("first request must queue");
 
         pool.spawn(Priority::Interactive, Some(JobKey::Request(11.into())), {
-            let started_tx = started_tx.clone();
-            let result_tx = result_tx.clone();
+            let started_tx = started_tx;
+            let result_tx = result_tx;
             move |token| {
                 started_tx.send(11).expect("record second request start");
                 release_second_rx.recv().expect("release second request");

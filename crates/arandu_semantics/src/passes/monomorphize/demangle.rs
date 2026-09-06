@@ -38,7 +38,7 @@ fn mangle_type_into(out: &mut String, ty: &ArType, symbols: &SymbolTable, intern
         ArType::Primitive(p) => out.push_str(p.as_str()),
         ArType::Named(id, args) => {
             out.push_str(&symbols.get(*id).name);
-            for &arg in args {
+            for &arg in interner.type_args(*args).iter() {
                 out.push('_');
                 mangle_type_into(out, &interner.resolve(arg), symbols, interner);
             }
@@ -70,14 +70,14 @@ fn mangle_type_into(out: &mut String, ty: &ArType, symbols: &SymbolTable, intern
         }
         ArType::Tuple(items) => {
             out.push_str("tup");
-            for &item in items {
+            for &item in interner.type_args(*items).iter() {
                 out.push('_');
                 mangle_type_into(out, &interner.resolve(item), symbols, interner);
             }
         }
         ArType::Func(params, ret) => {
             out.push_str("fn");
-            for &param in params {
+            for &param in interner.type_args(*params).iter() {
                 out.push('_');
                 mangle_type_into(out, &interner.resolve(param), symbols, interner);
             }

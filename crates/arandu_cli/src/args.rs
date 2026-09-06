@@ -118,7 +118,8 @@ pub fn usage_and_exit() -> ! {
         "  arandu_cli cache <dir|inspect|verify|verify-tree|prune> [--cache-dir=<absolute-dir>] [limits]\n",
         "  arandu_cli hash-file <path>          # BLAKE3 hex (packaging checksums)\n",
         "  arandu_cli watch [package-path]      # re-check on FS changes (package mode)\n",
-        "  arandu_cli test [package-path] [--list|--exact <id>] [--format human|json|junit]\n",
+        "  arandu_cli doc [path] [--format=html|json|md] [--out-dir=<dir>] [--open]\n",
+        "  arandu_cli test [package-path] [--list|--exact <id>] [--format human|json|junit] [--doc]\n",
         "  arandu_cli bench [package-path] [--list|--exact <id>] [--save-baseline <name>|--compare <name>]\n",
         "  arandu_cli clean [package-path]      # remove owned project artifacts\n",
         "  arandu_cli tree [package-path]       # canonical resolved dependency graph\n",
@@ -134,7 +135,7 @@ pub fn usage_and_exit() -> ! {
         "  -Z flags: -Ztime-passes  -Zprofile-queries  -Zprint-alloc-stats  -Zdump-mir\n",
         "           : -Zdebug-parser -Zdebug-typeck -Zdebug-ossa -Zdebug-layout -Zdebug-backend -Zdebug-all\n",
         "           : -Zself-profile=<path>  -Zexplain-rebuild  -Zno-generational-fallback\n\n",
-        "  backend: build → Cranelift (dev); build --release → LLVM when available\n",
+        "  backend: build → Cranelift baseline; build --release → Cranelift speed + AMIR O2\n",
         "  stdlib:  --stdlib-path > ARANDU_STDLIB > relative to binary (never cwd)\n",
         "  cache:   --cache-dir > ARANDU_CACHE_DIR > platform-native user cache"
     );

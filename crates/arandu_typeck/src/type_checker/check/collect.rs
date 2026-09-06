@@ -5,9 +5,9 @@ use crate::type_checker::types::ArType;
 
 /// Wrap a receiver's bare type with the ownership qualifier.
 ///
-/// - `shared self: T` → `&T`
-/// - `mut self: T` → `&mut T`
-/// - `own self: T` / bare → `T`
+/// Legacy receiver prefixes are lowered to the canonical `ref T` / `mut ref T`
+/// types. Canonical type-qualified parameters already arrive wrapped and pass
+/// through unchanged.
 #[inline]
 pub(crate) fn apply_receiver_ownership(
     checker: &mut TypeChecker<'_>,
@@ -27,34 +27,28 @@ pub(crate) fn collect_type_shapes(checker: &mut TypeChecker<'_>, program: &Progr
         let decl = checker.pool.decl(*decl_id);
         match decl {
             TopLevelDecl::Struct(struct_decl) => {
-                let mut fields = rustc_hash::FxHashMap::default();
-                let mut field_symbols = rustc_hash::FxHashMap::default();
-                let mut field_indices = rustc_hash::FxHashMap::default();
+                let mut field_entries: Vec<arandu_middle::layout::StructFieldInfo> = Vec::new();
                 for (idx, field) in struct_decl.fields.iter().enumerate() {
                     let field_ty =
                         checker.lower_type_expr(field.ty, checker.symbols.global_scope());
                     let field_tid = checker.intern(field_ty);
                     let field_key = crate::NodeKey::from(field.span);
-                    if let Some(field_symbol) = checker.resolved.definitions.get(&field_key) {
-                        field_symbols.insert(field.name.to_string(), *field_symbol);
-                    }
-                    fields.insert(field.name.to_string(), field_tid);
-                    field_indices.insert(field.name.to_string(), idx);
+                    let field_symbol = checker.resolved.definitions.get(&field_key).copied();
+                    field_entries.push(arandu_middle::layout::StructFieldInfo {
+                        name: field.name.clone(),
+                        symbol: field_symbol,
+                        ty: field_tid,
+                        index: idx,
+                    });
                 }
                 let struct_key = crate::NodeKey::from(struct_decl.span);
                 if let Some(symbol_id) = checker.resolved.definitions.get(&struct_key).copied() {
-                    checker
-                        .type_info
-                        .struct_fields
-                        .insert(symbol_id, std::sync::Arc::new(fields));
-                    checker
-                        .type_info
-                        .struct_field_symbols
-                        .insert(symbol_id, std::sync::Arc::new(field_symbols));
-                    checker
-                        .type_info
-                        .struct_field_indices
-                        .insert(symbol_id, std::sync::Arc::new(field_indices));
+                    checker.type_info.struct_fields.insert(
+                        symbol_id,
+                        std::sync::Arc::new(arandu_middle::layout::StructFields::from_entries(
+                            field_entries,
+                        )),
+                    );
                     let params = super::super::types::extract_generic_param_symbols(
                         checker,
                         &struct_decl.generic_params,
@@ -98,7 +92,10 @@ pub(crate) fn collect_type_shapes(checker: &mut TypeChecker<'_>, program: &Progr
                                 })
                                 .collect();
                             if tids.len() > 1 {
-                                checker.intern(super::super::ArType::Tuple(tids.clone()));
+                                checker.intern(super::super::ArType::tuple(
+                                    &tids,
+                                    &checker.type_info.type_interner,
+                                ));
                             }
                             super::super::EnumPayloadShape::Tuple(tids)
                         }
@@ -117,19 +114,32 @@ pub(crate) fn collect_type_shapes(checker: &mut TypeChecker<'_>, program: &Progr
                             .cloned();
                         if let Some(gp) = gp {
                             for &p_sym in gp.iter() {
-                                let arg_ty = super::super::ArType::Named(p_sym, vec![]);
+                                let arg_ty = super::super::ArType::named(
+                                    p_sym,
+                                    &[],
+                                    &checker.type_info.type_interner,
+                                );
                                 enum_args.push(checker.intern(arg_ty));
                             }
                         }
-                        let ret_ty_id =
-                            checker.intern(super::super::ArType::Named(enum_symbol_id, enum_args));
+                        let ret_ty_id = checker.intern(super::super::ArType::named(
+                            enum_symbol_id,
+                            &enum_args,
+                            &checker.type_info.type_interner,
+                        ));
                         let variant_ty = match &shape {
                             super::super::EnumPayloadShape::Tuple(tids) => {
-                                super::super::ArType::Func(tids.clone(), ret_ty_id)
+                                super::super::ArType::func(
+                                    tids,
+                                    ret_ty_id,
+                                    &checker.type_info.type_interner,
+                                )
                             }
-                            super::super::EnumPayloadShape::Unit => {
-                                super::super::ArType::Named(enum_symbol_id, vec![])
-                            }
+                            super::super::EnumPayloadShape::Unit => super::super::ArType::named(
+                                enum_symbol_id,
+                                &[],
+                                &checker.type_info.type_interner,
+                            ),
                         };
                         let variant_ty_id = checker.intern(variant_ty);
                         checker.record_decl_type(variant_symbol_id, variant_ty_id);
@@ -266,10 +276,12 @@ pub(crate) fn collect_signature_types(checker: &mut TypeChecker<'_>, program: &P
                         && first_param.is_receiver
                         && let Some(first_ty_id) = param_types.first_mut()
                     {
-                        // Peel ownership for receiver generic expand, then re-wrap.
-                        let bare_id = match checker.resolve(*first_ty_id) {
-                            ArType::Ref(inner) | ArType::RefMut(inner) => inner,
-                            _ => *first_ty_id,
+                        // Peel the receiver for generic expansion, then restore
+                        // either the canonical type wrapper or a legacy prefix.
+                        let (bare_id, effective_ownership) = match checker.resolve(*first_ty_id) {
+                            ArType::Ref(inner) => (inner, Some(Ownership::Shared)),
+                            ArType::RefMut(inner) => (inner, Some(Ownership::Mut)),
+                            _ => (*first_ty_id, first_param.ownership),
                         };
                         let lowered_first_ty = checker.resolve(bare_id);
                         if let ArType::Named(struct_id, ref args) = lowered_first_ty
@@ -280,13 +292,18 @@ pub(crate) fn collect_signature_types(checker: &mut TypeChecker<'_>, program: &P
                         {
                             let mut new_args = Vec::new();
                             for &param_sym in struct_params.iter() {
-                                let arg_ty = ArType::Named(param_sym, vec![]);
+                                let arg_ty =
+                                    ArType::named(param_sym, &[], &checker.type_info.type_interner);
                                 new_args.push(checker.intern(arg_ty));
                             }
-                            let new_first_ty = ArType::Named(struct_id, new_args);
+                            let new_first_ty = ArType::named(
+                                struct_id,
+                                &new_args,
+                                &checker.type_info.type_interner,
+                            );
                             let bare_inst = checker.intern(new_first_ty);
                             *first_ty_id =
-                                apply_receiver_ownership(checker, bare_inst, first_param.ownership);
+                                apply_receiver_ownership(checker, bare_inst, effective_ownership);
                             struct_params_for_mono = Some(struct_params);
                         }
                     }
@@ -310,9 +327,102 @@ pub(crate) fn collect_signature_types(checker: &mut TypeChecker<'_>, program: &P
                             .insert(symbol_id, std::sync::Arc::new(all_params));
                     }
                     let ret_id = checker.intern(ret_ty);
-                    let func_ty = ArType::Func(param_types, ret_id);
+                    let return_kind = match checker.resolve(ret_id) {
+                        ArType::Ref(_) => Some(arandu_middle::types::BorrowKind::Shared),
+                        ArType::RefMut(_) => Some(arandu_middle::types::BorrowKind::Exclusive),
+                        _ => None,
+                    };
+                    if let Some(kind) = return_kind {
+                        let candidates = param_types
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, parameter)| {
+                                matches!(
+                                    (kind, checker.resolve(**parameter)),
+                                    (
+                                        arandu_middle::types::BorrowKind::Shared,
+                                        ArType::Ref(_) | ArType::RefMut(_),
+                                    ) | (
+                                        arandu_middle::types::BorrowKind::Exclusive,
+                                        ArType::RefMut(_),
+                                    )
+                                )
+                            })
+                            .map(|(index, _)| index)
+                            .collect::<Vec<_>>();
+                        if let [parameter_index] = candidates.as_slice()
+                            && let Ok(parameter_index) = u32::try_from(*parameter_index)
+                        {
+                            checker.type_info.return_borrow_summaries.insert(
+                                symbol_id,
+                                arandu_middle::types::ReturnBorrowSummary::direct(
+                                    parameter_index,
+                                    kind,
+                                ),
+                            );
+                        }
+                    }
+                    let func_ty =
+                        ArType::func(&param_types, ret_id, &checker.type_info.type_interner);
                     let func_id = checker.intern(func_ty);
                     checker.record_decl_type(symbol_id, func_id);
+
+                    // Drop Elaboration: Check for @Destructor attribute
+                    let has_destructor_attr = func_decl
+                        .attrs
+                        .iter()
+                        .any(|attr| attr.name == "Destructor" || attr.name == "destructor");
+                    if has_destructor_attr
+                        && let arandu_parser::FuncName::Method { .. } = &func_decl.name
+                        && let Some(first_param) = func_decl.params.first()
+                        && first_param.is_receiver
+                    {
+                        let param_ty =
+                            checker.lower_type_expr(first_param.ty, checker.symbols.global_scope());
+                        if let ArType::Named(struct_id, _) = param_ty {
+                            checker.type_info.destructors.insert(struct_id, symbol_id);
+                        }
+                    }
+
+                    // Effect System (A2): Process @Effects(...) attribute
+                    for attr in &func_decl.attrs {
+                        if attr.name == "Effects" || attr.name == "effects" {
+                            let mut flags = arandu_middle::EffectFlags::NONE;
+                            for arg in &attr.args {
+                                let name = match checker.pool.expr(*arg) {
+                                    arandu_parser::ExprKind::Path { path } => {
+                                        path.first().map(|s| s.as_str())
+                                    }
+                                    arandu_parser::ExprKind::InterpolatedString { parts } => {
+                                        let part_ids = checker.pool.string_part_list(*parts);
+                                        part_ids.first().and_then(|&id| {
+                                            match checker.pool.string_part(id) {
+                                                arandu_parser::StringPart::Text {
+                                                    text, ..
+                                                } => Some(text.as_str()),
+                                                _ => None,
+                                            }
+                                        })
+                                    }
+                                    _ => None,
+                                };
+                                if let Some(eff_name) = name {
+                                    if let Some(flag) =
+                                        arandu_middle::EffectFlags::from_name(eff_name)
+                                    {
+                                        flags = flags.union(flag);
+                                    } else {
+                                        checker.diagnostics.push(arandu_middle::Diagnostic::error(
+                                            arandu_middle::DiagCode::N012UnknownAnnotation,
+                                            format!("unknown effect '{eff_name}' in @Effects"),
+                                            attr.span,
+                                        ));
+                                    }
+                                }
+                            }
+                            checker.type_info.function_effects.insert(symbol_id, flags);
+                        }
+                    }
                 }
             }
             TopLevelDecl::Extern(extern_decl) => {
@@ -332,8 +442,83 @@ pub(crate) fn collect_signature_types(checker: &mut TypeChecker<'_>, program: &P
 
                     let name_key = crate::NodeKey::from(member.span);
                     if let Some(symbol_id) = checker.resolved.definitions.get(&name_key).copied() {
+                        let member_name = member.name.as_str();
+                        let mut flags = arandu_middle::EffectFlags::FOREIGN;
+                        if member_name.starts_with("ar_rt_tcp_")
+                            || member_name.starts_with("ar_net_")
+                        {
+                            flags = flags.union(arandu_middle::EffectFlags::NET);
+                        } else if member_name.starts_with("ar_fs_")
+                            || member_name.starts_with("ar_io_")
+                        {
+                            flags = flags
+                                .union(arandu_middle::EffectFlags::FILE_READ)
+                                .union(arandu_middle::EffectFlags::FILE_WRITE);
+                        } else if member_name.starts_with("ar_rt_supervisor_")
+                            || member_name.starts_with("ar_process_")
+                        {
+                            flags = flags.union(arandu_middle::EffectFlags::PROCESS);
+                        }
+                        checker.type_info.function_effects.insert(symbol_id, flags);
+
                         let ret_id = checker.intern(ret_ty);
-                        let func_ty = ArType::Func(param_types, ret_id);
+                        // Signature-only intrinsics cannot be inspected by the
+                        // AMIR solver. Publish a borrow interface only when the
+                        // signature has one unambiguous borrow-bearing input.
+                        // This covers stdlib view constructors without adding
+                        // names, addresses, or lifetimes to the stable contract.
+                        if let Ok(result_paths) = checker.type_info.borrow_paths(ret_id)
+                            && !result_paths.is_empty()
+                        {
+                            let candidates = param_types
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(index, parameter)| {
+                                    let paths = checker.type_info.borrow_paths(*parameter).ok()?;
+                                    (!paths.is_empty()).then_some((index, paths))
+                                })
+                                .collect::<Vec<_>>();
+                            if let [(parameter_index, parameter_paths)] = candidates.as_slice()
+                                && let Ok(parameter_index) = u32::try_from(*parameter_index)
+                            {
+                                let mut summary =
+                                    arandu_middle::types::ReturnBorrowSummary::default();
+                                for (result_path, kind) in result_paths {
+                                    let sources = parameter_paths
+                                        .iter()
+                                        .filter(|(_, source_kind)| {
+                                            kind == arandu_middle::types::BorrowKind::Shared
+                                                || *source_kind
+                                                    == arandu_middle::types::BorrowKind::Exclusive
+                                        })
+                                        .map(|(parameter_path, _)| {
+                                            arandu_middle::types::BorrowSource {
+                                                parameter_index,
+                                                parameter_path: parameter_path.clone(),
+                                            }
+                                        })
+                                        .collect::<Vec<_>>();
+                                    if !sources.is_empty() {
+                                        summary.dependencies.push(
+                                            arandu_middle::types::ReturnBorrowDependency {
+                                                result_path,
+                                                sources,
+                                                kind,
+                                            },
+                                        );
+                                    }
+                                }
+                                summary.canonicalize();
+                                if !summary.dependencies.is_empty() {
+                                    checker
+                                        .type_info
+                                        .return_borrow_summaries
+                                        .insert(symbol_id, summary);
+                                }
+                            }
+                        }
+                        let func_ty =
+                            ArType::func(&param_types, ret_id, &checker.type_info.type_interner);
                         let func_id = checker.intern(func_ty);
                         checker.record_decl_type(symbol_id, func_id);
                         let params = super::super::types::extract_generic_param_symbols(

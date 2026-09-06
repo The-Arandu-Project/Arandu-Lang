@@ -1,20 +1,19 @@
 module std.alloc.allocator_api
 
-/// Minimal 0.1 — **IN optional** thin allocator surface (PROMOTE allocator thin).
+/// Minimal 0.1 — thin allocator surface.
 ///
-/// Free-function API (same product style as `vec` / `gen_arena`):
+/// Free-function API:
 /// - Global heap via pure-buffer hosts (`ar_vec_*`)
-/// - `BumpArena` — contiguous bump; power-of-two align; `reset` / `destroy`
+/// - `BumpArena` — contiguous bump; power-of-two align; `bumpReset` / `bumpDestroy`
 ///
-/// Fallible paths return `Result<_, AllocError>` (custom `E` via typed return context).
-/// Not in default `arandu new`.
+/// Fallible paths return `Result<_, AllocError>`.
 
 import std.core.mem as mem
 
 extern "C" {
-    func ar_vec_malloc(size: u64): ptr[u8]
-    func ar_vec_buf_free(p: ptr[u8], size: u64): void
-    func ar_vec_realloc(p: ptr[u8], oldSize: u64, newSize: u64): ptr[u8]
+    func ar_vec_malloc(size: uint): ptr[u8]
+    func ar_vec_buf_free(p: ptr[u8], size: uint): void
+    func ar_vec_realloc(p: ptr[u8], oldSize: uint, newSize: uint): ptr[u8]
 }
 
 /// Failure modes for fallible alloc (thin enum).
@@ -31,8 +30,8 @@ public func global(): GlobalAllocator {
     return GlobalAllocator {}
 }
 
-/// Allocate `size` bytes (alignment ignored on thin host — match Vec policy).
-public func global_alloc(size: u64): Result<ptr[u8], AllocError> {
+/// Allocate `size` bytes.
+public func globalAlloc(size: uint): Result<ptr[u8], AllocError> {
     if size == 0 {
         return Result.Err(AllocError.InvalidLayout)
     }
@@ -46,16 +45,15 @@ public func global_alloc(size: u64): Result<ptr[u8], AllocError> {
     }
 }
 
-/// Free a buffer from [`global_alloc`] / [`global_realloc`].
-public func global_dealloc(p: ptr[u8], size: u64): void {
+/// Free a buffer from [`globalAlloc`] / [`globalRealloc`].
+public func globalDealloc(p: ptr[u8], size: uint): void {
     unsafe {
         ar_vec_buf_free(p, size)
     }
 }
 
-/// Grow/shrink; on OOM returns `OutOfMemory` (original block ownership unchanged
-/// only if host realloc fails without free — thin host aborts path via `Err`).
-public func global_realloc(p: ptr[u8], oldSize: u64, newSize: u64): Result<ptr[u8], AllocError> {
+/// Grow/shrink buffer.
+public func globalRealloc(p: ptr[u8], oldSize: uint, newSize: uint): Result<ptr[u8], AllocError> {
     if newSize == 0 {
         return Result.Err(AllocError.InvalidLayout)
     }
@@ -71,15 +69,15 @@ public func global_realloc(p: ptr[u8], oldSize: u64, newSize: u64): Result<ptr[u
 
 // ── Bump arena ────────────────────────────────────────────────────────────
 
-/// Contiguous bump region (allocate-only until `reset` / `destroy`).
+/// Contiguous bump region (allocate-only until `bumpReset` / `bumpDestroy`).
 public struct BumpArena {
     buffer: ptr[u8]
-    capacity: u64
-    offset: u64
+    capacity: uint
+    offset: uint
 }
 
 /// New bump with capacity bytes (malloc once).
-public func bump_new(capacity: u64): Result<BumpArena, AllocError> {
+public func bumpNew(capacity: uint): Result<BumpArena, AllocError> {
     if capacity == 0 {
         return Result.Err(AllocError.InvalidLayout)
     }
@@ -92,20 +90,16 @@ public func bump_new(capacity: u64): Result<BumpArena, AllocError> {
         return Result.Ok(BumpArena {
             buffer: p,
             capacity: capacity,
-            offset: 0 as u64,
+            offset: 0,
         })
     }
 }
 
 /// Bump-allocate `size` bytes with `align` (min 1).
-///
-/// Alignment: `ceil(off / align) * align` via integer arithmetic
-/// (`((off + align - 1) / align) * align`). Works for any positive align
-/// (power-of-two recommended for ABI; not required by the formula).
-public func bump_alloc(mut a: BumpArena, size: u64, align: u64): Result<ptr[u8], AllocError> {
-    let mut al: u64 = align
+public func bumpAlloc(a: mut ref BumpArena, size: uint, align: uint): Result<ptr[u8], AllocError> {
+    let mut al: uint = align
     if al == 0 {
-        al = 1 as u64
+        al = 1
     }
     let off = a.offset
     let aligned = ((off + al - 1) / al) * al
@@ -120,23 +114,23 @@ public func bump_alloc(mut a: BumpArena, size: u64, align: u64): Result<ptr[u8],
 }
 
 /// Reset offset to 0 (memory retained).
-public func bump_reset(mut a: BumpArena): void {
-    a.offset = 0 as u64
+public func bumpReset(a: mut ref BumpArena): void {
+    a.offset = 0
 }
 
 /// Bytes still free in the bump.
-public func bump_remaining(shared a: BumpArena): u64 {
+public func bumpRemaining(a: ref BumpArena): uint {
     return a.capacity - a.offset
 }
 
 /// Free the underlying buffer.
-public func bump_destroy(mut a: BumpArena): void {
+public func bumpDestroy(a: mut ref BumpArena): void {
     if a.capacity > 0 {
         unsafe {
             ar_vec_buf_free(a.buffer, a.capacity)
         }
         a.buffer = nil
-        a.capacity = 0 as u64
-        a.offset = 0 as u64
+        a.capacity = 0
+        a.offset = 0
     }
 }

@@ -1,0 +1,121 @@
+module std.runtime.channel
+
+/// SL_R — Concurrency: Bounded Ring-Buffer `Channel<T>` (DoD Zero-Alloc).
+///
+/// Moved out of the former `std.runtime` monolith.
+
+import std.core.mem as mem
+
+extern "C" {
+    func ar_vec_malloc(size: uint): ptr[u8]
+    func ar_vec_buf_free(p: ptr[u8], size: uint): void
+}
+
+/// Bounded contiguous FIFO ring-buffer channel.
+///
+/// Pre-allocates buffer storage for `cap` elements; zero allocations during send/recv.
+public struct Channel<T> {
+    buf: ptr[Option<T>]
+    cap: uint
+    head: uint
+    tail: uint
+    len: uint
+    is_closed: bool
+}
+
+/// Creates a new bounded channel with contiguous storage for `cap` items.
+public func newChannel<T>(capacity: uint): Channel<T> {
+    let cap = if capacity == 0 { 1 as uint } else { capacity }
+    let byte_size = cap * (mem.sizeOf<Option<T>>() as uint)
+    let raw = unsafe { ar_vec_malloc(byte_size) }
+    let p = raw as ptr[Option<T>]
+    let mut i = 0 as uint
+    while i < cap {
+        unsafe {
+            let slot = mem.ptrOffset<Option<T>>(p, i as i32)
+            mem.ptrWrite<Option<T>>(slot, Option.None)
+        }
+        i = i + 1
+    }
+    return Channel<T> {
+        buf: p,
+        cap: cap,
+        head: 0,
+        tail: 0,
+        len: 0,
+        is_closed: false,
+    }
+}
+
+/// Returns the number of items currently buffered in the channel.
+public func Channel.len<T>(self: ref Channel<T>): uint {
+    return self.len
+}
+
+/// Returns the maximum capacity of the channel.
+public func Channel.capacity<T>(self: ref Channel<T>): uint {
+    return self.cap
+}
+
+/// Returns `true` if the channel has no buffered items.
+public func Channel.isEmpty<T>(self: ref Channel<T>): bool {
+    return self.len == 0
+}
+
+/// Returns `true` if the channel is at maximum capacity.
+public func Channel.isFull<T>(self: ref Channel<T>): bool {
+    return self.len == self.cap
+}
+
+/// Returns `true` if the channel has been closed.
+public func Channel.isClosed<T>(self: ref Channel<T>): bool {
+    return self.is_closed
+}
+
+/// Closes the channel. Subsequent sends will fail; remaining buffered items can still be received.
+public func Channel.close<T>(self: mut ref Channel<T>): void {
+    self.is_closed = true
+}
+
+/// Non-blocking send. Returns `true` on success, or `false` if full or closed.
+public func Channel.trySend<T>(self: mut ref Channel<T>, val: T): bool {
+    if self.is_closed || self.len == self.cap {
+        return false
+    }
+    unsafe {
+        let slot = mem.ptrOffset<Option<T>>(self.buf, self.tail as i32)
+        mem.ptrWrite<Option<T>>(slot, Option.Some(val))
+    }
+    self.tail = (self.tail + 1) % self.cap
+    self.len = self.len + 1
+    return true
+}
+
+/// Non-blocking receive. Returns `Option.Some(item)` or `Option.None` if empty.
+public func Channel.tryRecv<T>(self: mut ref Channel<T>): Option<T> {
+    if self.len == 0 {
+        return Option.None
+    }
+    let opt = unsafe {
+        let slot = mem.ptrOffset<Option<T>>(self.buf, self.head as i32)
+        let item = mem.ptrRead<Option<T>>(slot)
+        mem.ptrWrite<Option<T>>(slot, Option.None)
+        item
+    }
+    self.head = (self.head + 1) % self.cap
+    self.len = self.len - 1
+    return opt
+}
+
+/// Destroys the channel buffer and cleans up any remaining items.
+public func Channel.destroy<T>(self: mut ref Channel<T>): void {
+    unsafe {
+        let nullp: ptr[Option<T>] = nil
+        if self.buf != nullp {
+            let byte_size = self.cap * (mem.sizeOf<Option<T>>() as uint)
+            ar_vec_buf_free(self.buf as ptr[u8], byte_size)
+            self.buf = nullp
+            self.len = 0
+        }
+    }
+}

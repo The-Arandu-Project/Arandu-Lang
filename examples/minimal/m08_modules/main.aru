@@ -5,12 +5,12 @@ module examples.minimal.m08_main
 // This gold proves HIR body link across modules.
 
 import std.path as path
-import std.runtime as rt
+import std.runtime.executor as rt
 
 func main(): int {
-    if !path.is_empty("") {
+    if !path.isEmpty("") {
         return 1
     }
-    let ex = rt.new_sync_executor()
+    let ex = rt.newSyncExecutor()
     return ex.flags + 9
 }

@@ -114,13 +114,20 @@ pub unsafe extern "C" fn ar_co_poll_i64(state: *mut u8, out: *mut i64) -> i32 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_co_block_on_i64(state: *mut u8) -> i64 {
     let mut out: i64 = 0;
+    let mut spins: u32 = 0;
     loop {
         let tag = unsafe { ar_co_poll_i64(state, &mut out) };
         if tag == 0 {
             return out;
         }
-        // Pending: spin (no scheduler yet — A3.6 MVP).
-        std::hint::spin_loop();
+        // Cooperative backoff: short spin before yielding to prevent CPU core lockup.
+        if spins < 32 {
+            std::hint::spin_loop();
+            spins += 1;
+        } else {
+            std::thread::yield_now();
+            spins = 0;
+        }
     }
 }
 

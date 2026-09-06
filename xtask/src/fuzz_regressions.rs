@@ -225,8 +225,9 @@ fn decode_seed_bytes(bytes: &[u8], source: &str) -> Result<Vec<u8>, String> {
         if !compact.len().is_multiple_of(2) {
             return Err(format!("odd hex length in {source}"));
         }
-        return compact
-            .chunks_exact(2)
+        let (chunks, _) = compact.as_chunks::<2>();
+        return chunks
+            .iter()
             .map(|pair| {
                 let text =
                     std::str::from_utf8(pair).map_err(|_| format!("non-ASCII hex in {source}"))?;

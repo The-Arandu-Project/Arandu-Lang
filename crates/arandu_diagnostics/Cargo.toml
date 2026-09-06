@@ -14,7 +14,6 @@ path = "src/lib.rs"
 [dependencies]
 arandu_base = { path = "../arandu_base" }
 miette = { workspace = true }
-thiserror = { workspace = true }
 
 
 

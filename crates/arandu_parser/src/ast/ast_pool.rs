@@ -405,6 +405,15 @@ impl AstPool {
         self.stmt_spans[id.as_usize()]
     }
 
+    pub fn alloc_stmt_list(&mut self, ids: &[StmtId]) -> IndexRange {
+        let start = self.stmt_ids.len() as u32;
+        self.stmt_ids.extend_from_slice(ids);
+        IndexRange {
+            start,
+            len: ids.len() as u32,
+        }
+    }
+
     pub fn alloc_type_expr_list(&mut self, ids: &[TypeExprId]) -> IndexRange {
         let start = self.type_expr_ids.len() as u32;
         self.type_expr_ids.extend_from_slice(ids);
@@ -552,6 +561,11 @@ impl AstPool {
     #[must_use]
     pub fn type_expr_list(&self, range: IndexRange) -> &[TypeExprId] {
         &self.type_expr_ids[range.range()]
+    }
+
+    #[must_use]
+    pub fn stmt_list(&self, range: IndexRange) -> &[StmtId] {
+        &self.stmt_ids[range.range()]
     }
 
     #[must_use]

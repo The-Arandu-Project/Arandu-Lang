@@ -2,6 +2,7 @@
 
 pub mod bench;
 pub mod build;
+pub mod doc;
 pub mod doctor;
 pub mod hash;
 pub mod project;
@@ -42,6 +43,7 @@ pub fn run(raw_args: Vec<String>) -> CliResult {
 
     // ── Project / environment commands (no mandatory .aru path) ──────────
     match command {
+        "doc" => return doc::cmd_doc(&inv.args, &inv.project_flags, inv.data_layout),
         "new" => return project::cmd_new(&inv.args),
         "init" => return project::cmd_init(&inv.args),
         "doctor" => {
@@ -63,7 +65,7 @@ pub fn run(raw_args: Vec<String>) -> CliResult {
             } else {
                 env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
             };
-            return project::cmd_watch(&start, &inv.project_flags);
+            return project::cmd_watch(&start, &inv.project_flags, inv.data_layout);
         }
         "clean" => {
             let start = if inv.args.len() >= 3 {
@@ -95,7 +97,13 @@ pub fn run(raw_args: Vec<String>) -> CliResult {
             } else {
                 env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
             };
-            return build::cmd_project_build(&start, &inv.project_flags, inv.opt, inv.debug);
+            return build::cmd_project_build(
+                &start,
+                &inv.project_flags,
+                inv.opt,
+                inv.debug,
+                inv.data_layout,
+            );
         }
         "test" => {
             test_runner::install_ctrlc_handler();
@@ -104,6 +112,7 @@ pub fn run(raw_args: Vec<String>) -> CliResult {
             let mut exact = None;
             let mut filter = None;
             let mut harness_child = false;
+            let mut doc_tests = false;
             let mut runner = test_runner::RunnerOptions {
                 jobs: 1,
                 timeout: std::time::Duration::from_secs(300),
@@ -118,6 +127,8 @@ pub fn run(raw_args: Vec<String>) -> CliResult {
             while let Some(argument) = arguments.next() {
                 if argument == "--list" {
                     list = true;
+                } else if argument == "--doc" {
+                    doc_tests = true;
                 } else if argument == "--harness-child" {
                     harness_child = true;
                 } else if argument == "--exact" {
@@ -182,6 +193,8 @@ pub fn run(raw_args: Vec<String>) -> CliResult {
                 filter.as_deref(),
                 harness_child,
                 &runner,
+                inv.data_layout,
+                doc_tests,
             );
         }
         "bench" => {
@@ -332,6 +345,7 @@ pub fn run(raw_args: Vec<String>) -> CliResult {
                 filter.as_deref(),
                 harness_child,
                 &runner,
+                inv.data_layout,
             );
         }
         "check" | "run"
@@ -343,9 +357,21 @@ pub fn run(raw_args: Vec<String>) -> CliResult {
                 env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
             };
             if command == "check" {
-                return run::cmd_project_check(&start, &inv.project_flags, inv.opt, inv.debug);
+                return run::cmd_project_check(
+                    &start,
+                    &inv.project_flags,
+                    inv.opt,
+                    inv.debug,
+                    inv.data_layout,
+                );
             } else {
-                return run::cmd_project_run(&start, &inv.project_flags, inv.opt, inv.debug);
+                return run::cmd_project_run(
+                    &start,
+                    &inv.project_flags,
+                    inv.opt,
+                    inv.debug,
+                    inv.data_layout,
+                );
             }
         }
         _ => {}

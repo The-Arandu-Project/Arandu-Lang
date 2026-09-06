@@ -81,7 +81,7 @@ fn dump_func(pool: &AstPool, func: &FuncDecl, out: &mut Vec<String>) {
         dump_generic_params(pool, &func.generic_params),
         params,
         result,
-        dump_where_clause(&func.where_clause)
+        dump_where_clause(pool, &func.where_clause)
     ));
     dump_block_body(pool, &func.body, out, 4);
 }
@@ -94,7 +94,7 @@ fn dump_struct(pool: &AstPool, decl: &StructDecl, out: &mut Vec<String>) {
         dump_visibility(decl.visibility),
         decl.name,
         dump_generic_params(pool, &decl.generic_params),
-        dump_where_clause(&decl.where_clause)
+        dump_where_clause(pool, &decl.where_clause)
     ));
     for field in &decl.fields {
         dump_attrs(pool, &field.attrs, out, 4);
@@ -116,7 +116,7 @@ fn dump_enum(pool: &AstPool, decl: &EnumDecl, out: &mut Vec<String>) {
         dump_visibility(decl.visibility),
         decl.name,
         dump_generic_params(pool, &decl.generic_params),
-        dump_where_clause(&decl.where_clause)
+        dump_where_clause(pool, &decl.where_clause)
     ));
     for variant in &decl.variants {
         dump_attrs(pool, &variant.attrs, out, 4);
@@ -162,7 +162,7 @@ fn dump_interface(pool: &AstPool, decl: &InterfaceDecl, out: &mut Vec<String>) {
         dump_visibility(decl.visibility),
         decl.name,
         dump_generic_params(pool, &decl.generic_params),
-        dump_where_clause(&decl.where_clause)
+        dump_where_clause(pool, &decl.where_clause)
     ));
     for member in &decl.members {
         dump_signature(pool, member, out, 4);
@@ -201,7 +201,7 @@ fn dump_signature(pool: &AstPool, signature: &FuncSignature, out: &mut Vec<Strin
         dump_generic_params(pool, &signature.generic_params),
         params,
         result,
-        dump_where_clause(&signature.where_clause)
+        dump_where_clause(pool, &signature.where_clause)
     ));
 }
 

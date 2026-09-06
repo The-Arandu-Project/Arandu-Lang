@@ -134,8 +134,8 @@ fn apply_gen_promotion_impl(
             info.is_copy = true;
         }
     }
-    for block in &mut func.blocks {
-        for param in &mut block.params {
+    for block in &func.blocks {
+        for param in &mut func.block_params[block.params.as_range()] {
             if gen_temps.contains(&param.id) {
                 param.ty = gen_ty;
             }
@@ -487,7 +487,7 @@ mod tests {
         let blocks = vec![
             AmirBasicBlock {
                 id: BlockId::from_usize(0),
-                params: Vec::new(),
+                params: DenseRange::empty(),
                 statements: DenseRange::new(0, 1),
                 terminator: AmirTerminator::Branch {
                     condition: AmirOperand::Copy(temp(0)),
@@ -499,7 +499,7 @@ mod tests {
             },
             AmirBasicBlock {
                 id: BlockId::from_usize(1),
-                params: vec![param(2, 0, ref_ty)],
+                params: DenseRange::new(0, 1),
                 statements: DenseRange::new(1, 1),
                 terminator: AmirTerminator::Goto {
                     target: BlockId::from_usize(3),
@@ -508,7 +508,7 @@ mod tests {
             },
             AmirBasicBlock {
                 id: BlockId::from_usize(2),
-                params: vec![param(3, 0, ref_ty)],
+                params: DenseRange::new(1, 1),
                 statements: DenseRange::empty(),
                 terminator: AmirTerminator::Goto {
                     target: BlockId::from_usize(3),
@@ -517,7 +517,7 @@ mod tests {
             },
             AmirBasicBlock {
                 id: BlockId::from_usize(3),
-                params: vec![param(5, 0, ref_ty)],
+                params: DenseRange::new(2, 1),
                 statements: DenseRange::new(2, 3),
                 terminator: AmirTerminator::Goto {
                     target: BlockId::from_usize(1),
@@ -560,15 +560,26 @@ mod tests {
                 amir_temp(7, int_ty),
             ],
             blocks,
+
+            block_params: Vec::new(),
+
             stmts,
             cfg,
         };
+        func.block_params = vec![
+            param(2, 0, ref_ty),
+            param(3, 0, ref_ty),
+            param(5, 0, ref_ty),
+        ];
 
         let mut strict_func = func.clone();
         apply_gen_promotion(
             &mut strict_func,
             &interner,
-            EscapeCheckOptions { no_fallback: true },
+            EscapeCheckOptions {
+                no_fallback: true,
+                ..EscapeCheckOptions::default()
+            },
         );
         assert_eq!(strict_func.temps[1].ty, ref_ty);
         assert!(
@@ -591,9 +602,9 @@ mod tests {
         for holder in 1..=5 {
             assert_eq!(func.temps[holder].ty, gen_ty, "holder _{holder}");
         }
-        assert_eq!(func.blocks[1].params[0].ty, gen_ty);
-        assert_eq!(func.blocks[2].params[0].ty, gen_ty);
-        assert_eq!(func.blocks[3].params[0].ty, gen_ty);
+        assert_eq!(func.block_params(func.blocks[1].params)[0].ty, gen_ty);
+        assert_eq!(func.block_params(func.blocks[2].params)[0].ty, gen_ty);
+        assert_eq!(func.block_params(func.blocks[3].params)[0].ty, gen_ty);
         assert!(
             func.block_stmts(BlockId::from_usize(0))
                 .any(|stmt| matches!(
@@ -632,7 +643,7 @@ mod tests {
         let mut stmts = AmirStmtTable::new();
         stmts.push(AmirStmt::Assign {
             lhs: temp(0),
-            rhs: AmirRvalue::Borrow(projected_place.clone()),
+            rhs: AmirRvalue::Borrow(projected_place),
         });
         stmts.push(AmirStmt::Store {
             lhs: AmirPlace {
@@ -644,7 +655,7 @@ mod tests {
 
         let blocks = vec![AmirBasicBlock {
             id: BlockId::from_usize(0),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             statements: DenseRange::new(0, 2),
             terminator: AmirTerminator::Return,
         }];
@@ -674,6 +685,9 @@ mod tests {
             ],
             temps: vec![amir_temp(0, ref_ty)],
             blocks,
+
+            block_params: Vec::new(),
+
             stmts,
             cfg,
         };
@@ -739,7 +753,7 @@ mod tests {
         }
         let blocks = vec![AmirBasicBlock {
             id: BlockId::from_usize(0),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             statements: DenseRange::new(0, 7),
             terminator: AmirTerminator::Return,
         }];
@@ -774,6 +788,9 @@ mod tests {
                 amir_temp(3, int_ty),
             ],
             blocks,
+
+            block_params: Vec::new(),
+
             stmts,
             cfg,
         };

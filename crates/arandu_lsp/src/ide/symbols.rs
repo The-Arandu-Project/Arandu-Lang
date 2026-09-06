@@ -6,7 +6,7 @@ use arandu_query::{AnalysisSnapshot, SourceFile};
 use lsp_types::{Location, SymbolInformation, SymbolKind as LspSymbolKind, Uri};
 
 use super::presentation::typecheck;
-use super::types::DocSnap;
+use super::types::{DocSnap, MAX_WORKSPACE_SYMBOLS};
 use crate::conv::span_to_range;
 
 #[must_use]
@@ -92,6 +92,6 @@ pub fn workspace_symbols(
             });
         }
     }
-    out.truncate(200);
+    out.truncate(MAX_WORKSPACE_SYMBOLS);
     out
 }

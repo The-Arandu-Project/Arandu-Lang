@@ -252,9 +252,7 @@ impl AnalysisHost {
             manifest
                 .set_version(&mut self.db)
                 .to(manifest_data.version.clone());
-            manifest
-                .set_entry(&mut self.db)
-                .to(manifest_data.entry.clone());
+            manifest.set_entry(&mut self.db).to(manifest_data.entry);
             manifest.set_content_hash(&mut self.db).to(manifest_hash);
             manifest.set_path(&mut self.db).to(Arc::new(manifest_path));
             manifest

@@ -16,13 +16,23 @@ pub fn optimize_amir_checked(
     symbols: &SymbolTable,
     interner: &TypeInterner,
 ) -> Result<(), Diagnostic> {
+    optimize_amir_checked_with_level(program, symbols, interner, OptLevel::O1)
+}
+
+/// Validates AMIR before and after running the selected optimization pipeline.
+pub fn optimize_amir_checked_with_level(
+    program: &mut AmirProgram,
+    symbols: &SymbolTable,
+    interner: &TypeInterner,
+    level: OptLevel,
+) -> Result<(), Diagnostic> {
     if let Some(issue) = crate::amir_validate::validate_amir_program(program, symbols, interner)
         .into_iter()
         .next()
     {
         return Err(issue);
     }
-    optimize_amir(program)?;
+    optimize_amir_with_level(program, level)?;
     if let Some(issue) = crate::amir_validate::validate_amir_program(program, symbols, interner)
         .into_iter()
         .next()
@@ -119,7 +129,7 @@ mod tests {
         let blocks = vec![AmirBasicBlock {
             id: BlockId::from_usize(0),
             statements: range,
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Return,
         }];
         let cfg = compute_cfg_edges(&blocks);
@@ -131,6 +141,9 @@ mod tests {
             locals: Vec::new(),
             temps,
             blocks,
+
+            block_params: Vec::new(),
+
             stmts,
             cfg,
         }
@@ -360,7 +373,7 @@ mod tests {
                 AmirBasicBlock {
                     id: BlockId::from_usize(0),
                     statements: DenseRange::new(0, 1),
-                    params: Vec::new(),
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Branch {
                         condition: AmirOperand::Copy(TempId::from_usize(0)),
                         if_true: BlockId::from_usize(1),
@@ -372,16 +385,18 @@ mod tests {
                 AmirBasicBlock {
                     id: BlockId::from_usize(1),
                     statements: DenseRange::new(1, 1),
-                    params: Vec::new(),
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Return,
                 },
                 AmirBasicBlock {
                     id: BlockId::from_usize(2),
                     statements: DenseRange::new(2, 1),
-                    params: Vec::new(),
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Return,
                 },
             ],
+            block_params: Vec::new(),
+
             stmts: st,
             cfg: compute_cfg_edges(&[]),
         };
@@ -455,6 +470,7 @@ mod tests {
                 lhs: Some(TempId::from_usize(0)),
                 callee: AmirOperand::FunctionRef(crate::SymbolId::new(0, 1)),
                 args: smallvec::smallvec![],
+                return_borrow: None,
             }],
             vec![bool_temp(0)],
         );
@@ -518,7 +534,7 @@ mod tests {
                 AmirBasicBlock {
                     id: BlockId::from_usize(0),
                     statements: DenseRange::new(0, 1),
-                    params: Vec::new(),
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Branch {
                         condition: AmirOperand::Copy(TempId::from_usize(0)),
                         if_true: BlockId::from_usize(1),
@@ -530,7 +546,7 @@ mod tests {
                 AmirBasicBlock {
                     id: BlockId::from_usize(1),
                     statements: DenseRange::new(1, 1),
-                    params: Vec::new(),
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Goto {
                         target: BlockId::from_usize(3),
                         args: Vec::new(),
@@ -539,7 +555,7 @@ mod tests {
                 AmirBasicBlock {
                     id: BlockId::from_usize(2),
                     statements: DenseRange::new(2, 1),
-                    params: Vec::new(),
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Goto {
                         target: BlockId::from_usize(3),
                         args: Vec::new(),
@@ -548,10 +564,12 @@ mod tests {
                 AmirBasicBlock {
                     id: BlockId::from_usize(3),
                     statements: DenseRange::empty(),
-                    params: Vec::new(),
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Return,
                 },
             ],
+            block_params: Vec::new(),
+
             stmts: st,
             cfg: compute_cfg_edges(&[]),
         };
@@ -567,5 +585,122 @@ mod tests {
         assert_eq!(func.blocks.len(), 1);
         assert_eq!(func.blocks[0].statements.len, 2);
         assert!(matches!(func.blocks[0].terminator, AmirTerminator::Return));
+    }
+
+    #[test]
+    fn gvn_eliminates_redundant_binary_expressions() {
+        let mut f = func(
+            vec![
+                // _1 = add _2, _3
+                AmirStmt::Assign {
+                    lhs: TempId::from_usize(1),
+                    rhs: AmirRvalue::Binary {
+                        op: BinaryOp::Add,
+                        left: AmirOperand::Copy(TempId::from_usize(2)),
+                        right: AmirOperand::Copy(TempId::from_usize(3)),
+                    },
+                },
+                // _0 = add _3, _2 (commutative duplicate!)
+                AmirStmt::Assign {
+                    lhs: TempId::from_usize(0),
+                    rhs: AmirRvalue::Binary {
+                        op: BinaryOp::Add,
+                        left: AmirOperand::Copy(TempId::from_usize(3)),
+                        right: AmirOperand::Copy(TempId::from_usize(2)),
+                    },
+                },
+            ],
+            vec![int_temp(0), int_temp(1), int_temp(2), int_temp(3)],
+        );
+
+        assert!(crate::gvn::gvn(&mut f));
+        // Check that second assign was rewritten to Use(_1)
+        if let AmirStmt::Assign { lhs, rhs } = f.stmt(crate::amir::InstrId::from_usize(1)) {
+            assert_eq!(lhs.as_usize(), 0);
+            assert!(matches!(
+                rhs,
+                AmirRvalue::Use(AmirOperand::Copy(t)) if t.as_usize() == 1
+            ));
+        } else {
+            panic!("expected Assign");
+        }
+    }
+
+    #[test]
+    fn sroa_resolves_field_access_from_struct_literal() {
+        let mut f = func(
+            vec![
+                // _1 = StructLiteral { fields: [("x", _2), ("y", _0)] }
+                AmirStmt::Assign {
+                    lhs: TempId::from_usize(1),
+                    rhs: AmirRvalue::StructLiteral {
+                        struct_symbol: crate::SymbolId::new(0, 0),
+                        fields: vec![
+                            ("x".into(), AmirOperand::Copy(TempId::from_usize(2))),
+                            ("y".into(), AmirOperand::Copy(TempId::from_usize(0))),
+                        ],
+                    },
+                },
+                // _0 = _1.0
+                AmirStmt::Assign {
+                    lhs: TempId::from_usize(0),
+                    rhs: AmirRvalue::FieldAccess {
+                        base: AmirOperand::Copy(TempId::from_usize(1)),
+                        field: 0,
+                    },
+                },
+            ],
+            vec![int_temp(0), int_temp(1), int_temp(2)],
+        );
+
+        assert!(crate::sroa::sroa(&mut f));
+        // Check that field access was resolved to Use(_2)
+        if let AmirStmt::Assign { lhs, rhs } = f.stmt(crate::amir::InstrId::from_usize(1)) {
+            assert_eq!(lhs.as_usize(), 0);
+            assert!(matches!(
+                rhs,
+                AmirRvalue::Use(AmirOperand::Copy(t)) if t.as_usize() == 2
+            ));
+        } else {
+            panic!("expected Assign");
+        }
+    }
+
+    #[test]
+    fn sroa_resolves_tuple_field_access() {
+        let mut f = func(
+            vec![
+                // _1 = Tuple { items: [_2, _0] }
+                AmirStmt::Assign {
+                    lhs: TempId::from_usize(1),
+                    rhs: AmirRvalue::Tuple {
+                        items: vec![
+                            AmirOperand::Copy(TempId::from_usize(2)),
+                            AmirOperand::Copy(TempId::from_usize(0)),
+                        ],
+                    },
+                },
+                // _0 = _1.1
+                AmirStmt::Assign {
+                    lhs: TempId::from_usize(0),
+                    rhs: AmirRvalue::FieldAccess {
+                        base: AmirOperand::Copy(TempId::from_usize(1)),
+                        field: 1,
+                    },
+                },
+            ],
+            vec![int_temp(0), int_temp(1), int_temp(2)],
+        );
+
+        assert!(crate::sroa::sroa(&mut f));
+        if let AmirStmt::Assign { lhs, rhs } = f.stmt(crate::amir::InstrId::from_usize(1)) {
+            assert_eq!(lhs.as_usize(), 0);
+            assert!(matches!(
+                rhs,
+                AmirRvalue::Use(AmirOperand::Copy(t)) if t.as_usize() == 0
+            ));
+        } else {
+            panic!("expected Assign");
+        }
     }
 }

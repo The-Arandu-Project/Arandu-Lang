@@ -43,7 +43,7 @@ pub(crate) fn is_ident_start(ch: char) -> bool {
     if val < 128 {
         (CHAR_PROPERTIES[val as usize] & FLAG_IDENT_START) != 0
     } else {
-        ch.is_alphabetic()
+        unicode_ident::is_xid_start(ch)
     }
 }
 
@@ -53,15 +53,8 @@ pub(crate) fn is_ident_continue(ch: char) -> bool {
     if val < 128 {
         (CHAR_PROPERTIES[val as usize] & FLAG_IDENT_CONTINUE) != 0
     } else {
-        ch.is_alphanumeric()
+        unicode_ident::is_xid_continue(ch)
     }
-}
-
-#[inline]
-#[allow(dead_code)]
-pub(super) fn is_whitespace(ch: char) -> bool {
-    let val = ch as u32;
-    val < 128 && (CHAR_PROPERTIES[val as usize] & FLAG_WHITESPACE) != 0
 }
 
 #[inline]
@@ -91,7 +84,6 @@ pub(crate) fn keyword_kind(text: &str) -> Option<TokenKind> {
         "type" => TokenKind::KwType,
         "module" => TokenKind::KwModule,
         "import" => TokenKind::KwImport,
-        "from" => TokenKind::KwFrom,
         "as" => TokenKind::KwAs,
         "public" => TokenKind::KwPublic,
         "extern" => TokenKind::KwExtern,
@@ -100,10 +92,12 @@ pub(crate) fn keyword_kind(text: &str) -> Option<TokenKind> {
         "catch" => TokenKind::KwCatch,
         "is" => TokenKind::KwIs,
         "let" => TokenKind::KwLet,
+        "impl" => TokenKind::KwImpl,
         "set" => TokenKind::KwSet,
         "own" => TokenKind::KwOwn,
         "mut" => TokenKind::KwMut,
         "shared" => TokenKind::KwShared,
+        "ref" => TokenKind::KwRef,
         "self" => TokenKind::KwSelf,
         "ptr" => TokenKind::KwPtr,
         "defer" => TokenKind::KwDefer,

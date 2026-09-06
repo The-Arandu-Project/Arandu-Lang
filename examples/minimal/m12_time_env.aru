@@ -6,22 +6,22 @@ import std.env as env
 
 func main(): int {
     // argv always includes program name
-    if env.args_len() < 1 {
+    if env.argsLen() < 1 {
         return 1
     }
 
     // Presence (not non-empty): PATH is set on normal Unix/Windows runners.
-    if !env.var_is_set("PATH") {
+    if !env.varIsSet("PATH") {
         return 2
     }
     // Synthetic name must not exist
-    if env.var_is_set("ARANDU_P1_ENV_MISSING_XYZ_9f3a") {
+    if env.varIsSet("ARANDU_P1_ENV_MISSING_XYZ_9f3a") {
         return 3
     }
 
     // Monotonic: non-negative and non-decreasing across two samples
-    let t0 = time.monotonic_ns()
-    let t1 = time.monotonic_ns()
+    let t0 = time.monotonicNs()
+    let t1 = time.monotonicNs()
     if t0 < 0 {
         return 4
     }

@@ -3,10 +3,12 @@
 //! Enforces: CST (`syntax_tree`) → AST (`parse`) → `resolve` → `type_check` → `lower_amir` → backend.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process;
 
 use crate::cli_error::{CliFailure, CliResult};
+use arandu_middle::layout::DataLayout;
 
 pub fn finish(result: CliResult) -> ! {
     let code = match result {
@@ -18,11 +20,31 @@ pub fn finish(result: CliResult) -> ! {
     };
     arandu_base::print_perf_summary();
     arandu_base::finalize_self_profile();
+    // `process::exit` skips destructors, including the standard output
+    // buffers. Flush both streams explicitly so CLI output is not lost on
+    // platforms whose stdout/stderr are block-buffered (notably Windows).
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
     process::exit(code);
 }
 
 pub fn fail_usage(message: impl Into<String>) -> ! {
     finish(Err(CliFailure::usage(message)))
+}
+
+/// Guards JIT execution, which runs inside the host process, against a
+/// non-host layout. Returns a usage error for `run`/`test`/`bench`.
+pub(crate) fn ensure_host_jit_layout(data_layout: DataLayout) -> Result<(), CliFailure> {
+    let host_width = std::mem::size_of::<usize>() as u64;
+    if data_layout.pointer_width() == host_width {
+        return Ok(());
+    }
+    Err(CliFailure::usage(format!(
+        "JIT execution requires the host layout (got pointer width {}, host is {}-bit); \
+         use `--layout=by-host` or the `build`/`emit-c` commands for non-host layouts",
+        data_layout.pointer_width(),
+        host_width * 8,
+    )))
 }
 
 pub fn fail_operational(
@@ -55,6 +77,22 @@ pub fn optimize_amir_or_exit(
         amir,
         type_check.symbols.as_ref(),
         &type_check.type_info.type_interner,
+    ) {
+        print_diagnostics_and_exit(std::iter::once(diag), filepath);
+    }
+}
+
+pub fn optimize_amir_with_level_or_exit(
+    amir: &mut arandu_semantics::amir::AmirProgram,
+    type_check: &arandu_semantics::TypeCheckResult,
+    level: arandu_semantics::OptLevel,
+    filepath: &str,
+) {
+    if let Err(diag) = arandu_semantics::optimize_amir_checked_with_level(
+        amir,
+        type_check.symbols.as_ref(),
+        &type_check.type_info.type_interner,
+        level,
     ) {
         print_diagnostics_and_exit(std::iter::once(diag), filepath);
     }
@@ -95,17 +133,24 @@ pub fn handle_accumulated_diags(
     if diags.is_empty() {
         return;
     }
-    let diagnostics: Vec<_> = diags.iter().map(|d| d.0.clone()).collect();
-    if diagnostics
+    let mut deduped: Vec<&arandu_middle::Diagnostic> = Vec::with_capacity(diags.len());
+    for d in diags {
+        let diag = &d.0;
+        if !deduped.contains(&diag) {
+            deduped.push(diag);
+        }
+    }
+    if deduped
         .iter()
         .any(|d| matches!(d.severity, arandu_middle::Severity::Error))
     {
-        print_diagnostics_and_exit(diagnostics, filepath);
+        print_diagnostics_and_exit(deduped.into_iter().cloned(), filepath);
     }
     let source = std::fs::read_to_string(filepath).unwrap_or_default();
-    let named_source = miette::NamedSource::new(filepath, source);
-    for diagnostic in diagnostics {
-        let report = miette::Report::new(diagnostic).with_source_code(named_source.clone());
+    let source_arc: std::sync::Arc<str> = source.into();
+    for diagnostic in deduped {
+        let named_source = miette::NamedSource::new(filepath, source_arc.clone());
+        let report = miette::Report::new(diagnostic.clone()).with_source_code(named_source);
         eprintln!("{:?}", report);
     }
 }
@@ -133,7 +178,12 @@ pub fn pipeline_lower(
     let type_diags = arandu_query::passes::type_check::accumulated::<
         arandu_middle::db::DiagnosticsAccumulator,
     >(db, file);
-    handle_accumulated_diags(&type_diags, filepath);
+    if type_diags
+        .iter()
+        .any(|d| matches!(d.0.severity, arandu_middle::Severity::Error))
+    {
+        handle_accumulated_diags(&type_diags, filepath);
+    }
 
     let artifacts = {
         arandu_base::time_pass!("lower-amir");

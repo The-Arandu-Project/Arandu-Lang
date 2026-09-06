@@ -10,7 +10,7 @@ use crate::passes::type_checker::types::{ArType, Primitive};
 use smallvec::smallvec;
 
 fn non_copy_ty() -> ArType {
-    ArType::Named(crate::SymbolId::new(0, 0), Vec::new())
+    ArType::Named(crate::SymbolId::new(0, 0), crate::hir::IndexRange::empty())
 }
 
 fn int_ty() -> ArType {
@@ -57,7 +57,7 @@ fn block(statements: Vec<AmirStmt>, stmts: &mut AmirStmtTable) -> AmirBasicBlock
     AmirBasicBlock {
         id: BlockId::from_usize(0),
         statements: range,
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     }
 }
@@ -77,6 +77,9 @@ fn make_func(
         locals,
         temps,
         blocks,
+
+        block_params: Vec::new(),
+
         stmts,
         cfg,
     }
@@ -195,7 +198,7 @@ fn move_on_one_branch_maybe_moved() {
     let block0 = AmirBasicBlock {
         id: b0,
         statements: range0,
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Branch {
             condition: AmirOperand::Copy(TempId::from_usize(0)),
             if_true: b1,
@@ -210,7 +213,7 @@ fn move_on_one_branch_maybe_moved() {
     let block1 = AmirBasicBlock {
         id: b1,
         statements: range1,
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Goto {
             target: b3,
             args: Vec::new(),
@@ -220,7 +223,7 @@ fn move_on_one_branch_maybe_moved() {
     let block2 = AmirBasicBlock {
         id: b2,
         statements: DenseRange::empty(),
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Goto {
             target: b3,
             args: Vec::new(),
@@ -238,7 +241,7 @@ fn move_on_one_branch_maybe_moved() {
     let block3 = AmirBasicBlock {
         id: b3,
         statements: range3,
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     };
 
@@ -281,4 +284,89 @@ fn copy_type_move_does_not_mark_origin_moved() {
     let symbols = SymbolTable::new(0);
 
     assert!(check_moves(&func, &symbols).is_empty());
+}
+
+#[test]
+fn branch_arms_both_moving_same_local_do_not_conflict() {
+    // bb0 branches on cond; true_args moves local0, false_args moves local0
+    // Since true and false are mutually exclusive paths, this must NOT report O001.
+    let mut stmts = AmirStmtTable::new();
+    let r0 = stmts.push(AmirStmt::Assign {
+        lhs: TempId::from_usize(0),
+        rhs: AmirRvalue::Load(place(0)),
+    });
+    let r_cond = stmts.push(AmirStmt::Assign {
+        lhs: TempId::from_usize(1),
+        rhs: AmirRvalue::Load(place(1)),
+    });
+    let mut range0 = DenseRange::empty();
+    extend_block_range(&mut range0, r0);
+    extend_block_range(&mut range0, r_cond);
+
+    let block0 = AmirBasicBlock {
+        id: BlockId::from_usize(0),
+        statements: range0,
+        params: DenseRange::empty(),
+        terminator: AmirTerminator::Branch {
+            condition: AmirOperand::Copy(TempId::from_usize(1)),
+            if_true: BlockId::from_usize(1),
+            if_false: BlockId::from_usize(2),
+            true_args: vec![AmirOperand::Move(TempId::from_usize(0))],
+            false_args: vec![AmirOperand::Move(TempId::from_usize(0))],
+        },
+    };
+
+    let block1 = AmirBasicBlock {
+        id: BlockId::from_usize(1),
+        statements: DenseRange::empty(),
+        params: DenseRange::new(0, 1),
+        terminator: AmirTerminator::Return,
+    };
+
+    let block2 = AmirBasicBlock {
+        id: BlockId::from_usize(2),
+        statements: DenseRange::empty(),
+        params: DenseRange::new(1, 1),
+        terminator: AmirTerminator::Return,
+    };
+
+    let mut func = make_func(
+        vec![block0, block1, block2],
+        vec![
+            local(0, non_copy_ty()),
+            local(1, int_ty()),
+            local(2, non_copy_ty()),
+            local(3, non_copy_ty()),
+        ],
+        vec![
+            temp(0, non_copy_ty()),
+            temp(1, int_ty()),
+            temp(2, non_copy_ty()),
+            temp(3, non_copy_ty()),
+        ],
+        stmts,
+    );
+    func.block_params = vec![
+        crate::amir::BlockParam {
+            id: TempId::from_usize(2),
+            local: LocalId::from_usize(2),
+            ty: intern_ty(non_copy_ty()),
+            from: None,
+            moved: true,
+        },
+        crate::amir::BlockParam {
+            id: TempId::from_usize(3),
+            local: LocalId::from_usize(3),
+            ty: intern_ty(non_copy_ty()),
+            from: None,
+            moved: true,
+        },
+    ];
+    let symbols = SymbolTable::new(0);
+    let diags = check_moves(&func, &symbols);
+    assert!(
+        diags.is_empty(),
+        "expected no move errors when both branch arms move to their target, got: {:?}",
+        diags
+    );
 }

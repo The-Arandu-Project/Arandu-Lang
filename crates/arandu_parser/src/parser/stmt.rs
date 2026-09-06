@@ -32,6 +32,7 @@ impl<'a> Parser<'a> {
         }
         self.expect_name("RBRACE")?;
         self.finish_node();
+        let statements = self.pool.alloc_stmt_list(&statements);
         Ok(Block {
             span: self.span_from_mark(start),
             statements,
@@ -119,6 +120,7 @@ impl<'a> Parser<'a> {
             Stmt::Expr {
                 span: self.span_from_mark(start),
                 expr,
+                has_semi: true,
             }
         }))
     }
@@ -295,7 +297,7 @@ impl<'a> Parser<'a> {
                 let nested = self.parse_if()?;
                 Some(Block {
                     span: self.span_from_mark(start),
-                    statements: vec![nested],
+                    statements: self.pool.alloc_stmt_list(&[nested]),
                 })
             } else {
                 Some(self.parse_block()?)
@@ -313,19 +315,30 @@ impl<'a> Parser<'a> {
 
     pub(super) fn parse_condition(&mut self) -> Result<Condition, ParseError> {
         let start = self.mark();
-        let expr = self.parse_expr_without_block_calls(0)?;
-        if self.eat_name("KW_IS") {
+        if self.eat_name("KW_LET") {
             let pattern = self.parse_pattern()?;
+            self.expect_name("EQUAL")?;
+            let expr = self.parse_expr_without_block_calls(0)?;
             Ok(Condition::Is {
                 span: self.span_from_mark(start),
                 expr,
                 pattern,
             })
         } else {
-            Ok(Condition::Expr {
-                span: self.span_from_mark(start),
-                expr,
-            })
+            let expr = self.parse_expr_without_block_calls(0)?;
+            if self.eat_name("KW_IS") {
+                let pattern = self.parse_pattern()?;
+                Ok(Condition::Is {
+                    span: self.span_from_mark(start),
+                    expr,
+                    pattern,
+                })
+            } else {
+                Ok(Condition::Expr {
+                    span: self.span_from_mark(start),
+                    expr,
+                })
+            }
         }
     }
 

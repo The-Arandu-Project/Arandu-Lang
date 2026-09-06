@@ -7,7 +7,11 @@ use arandu_semantics::{lower_to_hir, resolve_for_test, type_check};
 fn check_ok(src: &str) {
     let program = arandu_parser::parse(src).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let mut tc = type_check(resolution, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     assert!(
         tc.diagnostics
             .iter()
@@ -158,7 +162,11 @@ func main() {
 "#;
     let program = arandu_parser::parse(src).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let tc = type_check(resolution, &program);
+    let tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     assert!(
         tc.diagnostics.iter().any(|d| {
             d.code == arandu_middle::DiagCode::T034CannotFormat
@@ -183,7 +191,11 @@ func main() {
 "#;
     let program = arandu_parser::parse(src).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let tc = type_check(resolution, &program);
+    let tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     assert!(
         tc.diagnostics.iter().any(|d| {
             d.code == arandu_middle::DiagCode::T034CannotFormat
@@ -234,7 +246,11 @@ func main() {
 "#;
     let program = arandu_parser::parse(src).expect("parse");
     let resolution = resolve_for_test(0, &program);
-    let tc = type_check(resolution, &program);
+    let tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
     assert!(
         tc.diagnostics
             .iter()

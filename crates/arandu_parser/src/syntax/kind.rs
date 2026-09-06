@@ -36,6 +36,7 @@ pub enum SyntaxKind {
     CONST_ITEM,
     TYPE_ALIAS_ITEM,
     EXTERN_ITEM,
+    IMPL_ITEM,
 
     /// `{ ... }` body (function body, struct body, …).
     BLOCK,
@@ -77,6 +78,7 @@ impl SyntaxKind {
                 | Self::CONST_ITEM
                 | Self::TYPE_ALIAS_ITEM
                 | Self::EXTERN_ITEM
+                | Self::IMPL_ITEM
         )
     }
 

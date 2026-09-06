@@ -70,9 +70,15 @@ pub(crate) fn synth_place(checker: &mut TypeChecker<'_>, place: &arandu_parser::
                     break;
                 }
                 let struct_info_opt = match actual_base_ty {
-                    ArType::Named(id, args) => Some((id, args.clone())),
+                    ArType::Named(id, args) => {
+                        let args_vec = interner.type_args(args);
+                        Some((id, args_vec))
+                    }
                     ArType::Ptr(inner) => match interner.resolve(inner) {
-                        ArType::Named(id, args) => Some((id, args.clone())),
+                        ArType::Named(id, args) => {
+                            let args_vec = interner.type_args(args);
+                            Some((id, args_vec))
+                        }
                         _ => None,
                     },
                     _ => None,
@@ -91,8 +97,8 @@ pub(crate) fn synth_place(checker: &mut TypeChecker<'_>, place: &arandu_parser::
                             .type_info
                             .struct_fields
                             .get(&struct_id)
-                            .and_then(|fields| fields.get(name.as_str()).copied())
-                            .map(|tid| checker.resolve(tid))
+                            .and_then(|fields| fields.get(name.as_str()))
+                            .map(|f| checker.resolve(f.ty))
                     }
                 } else {
                     None
@@ -144,9 +150,14 @@ pub(crate) fn synth_place(checker: &mut TypeChecker<'_>, place: &arandu_parser::
                     current_ty_id = checker.intern(ArType::Error);
                     break;
                 }
-                match actual_base_ty {
+                match &actual_base_ty {
                     ArType::Array(_, inner) | ArType::Slice(inner) => {
-                        current_ty_id = inner;
+                        current_ty_id = *inner;
+                    }
+                    ArType::Named(_, args)
+                        if arandu_middle::types::is_vec_type(&actual_base_ty, &checker.symbols) =>
+                    {
+                        current_ty_id = interner.type_args(*args)[0];
                     }
                     _ => {
                         let err_id = checker.intern(ArType::Error);

@@ -84,6 +84,7 @@ pub fn for_each_rvalue_operand(rvalue: &AmirRvalue, mut f: impl FnMut(&AmirOpera
         AmirRvalue::Use(op)
         | AmirRvalue::Unary { operand: op, .. }
         | AmirRvalue::Len(op)
+        | AmirRvalue::StrView { owner: op }
         | AmirRvalue::Alloc(op)
         | AmirRvalue::Discriminant { value: op }
         | AmirRvalue::EnumPayload { value: op, .. }
@@ -107,6 +108,17 @@ pub fn for_each_rvalue_operand(rvalue: &AmirRvalue, mut f: impl FnMut(&AmirOpera
         } => {
             f(left);
             f(right);
+        }
+
+        AmirRvalue::SliceView { owner, data, len } => {
+            f(owner);
+            f(data);
+            f(len);
+        }
+        AmirRvalue::SliceSubslice { slice, start, len } => {
+            f(slice);
+            f(start);
+            f(len);
         }
 
         AmirRvalue::EnumConstruct { payload, .. } => {

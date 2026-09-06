@@ -3,16 +3,10 @@
 
 use arandu_query::db::DatabaseImpl;
 use arandu_query::file_typeck_view;
-use arandu_query::passes::{
-    item_body_typeck, module_signatures, parse, type_check, ITEM_BODY_TYPECK_EXEC_COUNT,
-};
+use arandu_query::passes::{item_body_typeck, module_signatures, parse, type_check};
 use arandu_query::SourceFile;
 use salsa::Setter;
-use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
-
-/// Global exec counters are process-wide; serialize tests that reset them.
-static COUNTER_LOCK: Mutex<()> = Mutex::new(());
+use std::sync::Arc;
 
 fn free_func_list(db: &DatabaseImpl, file: SourceFile) -> Vec<arandu_middle::SymbolId> {
     let program = parse(db, file);
@@ -48,8 +42,7 @@ func beta(): int {{
 
 #[test]
 fn body_edit_beta_skips_alpha_item_body_typeck() {
-    let _guard = COUNTER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let mut db = DatabaseImpl::new();
+    let (mut db, rebuild_log) = DatabaseImpl::with_rebuild_log();
     let file = db.new_file("two.aru".into(), two_funcs(2));
 
     let tc0 = type_check(&db, file);
@@ -67,7 +60,7 @@ fn body_edit_beta_skips_alpha_item_body_typeck() {
     let _ = item_body_typeck(&db, file, alpha);
     let _ = item_body_typeck(&db, file, beta);
 
-    ITEM_BODY_TYPECK_EXEC_COUNT.store(0, Ordering::SeqCst);
+    rebuild_log.clear();
 
     file.set_text(&mut db).to(Arc::from(two_funcs(99)));
 
@@ -80,7 +73,7 @@ fn body_edit_beta_skips_alpha_item_body_typeck() {
     let _ = item_body_typeck(&db, file, beta2);
     let _ = file_typeck_view(&db, file);
 
-    let execs = ITEM_BODY_TYPECK_EXEC_COUNT.load(Ordering::SeqCst);
+    let execs = rebuild_log.count_executions_matching("item_body_typeck");
     assert!(
         execs <= 1,
         "expected ≤1 item_body_typeck execute after beta-only edit, got {execs}"
@@ -105,8 +98,7 @@ const B = {b_val}
 
 #[test]
 fn const_edit_b_skips_const_a() {
-    let _guard = COUNTER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let mut db = DatabaseImpl::new();
+    let (mut db, rebuild_log) = DatabaseImpl::with_rebuild_log();
     let file = db.new_file("consts.aru".into(), two_consts(2));
 
     let _ = type_check(&db, file);
@@ -121,7 +113,7 @@ fn const_edit_b_skips_const_a() {
     let _ = item_body_typeck(&db, file, a);
     let _ = item_body_typeck(&db, file, b);
 
-    ITEM_BODY_TYPECK_EXEC_COUNT.store(0, Ordering::SeqCst);
+    rebuild_log.clear();
     file.set_text(&mut db).to(Arc::from(two_consts(99)));
 
     let items2 = body_item_list(&db, file);
@@ -130,7 +122,7 @@ fn const_edit_b_skips_const_a() {
     let _ = item_body_typeck(&db, file, items2[1]);
     let _ = file_typeck_view(&db, file);
 
-    let execs = ITEM_BODY_TYPECK_EXEC_COUNT.load(Ordering::SeqCst);
+    let execs = rebuild_log.count_executions_matching("item_body_typeck");
     assert!(
         execs <= 1,
         "expected ≤1 item_body_typeck after const B-only edit, got {execs}"
@@ -154,8 +146,7 @@ func main(): int {{
 
 #[test]
 fn func_edit_skips_struct_item() {
-    let _guard = COUNTER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let mut db = DatabaseImpl::new();
+    let (mut db, rebuild_log) = DatabaseImpl::with_rebuild_log();
     let file = db.new_file("mix.aru".into(), struct_and_func(1));
 
     let tc0 = type_check(&db, file);
@@ -172,7 +163,7 @@ fn func_edit_skips_struct_item() {
         let _ = item_body_typeck(&db, file, id);
     }
 
-    ITEM_BODY_TYPECK_EXEC_COUNT.store(0, Ordering::SeqCst);
+    rebuild_log.clear();
     file.set_text(&mut db).to(Arc::from(struct_and_func(2)));
 
     let items2 = body_item_list(&db, file);
@@ -181,7 +172,7 @@ fn func_edit_skips_struct_item() {
     }
     let _ = file_typeck_view(&db, file);
 
-    let execs = ITEM_BODY_TYPECK_EXEC_COUNT.load(Ordering::SeqCst);
+    let execs = rebuild_log.count_executions_matching("item_body_typeck");
     // Only main should re-exec; Point span unchanged → 1 execute.
     assert!(
         execs <= 1,

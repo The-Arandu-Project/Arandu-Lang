@@ -32,8 +32,8 @@ pub fn validate_amir_func(
     let mut diags = Vec::new();
 
     if func.blocks.is_empty() {
-        diags.push(Diagnostic::error(
-            DiagCode::U001FeatureNotSupported,
+        diags.push(Diagnostic::ice(
+            DiagCode::ICEGEN002,
             "function has no basic blocks (CFG-4)".to_string(),
             span,
         ));
@@ -52,8 +52,8 @@ pub fn validate_amir_func(
             ));
         }
         if !is_valid_terminator(&block.terminator) {
-            diags.push(Diagnostic::error(
-                DiagCode::U001FeatureNotSupported,
+            diags.push(Diagnostic::ice(
+                DiagCode::ICEGEN002,
                 format!("bb{i}: invalid terminator (CFG-1)"),
                 span,
             ));
@@ -61,8 +61,8 @@ pub fn validate_amir_func(
 
         for succ in terminator_targets(&block.terminator) {
             if succ.as_usize() >= func.blocks.len() {
-                diags.push(Diagnostic::error(
-                    DiagCode::U001FeatureNotSupported,
+                diags.push(Diagnostic::ice(
+                    DiagCode::ICEGEN002,
                     format!(
                         "bb{i}: terminator targets non-existent bb{} (CFG-3)",
                         succ.as_usize()
@@ -76,19 +76,20 @@ pub fn validate_amir_func(
             let Some(target_block) = func.blocks.get(target.as_usize()) else {
                 return;
             };
+            let target_params = func.block_params(target_block.params);
             let arg_count = args.len();
-            if arg_count != target_block.params.len() {
+            if arg_count != target_params.len() {
                 diags.push(Diagnostic::ice(
                     DiagCode::ICEGEN002,
                     format!(
                         "bb{i} passes {arg_count} argument(s) to bb{}, which expects {} block parameter(s) (SSA-EDGE)",
                         target.as_usize(),
-                        target_block.params.len()
+                        target_params.len()
                     ),
                     span,
                 ));
             }
-            for (arg_index, (arg, param)) in args.iter().zip(&target_block.params).enumerate() {
+            for (arg_index, (arg, param)) in args.iter().zip(target_params).enumerate() {
                 let Some(arg_ty) = operand_type(func, arg, interner) else {
                     continue;
                 };
@@ -145,8 +146,8 @@ pub fn validate_amir_func(
         if !reachable.contains(BlockId::from_usize(i))
             && !matches!(block.terminator, AmirTerminator::Unreachable)
         {
-            diags.push(Diagnostic::error(
-                DiagCode::U001FeatureNotSupported,
+            diags.push(Diagnostic::ice(
+                DiagCode::ICEGEN002,
                 format!("bb{i}: not reachable from bb0 (CFG-5)"),
                 span,
             ));
@@ -197,7 +198,7 @@ pub fn validate_amir_func(
     }
 
     for (block_index, block) in func.blocks.iter().enumerate() {
-        for (param_index, param) in block.params.iter().enumerate() {
+        for (param_index, param) in func.block_params(block.params).iter().enumerate() {
             let Some(temp) = func.temps.get(param.id.as_usize()) else {
                 diags.push(Diagnostic::ice(
                     DiagCode::ICEGEN002,

@@ -9,7 +9,7 @@ use sha2::{Digest as _, Sha256};
 
 use super::ops::sorted_entries;
 use super::store::{is_link_like, is_plain_directory};
-use super::types::{CacheStoreError, TreeLimits, TreeVerification};
+use super::types::{COPY_BUFFER_SIZE, CacheStoreError, TreeLimits, TreeVerification};
 
 pub(crate) fn hash_tree(
     root: &Path,
@@ -130,7 +130,7 @@ fn hash_file_into(
     let mut file = File::open(path)
         .map_err(|error| CacheStoreError::io("read extracted tree file", path, error))?;
     let mut remaining = expected_len;
-    let mut buffer = [0_u8; 32 * 1024];
+    let mut buffer = [0_u8; COPY_BUFFER_SIZE];
     while remaining > 0 {
         let requested = usize::try_from(remaining)
             .unwrap_or(buffer.len())

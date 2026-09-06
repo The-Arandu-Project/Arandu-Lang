@@ -6,17 +6,22 @@ use super::super::constraints::ConstraintOrigin;
 use super::super::types::{ArType, Primitive};
 use super::expr::synth_expr;
 
-/// Peel auto-deref layers for field/index bases: `Nullable`, then `&`/`&mut`/`ptr`.
+/// Peel auto-deref layers for field/index bases: `Option`, `Nullable`, then `&`/`&mut`/`ptr`.
 ///
-/// Returns `(inner_ty_id, was_nullable)`. Used so `shared self` (`&T`) and
+/// Returns `(inner_ty_id, was_nullable, was_option)`. Used so `shared self` (`&T`) and
 /// `mut self` (`&mut T`) can use `self.field` without an explicit `*`.
-fn peel_auto_deref_base(checker: &TypeChecker<'_>, base_ty_id: TypeId) -> (TypeId, bool) {
+fn peel_auto_deref_base(checker: &TypeChecker<'_>, base_ty_id: TypeId) -> (TypeId, bool, bool) {
     let mut id = base_ty_id;
     let mut was_nullable = false;
-    // Bound iterations: Nullable? + a few ref layers is plenty; avoid infinite
+    let mut was_option = false;
+    // Bound iterations: Option/Nullable? + a few ref layers is plenty; avoid infinite
     // loops on malformed interned graphs.
     for _ in 0..8 {
         match checker.resolve(id) {
+            ArType::Option(inner) => {
+                was_option = true;
+                id = inner;
+            }
             ArType::Nullable(inner) => {
                 was_nullable = true;
                 id = inner;
@@ -27,7 +32,7 @@ fn peel_auto_deref_base(checker: &TypeChecker<'_>, base_ty_id: TypeId) -> (TypeI
             _ => break,
         }
     }
-    (id, was_nullable)
+    (id, was_nullable, was_option)
 }
 
 pub(crate) fn resolve_namespace_field(
@@ -79,15 +84,15 @@ pub(crate) fn resolve_field(
         return checker.intern(ArType::Error);
     }
 
-    let (actual_base_ty_id, was_nullable) = peel_auto_deref_base(checker, base_ty_id);
+    let (actual_base_ty_id, was_nullable, was_option) = peel_auto_deref_base(checker, base_ty_id);
     let actual_base_ty = checker.resolve(actual_base_ty_id);
 
-    if was_nullable && !safe {
+    if (was_nullable || was_option) && !safe {
         let base_ty = checker.resolve(base_ty_id);
         let diag = crate::Diagnostic::error(
             crate::DiagCode::T006NotNullable,
             format!(
-                "cannot access field '{}' on nullable type '{}'",
+                "cannot access field '{}' on nullable or optional type '{}'",
                 field,
                 base_ty.display(&checker.symbols, &checker.type_info.type_interner)
             ),
@@ -100,60 +105,99 @@ pub(crate) fn resolve_field(
                 base_ty.display(&checker.symbols, &checker.type_info.type_interner)
             ),
         )
-        .with_hint("use safe access `?.` or make the value non-nullable".to_string());
+        .with_hint("use safe access `?.` or unwrap the value first".to_string());
         checker.diagnostics.push(diag);
         return checker.intern(ArType::Error);
     }
 
     let struct_info_opt = match actual_base_ty {
-        ArType::Named(id, args) => Some((id, args.clone())),
+        ArType::Named(id, args) => Some((id, args)),
         ArType::Ptr(inner) => match checker.resolve(inner) {
-            ArType::Named(id, args) => Some((id, args.clone())),
+            ArType::Named(id, args) => Some((id, args)),
             _ => None,
         },
         _ => None,
     };
 
-    let field_ty = if let Some((struct_id, args)) = struct_info_opt {
-        let resolved_args: Vec<ArType> = args.iter().map(|&a| checker.resolve(a)).collect();
-        let field_from_struct = if let Some(fields_map) =
-            super::super::types::struct_fields_instantiated(checker, struct_id, &resolved_args)
-        {
-            fields_map.get(field).cloned()
-        } else {
-            checker
-                .type_info
-                .struct_fields
-                .get(&struct_id)
-                .and_then(|fields| fields.get(field).copied())
-                .map(|tid| checker.resolve(tid))
-        };
-
-        if let Some(field_ty) = field_from_struct {
-            field_ty
-        } else {
-            if let Some(method_sym) = checker.symbols.lookup_associated_member(struct_id, field)
-                && let Some(ArType::Func(params, ret)) = checker.decl_type(method_sym)
+    let field_ty =
+        if let Some((struct_id, args)) = struct_info_opt {
+            let arg_ids: Vec<TypeId> = checker.type_info.type_interner.type_args(args);
+            let resolved_args: Vec<ArType> = arg_ids.iter().map(|&a| checker.resolve(a)).collect();
+            let field_from_struct = if let Some(fields_map) =
+                super::super::types::struct_fields_instantiated(checker, struct_id, &resolved_args)
             {
-                ArType::Func(params, ret)
-            } else if let Some(constraints) = checker.type_info.param_constraints.get(&struct_id) {
-                let mut found_method_ty = None;
-                for &iface_sym in constraints.iter() {
-                    if let Some(iface_info) = checker.type_info.interfaces.get(&iface_sym)
-                        && let Some((_, method_tid)) =
-                            iface_info.methods.iter().find(|(m, _)| m == field)
-                    {
-                        found_method_ty = Some(checker.resolve(*method_tid));
-                        break;
+                fields_map.get(field).cloned()
+            } else {
+                checker
+                    .type_info
+                    .struct_fields
+                    .get(&struct_id)
+                    .and_then(|fields| fields.get(field))
+                    .map(|f| checker.resolve(f.ty))
+            };
+
+            if let Some(field_ty) = field_from_struct {
+                field_ty
+            } else {
+                if let Some(method_sym) = checker.symbols.lookup_associated_member(struct_id, field)
+                    && let Some(ArType::Func(params, ret)) = checker.decl_type(method_sym)
+                {
+                    let interner = &checker.type_info.type_interner;
+                    ArType::func(&interner.type_args(params), ret, interner)
+                } else if let Some(constraints) =
+                    checker.type_info.param_constraints.get(&struct_id)
+                {
+                    let mut found_method_ty = None;
+                    for bound in constraints.iter() {
+                        if let Some(iface_info) = checker.type_info.interfaces.get(&bound.iface_sym)
+                            && let Some(m) = iface_info.methods.iter().find(|m| m.name == field)
+                        {
+                            let raw_sig = checker.resolve(m.sig_id);
+                            let base_ty = checker.resolve(actual_base_ty_id);
+                            let inst_sig =
+                            crate::type_checker::types::interfaces::instantiate_interface_method(
+                                checker, bound.iface_sym, &bound.type_args, &base_ty, &raw_sig,
+                            );
+                            found_method_ty = Some(inst_sig);
+                            break;
+                        }
                     }
-                }
-                if let Some(method_ty) = found_method_ty {
-                    if let ArType::Func(params, ret) = method_ty {
-                        let mut new_params = vec![actual_base_ty_id];
-                        new_params.extend(params);
-                        ArType::Func(new_params, ret)
+                    if let Some(method_ty) = found_method_ty {
+                        if let ArType::Func(params, ret) = method_ty {
+                            let interner = &checker.type_info.type_interner;
+                            let params_vec = interner.type_args(params);
+                            let payload = if params_vec.first().is_some_and(|&p| {
+                                checker.unify_ids(p, actual_base_ty_id)
+                                    || match checker.resolve(p) {
+                                        ArType::Ref(inner)
+                                        | ArType::RefMut(inner)
+                                        | ArType::Ptr(inner) => {
+                                            checker.unify_ids(inner, actual_base_ty_id)
+                                        }
+                                        _ => false,
+                                    }
+                            }) {
+                                &params_vec[1..]
+                            } else {
+                                &params_vec[..]
+                            };
+                            let mut new_params = vec![actual_base_ty_id];
+                            new_params.extend_from_slice(payload);
+                            ArType::func(&new_params, ret, interner)
+                        } else {
+                            method_ty
+                        }
                     } else {
-                        method_ty
+                        checker.add_constraint(
+                            actual_base_ty_id,
+                            ArType::Error,
+                            ConstraintOrigin::UndefinedField {
+                                base_span: checker.pool.expr_span(base),
+                                field_span,
+                                field_name: field.to_string(),
+                            },
+                        );
+                        return checker.intern(ArType::Error);
                     }
                 } else {
                     checker.add_constraint(
@@ -167,34 +211,24 @@ pub(crate) fn resolve_field(
                     );
                     return checker.intern(ArType::Error);
                 }
-            } else {
-                checker.add_constraint(
-                    actual_base_ty_id,
-                    ArType::Error,
-                    ConstraintOrigin::UndefinedField {
-                        base_span: checker.pool.expr_span(base),
-                        field_span,
-                        field_name: field.to_string(),
-                    },
-                );
-                return checker.intern(ArType::Error);
             }
-        }
-    } else {
-        checker.add_constraint(
-            actual_base_ty_id,
-            ArType::Error,
-            ConstraintOrigin::UndefinedField {
-                base_span: checker.pool.expr_span(base),
-                field_span,
-                field_name: field.to_string(),
-            },
-        );
-        return checker.intern(ArType::Error);
-    };
+        } else {
+            checker.add_constraint(
+                actual_base_ty_id,
+                ArType::Error,
+                ConstraintOrigin::UndefinedField {
+                    base_span: checker.pool.expr_span(base),
+                    field_span,
+                    field_name: field.to_string(),
+                },
+            );
+            return checker.intern(ArType::Error);
+        };
 
     let field_id = checker.intern(field_ty);
-    if safe || was_nullable {
+    if was_option {
+        checker.intern(ArType::Option(field_id))
+    } else if safe || was_nullable {
         checker.intern(ArType::Nullable(field_id))
     } else {
         field_id
@@ -215,15 +249,15 @@ pub(crate) fn resolve_index(
         return checker.intern(ArType::Error);
     }
 
-    let (actual_base_ty_id, was_nullable) = peel_auto_deref_base(checker, base_ty_id);
+    let (actual_base_ty_id, was_nullable, was_option) = peel_auto_deref_base(checker, base_ty_id);
     let actual_base_ty = checker.resolve(actual_base_ty_id);
 
-    if was_nullable && !safe {
+    if (was_nullable || was_option) && !safe {
         let base_ty = checker.resolve(base_ty_id);
         let diag = crate::Diagnostic::error(
             crate::DiagCode::T006NotNullable,
             format!(
-                "cannot index nullable type '{}'",
+                "cannot index nullable or optional type '{}'",
                 base_ty.display(&checker.symbols, &checker.type_info.type_interner)
             ),
             checker.pool.expr_span(index),
@@ -240,8 +274,13 @@ pub(crate) fn resolve_index(
         return checker.intern(ArType::Error);
     }
 
-    let elem_ty_id = match actual_base_ty {
-        ArType::Array(_, inner) | ArType::Slice(inner) => inner,
+    let elem_ty_id = match &actual_base_ty {
+        ArType::Array(_, inner) | ArType::Slice(inner) => *inner,
+        ArType::Named(_, args)
+            if arandu_middle::types::is_vec_type(&actual_base_ty, &checker.symbols) =>
+        {
+            checker.type_info.type_interner.type_args(*args)[0]
+        }
         _ => {
             checker.add_constraint(
                 actual_base_ty_id,
@@ -257,7 +296,9 @@ pub(crate) fn resolve_index(
     };
 
     let index_ty = checker.resolve(index_ty_id);
-    if !index_ty.is_error() && !index_ty.is_integer() {
+    let is_range_index = matches!(index_ty, ArType::Range(_));
+
+    if !index_ty.is_error() && !index_ty.is_integer() && !is_range_index {
         checker.add_constraint(
             ArType::Primitive(Primitive::Int),
             index_ty_id,
@@ -269,7 +310,18 @@ pub(crate) fn resolve_index(
         );
     }
 
-    if safe || was_nullable {
+    if is_range_index {
+        let slice_ty_id = checker.intern(ArType::Slice(elem_ty_id));
+        if was_option {
+            checker.intern(ArType::Option(slice_ty_id))
+        } else if safe || was_nullable {
+            checker.intern(ArType::Nullable(slice_ty_id))
+        } else {
+            slice_ty_id
+        }
+    } else if was_option {
+        checker.intern(ArType::Option(elem_ty_id))
+    } else if safe || was_nullable {
         checker.intern(ArType::Nullable(elem_ty_id))
     } else {
         elem_ty_id

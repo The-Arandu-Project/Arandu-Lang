@@ -7,7 +7,7 @@ import std.alloc.vec as vec
 
 func main(): int {
     let mut v = vec.new<int>()
-    if !vec.is_empty(v) {
+    if !vec.isEmpty(v) {
         return 90
     }
     vec.push(v, 10)

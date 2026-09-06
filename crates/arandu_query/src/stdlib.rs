@@ -157,7 +157,7 @@ pub fn resolve_stdlib_root(opts: StdlibResolveOpts) -> Result<StdlibRoot, Stdlib
             }
 
             // 3b. Walk parents of the real executable (monorepo / cargo target/debug)
-            let mut cur = exe_dir.clone();
+            let mut cur = exe_dir;
             loop {
                 let candidate = cur.join("stdlib");
                 tried.push(format!("current_exe walk: {}", candidate.display()));
@@ -295,7 +295,7 @@ mod tests {
     fn explicit_wins() {
         let root = workspace_stdlib();
         let resolved = resolve_stdlib_root(StdlibResolveOpts {
-            explicit: Some(root.clone()),
+            explicit: Some(root),
             env_value: Some(Some("/nonexistent".into())),
             current_exe: Some(PathBuf::from("/tmp/fake-arandu")),
         })
@@ -384,7 +384,7 @@ mod tests {
         let resolved = resolve_stdlib_root(StdlibResolveOpts {
             explicit: None,
             env_value: Some(None),
-            current_exe: Some(link.clone()),
+            current_exe: Some(link),
         })
         .expect("symlink exe must resolve via canonicalize to versioned tree");
 

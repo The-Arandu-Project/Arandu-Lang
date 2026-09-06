@@ -184,3 +184,41 @@ fn run_m13_under_opt() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+#[test]
+fn run_generic_default_ref_and_destructor() {
+    let dir = std::env::temp_dir();
+    let file = dir.join("arandu_generic_default_destructor.aru");
+    fs::write(
+        &file,
+        r#"
+module tests.cli.generic_default_destructor
+
+struct Counter<T, A = int> {
+    val: T
+    tag: A
+}
+
+@Destructor
+func Counter.destroy<T, A>(self: Counter<T, A>): void {
+}
+
+func inspect<T>(c: &Counter<T>): T {
+    return c.val
+}
+
+func main(): int {
+    let c: Counter<int> = Counter { val: 99, tag: 1 }
+    return inspect(c)
+}
+"#,
+    )
+    .expect("write");
+    let out = run_cli(&["run", &file.to_string_lossy()]);
+    assert_eq!(
+        out.status.code(),
+        Some(99),
+        "generic default with destructor failed: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

@@ -7,7 +7,7 @@
 
 use super::LowerCtx;
 use crate::amir::program::extend_block_range;
-use crate::amir::{AmirBasicBlock, AmirStmtTable, AmirTerminator, BlockId};
+use crate::amir::{AmirBasicBlock, AmirStmtTable, AmirTerminator, BlockId, BlockParam};
 use crate::layout::DenseRange;
 use rustc_hash::FxHashMap;
 
@@ -17,6 +17,11 @@ pub(super) struct AmirBuilder {
     pub(super) current_block: Option<BlockId>,
     /// Predecessor lists per block, insertion-ordered (determinism matters).
     pub(super) predecessors: FxHashMap<BlockId, Vec<BlockId>>,
+    /// Per-block scratch parameters, index-aligned with `blocks`. SSA inserts
+    /// and prunes params non-contiguously across blocks, so they are staged
+    /// here and linearized into the dense `block_params` pool only when a
+    /// [`crate::amir::AmirFunc`] snapshot is materialized.
+    pub(super) params_scratch: Vec<Vec<BlockParam>>,
 }
 
 impl AmirBuilder {
@@ -26,6 +31,7 @@ impl AmirBuilder {
             stmts: AmirStmtTable::new(),
             current_block: None,
             predecessors: FxHashMap::default(),
+            params_scratch: Vec::new(),
         }
     }
 
@@ -35,11 +41,52 @@ impl AmirBuilder {
         let id = BlockId::from_usize(self.blocks.len());
         self.blocks.push(AmirBasicBlock {
             id,
-            params: Vec::new(),
+            params: DenseRange::empty(),
             statements: DenseRange::empty(),
             terminator: AmirTerminator::Unreachable,
         });
+        self.params_scratch.push(Vec::new());
         id
+    }
+
+    pub(super) fn push_block_param(&mut self, block: BlockId, param: BlockParam) {
+        self.params_scratch[block.as_usize()].push(param);
+    }
+
+    pub(super) fn block_params(&self, block: BlockId) -> &[BlockParam] {
+        &self.params_scratch[block.as_usize()]
+    }
+
+    pub(super) fn take_block_params(&mut self, block: BlockId) -> Vec<BlockParam> {
+        std::mem::take(&mut self.params_scratch[block.as_usize()])
+    }
+
+    pub(super) fn set_block_params(&mut self, block: BlockId, params: Vec<BlockParam>) {
+        self.params_scratch[block.as_usize()] = params;
+    }
+
+    /// Linearizes `params_scratch` into a dense `block_params` pool and stamps
+    /// each block's `params` range. Consumes the scratch.
+    pub(super) fn materialize_block_params(&mut self) -> Vec<BlockParam> {
+        let mut all = Vec::new();
+        for i in 0..self.blocks.len() {
+            let params = std::mem::take(&mut self.params_scratch[i]);
+            let start = all.len();
+            let len = params.len();
+            self.blocks[i].params = DenseRange::new(start, len);
+            all.extend(params);
+        }
+        all
+    }
+
+    /// Refills `params_scratch` from a materialized `block_params` pool (used
+    /// to tear an [`crate::amir::AmirFunc`] snapshot back into the builder).
+    pub(super) fn restore_block_params_scratch(&mut self, block_params: Vec<BlockParam>) {
+        self.params_scratch = self
+            .blocks
+            .iter()
+            .map(|b| block_params[b.params.as_range()].to_vec())
+            .collect();
     }
 
     /// Appends `stmt` to the open block's dense range. Silently dropped when

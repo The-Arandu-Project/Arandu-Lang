@@ -310,7 +310,7 @@ mod tests {
         let blocks = vec![AmirBasicBlock {
             id: BlockId::from_usize(0),
             statements: range,
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Return,
         }];
         let cfg = crate::cfg::compute_cfg_edges(&blocks);
@@ -322,6 +322,9 @@ mod tests {
             locals: Vec::new(),
             temps,
             blocks,
+
+            block_params: Vec::new(),
+
             stmts,
             cfg,
         }
@@ -334,6 +337,7 @@ mod tests {
                 lhs: Some(TempId::from_usize(0)),
                 callee: AmirOperand::FunctionRef(crate::SymbolId::new(0, 1)),
                 args: smallvec::smallvec![],
+                return_borrow: None,
             }],
             vec![bool_temp(0)],
         );
@@ -501,7 +505,7 @@ mod tests {
             AmirBasicBlock {
                 id: BlockId::from_usize(0),
                 statements: DenseRange::empty(),
-                params: Vec::new(),
+                params: DenseRange::empty(),
                 terminator: AmirTerminator::Branch {
                     condition: AmirOperand::Constant(AmirConstant::Bool(true)),
                     if_true: BlockId::from_usize(1),
@@ -513,13 +517,13 @@ mod tests {
             AmirBasicBlock {
                 id: BlockId::from_usize(1),
                 statements: r1,
-                params: Vec::new(),
+                params: DenseRange::empty(),
                 terminator: AmirTerminator::Return,
             },
             AmirBasicBlock {
                 id: BlockId::from_usize(2),
                 statements: r2,
-                params: Vec::new(),
+                params: DenseRange::empty(),
                 terminator: AmirTerminator::Return,
             },
         ];
@@ -532,6 +536,9 @@ mod tests {
             locals: Vec::new(),
             temps: vec![bool_temp(0)],
             blocks,
+
+            block_params: Vec::new(),
+
             stmts,
             cfg,
         };
@@ -564,7 +571,7 @@ mod tests {
             AmirBasicBlock {
                 id: BlockId::from_usize(0),
                 statements: range0,
-                params: Vec::new(),
+                params: DenseRange::empty(),
                 terminator: AmirTerminator::Goto {
                     target: BlockId::from_usize(1),
                     args: vec![AmirOperand::Copy(TempId::from_usize(1))],
@@ -573,7 +580,7 @@ mod tests {
             AmirBasicBlock {
                 id: BlockId::from_usize(1),
                 statements: range1,
-                params: Vec::new(),
+                params: DenseRange::empty(),
                 terminator: AmirTerminator::Return,
             },
         ];
@@ -586,6 +593,9 @@ mod tests {
             locals: Vec::new(),
             temps: vec![bool_temp(0), bool_temp(1)],
             blocks,
+
+            block_params: Vec::new(),
+
             stmts,
             cfg,
         };
@@ -609,7 +619,7 @@ mod tests {
             .map(|id| AmirBasicBlock {
                 id: BlockId::from_usize(id),
                 statements: DenseRange::new(0, 1),
-                params: Vec::new(),
+                params: DenseRange::empty(),
                 terminator: AmirTerminator::Return,
             })
             .collect::<Vec<_>>();
@@ -622,6 +632,9 @@ mod tests {
             locals: Vec::new(),
             temps: vec![int_temp(0), int_temp(1)],
             blocks,
+
+            block_params: Vec::new(),
+
             stmts,
             cfg,
         };

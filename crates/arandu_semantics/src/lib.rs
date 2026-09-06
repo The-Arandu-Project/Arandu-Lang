@@ -15,9 +15,10 @@
 pub use arandu_codegen::{CodegenBackend, CompiledCode, JitError};
 pub use arandu_middle::{
     BitMatrix, BitSet, CodeReplacement, DenseRange, DiagCode, Diagnostic, DocCommentMap, Hint,
-    Label, NodeKey, ResolutionResult, ResolvedNames, ScopeId, Severity, SmolStr, Symbol, SymbolId,
-    SymbolKind, SymbolTable, amir, amir_validate, bitset, cfg, diagnostics, hir, index_vec, layout,
-    literal_pool, newtype_index, ops, resolved, symbol_table, types, validate_amir_program,
+    IntrinsicKind, Label, NodeKey, ResolutionResult, ResolvedNames, ScopeId, Severity, SmolStr,
+    Symbol, SymbolId, SymbolKind, SymbolTable, amir, amir_validate, bitset, cfg, diagnostics, hir,
+    index_vec, intrinsics, layout, literal_pool, newtype_index, ops, resolved, symbol_table, types,
+    validate_amir_program,
 };
 
 pub use arandu_middle::ops::{BinaryOp, SetOp, UnaryOp};
@@ -27,9 +28,11 @@ pub mod passes;
 pub mod testing;
 
 pub use arandu_mir::{
-    check_borrows, check_moves, lower_to_amir, optimize_amir, optimize_amir_checked,
+    OptLevel, check_borrows, check_moves, lower_to_amir, lower_to_amir_with_interfaces,
+    optimize_amir, optimize_amir_checked, optimize_amir_checked_with_level,
 };
 pub use arandu_resolve::{resolve_for_test, resolve_imports_and_bodies, resolve_local};
+pub use arandu_typeck::type_checker::TargetInfo;
 pub use arandu_typeck::{
     TypeCheckResult, TypeChecker, TypeInfo, body_item_symbols, check_bodies, check_bodies_only,
     check_func_body_only, check_item_body_only, check_non_func_bodies_only, check_signatures,

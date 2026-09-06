@@ -4,6 +4,7 @@ use super::{
     ParseErrorCode, Parser, StructDecl, TokenKind, TopLevelDecl, TypeAliasDecl, TypeName,
     Visibility, is_contextual_module_segment,
 };
+use crate::{ExprId, ExprKind};
 use smallvec::SmallVec;
 use smol_str::SmolStr;
 
@@ -15,10 +16,10 @@ impl<'a> Parser<'a> {
             let last_segment_is_contextual = is_contextual_module_segment(&self.previous().kind);
             let next_starts_top_level = self.at_kind_name("EOF")
                 || self.at_kind_name("KW_IMPORT")
+                || self.at_soft_keyword("from")
                 || matches!(
                     self.current().kind,
-                    TokenKind::KwFrom
-                        | TokenKind::At
+                    TokenKind::At
                         | TokenKind::KwPublic
                         | TokenKind::KwConst
                         | TokenKind::KwType
@@ -56,7 +57,7 @@ impl<'a> Parser<'a> {
         let docs = self.take_pending_docs();
         let start = self.mark();
 
-        if self.at_kind_name("KW_FROM") {
+        if self.at_soft_keyword("from") {
             self.advance();
             if self.at_kind_name("STRING_START") {
                 let source = self.parse_string_literal()?;
@@ -183,19 +184,19 @@ impl<'a> Parser<'a> {
         Ok(text.into())
     }
 
-    pub(crate) fn parse_top_level_decl(&mut self) -> Result<TopLevelDecl, ParseError> {
+    pub(crate) fn parse_top_level_decls(&mut self) -> Result<Vec<TopLevelDecl>, ParseError> {
         let start = self.mark();
-        match self.try_parse_top_level_decl() {
-            Ok(decl) => Ok(decl),
+        match self.try_parse_top_level_decls() {
+            Ok(decls) => Ok(decls),
             Err(err) => {
                 self.diagnostics.push(err);
                 self.synchronize_top_level();
-                Ok(TopLevelDecl::Error(self.span_from_mark(start)))
+                Ok(vec![TopLevelDecl::Error(self.span_from_mark(start))])
             }
         }
     }
 
-    pub(super) fn try_parse_top_level_decl(&mut self) -> Result<TopLevelDecl, ParseError> {
+    pub(super) fn try_parse_top_level_decls(&mut self) -> Result<Vec<TopLevelDecl>, ParseError> {
         self.collect_doc_comments();
         let docs = self.take_pending_docs();
         let item_kind = self.peek_top_level_item_kind();
@@ -204,23 +205,28 @@ impl<'a> Parser<'a> {
             let attrs = self.parse_attributes()?;
             let visibility = self.parse_visibility();
             match self.current().kind {
-                TokenKind::KwConst => Ok(TopLevelDecl::Const(self.parse_const(attrs, visibility)?)),
-                TokenKind::KwType => Ok(TopLevelDecl::TypeAlias(
+                TokenKind::KwConst => Ok(vec![TopLevelDecl::Const(
+                    self.parse_const(attrs, visibility)?,
+                )]),
+                TokenKind::KwType => Ok(vec![TopLevelDecl::TypeAlias(
                     self.parse_type_alias(attrs, visibility)?,
-                )),
-                TokenKind::KwAsync | TokenKind::KwFunc => {
-                    Ok(TopLevelDecl::Func(self.parse_func(attrs, visibility)?))
-                }
-                TokenKind::KwStruct => Ok(TopLevelDecl::Struct(
+                )]),
+                TokenKind::KwAsync | TokenKind::KwFunc => Ok(vec![TopLevelDecl::Func(
+                    self.parse_func(attrs, visibility)?,
+                )]),
+                TokenKind::KwStruct => Ok(vec![TopLevelDecl::Struct(
                     self.parse_struct_decl(attrs, visibility)?,
-                )),
-                TokenKind::KwEnum => {
-                    Ok(TopLevelDecl::Enum(self.parse_enum_decl(attrs, visibility)?))
-                }
-                TokenKind::KwInterface => Ok(TopLevelDecl::Interface(
+                )]),
+                TokenKind::KwEnum => Ok(vec![TopLevelDecl::Enum(
+                    self.parse_enum_decl(attrs, visibility)?,
+                )]),
+                TokenKind::KwInterface => Ok(vec![TopLevelDecl::Interface(
                     self.parse_interface_decl(attrs, visibility)?,
-                )),
-                TokenKind::KwExtern => Ok(TopLevelDecl::Extern(self.parse_extern_decl(attrs)?)),
+                )]),
+                TokenKind::KwExtern => {
+                    Ok(vec![TopLevelDecl::Extern(self.parse_extern_decl(attrs)?)])
+                }
+                TokenKind::KwImpl => self.parse_impl_decl(attrs, visibility),
                 _ => Err(ParseError::new(
                     ParseErrorCode::ExpectedTopLevelDecl,
                     "expected top-level declaration",
@@ -231,9 +237,11 @@ impl<'a> Parser<'a> {
             }
         })();
         self.finish_node();
-        let decl = result?;
-        self.attach_docs(docs, decl.span());
-        Ok(decl)
+        let decls = result?;
+        if let Some(first) = decls.first() {
+            self.attach_docs(docs, first.span());
+        }
+        Ok(decls)
     }
 
     /// Look ahead past `@attr` / `public` / `async` to classify the green item kind.
@@ -281,6 +289,7 @@ impl<'a> Parser<'a> {
                 TokenKind::KwEnum => return SyntaxKind::ENUM_ITEM,
                 TokenKind::KwInterface => return SyntaxKind::INTERFACE_ITEM,
                 TokenKind::KwExtern => return SyntaxKind::EXTERN_ITEM,
+                TokenKind::KwImpl => return SyntaxKind::IMPL_ITEM,
                 _ => return SyntaxKind::ITEM,
             }
         }
@@ -421,7 +430,7 @@ impl<'a> Parser<'a> {
 
     pub(super) fn parse_field_decl(
         &mut self,
-        require_semicolon: bool,
+        _require_semicolon: bool,
     ) -> Result<FieldDecl, ParseError> {
         self.collect_doc_comments();
         let docs = self.take_pending_docs();
@@ -431,8 +440,8 @@ impl<'a> Parser<'a> {
         let name = self.expect_ident_value()?;
         self.expect_name("COLON")?;
         let ty = self.parse_type()?;
-        if require_semicolon || self.at_kind_name("SEMICOLON") {
-            self.expect_semicolon()?;
+        if self.at_kind_name("SEMICOLON") {
+            self.advance();
         }
         let field = FieldDecl {
             span: self.span_from_mark(start),
@@ -589,6 +598,113 @@ impl<'a> Parser<'a> {
         })
     }
 
+    pub(super) fn parse_impl_decl(
+        &mut self,
+        _attrs: Vec<Attribute>,
+        _visibility: Visibility,
+    ) -> Result<Vec<TopLevelDecl>, ParseError> {
+        self.expect_name("KW_IMPL")?;
+        let impl_generic_params = self.parse_generic_params()?;
+        let target_type_name = self.parse_type_name()?;
+        let type_generic_args = if self.eat_name("LT") {
+            let args = self.parse_generic_list(1, super::Parser::parse_type)?;
+            self.expect_gt()?;
+            args
+        } else {
+            Vec::new()
+        };
+        // The target arguments select the implemented instantiation. The
+        // nominal receiver remains `TypeName`; its declaration owns the
+        // generic parameter symbols imported into every member scope.
+        let _type_generic_args = type_generic_args;
+        let where_clause = self.parse_where_clause("LBRACE")?;
+
+        self.start_node(crate::syntax::SyntaxKind::BLOCK);
+        self.expect_name("LBRACE")?;
+
+        let mut methods = Vec::new();
+        while !self.at_kind_name("RBRACE") {
+            self.skip_semicolons();
+            if self.at_kind_name("RBRACE") {
+                break;
+            }
+            if self.at_kind_name("EOF") {
+                self.diagnostics.push(ParseError::new(
+                    ParseErrorCode::ExpectedToken,
+                    "expected '}'",
+                    self.current(),
+                    self.file_id,
+                    self.source,
+                ));
+                break;
+            }
+
+            self.start_node(crate::syntax::SyntaxKind::FUNC_ITEM);
+            let method_start = self.mark();
+            let m_attrs = self.parse_attributes()?;
+            let m_visibility = self.parse_visibility();
+            let is_async = self.eat_name("KW_ASYNC");
+            self.expect_name("KW_FUNC")?;
+            let func_name_start = self.mark();
+            let method_name = self.expect_ident_value()?;
+            let member_func_name = FuncName::Method {
+                span: self.span_from_mark(func_name_start),
+                receiver: target_type_name.clone(),
+                name: method_name,
+            };
+
+            let method_generics = self.parse_generic_params()?;
+            let mut all_generics = impl_generic_params.clone();
+            all_generics.extend(method_generics);
+
+            self.expect_name("LPAREN")?;
+            let params = self.parse_params(Some(&target_type_name))?;
+            self.expect_name("RPAREN")?;
+
+            let result = if self.eat_name("COLON") {
+                Some(self.parse_result_type()?)
+            } else {
+                None
+            };
+
+            let m_where = self.parse_where_clause("LBRACE")?;
+            let mut all_where = where_clause.clone();
+            all_where.extend(m_where);
+
+            let body = self.parse_block()?;
+            self.finish_node(); // FUNC_ITEM
+
+            let func_decl = FuncDecl {
+                span: self.span_from_mark(method_start),
+                attrs: m_attrs.into(),
+                visibility: m_visibility,
+                is_async,
+                name: member_func_name,
+                generic_params: all_generics,
+                params,
+                result,
+                where_clause: all_where,
+                body,
+            };
+            methods.push(func_decl);
+            self.skip_semicolons();
+        }
+
+        self.expect_name("RBRACE")?;
+        self.finish_node(); // BLOCK
+
+        if methods.is_empty() {
+            return Err(ParseError::new(
+                ParseErrorCode::ExpectedTopLevelDecl,
+                "an impl block must declare at least one function",
+                self.previous(),
+                self.file_id,
+                self.source,
+            ));
+        }
+        Ok(methods.into_iter().map(TopLevelDecl::Func).collect())
+    }
+
     pub(super) fn parse_abi_literal(&mut self) -> Result<SmolStr, ParseError> {
         self.expect_name("STRING_START")?;
         let abi = match &self.current().kind {
@@ -658,7 +774,7 @@ impl<'a> Parser<'a> {
             let name_span = self.current().span(self.file_id);
             let name = self.expect_name_like()?;
             let args = if self.eat_name("LPAREN") {
-                let args = self.parse_arguments()?;
+                let args = self.parse_attribute_arguments()?;
                 self.expect_name("RPAREN")?;
                 args
             } else {
@@ -673,6 +789,90 @@ impl<'a> Parser<'a> {
             self.skip_semicolons();
         }
         Ok(attrs)
+    }
+
+    pub(super) fn parse_attribute_arguments(&mut self) -> Result<Vec<ExprId>, ParseError> {
+        let mut args = Vec::new();
+        if self.at_kind_name("RPAREN") {
+            return Ok(args);
+        }
+        loop {
+            let is_bare_ident = matches!(
+                self.current().kind,
+                TokenKind::IdentValue | TokenKind::IdentType
+            ) && !self.tokens.get(self.pos + 1).is_some_and(|next| {
+                matches!(
+                    next.kind,
+                    TokenKind::Dot | TokenKind::LBrace | TokenKind::LParen
+                )
+            });
+            let arg = if is_bare_ident {
+                let start = self.pos;
+                let name = self.expect_name_like()?;
+                let span = self.span_from_mark(start);
+                self.pool.alloc_expr(
+                    ExprKind::Path {
+                        path: smallvec::smallvec![name],
+                    },
+                    span,
+                )
+            } else {
+                self.parse_expr(0)?
+            };
+            args.push(arg);
+            if !self.eat_name("COMMA") {
+                break;
+            }
+            if self.at_kind_name("RPAREN") {
+                break;
+            }
+        }
+        Ok(args)
+    }
+
+    pub(super) fn parse_generic_list<T, F>(
+        &mut self,
+        min_items: usize,
+        mut parse_item: F,
+    ) -> Result<Vec<T>, ParseError>
+    where
+        F: FnMut(&mut Self) -> Result<T, ParseError>,
+    {
+        if self.at_gt() {
+            if min_items == 0 {
+                return Ok(Vec::new());
+            }
+            return Err(ParseError::new(
+                ParseErrorCode::ExpectedToken,
+                "expected item before GT",
+                self.current(),
+                self.file_id,
+                self.source,
+            ));
+        }
+
+        let mut items = Vec::new();
+        loop {
+            items.push(parse_item(self)?);
+            if !self.eat_name("COMMA") {
+                break;
+            }
+            if self.at_gt() {
+                break;
+            }
+        }
+
+        if items.len() < min_items {
+            return Err(ParseError::new(
+                ParseErrorCode::ExpectedToken,
+                format!("expected at least {min_items} item(s) before GT"),
+                self.current(),
+                self.file_id,
+                self.source,
+            ));
+        }
+
+        Ok(items)
     }
 
     pub(super) fn parse_comma_separated_list<T, F>(
@@ -802,6 +1002,20 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn expect_import_name(&mut self) -> Result<SmolStr, ParseError> {
-        self.expect_name_like()
+        match &self.current().kind {
+            TokenKind::IdentValue | TokenKind::IdentType => {
+                let name = SmolStr::new(self.current_text());
+                self.advance();
+                Ok(name)
+            }
+            _ => Err(ParseError::expected(
+                ParseErrorCode::ExpectedToken,
+                "expected import identifier",
+                self.current(),
+                self.file_id,
+                self.source,
+                &["import identifier"],
+            )),
+        }
     }
 }

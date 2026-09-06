@@ -18,8 +18,11 @@ pub mod amir_validate;
 pub mod cfg;
 pub mod db;
 pub mod diagnostics;
+pub mod docs;
+pub mod effects;
 pub mod hir;
 pub mod ice;
+pub mod intrinsics;
 pub mod layout;
 pub mod literal_pool;
 pub mod ops;
@@ -45,6 +48,8 @@ pub use package::{ModuleId, PackageId, TargetId};
 
 pub use amir_validate::validate_amir_program;
 pub use diagnostics::{CodeReplacement, DiagCode, Diagnostic, Hint, Label, Severity};
+pub use effects::EffectFlags;
+pub use intrinsics::IntrinsicKind;
 pub use resolved::{DocCommentMap, NodeKey, ResolvedNames};
 pub use symbol_table::{ScopeId, Symbol, SymbolId, SymbolKind, SymbolTable};
 

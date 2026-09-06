@@ -1,0 +1,53 @@
+module std.runtime.waker
+
+/// experimental — not Minimal 0.1 — Waker / Context.
+///
+/// Waker is the async token handed to awaited operations (timers, socket
+/// readiness); reactor and sockets wake via its host id. Moved out of the
+/// former `std.runtime` monolith.
+
+extern "C" {
+    func ar_rt_waker_create(): int
+    func ar_rt_waker_wake(id: int): void
+    func ar_rt_waker_wait(id: int, timeout_ms: int): int
+    func ar_rt_waker_destroy(id: int): void
+}
+
+/// experimental — not Minimal 0.1
+public struct Waker {
+    id: int
+}
+
+/// experimental — not Minimal 0.1
+public struct Context {
+    waker: Waker
+}
+
+public func newWaker(): Waker {
+    unsafe {
+        return Waker { id: ar_rt_waker_create() }
+    }
+}
+
+public func wakerWake(w: ref Waker): void {
+    unsafe {
+        ar_rt_waker_wake(w.id)
+    }
+}
+
+/// Wait until woken or timeout. 1 = woken, 0 = timeout, -1 = error.
+public func wakerWait(w: ref Waker, timeoutMs: int): int {
+    unsafe {
+        return ar_rt_waker_wait(w.id, timeoutMs)
+    }
+}
+
+public func destroyWaker(w: ref Waker): void {
+    unsafe {
+        ar_rt_waker_destroy(w.id)
+    }
+}
+
+public func newContext(w: Waker): Context {
+    return Context { waker: w }
+}

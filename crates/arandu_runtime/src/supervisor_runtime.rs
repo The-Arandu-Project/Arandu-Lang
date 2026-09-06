@@ -134,39 +134,54 @@ pub unsafe extern "C" fn ar_rt_supervisor_poll(sup: i64, worker: i64) -> i64 {
     if sup < 0 || worker < 0 {
         return -1;
     }
-    let mut g = lock();
-    let Some(Some(super_slot)) = g.get_mut(sup as usize) else {
-        return -1;
-    };
-    let Some(Some(w)) = super_slot.workers.get_mut(worker as usize) else {
-        return -1;
-    };
-    match w.child.try_wait() {
-        Ok(None) => 0,
-        Ok(Some(_status)) => {
-            if w.restarts < w.max_restarts {
-                let path = match std::str::from_utf8(&w.path) {
-                    Ok(s) => s,
-                    Err(_) => return -1,
-                };
-                match Command::new(path)
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()
-                {
-                    Ok(c) => {
-                        w.child = c;
-                        w.restarts += 1;
-                        2
-                    }
-                    Err(_) => 1,
+    let (should_restart, path_bytes) = {
+        let mut g = lock();
+        let Some(Some(super_slot)) = g.get_mut(sup as usize) else {
+            return -1;
+        };
+        let Some(Some(w)) = super_slot.workers.get_mut(worker as usize) else {
+            return -1;
+        };
+        match w.child.try_wait() {
+            Ok(None) => return 0,
+            Ok(Some(_status)) => {
+                if w.restarts < w.max_restarts {
+                    (true, w.path.clone())
+                } else {
+                    return 1;
                 }
-            } else {
-                1
             }
+            Err(_) => return -1,
         }
-        Err(_) => -1,
+    };
+
+    if should_restart {
+        let path = match std::str::from_utf8(&path_bytes) {
+            Ok(s) => s,
+            Err(_) => return -1,
+        };
+        let new_child = match Command::new(path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(_) => return 1,
+        };
+
+        let mut g = lock();
+        let Some(Some(super_slot)) = g.get_mut(sup as usize) else {
+            return -1;
+        };
+        let Some(Some(w)) = super_slot.workers.get_mut(worker as usize) else {
+            return -1;
+        };
+        w.child = new_child;
+        w.restarts += 1;
+        2
+    } else {
+        1
     }
 }
 

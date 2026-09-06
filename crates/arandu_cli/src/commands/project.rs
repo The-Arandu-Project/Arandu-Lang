@@ -8,6 +8,7 @@ use crate::cli_error::{CliFailure, CliResult, CliSuccess};
 use crate::pipeline::{fail_operational, fail_usage, finish};
 use crate::project::{self, ProjectFlags};
 use crate::watch;
+use arandu_middle::layout::DataLayout;
 
 pub fn cmd_new(args: &[String]) -> CliResult {
     if args.len() < 3 {
@@ -239,6 +240,6 @@ pub fn cmd_cache(args: &[String], project_flags: &ProjectFlags) -> CliResult {
     }
 }
 
-pub fn cmd_watch(start: &Path, flags: &ProjectFlags) -> CliResult {
-    watch::cmd_watch(start, flags)
+pub fn cmd_watch(start: &Path, flags: &ProjectFlags, data_layout: DataLayout) -> CliResult {
+    watch::cmd_watch(start, flags, data_layout)
 }

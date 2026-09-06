@@ -81,6 +81,21 @@ impl RebuildLog {
         counts
     }
 
+    /// Counts recorded executions whose query key contains `substring`.
+    #[must_use]
+    pub fn count_executions_matching(&self, substring: &str) -> usize {
+        let Ok(events) = self.events.lock() else {
+            return 0;
+        };
+        events
+            .iter()
+            .filter(|e| match e {
+                RebuildEvent::Execute { key } => key.contains(substring),
+                _ => false,
+            })
+            .count()
+    }
+
     /// Human-readable causal chain of **executions** (validate hits omitted unless verbose).
     #[must_use]
     pub fn format_chain(&self, verbose: bool) -> String {

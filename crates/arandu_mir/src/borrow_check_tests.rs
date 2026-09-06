@@ -70,7 +70,7 @@ fn o003_shared_while_exclusive() {
     let block = AmirBasicBlock {
         id: BlockId::from_usize(0),
         statements: DenseRange::new(0, 3),
-        params: vec![],
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     };
     let blocks = vec![block];
@@ -87,6 +87,9 @@ fn o003_shared_while_exclusive() {
             temp(2, int),
         ],
         blocks,
+
+        block_params: Vec::new(),
+
         stmts,
         cfg,
     };
@@ -104,7 +107,10 @@ fn o003_shared_while_exclusive() {
 fn o002_move_while_borrowed() {
     let int = intern(ArType::Primitive(Primitive::Int));
     // Non-copy local of a "struct" so Move matters — use Named non-copy.
-    let named = intern(ArType::Named(SymbolId::new(0, 1), vec![]));
+    let named = intern(ArType::Named(
+        SymbolId::new(0, 1),
+        crate::hir::IndexRange::empty(),
+    ));
     let mut stmts = AmirStmtTable::new();
     // t0 = &s0
     stmts.push(AmirStmt::Assign {
@@ -132,7 +138,7 @@ fn o002_move_while_borrowed() {
     let block = AmirBasicBlock {
         id: BlockId::from_usize(0),
         statements: DenseRange::new(0, 4),
-        params: vec![],
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     };
     let blocks = vec![block];
@@ -156,6 +162,9 @@ fn o002_move_while_borrowed() {
             temp(3, named),
         ],
         blocks,
+
+        block_params: Vec::new(),
+
         stmts,
         cfg,
     };
@@ -188,7 +197,7 @@ fn o006_destroy_while_borrowed() {
     let block = AmirBasicBlock {
         id: BlockId::from_usize(0),
         statements: DenseRange::new(0, 3),
-        params: vec![],
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     };
     let blocks = vec![block];
@@ -201,6 +210,9 @@ fn o006_destroy_while_borrowed() {
         locals: vec![local(0, int)],
         temps: vec![temp(0, intern(ArType::Ref(int))), temp(1, int)],
         blocks,
+
+        block_params: Vec::new(),
+
         stmts,
         cfg,
     };
@@ -243,7 +255,7 @@ fn shared_shared_ok() {
     let block = AmirBasicBlock {
         id: BlockId::from_usize(0),
         statements: DenseRange::new(0, 4),
-        params: vec![],
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     };
     let blocks = vec![block];
@@ -257,6 +269,9 @@ fn shared_shared_ok() {
         locals: vec![local(0, int)],
         temps: vec![temp(0, ref_ty), temp(1, ref_ty), temp(2, int), temp(3, int)],
         blocks,
+
+        block_params: Vec::new(),
+
         stmts,
         cfg,
     };
@@ -293,11 +308,12 @@ fn o003_two_loans_then_call() {
             AmirOperand::Copy(TempId::from_usize(0)),
             AmirOperand::Copy(TempId::from_usize(1)),
         ],
+        return_borrow: None,
     });
     let block = AmirBasicBlock {
         id: BlockId::from_usize(0),
         statements: DenseRange::new(0, 4),
-        params: vec![],
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     };
     let blocks = vec![block];
@@ -314,6 +330,9 @@ fn o003_two_loans_then_call() {
             temp(2, int),
         ],
         blocks,
+
+        block_params: Vec::new(),
+
         stmts,
         cfg,
     };
@@ -323,5 +342,63 @@ fn o003_two_loans_then_call() {
             .iter()
             .any(|d| d.code == DiagCode::O003MutableBorrowConflict),
         "expected O003, got {diags:?}"
+    );
+}
+
+/// Mutating a projected field `s0.f` while `s0` is borrowed → O003.
+#[test]
+fn o003_store_to_projected_field_while_borrowed() {
+    let int = intern(ArType::Primitive(Primitive::Int));
+    let mut stmts = AmirStmtTable::new();
+    // t0 = &s0
+    stmts.push(AmirStmt::Assign {
+        lhs: TempId::from_usize(0),
+        rhs: AmirRvalue::Borrow(place(0)),
+    });
+    // Store s0.f = 42 (projected place) while t0 is still live!
+    let mut projected_place = place(0);
+    projected_place
+        .projections
+        .push(crate::amir::AmirProjection::Field(SymbolId::new(0, 10)));
+    stmts.push(AmirStmt::Store {
+        lhs: projected_place,
+        rhs: AmirOperand::Constant(crate::amir::AmirConstant::Bool(true)),
+    });
+    // Use t0 after store
+    stmts.push(AmirStmt::Assign {
+        lhs: TempId::from_usize(1),
+        rhs: AmirRvalue::Unary {
+            op: UnaryOp::Deref,
+            operand: AmirOperand::Copy(TempId::from_usize(0)),
+        },
+    });
+    let block = AmirBasicBlock {
+        id: BlockId::from_usize(0),
+        statements: DenseRange::new(0, 3),
+        params: DenseRange::empty(),
+        terminator: AmirTerminator::Return,
+    };
+    let blocks = vec![block];
+    let cfg = compute_cfg_edges(&blocks);
+    let func = AmirFunc {
+        symbol: SymbolId::new(0, 0),
+        return_type: int,
+        receiver: None,
+        params: vec![],
+        locals: vec![local(0, int)],
+        temps: vec![temp(0, intern(ArType::Ref(int))), temp(1, int)],
+        blocks,
+
+        block_params: Vec::new(),
+
+        stmts,
+        cfg,
+    };
+    let diags = check_borrows(&func, &empty_symbols());
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.code == DiagCode::O003MutableBorrowConflict),
+        "expected O003 for store to field while borrowed, got {diags:?}"
     );
 }

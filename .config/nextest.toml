@@ -1,0 +1,18 @@
+# Configuração do cargo-nextest para o compilador Arandu
+# Documentação: https://nexte.st/docs/configuration/
+
+[profile.default]
+# Limites de detecção de testes lentos
+slow-timeout = { period = "15s", terminate-after = 2 }
+
+# Formato e nível de detalhes da saída
+status-level = "pass"
+final-status-level = "flaky"
+failure-output = "immediate-final"
+success-output = "never"
+
+[profile.ci]
+status-level = "all"
+final-status-level = "flaky"
+failure-output = "immediate-final"
+retries = 1

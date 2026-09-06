@@ -1,0 +1,157 @@
+module std.core.iter
+
+import std.core.option as option
+
+/// Pure iterator interface over elements of type `Item`.
+///
+/// Implementations must be deterministic, stack-first, and allocation-free.
+public interface Iterator<Item> {
+    func next(self: mut ref Self): Option<Item>
+}
+
+/// An iterator adapter that yields only the first `remaining` elements.
+public struct Take<I: Iterator<Item>, Item> {
+    iter: I
+    remaining: uint
+}
+
+/// Creates a `Take` iterator adapter.
+public func take<I: Iterator<Item>, Item>(it: I, count: uint): Take<I, Item> {
+    return Take<I, Item> {
+        iter: it,
+        remaining: count,
+    }
+}
+
+/// Advances the `Take` iterator and returns the next element.
+public func Take.next<I: Iterator<Item>, Item>(self: mut ref Take<I, Item>): Option<Item> {
+    if self.remaining == 0 {
+        return Option.None
+    }
+    self.remaining = self.remaining - 1
+    return self.iter.next()
+}
+
+/// An iterator adapter that skips the first `target` elements.
+public struct Skip<I: Iterator<Item>, Item> {
+    iter: I
+    skipped: uint
+    target: uint
+}
+
+/// Creates a `Skip` iterator adapter.
+public func skip<I: Iterator<Item>, Item>(it: I, count: uint): Skip<I, Item> {
+    return Skip<I, Item> {
+        iter: it,
+        skipped: 0,
+        target: count,
+    }
+}
+
+/// Advances the `Skip` iterator, discarding the initial elements on first iteration.
+public func Skip.next<I: Iterator<Item>, Item>(self: mut ref Skip<I, Item>): Option<Item> {
+    while self.skipped < self.target {
+        match self.iter.next() {
+            Some(_) => {
+                self.skipped = self.skipped + 1
+            }
+            None => {
+                return Option.None
+            }
+        }
+    }
+    return self.iter.next()
+}
+
+/// Pair representing an indexed element in [`Enumerate`].
+public struct Indexed<Item> {
+    index: uint
+    value: Item
+}
+
+/// An iterator adapter that pairs each element with its 0-based index.
+public struct Enumerate<I: Iterator<Item>, Item> {
+    iter: I
+    index: uint
+}
+
+/// Creates an `Enumerate` iterator adapter.
+public func enumerate<I: Iterator<Item>, Item>(it: I): Enumerate<I, Item> {
+    return Enumerate<I, Item> {
+        iter: it,
+        index: 0,
+    }
+}
+
+/// Advances the `Enumerate` iterator and returns `(index, value)`.
+public func Enumerate.next<I: Iterator<Item>, Item>(self: mut ref Enumerate<I, Item>): Option<Indexed<Item> > {
+    match self.iter.next() {
+        Some(val) => {
+            let cur = self.index
+            self.index = self.index + 1
+            return Option.Some(Indexed<Item> {
+                index: cur,
+                value: val,
+            })
+        }
+        None => {
+            return Option.None
+        }
+    }
+}
+
+/// An iterator adapter that steps by a given amount on each iteration.
+public struct StepBy<I: Iterator<Item>, Item> {
+    iter: I
+    step: uint
+    first: bool
+}
+
+/// Creates a `StepBy` iterator adapter.
+public func stepBy<I: Iterator<Item>, Item>(it: I, step: uint): StepBy<I, Item> {
+    let mut s = step
+    if s == 0 {
+        s = 1
+    }
+    return StepBy<I, Item> {
+        iter: it,
+        step: s,
+        first: true,
+    }
+}
+
+/// Advances the `StepBy` iterator by `step` items.
+public func StepBy.next<I: Iterator<Item>, Item>(self: mut ref StepBy<I, Item>): Option<Item> {
+    if self.first {
+        self.first = false
+        return self.iter.next()
+    }
+    let mut i: uint = 1
+    while i < self.step {
+        match self.iter.next() {
+            Some(_) => {
+                i = i + 1
+            }
+            None => {
+                return Option.None
+            }
+        }
+    }
+    return self.iter.next()
+}
+
+/// Consumes the iterator and returns the total number of elements.
+public func count<I: Iterator<Item>, Item>(mut it: I): uint {
+    let mut c: uint = 0
+    while true {
+        match it.next() {
+            Some(_) => {
+                c = c + 1
+            }
+            None => {
+                return c
+            }
+        }
+    }
+    return c
+}

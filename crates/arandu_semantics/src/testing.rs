@@ -70,13 +70,21 @@ pub fn validate_benchmark_case(
     let signature_has_error = matches!(
         signature.as_ref(),
         Some(ArType::Func(parameters, return_type))
-            if parameters.iter().any(|parameter| {
+            if type_info.type_interner.type_args(*parameters).iter().any(|parameter| {
                 matches!(type_info.resolve_type_id(*parameter), ArType::Error)
             }) || matches!(type_info.resolve_type_id(*return_type), ArType::Error)
     );
     let valid_type = match signature {
-        Some(ArType::Func(parameters, return_type)) if parameters.len() == 1 => {
-            let parameter = type_info.resolve_type_id(parameters[0]);
+        Some(ArType::Func(parameters, return_type)) if parameters.len == 1 => {
+            let parameter_ty_id = type_info
+                .type_interner
+                .type_args(parameters)
+                .first()
+                .copied();
+            let parameter = match parameter_ty_id {
+                Some(tid) => type_info.resolve_type_id(tid),
+                None => ArType::Error,
+            };
             let benchmark_named = match parameter {
                 ArType::RefMut(inner) => match type_info.resolve_type_id(inner) {
                     ArType::Named(type_symbol, arguments) if arguments.is_empty() => {
@@ -84,9 +92,9 @@ pub fn validate_benchmark_case(
                         symbols.get(type_symbol).name.rsplit('.').next() == Some("Benchmark")
                             && fields.is_some_and(|fields| {
                                 fields.len() == 1
-                                    && fields.values().all(|field| {
+                                    && fields.iter().all(|f| {
                                         matches!(
-                                            type_info.resolve_type_id(*field),
+                                            type_info.resolve_type_id(f.ty),
                                             ArType::Primitive(crate::types::Primitive::Int)
                                         )
                                     })

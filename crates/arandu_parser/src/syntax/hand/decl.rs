@@ -6,8 +6,8 @@ use super::ty::{parse_dotted_ident_path, parse_type};
 use crate::ast::ast_pool::AstPool;
 use crate::syntax::kind::{SyntaxKind, SyntaxNode};
 use crate::{
-    Attribute, ConstDecl, ExternDecl, GenericParam, ImportDecl, ImportItem, InterfaceDecl,
-    ModuleDecl, TopLevelDecl, TypeAliasDecl, TypeName, Visibility, WhereItem,
+    Attribute, ConstDecl, ExprKind, ExternDecl, GenericParam, ImportDecl, ImportItem,
+    InterfaceDecl, ModuleDecl, TopLevelDecl, TypeAliasDecl, Visibility, WhereItem,
 };
 use arandu_lexer::{Span, Token, TokenKind};
 use smallvec::{SmallVec, smallvec};
@@ -116,8 +116,32 @@ pub(super) fn parse_attributes(
         if cur.eat(TokenKind::LParen) {
             if cur.peek_kind() != Some(TokenKind::RParen) {
                 loop {
-                    // Attr args may be bare string literals
-                    args.push(try_hand_lower_expr(ctx, cur, 0)?);
+                    // Attr args may be bare string literals or identifiers (e.g. @Effects(Pure, Net))
+                    let is_bare_ident = if let Some(tok) = cur.peek() {
+                        matches!(tok.kind, TokenKind::IdentValue | TokenKind::IdentType)
+                            && !cur.peek_at(1).is_some_and(|next| {
+                                matches!(
+                                    next.kind,
+                                    TokenKind::Dot | TokenKind::LBrace | TokenKind::LParen
+                                )
+                            })
+                    } else {
+                        false
+                    };
+                    let arg = if is_bare_ident {
+                        let t = cur.bump()?;
+                        let text = SmolStr::new(ctx.text(t)?);
+                        let span = ctx.token_span(t);
+                        ctx.pool.alloc_expr(
+                            ExprKind::Path {
+                                path: smallvec::smallvec![text],
+                            },
+                            span,
+                        )
+                    } else {
+                        try_hand_lower_expr(ctx, cur, 0)?
+                    };
+                    args.push(arg);
                     if cur.eat(TokenKind::Comma) {
                         continue;
                     }
@@ -145,7 +169,7 @@ pub(super) fn parse_generic_params(
         return Some(smallvec![]);
     }
     let mut params = SmallVec::new();
-    if cur.peek_kind() != Some(TokenKind::Gt) {
+    if !cur.at_gt() {
         loop {
             let name_tok = cur.peek()?;
             if !matches!(name_tok.kind, TokenKind::IdentType | TokenKind::IdentValue) {
@@ -158,15 +182,9 @@ pub(super) fn parse_generic_params(
             let mut p_end = name_tok.start + name_tok.len;
             if cur.eat(TokenKind::Colon) {
                 loop {
-                    let path_start = cur.peek()?.start;
-                    let path = parse_dotted_ident_path(ctx, cur)?;
-                    let last = path.last()?;
-                    let path_end = path_start + last.len() as u32;
-                    p_end = path_end;
-                    constraints.push(TypeName {
-                        span: ctx.span(path_start, path_end),
-                        path,
-                    });
+                    let ty = super::ty::parse_type(ctx, cur)?;
+                    p_end = ctx.pool.type_expr_span(ty).end;
+                    constraints.push(ty);
                     if cur.eat(TokenKind::Plus) {
                         continue;
                     }
@@ -193,7 +211,7 @@ pub(super) fn parse_generic_params(
             break;
         }
     }
-    cur.expect(TokenKind::Gt)?;
+    cur.expect_gt()?;
     Some(params)
 }
 
@@ -216,15 +234,8 @@ pub(super) fn parse_where_clause(
         cur.expect(TokenKind::Colon)?;
         let mut constraints = SmallVec::new();
         loop {
-            let path_start = cur.peek()?.start;
-            let path = parse_dotted_ident_path(ctx, cur)?;
-            // End of last path segment: approximate from last segment text len.
-            let last = path.last()?;
-            let path_end = path_start + last.len() as u32;
-            constraints.push(TypeName {
-                span: ctx.span(path_start, path_end),
-                path,
-            });
+            let ty = super::ty::parse_type(ctx, cur)?;
+            constraints.push(ty);
             if cur.eat(TokenKind::Plus) {
                 continue;
             }
@@ -232,7 +243,7 @@ pub(super) fn parse_where_clause(
         }
         let item_end = constraints
             .last()
-            .map(|c: &TypeName| c.span.end)
+            .map(|c| ctx.pool.type_expr_span(*c).end)
             .unwrap_or(start + name_tok.len);
         items.push(WhereItem {
             span: ctx.span(start, item_end),
@@ -283,7 +294,7 @@ pub fn try_hand_lower_module(
             let between = source.get(end as usize..next.start as usize).unwrap_or("");
             let has_nl = between.contains('\n');
             let has_semi = toks.iter().any(|t| matches!(t.kind, TokenKind::Semicolon));
-            if !has_nl && !has_semi && starts_top_level_decl(next.kind) {
+            if !has_nl && !has_semi && starts_top_level_tok(source, next) {
                 return None;
             }
         }
@@ -312,6 +323,26 @@ fn starts_top_level_decl(kind: TokenKind) -> bool {
     )
 }
 
+/// Like [`starts_top_level_decl`], but also recognizes the soft keyword
+/// `from` when it lexes as a plain identifier.
+fn starts_top_level_tok(source: &str, tok: &Token) -> bool {
+    starts_top_level_decl(tok.kind)
+        || (tok.kind == TokenKind::IdentValue && tok.lexeme(source) == "from")
+}
+
+/// Consume the soft keyword `from` regardless of whether it lexed as the
+/// (now retired) `KwFrom` keyword or as a plain identifier.
+fn eat_soft_from(ctx: &HandCtx<'_>, cur: &mut Cursor<'_>) -> bool {
+    if matches!(
+        cur.peek(),
+        Some(tok) if tok.kind == TokenKind::IdentValue && ctx.text(tok) == Some("from")
+    ) {
+        cur.bump();
+        return true;
+    }
+    false
+}
+
 /// All import forms.
 #[must_use]
 pub fn try_hand_lower_import(
@@ -333,7 +364,7 @@ pub fn try_hand_lower_import(
     let mut cur = Cursor::new(&toks);
     let span = token_bounds_span(file_id, &toks)?;
 
-    if cur.eat(TokenKind::KwFrom) {
+    if eat_soft_from(&ctx, &mut cur) {
         // from path import { A, B as C }  OR  from "ext" import { … }
         if cur.peek_kind() == Some(TokenKind::StringStart) {
             let source_s = parse_static_string(&mut ctx, &mut cur)?;
@@ -415,6 +446,9 @@ fn parse_import_brace_list(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>) -> Optio
             let mut end = name_tok.start + name_tok.len;
             let alias = if cur.eat(TokenKind::KwAs) {
                 let a = cur.peek()?;
+                if !matches!(a.kind, TokenKind::IdentValue | TokenKind::IdentType) {
+                    return None;
+                }
                 let alias = SmolStr::new(ctx.text(a)?);
                 end = a.start + a.len;
                 cur.bump();
