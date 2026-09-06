@@ -291,15 +291,22 @@ pub unsafe extern "C" fn ar_rt_reactor_poll_ms(id: ReactorId, timeout_ms: i64) -
 
     #[cfg(target_os = "linux")]
     {
-        let (epfd, tfd_opt, deadline) = {
+        let (epfd, tfd_opt, deadline, has_sockets) = {
             let guard = lock_reactors();
             let Some(slot) = guard.get(id as usize).and_then(|s| s.as_ref()) else {
                 return -1;
             };
-            (slot.epoll_fd, slot.timer_fd, slot.deadline)
+            (
+                slot.epoll_fd,
+                slot.timer_fd,
+                slot.deadline,
+                !slot.sockets.is_empty(),
+            )
         };
 
-        if tfd_opt.is_none() {
+        // Socket readiness is independent of timer registration. Only use
+        // the sleep-only fallback when epoll has no registered I/O sources.
+        if tfd_opt.is_none() && !has_sockets {
             if let Some(dl) = deadline {
                 let now = Instant::now();
                 if now >= dl {
@@ -508,6 +515,68 @@ pub unsafe extern "C" fn ar_rt_reactor_register_socket(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn portable_reactor_explicitly_rejects_socket_registration() {
+        let (listener, client, server) = crate::socket_runtime::tests::connected_pair();
+        // SAFETY: this test owns the socket/reactor/waker handles and destroys
+        // them only after all operations using them have completed.
+        unsafe {
+            let reactor = ar_rt_reactor_create();
+            let waker = crate::waker_runtime::ar_rt_waker_create();
+            assert!(reactor >= 0);
+            assert_eq!(ar_rt_reactor_backend(), BACKEND_PORTABLE);
+            assert_eq!(ar_rt_reactor_register_socket(reactor, server, 1, waker), -1);
+            ar_rt_reactor_destroy(reactor);
+            crate::waker_runtime::ar_rt_waker_destroy(waker);
+            crate::socket_runtime::ar_rt_tcp_close(client);
+            crate::socket_runtime::ar_rt_tcp_close(server);
+            crate::socket_runtime::ar_rt_tcp_close(listener);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn socket_readiness_wakes_without_an_armed_timer_and_can_be_rearmed() {
+        use crate::socket_runtime::{
+            WAIT_READ, ar_rt_tcp_close, ar_rt_tcp_write, tests::connected_pair,
+        };
+        use crate::waker_runtime::{ar_rt_waker_create, ar_rt_waker_destroy, ar_rt_waker_wait};
+        let (listener, client, server) = connected_pair();
+        // SAFETY: all handles remain owned and live until cleanup; the byte
+        // passed to write is valid for its stated length for the entire call.
+        unsafe {
+            let reactor = ar_rt_reactor_create();
+            assert!(reactor >= 0);
+            let waker = ar_rt_waker_create();
+            assert_eq!(
+                ar_rt_reactor_register_socket(reactor, server, WAIT_READ, waker),
+                0
+            );
+            assert_eq!(ar_rt_tcp_write(client, b"x".as_ptr(), 1), 1);
+            assert!(ar_rt_reactor_poll_ms(reactor, 100) >= 0);
+            assert_eq!(
+                ar_rt_waker_wait(waker, 0),
+                1,
+                "readiness must not depend on a timer"
+            );
+            // EPOLLONESHOT suppresses another notification until rearmed.
+            assert!(ar_rt_reactor_poll_ms(reactor, 0) >= 0);
+            assert_eq!(ar_rt_waker_wait(waker, 0), 0);
+            assert_eq!(
+                ar_rt_reactor_register_socket(reactor, server, WAIT_READ, waker),
+                0
+            );
+            assert!(ar_rt_reactor_poll_ms(reactor, 100) >= 0);
+            assert_eq!(ar_rt_waker_wait(waker, 0), 1);
+            ar_rt_reactor_destroy(reactor);
+            ar_rt_waker_destroy(waker);
+            ar_rt_tcp_close(client);
+            ar_rt_tcp_close(server);
+            ar_rt_tcp_close(listener);
+        }
+    }
 
     #[test]
     fn create_sleep_destroy() {

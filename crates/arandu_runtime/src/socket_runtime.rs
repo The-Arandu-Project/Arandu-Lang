@@ -461,21 +461,38 @@ unsafe fn write_io_uring(sock: i64, buf: *const u8, len: i64) -> Option<i64> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    pub(crate) fn connected_pair() -> (i64, i64, i64) {
+        // SAFETY: handles are created here, checked before use and transferred
+        // to the caller for cleanup; these calls do not borrow raw buffers.
+        unsafe {
+            let listener = ar_rt_tcp_listen(0);
+            assert!(
+                listener >= 0,
+                "loopback listener must be available for socket tests"
+            );
+            let port = {
+                let guard = lock();
+                let SockKind::Listener(socket) = &guard[listener as usize].as_ref().unwrap().kind
+                else {
+                    panic!("expected listener");
+                };
+                socket.local_addr().unwrap().port()
+            };
+            let client = ar_rt_tcp_connect(i64::from(port));
+            assert!(client >= 0, "connect to the allocated loopback port");
+            let server = ar_rt_tcp_accept(listener);
+            assert!(server >= 0, "accept the loopback client");
+            (listener, client, server)
+        }
+    }
 
     #[test]
     fn listen_connect_write_read() {
         unsafe {
-            let port = 18765i64;
-            let lis = ar_rt_tcp_listen(port);
-            if lis < 0 {
-                return;
-            }
-            let client = ar_rt_tcp_connect(port);
-            assert!(client >= 0);
-            let server = ar_rt_tcp_accept(lis);
-            assert!(server >= 0);
+            let (lis, client, server) = connected_pair();
             let msg = b"hi";
             assert_eq!(ar_rt_tcp_write(client, msg.as_ptr(), 2), 2);
             let mut buf = [0u8; 8];
@@ -490,13 +507,7 @@ mod tests {
     #[test]
     fn nonblocking_wait_read() {
         unsafe {
-            let port = 18766i64;
-            let lis = ar_rt_tcp_listen(port);
-            if lis < 0 {
-                return;
-            }
-            let client = ar_rt_tcp_connect(port);
-            let server = ar_rt_tcp_accept(lis);
+            let (lis, client, server) = connected_pair();
             assert_eq!(ar_rt_tcp_set_nonblocking(server, 1), 0);
             // No data yet — wait should timeout.
             let t0 = ar_rt_tcp_wait(server, WAIT_READ, 10);
@@ -516,13 +527,7 @@ mod tests {
     #[test]
     fn async_read_write_path() {
         unsafe {
-            let port = 18767i64;
-            let lis = ar_rt_tcp_listen(port);
-            if lis < 0 {
-                return;
-            }
-            let client = ar_rt_tcp_connect(port);
-            let server = ar_rt_tcp_accept(lis);
+            let (lis, client, server) = connected_pair();
             let msg = b"ok";
             assert!(ar_rt_tcp_write_async(client, msg.as_ptr(), 2) >= 2);
             let mut buf = [0u8; 4];

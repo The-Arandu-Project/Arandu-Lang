@@ -269,11 +269,18 @@ mod tests {
 
     #[test]
     fn temp_dir_returns_a_usable_path_and_cleanup_removes_it() {
-        let root = std::env::temp_dir().join(format!(
-            "ar_test_ctx_temp_{}",
-            sandbox::NONCE_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
-        std::fs::create_dir(&root).unwrap();
+        let root = loop {
+            let candidate = std::env::temp_dir().join(format!(
+                "ar_test_ctx_temp_{}_{}",
+                std::process::id(),
+                sandbox::NONCE_COUNTER.fetch_add(1, Ordering::Relaxed)
+            ));
+            match std::fs::create_dir(&candidate) {
+                Ok(()) => break candidate,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("reserve test directory: {error}"),
+            }
+        };
         init_test_context("pkg::mod::test_temp", 42, Some(root.clone()));
         let returned = unsafe { ar_test_temp_dir(0) };
         let bytes = unsafe {
