@@ -284,7 +284,7 @@ impl<'a, 'b, M: Module> FunctionTranslator<'a, 'b, M> {
             let block_id = BlockId::from_usize(idx);
             let clif_block = self.block_map[&block_id];
             if block_id.as_usize() > 0 {
-                for param in &block.params {
+                for param in self.current_func.block_params(block.params) {
                     let pty = self.resolve_ty(param.ty);
                     for &clif_ty in &clif_types(&pty, self.ptr_type) {
                         self.builder.append_block_param(clif_block, clif_ty);
@@ -421,7 +421,7 @@ impl<'a, 'b, M: Module> AmirVisitor for FunctionTranslator<'a, 'b, M> {
         } else {
             let clif_params = self.builder.block_params(clif_block).to_vec();
             let mut clif_slot_idx = 0;
-            for param in &block.params {
+            for param in self.current_func.block_params(block.params) {
                 let pty = self.resolve_ty(param.ty);
                 if matches!(pty, ArType::Primitive(Primitive::Str)) {
                     let ptr_val = clif_params[clif_slot_idx];

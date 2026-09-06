@@ -42,7 +42,7 @@ fn dummy_expr() -> arandu_parser::Expr {
 fn dummy_block() -> arandu_parser::Block {
     arandu_parser::Block {
         span: dummy_span(),
-        statements: Vec::new(),
+        statements: arandu_parser::IndexRange::empty(),
     }
 }
 

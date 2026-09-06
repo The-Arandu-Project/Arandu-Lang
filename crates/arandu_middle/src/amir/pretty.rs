@@ -107,10 +107,10 @@ impl AmirFunc {
 
         // Basic blocks
         for block in &self.blocks {
+            let block_params = self.block_params(block.params);
             let mut param_str = String::new();
-            if !block.params.is_empty() {
-                let p_strs: Vec<String> = block
-                    .params
+            if !block_params.is_empty() {
+                let p_strs: Vec<String> = block_params
                     .iter()
                     .map(|p| {
                         let mut s = format!(

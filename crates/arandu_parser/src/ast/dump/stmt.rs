@@ -9,8 +9,8 @@ use super::expr::{dump_expr, dump_pattern};
 use super::{dump_set_op, dump_span};
 
 pub(super) fn dump_block_body(pool: &AstPool, block: &Block, out: &mut Vec<String>, indent: usize) {
-    for stmt in &block.statements {
-        dump_stmt(pool, *stmt, out, indent);
+    for &stmt in pool.stmt_list(block.statements) {
+        dump_stmt(pool, stmt, out, indent);
     }
 }
 
@@ -314,8 +314,8 @@ pub(super) fn dump_inline_block(pool: &AstPool, label: &str, span: Span, block: 
 }
 
 pub(super) fn dump_block_inline(pool: &AstPool, block: &Block) -> String {
-    let stmts = block
-        .statements
+    let stmts = pool
+        .stmt_list(block.statements)
         .iter()
         .map(|stmt| dump_stmt_inline(pool, *stmt))
         .collect::<Vec<_>>()

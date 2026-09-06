@@ -119,7 +119,9 @@ fn ast_nested_expression_spans_are_contained_by_parent() {
         arandu_parser::TopLevelDecl::Func(func) => func,
         other => panic!("expected func, got {other:?}"),
     };
-    let stmt = program.pool.stmt(func.body.statements[0]);
+    let stmt = program
+        .pool
+        .stmt(program.pool.stmt_list(func.body.statements)[0]);
     let arandu_parser::Stmt::VarDecl { value, .. } = stmt else {
         panic!("expected var decl, got {stmt:?}");
     };
@@ -147,7 +149,9 @@ fn ast_call_with_block_span_covers_trailing_block() {
         arandu_parser::TopLevelDecl::Func(func) => func,
         other => panic!("expected func, got {other:?}"),
     };
-    let stmt = program.pool.stmt(func.body.statements[0]);
+    let stmt = program
+        .pool
+        .stmt(program.pool.stmt_list(func.body.statements)[0]);
     let arandu_parser::Stmt::Expr { expr, .. } = stmt else {
         panic!("expected expr stmt, got {stmt:?}");
     };
@@ -174,7 +178,9 @@ fn ast_multiline_string_span_covers_delimiters() {
         arandu_parser::TopLevelDecl::Func(func) => func,
         other => panic!("expected func, got {other:?}"),
     };
-    let stmt = program.pool.stmt(func.body.statements[0]);
+    let stmt = program
+        .pool
+        .stmt(program.pool.stmt_list(func.body.statements)[0]);
     let arandu_parser::Stmt::VarDecl { value, .. } = stmt else {
         panic!("expected var decl, got {stmt:?}");
     };

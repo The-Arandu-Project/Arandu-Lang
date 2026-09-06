@@ -57,7 +57,7 @@ fn block(statements: Vec<AmirStmt>, stmts: &mut AmirStmtTable) -> AmirBasicBlock
     AmirBasicBlock {
         id: BlockId::from_usize(0),
         statements: range,
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     }
 }
@@ -77,6 +77,9 @@ fn make_func(
         locals,
         temps,
         blocks,
+
+        block_params: Vec::new(),
+
         stmts,
         cfg,
     }
@@ -195,7 +198,7 @@ fn move_on_one_branch_maybe_moved() {
     let block0 = AmirBasicBlock {
         id: b0,
         statements: range0,
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Branch {
             condition: AmirOperand::Copy(TempId::from_usize(0)),
             if_true: b1,
@@ -210,7 +213,7 @@ fn move_on_one_branch_maybe_moved() {
     let block1 = AmirBasicBlock {
         id: b1,
         statements: range1,
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Goto {
             target: b3,
             args: Vec::new(),
@@ -220,7 +223,7 @@ fn move_on_one_branch_maybe_moved() {
     let block2 = AmirBasicBlock {
         id: b2,
         statements: DenseRange::empty(),
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Goto {
             target: b3,
             args: Vec::new(),
@@ -238,7 +241,7 @@ fn move_on_one_branch_maybe_moved() {
     let block3 = AmirBasicBlock {
         id: b3,
         statements: range3,
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     };
 
@@ -303,7 +306,7 @@ fn branch_arms_both_moving_same_local_do_not_conflict() {
     let block0 = AmirBasicBlock {
         id: BlockId::from_usize(0),
         statements: range0,
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Branch {
             condition: AmirOperand::Copy(TempId::from_usize(1)),
             if_true: BlockId::from_usize(1),
@@ -316,30 +319,18 @@ fn branch_arms_both_moving_same_local_do_not_conflict() {
     let block1 = AmirBasicBlock {
         id: BlockId::from_usize(1),
         statements: DenseRange::empty(),
-        params: vec![crate::amir::BlockParam {
-            id: TempId::from_usize(2),
-            local: LocalId::from_usize(2),
-            ty: intern_ty(non_copy_ty()),
-            from: None,
-            moved: true,
-        }],
+        params: DenseRange::new(0, 1),
         terminator: AmirTerminator::Return,
     };
 
     let block2 = AmirBasicBlock {
         id: BlockId::from_usize(2),
         statements: DenseRange::empty(),
-        params: vec![crate::amir::BlockParam {
-            id: TempId::from_usize(3),
-            local: LocalId::from_usize(3),
-            ty: intern_ty(non_copy_ty()),
-            from: None,
-            moved: true,
-        }],
+        params: DenseRange::new(1, 1),
         terminator: AmirTerminator::Return,
     };
 
-    let func = make_func(
+    let mut func = make_func(
         vec![block0, block1, block2],
         vec![
             local(0, non_copy_ty()),
@@ -355,6 +346,22 @@ fn branch_arms_both_moving_same_local_do_not_conflict() {
         ],
         stmts,
     );
+    func.block_params = vec![
+        crate::amir::BlockParam {
+            id: TempId::from_usize(2),
+            local: LocalId::from_usize(2),
+            ty: intern_ty(non_copy_ty()),
+            from: None,
+            moved: true,
+        },
+        crate::amir::BlockParam {
+            id: TempId::from_usize(3),
+            local: LocalId::from_usize(3),
+            ty: intern_ty(non_copy_ty()),
+            from: None,
+            moved: true,
+        },
+    ];
     let symbols = SymbolTable::new(0);
     let diags = check_moves(&func, &symbols);
     assert!(

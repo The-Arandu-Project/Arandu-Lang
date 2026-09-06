@@ -193,7 +193,7 @@ impl<'a> CEmitter<'a> {
             }
         }
         for block in &func.blocks {
-            for param in &block.params {
+            for param in func.block_params(block.params) {
                 used_temps.insert(param.id.as_usize());
                 used_locals.insert(param.local.as_usize());
             }

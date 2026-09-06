@@ -172,7 +172,7 @@ mod tests {
         let blocks = vec![AmirBasicBlock {
             id: BlockId::from_usize(0),
             statements: range,
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Return,
         }];
         let cfg = compute_cfg_edges(&blocks);
@@ -184,6 +184,9 @@ mod tests {
             locals: Vec::new(),
             temps,
             blocks,
+
+            block_params: Vec::new(),
+
             stmts,
             cfg,
         }
@@ -339,7 +342,7 @@ mod tests {
         let blocks = vec![
             AmirBasicBlock {
                 id: BlockId::from_usize(0),
-                params: Vec::new(),
+                params: DenseRange::empty(),
                 statements: range,
                 terminator: AmirTerminator::Branch {
                     condition: AmirOperand::Copy(TempId::from_usize(1)),
@@ -351,7 +354,7 @@ mod tests {
             },
             AmirBasicBlock {
                 id: BlockId::from_usize(1),
-                params: Vec::new(),
+                params: DenseRange::empty(),
                 statements: DenseRange::empty(),
                 terminator: AmirTerminator::Goto {
                     target: BlockId::from_usize(3),
@@ -360,7 +363,7 @@ mod tests {
             },
             AmirBasicBlock {
                 id: BlockId::from_usize(2),
-                params: Vec::new(),
+                params: DenseRange::empty(),
                 statements: DenseRange::empty(),
                 terminator: AmirTerminator::Goto {
                     target: BlockId::from_usize(3),
@@ -369,7 +372,7 @@ mod tests {
             },
             AmirBasicBlock {
                 id: BlockId::from_usize(3),
-                params: Vec::new(),
+                params: DenseRange::empty(),
                 statements: DenseRange::empty(),
                 terminator: AmirTerminator::Return,
             },
@@ -384,6 +387,9 @@ mod tests {
             // TempId doubles as the SCCP lattice index — keep ids dense.
             temps: vec![int_temp(0), bool_temp],
             blocks,
+
+            block_params: Vec::new(),
+
             stmts,
             cfg,
         };

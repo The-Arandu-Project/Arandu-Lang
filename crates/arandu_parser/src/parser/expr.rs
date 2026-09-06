@@ -551,11 +551,14 @@ impl<'a> Parser<'a> {
             let nested_span = self.pool.expr_span(nested);
             Block {
                 span: nested_span,
-                statements: vec![self.pool.alloc_stmt(Stmt::Expr {
-                    span: nested_span,
-                    expr: nested,
-                    has_semi: false,
-                })],
+                statements: {
+                    let nested_id = self.pool.alloc_stmt(Stmt::Expr {
+                        span: nested_span,
+                        expr: nested,
+                        has_semi: false,
+                    });
+                    self.pool.alloc_stmt_list(&[nested_id])
+                },
             }
         } else {
             self.parse_block()?

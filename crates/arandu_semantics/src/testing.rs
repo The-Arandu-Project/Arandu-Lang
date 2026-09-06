@@ -92,9 +92,9 @@ pub fn validate_benchmark_case(
                         symbols.get(type_symbol).name.rsplit('.').next() == Some("Benchmark")
                             && fields.is_some_and(|fields| {
                                 fields.len() == 1
-                                    && fields.values().all(|field| {
+                                    && fields.iter().all(|f| {
                                         matches!(
-                                            type_info.resolve_type_id(*field),
+                                            type_info.resolve_type_id(f.ty),
                                             ArType::Primitive(crate::types::Primitive::Int)
                                         )
                                     })

@@ -260,7 +260,7 @@ pub fn prune_dummy_loads_stores(func: &mut AmirFunc) {
 
         new_blocks.push(AmirBasicBlock {
             id: block.id,
-            params: block.params.clone(),
+            params: block.params,
             statements: crate::layout::DenseRange::new(new_range_start, new_range_len),
             terminator: block.terminator.clone(),
         });
@@ -406,7 +406,7 @@ mod tests {
 
         let block = AmirBasicBlock {
             id: BlockId::from_usize(0),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             statements: DenseRange::new(0, 4),
             terminator: AmirTerminator::Return,
         };
@@ -419,6 +419,7 @@ mod tests {
             locals: vec![local_non_mem, local_mem],
             temps: Vec::new(),
             blocks: vec![block],
+            block_params: Vec::new(),
             stmts,
             cfg: ControlFlowGraph::default(),
         };

@@ -208,8 +208,8 @@ impl<'a> CEmitter<'a> {
                         .rsplit('.')
                         .next()
                         .unwrap_or("");
-                    let field_idx = match self.provider.get_struct_field_indices(struct_id) {
-                        Some(indices) => indices.get(field_name).copied().unwrap_or(0),
+                    let field_idx = match self.provider.get_struct_fields(struct_id) {
+                        Some(fields) => fields.get(field_name).map(|f| f.index).unwrap_or(0),
                         None => 0,
                     };
                     let offset = layout.field_offsets.get(field_idx).copied().unwrap_or(0);

@@ -129,7 +129,7 @@ mod tests {
         let blocks = vec![AmirBasicBlock {
             id: BlockId::from_usize(0),
             statements: range,
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Return,
         }];
         let cfg = compute_cfg_edges(&blocks);
@@ -141,6 +141,9 @@ mod tests {
             locals: Vec::new(),
             temps,
             blocks,
+
+            block_params: Vec::new(),
+
             stmts,
             cfg,
         }
@@ -370,7 +373,7 @@ mod tests {
                 AmirBasicBlock {
                     id: BlockId::from_usize(0),
                     statements: DenseRange::new(0, 1),
-                    params: Vec::new(),
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Branch {
                         condition: AmirOperand::Copy(TempId::from_usize(0)),
                         if_true: BlockId::from_usize(1),
@@ -382,16 +385,18 @@ mod tests {
                 AmirBasicBlock {
                     id: BlockId::from_usize(1),
                     statements: DenseRange::new(1, 1),
-                    params: Vec::new(),
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Return,
                 },
                 AmirBasicBlock {
                     id: BlockId::from_usize(2),
                     statements: DenseRange::new(2, 1),
-                    params: Vec::new(),
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Return,
                 },
             ],
+            block_params: Vec::new(),
+
             stmts: st,
             cfg: compute_cfg_edges(&[]),
         };
@@ -529,7 +534,7 @@ mod tests {
                 AmirBasicBlock {
                     id: BlockId::from_usize(0),
                     statements: DenseRange::new(0, 1),
-                    params: Vec::new(),
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Branch {
                         condition: AmirOperand::Copy(TempId::from_usize(0)),
                         if_true: BlockId::from_usize(1),
@@ -541,7 +546,7 @@ mod tests {
                 AmirBasicBlock {
                     id: BlockId::from_usize(1),
                     statements: DenseRange::new(1, 1),
-                    params: Vec::new(),
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Goto {
                         target: BlockId::from_usize(3),
                         args: Vec::new(),
@@ -550,7 +555,7 @@ mod tests {
                 AmirBasicBlock {
                     id: BlockId::from_usize(2),
                     statements: DenseRange::new(2, 1),
-                    params: Vec::new(),
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Goto {
                         target: BlockId::from_usize(3),
                         args: Vec::new(),
@@ -559,10 +564,12 @@ mod tests {
                 AmirBasicBlock {
                     id: BlockId::from_usize(3),
                     statements: DenseRange::empty(),
-                    params: Vec::new(),
+                    params: DenseRange::empty(),
                     terminator: AmirTerminator::Return,
                 },
             ],
+            block_params: Vec::new(),
+
             stmts: st,
             cfg: compute_cfg_edges(&[]),
         };

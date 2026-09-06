@@ -380,23 +380,13 @@ mod tests {
         let TopLevelDecl::Func(f) = prog.pool.decl(prog.decls[0]) else {
             panic!("expected Func");
         };
-        assert_eq!(f.body.statements.len(), 4);
-        assert!(matches!(
-            prog.pool.stmt(f.body.statements[0]),
-            Stmt::VarDecl { .. }
-        ));
-        assert!(matches!(
-            prog.pool.stmt(f.body.statements[1]),
-            Stmt::Set { .. }
-        ));
-        assert!(matches!(
-            prog.pool.stmt(f.body.statements[2]),
-            Stmt::Expr { .. }
-        ));
-        assert!(matches!(
-            prog.pool.stmt(f.body.statements[3]),
-            Stmt::If { .. }
-        ));
+        let stmts = prog.pool.stmt_list(f.body.statements);
+        assert_eq!(stmts.len(), 4);
+        assert_eq!(stmts.len(), 4);
+        assert!(matches!(prog.pool.stmt(stmts[0]), Stmt::VarDecl { .. }));
+        assert!(matches!(prog.pool.stmt(stmts[1]), Stmt::Set { .. }));
+        assert!(matches!(prog.pool.stmt(stmts[2]), Stmt::Expr { .. }));
+        assert!(matches!(prog.pool.stmt(stmts[3]), Stmt::If { .. }));
     }
 
     #[test]
@@ -417,10 +407,10 @@ mod tests {
             panic!("func");
         };
         assert!(
-            f.body
-                .statements
+            prog.pool
+                .stmt_list(f.body.statements)
                 .iter()
-                .any(|id| matches!(prog.pool.stmt(*id), Stmt::While { .. }))
+                .any(|&id| matches!(prog.pool.stmt(id), Stmt::While { .. }))
         );
     }
 
@@ -433,9 +423,9 @@ mod tests {
         match prog.pool.decl(prog.decls[0]) {
             TopLevelDecl::Func(f) => {
                 assert_eq!(f.params.len(), 2);
-                assert_eq!(f.body.statements.len(), 1);
+                assert_eq!(prog.pool.stmt_list(f.body.statements).len(), 1);
                 assert!(matches!(
-                    prog.pool.stmt(f.body.statements[0]),
+                    prog.pool.stmt(prog.pool.stmt_list(f.body.statements)[0]),
                     Stmt::Return { .. }
                 ));
             }
@@ -495,10 +485,10 @@ enum Color {
         assert!(f.is_async);
         assert!(matches!(f.visibility, crate::Visibility::Public));
         assert!(
-            f.body
-                .statements
+            prog.pool
+                .stmt_list(f.body.statements)
                 .iter()
-                .any(|id| matches!(prog.pool.stmt(*id), Stmt::For { .. }))
+                .any(|&id| matches!(prog.pool.stmt(id), Stmt::For { .. }))
         );
     }
 

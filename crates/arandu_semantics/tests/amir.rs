@@ -368,10 +368,10 @@ func main(cond: bool) {
         .expect("loop header not found");
 
     assert_eq!(
-        loop_header.params.len(),
+        func.block_params(loop_header.params).len(),
         2,
         "esperado exatamente 2 block-params (acc, i) no header do loop, achou {}",
-        loop_header.params.len()
+        func.block_params(loop_header.params).len()
     );
 }
 
@@ -394,7 +394,7 @@ fn empty_block(id: usize, _predecessors: &[usize], successors: &[usize]) -> Amir
     AmirBasicBlock {
         id: BlockId::from_usize(id),
         statements: DenseRange::empty(),
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: term,
     }
 }
@@ -462,6 +462,7 @@ fn test_func(
         locals,
         temps,
         blocks,
+        block_params: Vec::new(),
         stmts,
         cfg,
     }
@@ -536,7 +537,7 @@ fn local_liveness_uses_dense_bitsets() {
         vec![AmirBasicBlock {
             id: BlockId::from_usize(0),
             statements: DenseRange::new(first.as_usize(), second.as_usize() - first.as_usize() + 1),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Return,
         }],
         stmts,
@@ -562,7 +563,7 @@ fn dce_tracks_used_temps_with_dense_bitsets() {
     let func_block = AmirBasicBlock {
         id: BlockId::from_usize(0),
         statements: DenseRange::new(first.as_usize(), 2),
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     };
     let mut func = test_func(
@@ -587,7 +588,7 @@ fn validate_amir_rejects_poison_temp_with_icegen002() {
     let func_block = AmirBasicBlock {
         id: BlockId::from_usize(0),
         statements: DenseRange::new(0, 0),
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     };
     // TYP-1: poison Error type must ICE when validated with the interner.
@@ -635,7 +636,7 @@ fn validate_amir_rejects_edge_argument_count_mismatch() {
         AmirBasicBlock {
             id: BlockId::from_usize(0),
             statements: DenseRange::empty(),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Goto {
                 target: BlockId::from_usize(1),
                 args: Vec::new(),
@@ -644,22 +645,24 @@ fn validate_amir_rejects_edge_argument_count_mismatch() {
         AmirBasicBlock {
             id: BlockId::from_usize(1),
             statements: DenseRange::empty(),
-            params: vec![BlockParam {
-                id: temp(0),
-                local: local(0),
-                ty,
-                from: None,
-                moved: false,
-            }],
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Return,
         },
     ];
-    let func = test_func(
+    let mut func = test_func(
         vec![test_local(0, 1)],
         vec![AmirTemp { ty, ..test_temp(0) }],
         blocks,
         AmirStmtTable::new(),
     );
+    func.block_params = vec![BlockParam {
+        id: temp(0),
+        local: local(0),
+        ty,
+        from: None,
+        moved: false,
+    }];
+    func.blocks[1].params = DenseRange::new(0, 1);
 
     let issues =
         arandu_middle::amir_validate::validate_amir_func(&func, &validation_symbols(), &interner);
@@ -679,7 +682,7 @@ fn validate_amir_rejects_edge_argument_type_mismatch() {
         AmirBasicBlock {
             id: BlockId::from_usize(0),
             statements: DenseRange::empty(),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Goto {
                 target: BlockId::from_usize(1),
                 args: vec![AmirOperand::Copy(temp(0))],
@@ -688,17 +691,11 @@ fn validate_amir_rejects_edge_argument_type_mismatch() {
         AmirBasicBlock {
             id: BlockId::from_usize(1),
             statements: DenseRange::empty(),
-            params: vec![BlockParam {
-                id: temp(1),
-                local: local(0),
-                ty: bool_ty,
-                from: None,
-                moved: false,
-            }],
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Return,
         },
     ];
-    let func = test_func(
+    let mut func = test_func(
         vec![test_local(0, 1)],
         vec![
             AmirTemp {
@@ -713,6 +710,14 @@ fn validate_amir_rejects_edge_argument_type_mismatch() {
         blocks,
         AmirStmtTable::new(),
     );
+    func.block_params = vec![BlockParam {
+        id: temp(1),
+        local: local(0),
+        ty: bool_ty,
+        from: None,
+        moved: false,
+    }];
+    func.blocks[1].params = DenseRange::new(0, 1);
 
     let issues =
         arandu_middle::amir_validate::validate_amir_func(&func, &validation_symbols(), &interner);
@@ -732,16 +737,10 @@ fn validate_amir_rejects_block_parameter_temp_type_mismatch() {
     let blocks = vec![AmirBasicBlock {
         id: BlockId::from_usize(0),
         statements: DenseRange::empty(),
-        params: vec![BlockParam {
-            id: temp(0),
-            local: local(0),
-            ty: bool_ty,
-            from: None,
-            moved: false,
-        }],
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     }];
-    let func = test_func(
+    let mut func = test_func(
         vec![test_local(0, 1)],
         vec![AmirTemp {
             ty: int_ty,
@@ -750,6 +749,14 @@ fn validate_amir_rejects_block_parameter_temp_type_mismatch() {
         blocks,
         AmirStmtTable::new(),
     );
+    func.block_params = vec![BlockParam {
+        id: temp(0),
+        local: local(0),
+        ty: bool_ty,
+        from: None,
+        moved: false,
+    }];
+    func.blocks[0].params = DenseRange::new(0, 1);
 
     let issues =
         arandu_middle::amir_validate::validate_amir_func(&func, &validation_symbols(), &interner);
@@ -791,7 +798,7 @@ fn validate_amir_rejects_inconsistent_gen_payload_and_handle_types() {
     let blocks = vec![AmirBasicBlock {
         id: BlockId::from_usize(0),
         statements: DenseRange::new(0, 2),
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     }];
     let func = AmirFunc {
@@ -825,6 +832,9 @@ fn validate_amir_rejects_inconsistent_gen_payload_and_handle_types() {
         ],
         cfg: arandu_semantics::cfg::compute_cfg_edges(&blocks),
         blocks,
+
+        block_params: Vec::new(),
+
         stmts,
     };
     let program = arandu_semantics::amir::AmirProgram {
@@ -853,19 +863,19 @@ fn validate_amir_rejects_overlapping_and_out_of_bounds_statement_ranges() {
         AmirBasicBlock {
             id: BlockId::from_usize(0),
             statements: DenseRange::new(0, 1),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Return,
         },
         AmirBasicBlock {
             id: BlockId::from_usize(1),
             statements: DenseRange::new(0, 1),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Unreachable,
         },
         AmirBasicBlock {
             id: BlockId::from_usize(2),
             statements: DenseRange::new(1, 1),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Unreachable,
         },
     ];

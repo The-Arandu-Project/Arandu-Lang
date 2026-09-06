@@ -426,6 +426,10 @@ impl StableHash for arandu_middle::amir::AmirFunc {
             h.update(&u32_le(b.id.as_usize() as u32));
             h.update(&u32_le(b.statements.start));
             h.update(&u32_le(b.statements.len));
+            // Block params live in the dense `block_params` pool; hash the
+            // range so a change in block signature invalidates the hash.
+            h.update(&u32_le(b.params.start));
+            h.update(&u32_le(b.params.len));
             // Terminator discriminant for structural early cutoff.
             h.update(&[match &b.terminator {
                 arandu_middle::amir::AmirTerminator::Return => 0u8,

@@ -484,7 +484,7 @@ mod tests {
         let block = AmirBasicBlock {
             id: BlockId::from_usize(0),
             statements: DenseRange::new(0, 2),
-            params: vec![],
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Return,
         };
         let blocks = vec![block];
@@ -519,6 +519,9 @@ mod tests {
                 },
             ],
             blocks,
+
+            block_params: Vec::new(),
+
             stmts,
             cfg,
         };
@@ -566,7 +569,7 @@ mod tests {
         let block = AmirBasicBlock {
             id: BlockId::from_usize(0),
             statements: DenseRange::new(0, 2),
-            params: vec![],
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Return,
         };
         let blocks = vec![block];
@@ -601,6 +604,9 @@ mod tests {
                 },
             ],
             blocks,
+
+            block_params: Vec::new(),
+
             stmts,
             cfg,
         };
@@ -643,7 +649,7 @@ mod tests {
         let block = AmirBasicBlock {
             id: BlockId::from_usize(0),
             statements: DenseRange::new(0, 2),
-            params: vec![],
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Return,
         };
         let blocks = vec![block];
@@ -686,6 +692,9 @@ mod tests {
                 },
             ],
             blocks,
+
+            block_params: Vec::new(),
+
             stmts,
             cfg,
         };
@@ -756,7 +765,7 @@ mod tests {
         let block = AmirBasicBlock {
             id: BlockId::from_usize(0),
             statements: DenseRange::new(0, 3),
-            params: vec![],
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Return,
         };
         let blocks = vec![block];
@@ -809,6 +818,9 @@ mod tests {
                 },
             ],
             blocks,
+
+            block_params: Vec::new(),
+
             stmts,
             cfg,
         };

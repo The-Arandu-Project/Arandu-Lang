@@ -36,7 +36,7 @@ pub fn gvn(func: &mut AmirFunc) -> bool {
     // Record block parameters definition blocks
     for (bi, block) in func.blocks.iter().enumerate() {
         let bid = BlockId::from_usize(bi);
-        for param in &block.params {
+        for param in func.block_params(block.params) {
             temp_def_block[param.id.as_usize()] = Some(bid);
         }
     }

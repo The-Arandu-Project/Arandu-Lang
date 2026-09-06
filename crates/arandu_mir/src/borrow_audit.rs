@@ -498,7 +498,7 @@ mod tests {
         });
         let blocks = vec![AmirBasicBlock {
             id: BlockId::from_usize(0),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             statements: DenseRange::new(0, 3),
             terminator: AmirTerminator::Return,
         }];
@@ -526,6 +526,9 @@ mod tests {
                 })
                 .collect(),
             blocks,
+
+            block_params: Vec::new(),
+
             stmts,
             cfg,
         };

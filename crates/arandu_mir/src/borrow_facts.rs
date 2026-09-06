@@ -743,7 +743,8 @@ fn analyze_local_holder_states(func: &AmirFunc, loans: &[Loan]) -> Vec<Vec<Vec<B
         for (target, args) in terminator_edges(&block.terminator) {
             let mut edge = state.clone();
             if let Some(successor) = func.blocks.get(target.as_usize()) {
-                for (parameter, argument) in successor.params.iter().zip(args) {
+                let succ_params = func.block_params(successor.params);
+                for (parameter, argument) in succ_params.iter().zip(args) {
                     let source = operand_temp(argument);
                     for (loan_index, loan) in loans.iter().enumerate() {
                         let paths = source
@@ -875,7 +876,7 @@ fn propagate_terminator_args(
         let Some(src) = operand_temp(arg) else {
             continue;
         };
-        let Some(param) = tb.params.get(i) else {
+        let Some(param) = func.block_params(tb.params).get(i) else {
             continue;
         };
         for loan in loans.iter_mut() {

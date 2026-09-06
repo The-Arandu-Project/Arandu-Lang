@@ -131,9 +131,9 @@ impl LowerCtx<'_> {
         let sid = self.struct_id_of_base(base_ty)?;
         self.tc
             .type_info
-            .struct_field_symbols
+            .struct_fields
             .get(&sid)
-            .and_then(|m| m.get(field).copied())
+            .and_then(|m| m.get(field).and_then(|f| f.symbol))
     }
 
     pub(crate) fn resolve_field_index(&self, base_ty: &ArType, field: &str) -> usize {
@@ -146,8 +146,9 @@ impl LowerCtx<'_> {
             return idx;
         }
         self.struct_id_of_base(base_ty)
-            .and_then(|sid| self.tc.type_info.struct_field_indices.get(&sid))
-            .and_then(|m| m.get(field).copied())
+            .and_then(|sid| self.tc.type_info.struct_fields.get(&sid))
+            .and_then(|m| m.get(field))
+            .map(|f| f.index)
             .unwrap_or(0)
     }
 

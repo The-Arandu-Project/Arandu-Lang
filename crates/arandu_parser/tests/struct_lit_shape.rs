@@ -10,8 +10,8 @@ fn shape(src: &str) -> String {
     use arandu_parser::TopLevelDecl;
     for d in &prog.decls {
         if let TopLevelDecl::Func(f) = prog.pool.decl(*d) {
-            for sid in &f.body.statements {
-                if let arandu_parser::Stmt::VarDecl { value, .. } = prog.pool.stmt(*sid) {
+            for &sid in prog.pool.stmt_list(f.body.statements) {
+                if let arandu_parser::Stmt::VarDecl { value, .. } = prog.pool.stmt(sid) {
                     out.push_str(&fmt_expr(&prog, *value));
                 }
             }
@@ -65,8 +65,8 @@ fn variant_sugar_shape() {
     let mut found = false;
     for d in &prog.decls {
         if let TopLevelDecl::Func(f) = prog.pool.decl(*d) {
-            for sid in &f.body.statements {
-                if let arandu_parser::Stmt::Return { values, .. } = prog.pool.stmt(*sid)
+            for &sid in prog.pool.stmt_list(f.body.statements) {
+                if let arandu_parser::Stmt::Return { values, .. } = prog.pool.stmt(sid)
                     && let Some(&e) = values.first()
                 {
                     assert!(

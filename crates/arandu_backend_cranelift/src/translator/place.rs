@@ -208,7 +208,7 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
         let field_name = &self.symbol_table.get(symbol_id).name;
         let field_idx = self
             .type_info
-            .struct_field_indices
+            .struct_fields
             .get(&match &struct_ty {
                 ArType::Named(id, _) => *id,
                 _ => {
@@ -216,7 +216,8 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                     return 0;
                 }
             })
-            .and_then(|m| m.get(field_name.as_str()).copied())
+            .and_then(|m| m.get(field_name.as_str()))
+            .map(|f| f.index)
             .unwrap_or(0);
 
         let layout = self.checked_layout(&struct_ty);
@@ -225,9 +226,9 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
         // Update current_ty to the field type for nested projections.
         if let ArType::Named(sid, _) = &struct_ty
             && let Some(fields) = self.type_info.struct_fields.get(sid)
-            && let Some(&tid) = fields.get(field_name.as_str())
+            && let Some(f) = fields.get(field_name.as_str())
         {
-            *current_ty = self.type_info.resolve_type_id(tid);
+            *current_ty = self.type_info.resolve_type_id(f.ty);
             return offset;
         }
         *current_ty = ArType::Error;
@@ -252,9 +253,9 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                     let field_name = &self.symbol_table.get(*symbol_id).name;
                     if let ArType::Named(sid, _) = &struct_ty
                         && let Some(fields) = self.type_info.struct_fields.get(sid)
-                        && let Some(&tid) = fields.get(field_name.as_str())
+                        && let Some(f) = fields.get(field_name.as_str())
                     {
-                        current_ty = self.type_info.resolve_type_id(tid);
+                        current_ty = self.type_info.resolve_type_id(f.ty);
                     } else {
                         return ArType::Error;
                     }

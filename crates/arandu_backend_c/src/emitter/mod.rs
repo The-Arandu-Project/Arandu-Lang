@@ -105,7 +105,8 @@ impl<'a> CEmitter<'a> {
         let Some(field_ty) = self
             .provider
             .get_struct_fields(*struct_id)
-            .and_then(|fields| fields.get(field_name).copied())
+            .and_then(|fields| fields.get(field_name))
+            .map(|f| f.ty)
         else {
             return ArType::Error;
         };

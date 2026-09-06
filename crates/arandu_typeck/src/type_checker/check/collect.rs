@@ -27,34 +27,28 @@ pub(crate) fn collect_type_shapes(checker: &mut TypeChecker<'_>, program: &Progr
         let decl = checker.pool.decl(*decl_id);
         match decl {
             TopLevelDecl::Struct(struct_decl) => {
-                let mut fields = rustc_hash::FxHashMap::default();
-                let mut field_symbols = rustc_hash::FxHashMap::default();
-                let mut field_indices = rustc_hash::FxHashMap::default();
+                let mut field_entries: Vec<arandu_middle::layout::StructFieldInfo> = Vec::new();
                 for (idx, field) in struct_decl.fields.iter().enumerate() {
                     let field_ty =
                         checker.lower_type_expr(field.ty, checker.symbols.global_scope());
                     let field_tid = checker.intern(field_ty);
                     let field_key = crate::NodeKey::from(field.span);
-                    if let Some(field_symbol) = checker.resolved.definitions.get(&field_key) {
-                        field_symbols.insert(field.name.to_string(), *field_symbol);
-                    }
-                    fields.insert(field.name.to_string(), field_tid);
-                    field_indices.insert(field.name.to_string(), idx);
+                    let field_symbol = checker.resolved.definitions.get(&field_key).copied();
+                    field_entries.push(arandu_middle::layout::StructFieldInfo {
+                        name: field.name.clone(),
+                        symbol: field_symbol,
+                        ty: field_tid,
+                        index: idx,
+                    });
                 }
                 let struct_key = crate::NodeKey::from(struct_decl.span);
                 if let Some(symbol_id) = checker.resolved.definitions.get(&struct_key).copied() {
-                    checker
-                        .type_info
-                        .struct_fields
-                        .insert(symbol_id, std::sync::Arc::new(fields));
-                    checker
-                        .type_info
-                        .struct_field_symbols
-                        .insert(symbol_id, std::sync::Arc::new(field_symbols));
-                    checker
-                        .type_info
-                        .struct_field_indices
-                        .insert(symbol_id, std::sync::Arc::new(field_indices));
+                    checker.type_info.struct_fields.insert(
+                        symbol_id,
+                        std::sync::Arc::new(arandu_middle::layout::StructFields::from_entries(
+                            field_entries,
+                        )),
+                    );
                     let params = super::super::types::extract_generic_param_symbols(
                         checker,
                         &struct_decl.generic_params,

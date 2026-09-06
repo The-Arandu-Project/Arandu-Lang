@@ -206,10 +206,10 @@ pub fn struct_fields_instantiated(
     let subst = build_subst(&params, &generic_args);
     let res: FxHashMap<String, ArType> = fields
         .iter()
-        .map(|(name, &tid)| {
-            let ty = checker.resolve(tid);
+        .map(|f| {
+            let ty = checker.resolve(f.ty);
             let inst = instantiate_type(&ty, &subst, &mut checker.type_info.type_interner);
-            (name.clone(), inst)
+            (f.name.to_string(), inst)
         })
         .collect();
     Some(res)
@@ -661,8 +661,14 @@ mod tests {
             &[],
             &checker.type_info.type_interner,
         ));
-        let mut fields_map = rustc_hash::FxHashMap::default();
-        fields_map.insert("x".to_string(), param_type_id);
+        let fields_map = arandu_middle::layout::StructFields::from_entries([
+            arandu_middle::layout::StructFieldInfo {
+                name: "x".into(),
+                symbol: None,
+                ty: param_type_id,
+                index: 0,
+            },
+        ]);
         checker
             .type_info
             .struct_fields

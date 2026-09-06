@@ -1490,7 +1490,7 @@ fn jit_gen_insert_get_copy_tuple() {
     let block = AmirBasicBlock {
         id: BlockId::from_usize(0),
         statements: DenseRange::new(0, 4),
-        params: vec![],
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     };
     let blocks = vec![block];
@@ -1544,6 +1544,9 @@ fn jit_gen_insert_get_copy_tuple() {
             },
         ],
         blocks,
+
+        block_params: Vec::new(),
+
         stmts,
         cfg,
     };
@@ -1661,7 +1664,7 @@ fn jit_vec_legacy_handle_len_abi() {
     let block = AmirBasicBlock {
         id: BlockId::from_usize(0),
         statements: DenseRange::new(0, 4),
-        params: vec![],
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     };
     let cfg = compute_cfg_edges(std::slice::from_ref(&block));
@@ -1680,6 +1683,9 @@ fn jit_vec_legacy_handle_len_abi() {
         locals: vec![],
         temps: vec![temp(0), temp(1)],
         blocks: vec![block],
+
+        block_params: Vec::new(),
+
         stmts,
         cfg,
     };

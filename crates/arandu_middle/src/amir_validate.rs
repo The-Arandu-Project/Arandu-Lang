@@ -76,19 +76,20 @@ pub fn validate_amir_func(
             let Some(target_block) = func.blocks.get(target.as_usize()) else {
                 return;
             };
+            let target_params = func.block_params(target_block.params);
             let arg_count = args.len();
-            if arg_count != target_block.params.len() {
+            if arg_count != target_params.len() {
                 diags.push(Diagnostic::ice(
                     DiagCode::ICEGEN002,
                     format!(
                         "bb{i} passes {arg_count} argument(s) to bb{}, which expects {} block parameter(s) (SSA-EDGE)",
                         target.as_usize(),
-                        target_block.params.len()
+                        target_params.len()
                     ),
                     span,
                 ));
             }
-            for (arg_index, (arg, param)) in args.iter().zip(&target_block.params).enumerate() {
+            for (arg_index, (arg, param)) in args.iter().zip(target_params).enumerate() {
                 let Some(arg_ty) = operand_type(func, arg, interner) else {
                     continue;
                 };
@@ -197,7 +198,7 @@ pub fn validate_amir_func(
     }
 
     for (block_index, block) in func.blocks.iter().enumerate() {
-        for (param_index, param) in block.params.iter().enumerate() {
+        for (param_index, param) in func.block_params(block.params).iter().enumerate() {
             let Some(temp) = func.temps.get(param.id.as_usize()) else {
                 diags.push(Diagnostic::ice(
                     DiagCode::ICEGEN002,

@@ -97,8 +97,8 @@ pub(crate) fn synth_place(checker: &mut TypeChecker<'_>, place: &arandu_parser::
                             .type_info
                             .struct_fields
                             .get(&struct_id)
-                            .and_then(|fields| fields.get(name.as_str()).copied())
-                            .map(|tid| checker.resolve(tid))
+                            .and_then(|fields| fields.get(name.as_str()))
+                            .map(|f| checker.resolve(f.ty))
                     }
                 } else {
                     None

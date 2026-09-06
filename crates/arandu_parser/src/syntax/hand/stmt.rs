@@ -98,7 +98,7 @@ pub fn parse_block_tokens(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>) -> Option
             let close = cur.bump()?;
             return Some(Block {
                 span: ctx.span(start, close.start + close.len),
-                statements,
+                statements: ctx.pool.alloc_stmt_list(&statements),
             });
         }
         if cur.at_end() {
@@ -456,7 +456,7 @@ fn lower_if(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>, start: u32) -> Option<S
             let nested = lower_if(ctx, cur, cur.peek()?.start)?;
             Some(Block {
                 span: ctx.pool.stmt_span(nested),
-                statements: vec![nested],
+                statements: ctx.pool.alloc_stmt_list(&[nested]),
             })
         } else {
             Some(parse_block_tokens(ctx, cur)?)

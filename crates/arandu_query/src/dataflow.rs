@@ -178,6 +178,7 @@ fn empty_func(symbol: SymbolId) -> AmirFunc {
         locals: vec![],
         temps: vec![],
         blocks: vec![],
+        block_params: vec![],
         stmts: Default::default(),
         cfg: Default::default(),
     }

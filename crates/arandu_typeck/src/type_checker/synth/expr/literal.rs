@@ -16,7 +16,7 @@ use arandu_middle::types::type_interner::TypeId;
 fn infer_struct_type_args(
     checker: &mut TypeChecker<'_>,
     params: &[arandu_middle::SymbolId],
-    template_fields: &rustc_hash::FxHashMap<String, TypeId>,
+    template_fields: &arandu_middle::layout::StructFields,
     field_ids: &[arandu_parser::ast_pool::FieldInitId],
 ) -> Option<Vec<TypeId>> {
     let mut out = Vec::with_capacity(params.len());
@@ -24,7 +24,7 @@ fn infer_struct_type_args(
         let mut found: Option<TypeId> = None;
         for &fid in field_ids {
             let field = checker.pool.field_init(fid);
-            let Some(&tmpl_tid) = template_fields.get(field.name.as_str()) else {
+            let Some(tmpl_tid) = template_fields.get(field.name.as_str()).map(|f| f.ty) else {
                 continue;
             };
             let tmpl = checker.resolve(tmpl_tid);
@@ -212,8 +212,12 @@ pub(super) fn synth_literal_expr(
                     && !params.is_empty()
                     && let Some(template_fields) =
                         checker.type_info.struct_fields.get(&symbol_id).cloned()
-                    && let Some(inferred) =
-                        infer_struct_type_args(checker, &params, &template_fields, &field_ids)
+                    && let Some(inferred) = infer_struct_type_args(
+                        checker,
+                        &params,
+                        template_fields.as_ref(),
+                        &field_ids,
+                    )
                 {
                     generic_args = inferred;
                     let concrete =
@@ -235,7 +239,7 @@ pub(super) fn synth_literal_expr(
                                 .map(|fields| {
                                     fields
                                         .iter()
-                                        .map(|(n, &tid)| (n.clone(), checker.resolve(tid)))
+                                        .map(|f| (f.name.to_string(), checker.resolve(f.ty)))
                                         .collect()
                                 })
                         },

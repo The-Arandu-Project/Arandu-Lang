@@ -231,7 +231,7 @@ fn meet_block_params(
     lattice: &mut [LatticeVal],
     reachable: &[bool],
 ) -> bool {
-    let params = &func.block(bid).params;
+    let params = func.block_params(func.block(bid).params);
     if params.is_empty() {
         return false;
     }
@@ -635,16 +635,6 @@ mod tests {
         }
     }
 
-    fn bool_temp(id: usize) -> AmirTemp {
-        AmirTemp {
-            id: TempId::from_usize(id),
-            ty: intern_ty(ArType::Primitive(Primitive::Bool)),
-            is_copy: true,
-            is_nullable: false,
-            span: arandu_lexer::Span::new(0, 0, 0),
-        }
-    }
-
     /// Join: both preds pass the same constant into a block param → param is constant.
     #[test]
     fn block_param_meet_same_constant_from_two_preds() {
@@ -665,7 +655,7 @@ mod tests {
             AmirBasicBlock {
                 id: BlockId::from_usize(0),
                 statements: DenseRange::empty(),
-                params: Vec::new(),
+                params: DenseRange::empty(),
                 terminator: AmirTerminator::Branch {
                     condition: AmirOperand::Constant(AmirConstant::Bool(true)),
                     if_true: BlockId::from_usize(1),
@@ -677,7 +667,7 @@ mod tests {
             AmirBasicBlock {
                 id: BlockId::from_usize(1),
                 statements: DenseRange::empty(),
-                params: Vec::new(),
+                params: DenseRange::empty(),
                 terminator: AmirTerminator::Goto {
                     target: BlockId::from_usize(2),
                     args: vec![AmirOperand::Constant(five)],
@@ -686,13 +676,7 @@ mod tests {
             AmirBasicBlock {
                 id: BlockId::from_usize(2),
                 statements: range2,
-                params: vec![BlockParam {
-                    id: TempId::from_usize(1),
-                    local: LocalId::from_usize(0),
-                    ty: int_ty,
-                    from: None,
-                    moved: false,
-                }],
+                params: DenseRange::new(0, 1),
                 terminator: AmirTerminator::Return,
             },
         ];
@@ -712,6 +696,15 @@ mod tests {
             }],
             temps: vec![int_temp(0), int_temp(1), int_temp(2)],
             blocks,
+
+            block_params: vec![BlockParam {
+                id: TempId::from_usize(1),
+                local: LocalId::from_usize(0),
+                ty: int_ty,
+                from: None,
+                moved: false,
+            }],
+
             stmts,
             cfg,
         };
@@ -758,7 +751,7 @@ mod tests {
             AmirBasicBlock {
                 id: BlockId::from_usize(0),
                 statements: DenseRange::empty(),
-                params: Vec::new(),
+                params: DenseRange::empty(),
                 terminator: AmirTerminator::Branch {
                     // Undefined condition → both arms reachable
                     condition: AmirOperand::Copy(TempId::from_usize(0)),
@@ -771,7 +764,7 @@ mod tests {
             AmirBasicBlock {
                 id: BlockId::from_usize(1),
                 statements: DenseRange::empty(),
-                params: Vec::new(),
+                params: DenseRange::empty(),
                 terminator: AmirTerminator::Goto {
                     target: BlockId::from_usize(3),
                     args: vec![AmirOperand::Constant(one)],
@@ -780,7 +773,7 @@ mod tests {
             AmirBasicBlock {
                 id: BlockId::from_usize(2),
                 statements: DenseRange::empty(),
-                params: Vec::new(),
+                params: DenseRange::empty(),
                 terminator: AmirTerminator::Goto {
                     target: BlockId::from_usize(3),
                     args: vec![AmirOperand::Constant(two)],
@@ -789,13 +782,7 @@ mod tests {
             AmirBasicBlock {
                 id: BlockId::from_usize(3),
                 statements: range_join,
-                params: vec![BlockParam {
-                    id: TempId::from_usize(1),
-                    local: LocalId::from_usize(0),
-                    ty: int_ty,
-                    from: None,
-                    moved: false,
-                }],
+                params: DenseRange::new(0, 1),
                 terminator: AmirTerminator::Return,
             },
         ];
@@ -813,8 +800,17 @@ mod tests {
                 span: arandu_lexer::Span::new(0, 0, 0),
                 use_span: None,
             }],
-            temps: vec![bool_temp(0), int_temp(1), int_temp(2)],
+            temps: vec![int_temp(0), int_temp(1), int_temp(2)],
             blocks,
+
+            block_params: vec![BlockParam {
+                id: TempId::from_usize(1),
+                local: LocalId::from_usize(0),
+                ty: int_ty,
+                from: None,
+                moved: false,
+            }],
+
             stmts,
             cfg,
         };

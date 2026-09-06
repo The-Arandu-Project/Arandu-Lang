@@ -1,4 +1,4 @@
-use super::block::AmirBasicBlock;
+use super::block::{AmirBasicBlock, BlockParam};
 use super::local::{AmirLocal, AmirReceiver, AmirTemp, TempId};
 use super::stmt::{AmirStmt, AmirStmtTable, InstrId};
 use crate::SymbolId;
@@ -25,6 +25,10 @@ pub struct AmirFunc {
     pub locals: Vec<AmirLocal>,
     pub temps: Vec<AmirTemp>,
     pub blocks: Vec<AmirBasicBlock>,
+    /// Dense pool of block parameters. Each block's `params` range indexes
+    /// into this pool; the pool is dense per `AmirFunc` (contiguity asserted
+    /// wherever a block's range is re-materialized).
+    pub block_params: Vec<BlockParam>,
     pub stmts: AmirStmtTable,
     pub cfg: ControlFlowGraph,
 }
@@ -37,6 +41,17 @@ impl AmirFunc {
 
     pub fn block_mut(&mut self, block: super::block::BlockId) -> &mut AmirBasicBlock {
         &mut self.blocks[block.as_usize()]
+    }
+
+    /// Block parameters of the block whose `params: DenseRange` is `range`,
+    /// sliced out of the dense `block_params` pool.
+    #[must_use]
+    pub fn block_params(&self, range: DenseRange) -> &[BlockParam] {
+        &self.block_params[range.as_range()]
+    }
+
+    pub fn block_params_mut(&mut self, range: DenseRange) -> &mut [BlockParam] {
+        &mut self.block_params[range.as_range()]
     }
 
     #[must_use]
@@ -117,7 +132,7 @@ mod tests {
     fn block(id: usize) -> AmirBasicBlock {
         AmirBasicBlock {
             id: super::super::block::BlockId::from_usize(id),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             statements: DenseRange::empty(),
             terminator: AmirTerminator::Return,
         }
@@ -133,6 +148,7 @@ mod tests {
             locals: Vec::new(),
             temps: Vec::new(),
             blocks: vec![block(0), block(1)],
+            block_params: Vec::new(),
             stmts: AmirStmtTable::new(),
             cfg: ControlFlowGraph::default(),
         }

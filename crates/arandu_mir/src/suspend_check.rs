@@ -113,7 +113,7 @@ mod tests {
             AmirBasicBlock {
                 id: BlockId::from_usize(0),
                 statements: DenseRange::new(0, 2),
-                params: vec![],
+                params: DenseRange::empty(),
                 terminator: AmirTerminator::Suspend {
                     future: AmirOperand::Copy(TempId::from_usize(2)),
                     resume: BlockId::from_usize(1),
@@ -123,7 +123,7 @@ mod tests {
             AmirBasicBlock {
                 id: BlockId::from_usize(1),
                 statements: DenseRange::new(2, 0),
-                params: vec![],
+                params: DenseRange::empty(),
                 terminator: AmirTerminator::Return,
             },
         ];
@@ -165,6 +165,9 @@ mod tests {
                 },
             ],
             blocks,
+
+            block_params: Vec::new(),
+
             stmts,
             cfg,
         };

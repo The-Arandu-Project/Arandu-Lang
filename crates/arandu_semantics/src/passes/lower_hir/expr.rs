@@ -6,7 +6,6 @@ use crate::hir::{
 use crate::passes::lowering::{require_def_symbol, require_type_symbol, require_value_symbol};
 use crate::passes::type_checker::types::{ArType, Primitive};
 use crate::{NodeKey, TypeCheckResult};
-use arandu_middle::SmolStr;
 use arandu_middle::types::{TypeId, TypeInterner};
 use arandu_parser::CatchHandler;
 use arandu_parser::ast_pool::{AstPool, ExprId, ExprKind};
@@ -477,15 +476,15 @@ pub(crate) fn lower_expr_raw(
                     .get(&struct_symbol)
                     .cloned()
             {
-                for (def_name, &def_tid) in defined_fields.iter() {
-                    let smol_name = SmolStr::new(def_name.as_str());
+                for f in defined_fields.iter() {
+                    let smol_name = f.name.clone();
                     if !explicit_field_names.contains(&smol_name) {
                         let field_expr = hir_pool.alloc_expr(HirExpr {
                             kind: HirExprKind::Field {
                                 base: base_vid,
                                 field: smol_name.clone(),
                             },
-                            ty: def_tid,
+                            ty: f.ty,
                             span,
                         });
                         hir_fields.push(HirFieldInit {

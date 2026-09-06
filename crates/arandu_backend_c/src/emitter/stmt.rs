@@ -285,9 +285,9 @@ impl<'a> CEmitter<'a> {
                                 .next()
                                 .unwrap_or("");
                             if let Some(fields) = self.provider.get_struct_fields(struct_id)
-                                && let Some(&field_ty_id) = fields.get(field_name)
+                                && let Some(f) = fields.get(field_name)
                             {
-                                current_ty = self.interner.resolve(field_ty_id);
+                                current_ty = self.interner.resolve(f.ty);
                             }
                         }
                         arandu_middle::amir::AmirProjection::Index(_) => {}
@@ -499,7 +499,8 @@ impl<'a> CEmitter<'a> {
         indent: &str,
     ) {
         let target_block = &func.blocks[target.as_usize()];
-        for (param, arg) in target_block.params.iter().zip(args.iter()) {
+        let target_params = func.block_params(target_block.params);
+        for (param, arg) in target_params.iter().zip(args.iter()) {
             let arg_str = self.format_operand(arg, func);
             let _ = writeln!(
                 &mut self.output,

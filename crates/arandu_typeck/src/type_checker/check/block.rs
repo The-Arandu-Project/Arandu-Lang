@@ -21,9 +21,10 @@ pub fn check_block_tail(
     tail_expected: Option<TypeId>,
 ) -> ArType {
     let mut last_ty = ArType::Void;
-    let len = block.statements.len();
-    for (i, stmt) in block.statements.iter().enumerate() {
-        let stmt = pool.stmt(*stmt);
+    let statements = pool.stmt_list(block.statements);
+    let len = statements.len();
+    for (i, &stmt) in statements.iter().enumerate() {
+        let stmt = pool.stmt(stmt);
         if i == len - 1 {
             if let Stmt::Expr {
                 expr,

@@ -257,7 +257,7 @@ fn temp_origins<'bump>(
         origins[param_temp.as_usize()] = Some(LocalId::from_usize(i));
     }
     for block in &func.blocks {
-        for param in &block.params {
+        for param in func.block_params(block.params) {
             origins[param.id.as_usize()] = Some(param.local);
         }
     }

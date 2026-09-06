@@ -127,6 +127,7 @@ pub(crate) fn lower_func(
     // OSSA Optimization passes
     // 1. Snapshot func for validation without cloning Vecs (take → check → put back).
     let raw_cfg = crate::cfg::compute_cfg_edges(&ctx.builder.blocks);
+    let raw_block_params = ctx.builder.materialize_block_params();
     let mut raw_func = AmirFunc {
         symbol: f.symbol,
         return_type: ret_ty,
@@ -135,6 +136,7 @@ pub(crate) fn lower_func(
         locals: std::mem::take(&mut ctx.locals),
         temps: std::mem::take(&mut ctx.temps),
         blocks: std::mem::take(&mut ctx.builder.blocks),
+        block_params: raw_block_params,
         stmts: std::mem::take(&mut ctx.builder.stmts),
         cfg: raw_cfg,
     };
@@ -156,6 +158,8 @@ pub(crate) fn lower_func(
     ctx.temps = std::mem::take(&mut raw_func.temps);
     ctx.builder.blocks = std::mem::take(&mut raw_func.blocks);
     ctx.builder.stmts = std::mem::take(&mut raw_func.stmts);
+    ctx.builder
+        .restore_block_params_scratch(std::mem::take(&mut raw_func.block_params));
     drop(raw_func);
 
     // 3. OSSA Optimization passes
@@ -164,6 +168,7 @@ pub(crate) fn lower_func(
     ctx.rewrite_all_operands();
 
     let cfg = crate::cfg::compute_cfg_edges(&ctx.builder.blocks);
+    let amir_block_params = ctx.builder.materialize_block_params();
     let mut amir_f = AmirFunc {
         symbol: f.symbol,
         return_type: ret_ty,
@@ -172,6 +177,7 @@ pub(crate) fn lower_func(
         locals: ctx.locals,
         temps: ctx.temps,
         blocks: ctx.builder.blocks,
+        block_params: amir_block_params,
         stmts: ctx.builder.stmts,
         cfg,
     };
@@ -398,7 +404,7 @@ fn promote_escaped_coroutines(func: &mut AmirFunc) {
                     for (idx, arg) in args.iter().enumerate() {
                         if let AmirOperand::Copy(src) | AmirOperand::Move(src) = arg
                             && let Some(src_origins) = temp_origins.get(src).cloned()
-                            && let Some(param) = target_block.params.get(idx)
+                            && let Some(param) = func.block_params(target_block.params).get(idx)
                         {
                             let entry = temp_origins.entry(param.id).or_default();
                             let old_len = entry.len();
@@ -420,7 +426,7 @@ fn promote_escaped_coroutines(func: &mut AmirFunc) {
                     for (idx, arg) in true_args.iter().enumerate() {
                         if let AmirOperand::Copy(src) | AmirOperand::Move(src) = arg
                             && let Some(src_origins) = temp_origins.get(src).cloned()
-                            && let Some(param) = true_block.params.get(idx)
+                            && let Some(param) = func.block_params(true_block.params).get(idx)
                         {
                             let entry = temp_origins.entry(param.id).or_default();
                             let old_len = entry.len();
@@ -434,7 +440,7 @@ fn promote_escaped_coroutines(func: &mut AmirFunc) {
                     for (idx, arg) in false_args.iter().enumerate() {
                         if let AmirOperand::Copy(src) | AmirOperand::Move(src) = arg
                             && let Some(src_origins) = temp_origins.get(src).cloned()
-                            && let Some(param) = false_block.params.get(idx)
+                            && let Some(param) = func.block_params(false_block.params).get(idx)
                         {
                             let entry = temp_origins.entry(param.id).or_default();
                             let old_len = entry.len();
@@ -455,7 +461,7 @@ fn promote_escaped_coroutines(func: &mut AmirFunc) {
                         for (idx, arg) in args.iter().enumerate() {
                             if let AmirOperand::Copy(src) | AmirOperand::Move(src) = arg
                                 && let Some(src_origins) = temp_origins.get(src).cloned()
-                                && let Some(param) = target_block.params.get(idx)
+                                && let Some(param) = func.block_params(target_block.params).get(idx)
                             {
                                 let entry = temp_origins.entry(param.id).or_default();
                                 let old_len = entry.len();
@@ -470,7 +476,7 @@ fn promote_escaped_coroutines(func: &mut AmirFunc) {
                     for (idx, arg) in otherwise.1.iter().enumerate() {
                         if let AmirOperand::Copy(src) | AmirOperand::Move(src) = arg
                             && let Some(src_origins) = temp_origins.get(src).cloned()
-                            && let Some(param) = other_block.params.get(idx)
+                            && let Some(param) = func.block_params(other_block.params).get(idx)
                         {
                             let entry = temp_origins.entry(param.id).or_default();
                             let old_len = entry.len();

@@ -60,7 +60,7 @@ pub fn initialized_at_block_exit(func: &AmirFunc) -> Vec<BitSet<LocalId>> {
         .map(|(index, mut initialized)| {
             let bid = BlockId::from_usize(index);
             if let Some(block) = func.blocks.get(index) {
-                for param in &block.params {
+                for param in func.block_params(block.params) {
                     initialized.insert(param.local);
                 }
             }
@@ -107,7 +107,7 @@ pub fn check_definite_init_by_block(
         let bid = block.id;
 
         // Block parameters define and initialize their corresponding local at block entry.
-        for param in &block.params {
+        for param in func.block_params(block.params) {
             current.insert(param.local);
         }
 
@@ -139,7 +139,7 @@ fn compute_init_in(func: &AmirFunc) -> Option<Vec<BitSet<LocalId>>> {
 
     for block in &func.blocks {
         let bid = block.id;
-        for param in &block.params {
+        for param in func.block_params(block.params) {
             block_gens.insert(bid, param.local);
         }
         for stmt in func.block_stmts(bid) {
@@ -393,7 +393,7 @@ mod tests {
         AmirBasicBlock {
             id: BlockId::from_usize(id),
             statements: range,
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator,
         }
     }
@@ -413,6 +413,9 @@ mod tests {
             locals,
             temps,
             blocks,
+
+            block_params: Vec::new(),
+
             stmts,
             cfg,
         }
@@ -766,7 +769,7 @@ mod tests {
             &[],
             &mut stmts,
         );
-        let mut b1 = make_block(
+        let b1 = make_block(
             1,
             vec![AmirStmt::Assign {
                 lhs: TempId::from_usize(1),
@@ -777,7 +780,15 @@ mod tests {
             &[0],
             &mut stmts,
         );
-        b1.params.push(crate::amir::BlockParam {
+
+        let mut func = make_func(
+            vec![b0, b1],
+            stmts,
+            vec![make_local(0, None)],
+            vec![make_temp(0), make_temp(1)],
+        );
+        func.blocks[1].params = DenseRange::new(0, 1);
+        func.block_params.push(crate::amir::BlockParam {
             id: TempId::from_usize(0),
             local: LocalId::from_usize(0),
             ty: intern_ty(ArType::Primitive(
@@ -786,13 +797,6 @@ mod tests {
             from: None,
             moved: false,
         });
-
-        let func = make_func(
-            vec![b0, b1],
-            stmts,
-            vec![make_local(0, None)],
-            vec![make_temp(0), make_temp(1)],
-        );
 
         let st = make_symbol_table();
         let diags = check_definite_init(&func, &st);

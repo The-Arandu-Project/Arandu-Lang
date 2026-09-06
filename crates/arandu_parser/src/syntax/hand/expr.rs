@@ -852,7 +852,7 @@ fn parse_if_expr(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>, start: u32) -> Opt
             });
             crate::Block {
                 span: ctx.pool.expr_span(nested),
-                statements: vec![nested_id],
+                statements: ctx.pool.alloc_stmt_list(&[nested_id]),
             }
         } else {
             parse_block_tokens(ctx, cur)?

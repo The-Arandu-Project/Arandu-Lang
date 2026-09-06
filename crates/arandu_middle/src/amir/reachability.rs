@@ -64,6 +64,7 @@ mod tests {
             locals: Vec::new(),
             temps: Vec::new(),
             blocks,
+            block_params: Vec::new(),
             stmts: AmirStmtTable::new(),
             cfg,
         }
@@ -81,7 +82,7 @@ mod tests {
         let b = AmirBasicBlock {
             id: BlockId::from_usize(0),
             statements: DenseRange::empty(),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Return,
         };
         let func = func_with_blocks(vec![b]);
@@ -95,7 +96,7 @@ mod tests {
         let b0 = AmirBasicBlock {
             id: BlockId::from_usize(0),
             statements: DenseRange::empty(),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Goto {
                 target: BlockId::from_usize(1),
                 args: Vec::new(),
@@ -104,13 +105,13 @@ mod tests {
         let b1 = AmirBasicBlock {
             id: BlockId::from_usize(1),
             statements: DenseRange::empty(),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Return,
         };
         let b2 = AmirBasicBlock {
             id: BlockId::from_usize(2),
             statements: DenseRange::empty(),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Return,
         };
         let func = func_with_blocks(vec![b0, b1, b2]);
@@ -126,7 +127,7 @@ mod tests {
         let b0 = AmirBasicBlock {
             id: BlockId::from_usize(0),
             statements: DenseRange::empty(),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Branch {
                 condition: crate::amir::value::AmirOperand::Constant(
                     crate::amir::value::AmirConstant::Bool(true),
@@ -140,13 +141,13 @@ mod tests {
         let b1 = AmirBasicBlock {
             id: BlockId::from_usize(1),
             statements: DenseRange::empty(),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Return,
         };
         let b2 = AmirBasicBlock {
             id: BlockId::from_usize(2),
             statements: DenseRange::empty(),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Return,
         };
         let func = func_with_blocks(vec![b0, b1, b2]);
@@ -160,7 +161,7 @@ mod tests {
         let b0 = AmirBasicBlock {
             id: BlockId::from_usize(0),
             statements: DenseRange::empty(),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: AmirTerminator::SwitchInt {
                 discriminant: AmirOperand::Constant(crate::amir::value::AmirConstant::Bool(true)),
                 targets: vec![],
@@ -170,7 +171,7 @@ mod tests {
         let b1 = AmirBasicBlock {
             id: BlockId::from_usize(1),
             statements: DenseRange::empty(),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: AmirTerminator::Return,
         };
         let func = func_with_blocks(vec![b0, b1]);

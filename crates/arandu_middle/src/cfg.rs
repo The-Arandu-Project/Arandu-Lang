@@ -131,7 +131,7 @@ mod tests {
         AmirBasicBlock {
             id: BlockId::from_usize(id),
             statements: crate::layout::DenseRange::empty(),
-            params: Vec::new(),
+            params: crate::layout::DenseRange::empty(),
             terminator,
         }
     }

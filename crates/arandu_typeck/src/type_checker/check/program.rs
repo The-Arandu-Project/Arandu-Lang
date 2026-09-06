@@ -115,28 +115,6 @@ fn duplicate_module_member_info(checker: &mut TypeChecker<'_>, program: &Program
             if let Some(fields) = checker.type_info.struct_fields.get(&free_id).cloned() {
                 checker.type_info.struct_fields.insert(member_id, fields);
             }
-            if let Some(field_syms) = checker
-                .type_info
-                .struct_field_symbols
-                .get(&free_id)
-                .cloned()
-            {
-                checker
-                    .type_info
-                    .struct_field_symbols
-                    .insert(member_id, field_syms);
-            }
-            if let Some(field_idxs) = checker
-                .type_info
-                .struct_field_indices
-                .get(&free_id)
-                .cloned()
-            {
-                checker
-                    .type_info
-                    .struct_field_indices
-                    .insert(member_id, field_idxs);
-            }
         }
     }
 }

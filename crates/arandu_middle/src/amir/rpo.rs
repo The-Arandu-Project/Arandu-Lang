@@ -63,7 +63,7 @@ mod tests {
         AmirBasicBlock {
             id: BlockId::from_usize(id),
             statements: DenseRange::empty(),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             terminator: term,
         }
     }
@@ -78,6 +78,7 @@ mod tests {
             locals: Vec::new(),
             temps: Vec::new(),
             blocks,
+            block_params: Vec::new(),
             stmts: AmirStmtTable::new(),
             cfg,
         }

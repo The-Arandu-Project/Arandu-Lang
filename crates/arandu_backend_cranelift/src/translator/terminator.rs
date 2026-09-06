@@ -57,9 +57,10 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
 
             AmirTerminator::Goto { target, args } => {
                 let target_block = &self.current_func.blocks[target.as_usize()];
+                let target_params = self.current_func.block_params(target_block.params);
                 let mut clif_args = Vec::new();
                 for (j, arg) in args.iter().enumerate() {
-                    let param_ty = self.resolve_ty(target_block.params[j].ty);
+                    let param_ty = self.resolve_ty(target_params[j].ty);
                     if matches!(&param_ty, ArType::Primitive(Primitive::Str)) {
                         let (ptr_val, len_val) = self.translate_str_operand(arg);
                         clif_args.push(BlockArg::Value(ptr_val));
@@ -86,9 +87,10 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 let cond_val = self.translate_operand(condition, None);
 
                 let true_block_def = &self.current_func.blocks[if_true.as_usize()];
+                let true_params = self.current_func.block_params(true_block_def.params);
                 let mut true_clif_args = Vec::new();
                 for (j, arg) in true_args.iter().enumerate() {
-                    let param_ty = self.resolve_ty(true_block_def.params[j].ty);
+                    let param_ty = self.resolve_ty(true_params[j].ty);
                     if matches!(&param_ty, ArType::Primitive(Primitive::Str)) {
                         let (ptr_val, len_val) = self.translate_str_operand(arg);
                         true_clif_args.push(BlockArg::Value(ptr_val));
@@ -104,9 +106,10 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 }
 
                 let false_block_def = &self.current_func.blocks[if_false.as_usize()];
+                let false_params = self.current_func.block_params(false_block_def.params);
                 let mut false_clif_args = Vec::new();
                 for (j, arg) in false_args.iter().enumerate() {
-                    let param_ty = self.resolve_ty(false_block_def.params[j].ty);
+                    let param_ty = self.resolve_ty(false_params[j].ty);
                     if matches!(&param_ty, ArType::Primitive(Primitive::Str)) {
                         let (ptr_val, len_val) = self.translate_str_operand(arg);
                         false_clif_args.push(BlockArg::Value(ptr_val));
@@ -163,8 +166,9 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 args,
             } => {
                 let target_block = &self.current_func.blocks[resume.as_usize()];
+                let target_params = self.current_func.block_params(target_block.params);
                 let mut clif_args = Vec::new();
-                for (param, arg) in target_block.params.iter().zip(args.iter()) {
+                for (param, arg) in target_params.iter().zip(args.iter()) {
                     let param_ty = self.resolve_ty(param.ty);
                     if matches!(&param_ty, ArType::Primitive(Primitive::Str)) {
                         let (ptr_val, len_val) = self.translate_str_operand(arg);
@@ -180,7 +184,7 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                     }
                 }
                 // Extra AMIR params without args: poison (should not happen after A3.5).
-                for param in target_block.params.iter().skip(args.len()) {
+                for param in target_params.iter().skip(args.len()) {
                     let param_ty = self.resolve_ty(param.ty);
                     if matches!(
                         &param_ty,

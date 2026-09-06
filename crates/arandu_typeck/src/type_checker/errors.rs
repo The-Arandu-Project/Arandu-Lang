@@ -313,9 +313,9 @@ pub fn constraint_to_diagnostic(
 
                 // Add struct fields as candidates
                 if let Some(fields) = type_info.struct_fields.get(&struct_id) {
-                    for f_name in fields.keys() {
+                    for f in fields.iter() {
                         candidates.push(Candidate {
-                            name: f_name.clone(),
+                            name: f.name.to_string(),
                             is_method: false,
                         });
                     }

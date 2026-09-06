@@ -32,6 +32,7 @@ impl<'a> Parser<'a> {
         }
         self.expect_name("RBRACE")?;
         self.finish_node();
+        let statements = self.pool.alloc_stmt_list(&statements);
         Ok(Block {
             span: self.span_from_mark(start),
             statements,
@@ -296,7 +297,7 @@ impl<'a> Parser<'a> {
                 let nested = self.parse_if()?;
                 Some(Block {
                     span: self.span_from_mark(start),
-                    statements: vec![nested],
+                    statements: self.pool.alloc_stmt_list(&[nested]),
                 })
             } else {
                 Some(self.parse_block()?)

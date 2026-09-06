@@ -70,7 +70,7 @@ fn o003_shared_while_exclusive() {
     let block = AmirBasicBlock {
         id: BlockId::from_usize(0),
         statements: DenseRange::new(0, 3),
-        params: vec![],
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     };
     let blocks = vec![block];
@@ -87,6 +87,9 @@ fn o003_shared_while_exclusive() {
             temp(2, int),
         ],
         blocks,
+
+        block_params: Vec::new(),
+
         stmts,
         cfg,
     };
@@ -135,7 +138,7 @@ fn o002_move_while_borrowed() {
     let block = AmirBasicBlock {
         id: BlockId::from_usize(0),
         statements: DenseRange::new(0, 4),
-        params: vec![],
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     };
     let blocks = vec![block];
@@ -159,6 +162,9 @@ fn o002_move_while_borrowed() {
             temp(3, named),
         ],
         blocks,
+
+        block_params: Vec::new(),
+
         stmts,
         cfg,
     };
@@ -191,7 +197,7 @@ fn o006_destroy_while_borrowed() {
     let block = AmirBasicBlock {
         id: BlockId::from_usize(0),
         statements: DenseRange::new(0, 3),
-        params: vec![],
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     };
     let blocks = vec![block];
@@ -204,6 +210,9 @@ fn o006_destroy_while_borrowed() {
         locals: vec![local(0, int)],
         temps: vec![temp(0, intern(ArType::Ref(int))), temp(1, int)],
         blocks,
+
+        block_params: Vec::new(),
+
         stmts,
         cfg,
     };
@@ -246,7 +255,7 @@ fn shared_shared_ok() {
     let block = AmirBasicBlock {
         id: BlockId::from_usize(0),
         statements: DenseRange::new(0, 4),
-        params: vec![],
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     };
     let blocks = vec![block];
@@ -260,6 +269,9 @@ fn shared_shared_ok() {
         locals: vec![local(0, int)],
         temps: vec![temp(0, ref_ty), temp(1, ref_ty), temp(2, int), temp(3, int)],
         blocks,
+
+        block_params: Vec::new(),
+
         stmts,
         cfg,
     };
@@ -301,7 +313,7 @@ fn o003_two_loans_then_call() {
     let block = AmirBasicBlock {
         id: BlockId::from_usize(0),
         statements: DenseRange::new(0, 4),
-        params: vec![],
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     };
     let blocks = vec![block];
@@ -318,6 +330,9 @@ fn o003_two_loans_then_call() {
             temp(2, int),
         ],
         blocks,
+
+        block_params: Vec::new(),
+
         stmts,
         cfg,
     };
@@ -360,7 +375,7 @@ fn o003_store_to_projected_field_while_borrowed() {
     let block = AmirBasicBlock {
         id: BlockId::from_usize(0),
         statements: DenseRange::new(0, 3),
-        params: vec![],
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     };
     let blocks = vec![block];
@@ -373,6 +388,9 @@ fn o003_store_to_projected_field_while_borrowed() {
         locals: vec![local(0, int)],
         temps: vec![temp(0, intern(ArType::Ref(int))), temp(1, int)],
         blocks,
+
+        block_params: Vec::new(),
+
         stmts,
         cfg,
     };

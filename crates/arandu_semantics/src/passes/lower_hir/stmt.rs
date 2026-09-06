@@ -26,8 +26,8 @@ pub(crate) fn lower_block_raw(
     block: &Block,
 ) -> Result<HirBlock, Diagnostic> {
     let mut statements = Vec::new();
-    for s in &block.statements {
-        statements.push(lower_stmt(type_check, pool, hir_pool, *s)?);
+    for &s in pool.stmt_list(block.statements) {
+        statements.push(lower_stmt(type_check, pool, hir_pool, s)?);
     }
     let statements_range = hir_pool.alloc_stmt_list(&statements);
     Ok(HirBlock {

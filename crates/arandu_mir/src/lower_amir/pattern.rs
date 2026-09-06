@@ -436,17 +436,16 @@ impl LowerCtx<'_> {
                 let field_ids = self.hir.pool.field_pattern_list(*fields);
                 for &fid in field_ids {
                     let field = self.hir.pool.field_pattern(fid);
-                    let field_tid = fields_map.and_then(|m| m.get(field.name.as_str()).copied());
+                    let field_tid = fields_map
+                        .and_then(|m| m.get(field.name.as_str()))
+                        .map(|f| f.ty);
                     let tmp_field = match field_tid {
                         Some(tid) => self.new_temp_id(tid),
                         None => self.new_temp(ArType::Error),
                     };
-                    let field_idx = self
-                        .tc
-                        .type_info
-                        .struct_field_indices
-                        .get(struct_symbol)
-                        .and_then(|m| m.get(field.name.as_str()).copied())
+                    let field_idx = fields_map
+                        .and_then(|m| m.get(field.name.as_str()))
+                        .map(|f| f.index)
                         .unwrap_or(0);
                     self.emit_assign_temp(
                         tmp_field,

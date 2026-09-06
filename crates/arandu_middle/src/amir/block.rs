@@ -19,7 +19,9 @@ pub struct BlockParam {
 #[derive(Debug, Clone)]
 pub struct AmirBasicBlock {
     pub id: BlockId,
-    pub params: Vec<BlockParam>,
+    /// Block parameters live in [`super::program::AmirFunc::block_params`]; this
+    /// range indexes into that dense pool.
+    pub params: DenseRange,
     pub statements: DenseRange,
     pub terminator: AmirTerminator,
 }
@@ -38,7 +40,7 @@ mod tests {
     fn basic_block_construction() {
         let b = AmirBasicBlock {
             id: BlockId::from_usize(1),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             statements: DenseRange::empty(),
             terminator: AmirTerminator::Return,
         };
@@ -50,7 +52,7 @@ mod tests {
     fn unreachable_terminator() {
         let b = AmirBasicBlock {
             id: BlockId::from_usize(2),
-            params: Vec::new(),
+            params: DenseRange::empty(),
             statements: DenseRange::empty(),
             terminator: AmirTerminator::Unreachable,
         };

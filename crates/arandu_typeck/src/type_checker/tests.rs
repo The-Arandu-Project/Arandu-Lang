@@ -9,6 +9,7 @@ use crate::Span;
 use crate::SymbolKind;
 use crate::type_checker::info::translate_type;
 use arandu_middle::DiagCode;
+use arandu_middle::layout::{StructFieldInfo, StructFields};
 
 // ── helpers ──
 
@@ -170,8 +171,6 @@ fn type_info_missing_decl_returns_none() {
 fn type_info_pod_struct_is_copy_vec_like_is_not() {
     use std::sync::Arc;
 
-    use rustc_hash::FxHashMap;
-
     let mut info = TypeInfo::new();
     let i = &mut info.type_interner;
     let u32_ty = i.intern(ArType::Primitive(Primitive::U32));
@@ -181,9 +180,20 @@ fn type_info_pod_struct_is_copy_vec_like_is_not() {
 
     // GenRef-like: { index: u32, generation: u32 } → copy
     let gen_sym = SymbolId::new(0, 10);
-    let mut gen_fields = FxHashMap::default();
-    gen_fields.insert("index".into(), u32_ty);
-    gen_fields.insert("generation".into(), u32_ty);
+    let gen_fields = StructFields::from_entries([
+        StructFieldInfo {
+            name: "index".into(),
+            symbol: None,
+            ty: u32_ty,
+            index: 0,
+        },
+        StructFieldInfo {
+            name: "generation".into(),
+            symbol: None,
+            ty: u32_ty,
+            index: 1,
+        },
+    ]);
     info.struct_fields.insert(gen_sym, Arc::new(gen_fields));
     let gen_tid = info
         .type_interner
@@ -195,9 +205,20 @@ fn type_info_pod_struct_is_copy_vec_like_is_not() {
 
     // Vec-like: { data: ptr[int], len: u64 } → not copy
     let vec_sym = SymbolId::new(0, 11);
-    let mut vec_fields = FxHashMap::default();
-    vec_fields.insert("data".into(), ptr_ty);
-    vec_fields.insert("len".into(), u64_ty);
+    let vec_fields = StructFields::from_entries([
+        StructFieldInfo {
+            name: "data".into(),
+            symbol: None,
+            ty: ptr_ty,
+            index: 0,
+        },
+        StructFieldInfo {
+            name: "len".into(),
+            symbol: None,
+            ty: u64_ty,
+            index: 1,
+        },
+    ]);
     info.struct_fields.insert(vec_sym, Arc::new(vec_fields));
     let vec_tid = info
         .type_interner
@@ -210,7 +231,7 @@ fn type_info_pod_struct_is_copy_vec_like_is_not() {
     // Empty unit struct → copy
     let unit_sym = SymbolId::new(0, 12);
     info.struct_fields
-        .insert(unit_sym, Arc::new(FxHashMap::default()));
+        .insert(unit_sym, Arc::new(StructFields::new()));
     let unit_tid = info
         .type_interner
         .intern(ArType::named(unit_sym, &[], &info.type_interner));
@@ -227,8 +248,12 @@ fn type_info_pod_struct_is_copy_vec_like_is_not() {
     assert!(!info.is_copy(exclusive_ref));
 
     let view_sym = SymbolId::new(0, 13);
-    let mut view_fields = FxHashMap::default();
-    view_fields.insert("value".into(), shared_ref);
+    let view_fields = StructFields::from_entries([StructFieldInfo {
+        name: "value".into(),
+        symbol: None,
+        ty: shared_ref,
+        index: 0,
+    }]);
     info.struct_fields.insert(view_sym, Arc::new(view_fields));
     let view_ty = info
         .type_interner
@@ -236,8 +261,12 @@ fn type_info_pod_struct_is_copy_vec_like_is_not() {
     assert!(info.is_copy(view_ty), "shared-ref carrier should be copy");
 
     let mut_view_sym = SymbolId::new(0, 14);
-    let mut mut_view_fields = FxHashMap::default();
-    mut_view_fields.insert("value".into(), exclusive_ref);
+    let mut_view_fields = StructFields::from_entries([StructFieldInfo {
+        name: "value".into(),
+        symbol: None,
+        ty: exclusive_ref,
+        index: 0,
+    }]);
     info.struct_fields
         .insert(mut_view_sym, Arc::new(mut_view_fields));
     let mut_view_ty =
@@ -369,13 +398,18 @@ fn merge_from_struct_fields() {
         .intern(ArType::Primitive(Primitive::Int));
     from_info.struct_fields.insert(
         SymbolId::new(0, 0),
-        std::sync::Arc::new([("x".to_string(), int_id)].into_iter().collect()),
+        std::sync::Arc::new(StructFields::from_entries([StructFieldInfo {
+            name: "x".into(),
+            symbol: None,
+            ty: int_id,
+            index: 0,
+        }])),
     );
     let mut to_info = TypeInfo::new();
     to_info.merge_from(&from_info);
     let fields = to_info.struct_fields.get(&SymbolId::new(0, 0));
     assert!(fields.is_some());
-    let tid = *fields.unwrap().get("x").unwrap();
+    let tid = fields.unwrap().get("x").unwrap().ty;
     assert_eq!(
         to_info.type_interner.resolve(tid),
         ArType::Primitive(Primitive::Int)

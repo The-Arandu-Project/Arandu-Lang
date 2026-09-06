@@ -326,9 +326,10 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 for (i, (name, op)) in fields.iter().enumerate() {
                     let field_idx = self
                         .type_info
-                        .struct_field_indices
+                        .struct_fields
                         .get(struct_symbol)
-                        .and_then(|m| m.get(name.as_str()).copied())
+                        .and_then(|m| m.get(name.as_str()))
+                        .map(|f| f.index)
                         .unwrap_or(i);
                     let offset = layout.field_offsets.get(field_idx).copied().unwrap_or(0) as i32;
                     let op_ty = self.get_operand_ar_type(op);
@@ -349,8 +350,8 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                     } else {
                         let field_defs = self.type_info.struct_fields.get(struct_symbol);
                         let field_ty = field_defs
-                            .and_then(|m| m.get(name.as_str()).copied())
-                            .map(|tid| self.type_info.type_interner.resolve(tid))
+                            .and_then(|m| m.get(name.as_str()))
+                            .map(|f| self.type_info.type_interner.resolve(f.ty))
                             .unwrap_or(ArType::Error);
                         let expected_field_ty =
                             match crate::types::clif_type(&field_ty, self.ptr_type) {

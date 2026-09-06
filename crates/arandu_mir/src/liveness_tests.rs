@@ -40,6 +40,9 @@ fn void_func(blocks: Vec<AmirBasicBlock>, stmts: AmirStmtTable) -> AmirFunc {
         }],
         temps: Vec::new(),
         blocks,
+
+        block_params: Vec::new(),
+
         stmts,
         cfg,
     }
@@ -49,7 +52,7 @@ fn empty_block(id: usize) -> AmirBasicBlock {
     AmirBasicBlock {
         id: block_id(id),
         statements: DenseRange::empty(),
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     }
 }
@@ -167,7 +170,7 @@ fn two_block_flow_use_after_def() {
     let block0 = AmirBasicBlock {
         id: b0,
         statements: DenseRange::new(0, 1),
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Goto {
             target: b1,
             args: Vec::new(),
@@ -176,7 +179,7 @@ fn two_block_flow_use_after_def() {
     let block1 = AmirBasicBlock {
         id: b1,
         statements: DenseRange::new(1, 1),
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Return,
     };
 
@@ -205,7 +208,7 @@ fn branch_condition_is_use() {
     let block0 = AmirBasicBlock {
         id: b0,
         statements: DenseRange::new(0, 1),
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Branch {
             condition: AmirOperand::Copy(temp_id(0)),
             if_true: b1,
@@ -237,7 +240,7 @@ fn switch_int_condition_is_use() {
     let block0 = AmirBasicBlock {
         id: b0,
         statements: DenseRange::new(0, 1),
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: AmirTerminator::SwitchInt {
             discriminant: AmirOperand::Copy(temp_id(0)),
             targets: vec![],
@@ -282,7 +285,7 @@ fn diamond_join_propagates_liveness() {
     let block0 = AmirBasicBlock {
         id: b0,
         statements: DenseRange::new(0, 1),
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Branch {
             condition: AmirOperand::Constant(AmirConstant::Bool(true)),
             if_true: b1,
@@ -294,7 +297,7 @@ fn diamond_join_propagates_liveness() {
     let block1 = AmirBasicBlock {
         id: b1,
         statements: DenseRange::empty(),
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Goto {
             target: b3,
             args: Vec::new(),
@@ -303,7 +306,7 @@ fn diamond_join_propagates_liveness() {
     let block2 = AmirBasicBlock {
         id: b2,
         statements: DenseRange::new(1, 1),
-        params: Vec::new(),
+        params: DenseRange::empty(),
         terminator: AmirTerminator::Goto {
             target: b3,
             args: Vec::new(),

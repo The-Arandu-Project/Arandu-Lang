@@ -402,7 +402,8 @@ fn transfer_terminator(
         let Some(block) = function.blocks.get(target.as_usize()) else {
             return;
         };
-        for (parameter, argument) in block.params.iter().zip(args) {
+        let block_params = function.block_params(block.params);
+        for (parameter, argument) in block_params.iter().zip(args) {
             let mut source = operand_origins(*argument, temps);
             if let Some(target) = temps.get_mut(parameter.id.as_usize()) {
                 *changed |= merge_origins(target, &mut source);
@@ -521,8 +522,9 @@ fn field_name(
         return None;
     };
     type_info
-        .struct_field_indices
+        .struct_fields
         .get(&symbol)?
         .iter()
-        .find_map(|(name, &field_index)| (field_index == index).then(|| name.as_str().into()))
+        .find(|f| f.index == index)
+        .map(|f| f.name.clone())
 }

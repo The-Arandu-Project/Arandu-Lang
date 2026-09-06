@@ -740,9 +740,12 @@ impl LowerCtx<'_> {
                 for f in fields_slice {
                     field_ops.push((f.name.clone(), self.lower_expr(f.value, None, symbols)?));
                 }
-                if let Some(indices) = self.tc.type_info.struct_field_indices.get(struct_symbol) {
+                if let Some(fields) = self.tc.type_info.struct_fields.get(struct_symbol) {
                     field_ops.sort_by_key(|(name, _)| {
-                        indices.get(name.as_str()).copied().unwrap_or(usize::MAX)
+                        fields
+                            .get(name.as_str())
+                            .map(|f| f.index)
+                            .unwrap_or(usize::MAX)
                     });
                 }
                 let dest = target.unwrap_or_else(|| self.new_temp_id(expr.ty));

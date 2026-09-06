@@ -141,7 +141,7 @@ pub fn analyze_temp_liveness(func: &AmirFunc) -> TempLiveness {
     for block in &func.blocks {
         let mut defined = BitSet::<TempId>::with_capacity(num_temps);
         // Block params are defs at entry (before body uses).
-        for param in &block.params {
+        for param in func.block_params(block.params) {
             defined.insert(param.id);
             block_defs.insert(block.id, param.id);
         }

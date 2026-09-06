@@ -24,8 +24,8 @@ fn type_needs_drop(ty: TypeId, type_info: &TypeInfo) -> bool {
                 return true;
             }
             if let Some(fields) = type_info.struct_fields.get(&sym) {
-                for &field_ty in fields.values() {
-                    if type_needs_drop(field_ty, type_info) {
+                for f in fields.iter() {
+                    if type_needs_drop(f.ty, type_info) {
                         return true;
                     }
                 }
@@ -54,24 +54,17 @@ fn emit_recursive_drops(
             return;
         }
 
-        if let Some(field_symbols) = type_info.struct_field_symbols.get(&sym)
-            && let Some(field_types) = type_info.struct_fields.get(&sym)
-            && let Some(field_indices) = type_info.struct_field_indices.get(&sym)
-        {
-            let mut indexed: Vec<(usize, SymbolId, TypeId)> = field_symbols
-                .iter()
-                .filter_map(|(name, &fsym)| {
-                    let idx = field_indices.get(name).copied()?;
-                    let fty = field_types.get(name).copied()?;
-                    Some((idx, fsym, fty))
-                })
-                .collect();
+        if let Some(fields) = type_info.struct_fields.get(&sym) {
+            let mut indexed: Vec<(usize, Option<SymbolId>, TypeId)> =
+                fields.iter().map(|f| (f.index, f.symbol, f.ty)).collect();
             indexed.sort_by_key(|(idx, _, _)| std::cmp::Reverse(*idx));
 
             for (_, fsym, fty) in indexed {
                 if type_needs_drop(fty, type_info) {
                     let mut sub_place = place.clone();
-                    sub_place.projections.push(AmirProjection::Field(fsym));
+                    if let Some(fsym) = fsym {
+                        sub_place.projections.push(AmirProjection::Field(fsym));
+                    }
                     emit_recursive_drops(&sub_place, fty, type_info, false, rebuilt);
                 }
             }

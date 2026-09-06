@@ -4,6 +4,7 @@ use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use crate::SymbolId;
+use arandu_middle::layout::{StructFieldInfo, StructFields};
 use arandu_middle::types::{BorrowKind, BorrowPath, BorrowPathSegment, ReturnBorrowSummary};
 use arandu_parser::ast_pool::ExprId;
 
@@ -33,10 +34,8 @@ pub struct TypeInfo {
     pub decl_types: FxHashMap<SymbolId, TypeId>,
     /// Canonical flow-derived borrow interfaces published across item/module boundaries.
     pub return_borrow_summaries: FxHashMap<SymbolId, ReturnBorrowSummary>,
-    /// Struct field name → interned field type.
-    pub struct_fields: FxHashMap<SymbolId, Arc<FxHashMap<String, TypeId>>>,
-    pub struct_field_symbols: FxHashMap<SymbolId, Arc<FxHashMap<String, SymbolId>>>,
-    pub struct_field_indices: FxHashMap<SymbolId, Arc<FxHashMap<String, usize>>>,
+    /// Struct field table: declaration order + name index (type/symbol/index folded in).
+    pub struct_fields: FxHashMap<SymbolId, Arc<StructFields>>,
     pub enum_variants: FxHashMap<SymbolId, (SymbolId, EnumPayloadShape)>,
     /// Pre-computed discriminant tag for each enum variant symbol.
     pub enum_variant_tags: FxHashMap<SymbolId, usize>,
@@ -81,8 +80,6 @@ impl TypeInfo {
             decl_types: FxHashMap::default(),
             return_borrow_summaries: FxHashMap::default(),
             struct_fields: FxHashMap::default(),
-            struct_field_symbols: FxHashMap::default(),
-            struct_field_indices: FxHashMap::default(),
             enum_variants: FxHashMap::default(),
             enum_variant_tags: FxHashMap::default(),
             destructors: FxHashMap::default(),
@@ -139,26 +136,26 @@ impl TypeInfo {
     pub fn get_struct_field_type(&self, struct_sym: SymbolId, field: &str) -> Option<TypeId> {
         self.struct_fields
             .get(&struct_sym)
-            .and_then(|f| f.get(field))
-            .copied()
+            .and_then(|s| s.get(field))
+            .map(|f| f.ty)
     }
 
     /// Lookup struct field symbol by struct symbol and field name.
     #[must_use]
     pub fn get_struct_field_symbol(&self, struct_sym: SymbolId, field: &str) -> Option<SymbolId> {
-        self.struct_field_symbols
+        self.struct_fields
             .get(&struct_sym)
-            .and_then(|f| f.get(field))
-            .copied()
+            .and_then(|s| s.get(field))
+            .and_then(|f| f.symbol)
     }
 
     /// Lookup struct field index by struct symbol and field name.
     #[must_use]
     pub fn get_struct_field_index(&self, struct_sym: SymbolId, field: &str) -> Option<usize> {
-        self.struct_field_indices
+        self.struct_fields
             .get(&struct_sym)
-            .and_then(|f| f.get(field))
-            .copied()
+            .and_then(|s| s.get(field))
+            .map(|f| f.index)
     }
 
     /// Whether values of this type may be used after "move" (copy semantics).
@@ -249,20 +246,20 @@ impl TypeInfo {
                         (parameters.len() == args.len() && !parameters.is_empty())
                             .then(|| build_subst_ids(parameters, &args, &self.type_interner))
                     });
-                    let mut fields = fields.iter().collect::<Vec<_>>();
-                    fields.sort_by_key(|(name, _)| *name);
-                    for (name, &field_id) in fields {
+                    let mut field_refs = fields.fields.iter().collect::<Vec<_>>();
+                    field_refs.sort_by_key(|f| f.name.as_str());
+                    for f in field_refs {
                         let field_id = if let Some(substitution) = &substitution {
-                            let field = self.type_interner.resolve(field_id);
+                            let field = self.type_interner.resolve(f.ty);
                             self.type_interner.intern(substitute_type(
                                 &field,
                                 substitution,
                                 &self.type_interner,
                             ))
                         } else {
-                            field_id
+                            f.ty
                         };
-                        prefix.push(BorrowPathSegment::Field(name.as_str().into()));
+                        prefix.push(BorrowPathSegment::Field(f.name.as_str().into()));
                         self.collect_borrow_paths(field_id, prefix, visiting, output)?;
                         prefix.pop();
                     }
@@ -432,8 +429,8 @@ impl TypeInfo {
                 return false;
             }
             let subst = build_subst_ids(params, args, &self.type_interner);
-            for &field_tid in fields.values() {
-                let field_ty = self.type_interner.resolve(field_tid);
+            for f in fields.iter() {
+                let field_ty = self.type_interner.resolve(f.ty);
                 let inst = substitute_type(&field_ty, &subst, &self.type_interner);
                 let inst_id = self.type_interner.intern(inst);
                 if !self.is_pod_component(inst_id, visiting) {
@@ -442,9 +439,7 @@ impl TypeInfo {
             }
             return true;
         }
-        fields
-            .values()
-            .all(|&fid| self.is_pod_component(fid, visiting))
+        fields.iter().all(|f| self.is_pod_component(f.ty, visiting))
     }
 }
 
@@ -587,8 +582,6 @@ impl TypeInfo {
         if other.decl_types.is_empty()
             && other.return_borrow_summaries.is_empty()
             && other.struct_fields.is_empty()
-            && other.struct_field_symbols.is_empty()
-            && other.struct_field_indices.is_empty()
             && other.enum_variants.is_empty()
             && other.enum_variant_tags.is_empty()
             && other.destructors.is_empty()
@@ -616,22 +609,19 @@ impl TypeInfo {
                 .map(|(&symbol, summary)| (symbol, summary.clone())),
         );
         for (symbol, fields) in &other.struct_fields {
-            let mut translated_fields = FxHashMap::default();
-            for (name, &tid) in fields.iter() {
-                let ty = other.type_interner.resolve(tid);
-                let translated = translate_type(&ty, &other.type_interner, &mut self.type_interner);
-                translated_fields.insert(name.clone(), self.type_interner.intern(translated));
-            }
-            self.struct_fields
-                .insert(*symbol, Arc::new(translated_fields));
-        }
-        for (symbol, field_symbols) in &other.struct_field_symbols {
-            self.struct_field_symbols
-                .insert(*symbol, Arc::clone(field_symbols));
-        }
-        for (symbol, field_indices) in &other.struct_field_indices {
-            self.struct_field_indices
-                .insert(*symbol, Arc::clone(field_indices));
+            let translated: StructFields =
+                StructFields::from_entries(fields.iter().map(|f| StructFieldInfo {
+                    name: f.name.clone(),
+                    symbol: f.symbol,
+                    ty: {
+                        let ty = other.type_interner.resolve(f.ty);
+                        let translated =
+                            translate_type(&ty, &other.type_interner, &mut self.type_interner);
+                        self.type_interner.intern(translated)
+                    },
+                    index: f.index,
+                }));
+            self.struct_fields.insert(*symbol, Arc::new(translated));
         }
         for (symbol, (enum_id, shape)) in &other.enum_variants {
             let translated_shape = match shape {
@@ -780,17 +770,8 @@ impl arandu_middle::layout::StructLayoutProvider for TypeInfo {
     fn get_struct_fields(
         &self,
         struct_id: SymbolId,
-    ) -> Option<&rustc_hash::FxHashMap<String, TypeId>> {
+    ) -> Option<&arandu_middle::layout::StructFields> {
         self.struct_fields.get(&struct_id).map(|a| a.as_ref())
-    }
-
-    fn get_struct_field_indices(
-        &self,
-        struct_id: SymbolId,
-    ) -> Option<&rustc_hash::FxHashMap<String, usize>> {
-        self.struct_field_indices
-            .get(&struct_id)
-            .map(|a| a.as_ref())
     }
 
     fn get_generic_params(&self, struct_id: SymbolId) -> Option<&[SymbolId]> {
@@ -868,10 +849,25 @@ mod borrow_shape_tests {
                 .intern(ArType::named(record, &[], &info.type_interner));
         info.struct_fields.insert(
             record,
-            Arc::new(FxHashMap::from_iter([
-                ("next".to_string(), record_type),
-                ("read".to_string(), option_shared),
-                ("write".to_string(), exclusive),
+            Arc::new(StructFields::from_entries([
+                StructFieldInfo {
+                    name: "next".into(),
+                    symbol: Some(SymbolId::new(0, 1)),
+                    ty: record_type,
+                    index: 0,
+                },
+                StructFieldInfo {
+                    name: "read".into(),
+                    symbol: Some(SymbolId::new(0, 2)),
+                    ty: option_shared,
+                    index: 1,
+                },
+                StructFieldInfo {
+                    name: "write".into(),
+                    symbol: Some(SymbolId::new(0, 3)),
+                    ty: exclusive,
+                    index: 2,
+                },
             ])),
         );
 

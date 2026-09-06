@@ -176,7 +176,7 @@ pub(crate) fn lower_decl(
                     let field_symbol = require_def_symbol(&type_check.resolved, f.span)?;
                     let field_ty = struct_fields_map
                         .get(f.name.as_str())
-                        .copied()
+                        .map(|f| f.ty)
                         .unwrap_or_else(error_ty);
                     fields.push(HirStructField {
                         symbol: field_symbol,
