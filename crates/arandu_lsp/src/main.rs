@@ -15,6 +15,7 @@ mod diagnostics;
 mod dispatcher;
 mod handlers;
 mod ide;
+mod logging;
 mod pool;
 mod state;
 mod uri_util;

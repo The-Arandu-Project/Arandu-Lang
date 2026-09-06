@@ -2107,6 +2107,117 @@ fn stdio_l3_stress_has_no_crash_deadlock_or_stale_publication() {
     lsp.shutdown(20_001);
 }
 
+#[test]
+fn stdio_interleaved_edits_preserve_responses_and_final_diagnostics() {
+    const FINAL_REVISION: i32 = 41;
+    const FIRST_REQUEST_ID: i64 = 100;
+
+    let fixture = FixtureDir::new();
+    let uri = file_uri(&fixture.path().join("backlog.aru"));
+    let mut lsp = LspProcess::spawn();
+    lsp.initialize(fixture.path(), 1);
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didOpen",
+        "params": {
+            "textDocument": {
+                "uri": uri,
+                "languageId": "arandu",
+                "version": 1,
+                "text": "func main(): int { return 0 }\n"
+            }
+        }
+    }));
+    let _ = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && message.pointer("/params/uri").and_then(Value::as_str) == Some(uri.as_str())
+    });
+
+    // Interleave saved revisions with interactive requests. This checks
+    // response completeness and the final diagnostic revision; it does not
+    // claim to saturate or bound the worker result channel.
+    let mut request_ids = BTreeSet::new();
+    for revision in 2..FINAL_REVISION {
+        let text = if revision % 2 == 0 {
+            format!("func main(): int {{ return {revision} }}\n")
+        } else {
+            "func main(): int { return unresolved }\n".to_owned()
+        };
+        lsp.send(&json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didChange",
+            "params": {
+                "textDocument": { "uri": uri, "version": revision },
+                "contentChanges": [{ "text": text }]
+            }
+        }));
+        lsp.send(&json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didSave",
+            "params": { "textDocument": { "uri": uri } }
+        }));
+        if revision % 8 == 0 {
+            let id = FIRST_REQUEST_ID + i64::from(revision);
+            request_ids.insert(id);
+            lsp.send(&json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "textDocument/completion",
+                "params": {
+                    "textDocument": { "uri": uri },
+                    "position": { "line": 0, "character": 4 }
+                }
+            }));
+        }
+    }
+    let responses = lsp.wait_for_responses(request_ids.iter().copied());
+    for (id, response) in responses {
+        if let Some(error) = response.get("error") {
+            let code = error.get("code").and_then(Value::as_i64);
+            assert!(
+                matches!(code, Some(-32802..=-32800)),
+                "backlog request {id} returned an unexpected/internal error: {response}"
+            );
+        } else {
+            assert!(
+                response.get("result").is_some(),
+                "backlog request {id} returned no result: {response}"
+            );
+        }
+    }
+
+    // The final oracle must land on an empty Problems panel for the last
+    // revision, proving publication neither stalled nor regressed.
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didChange",
+        "params": {
+            "textDocument": { "uri": uri, "version": FINAL_REVISION },
+            "contentChanges": [{ "text": "func main(): int { return 42 }\n" }]
+        }
+    }));
+    lsp.send(&json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didSave",
+        "params": { "textDocument": { "uri": uri } }
+    }));
+    let final_diagnostics = lsp.wait_for(|message| {
+        message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && message.pointer("/params/uri").and_then(Value::as_str) == Some(uri.as_str())
+            && message.pointer("/params/version").and_then(Value::as_i64)
+                == Some(i64::from(FINAL_REVISION))
+    });
+    assert_eq!(
+        final_diagnostics
+            .pointer("/params/diagnostics")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(0),
+        "backlog final revision must clear Problems: {final_diagnostics}"
+    );
+    lsp.shutdown(200);
+}
+
 #[derive(Debug)]
 struct LspPerfBudget {
     samples: usize,

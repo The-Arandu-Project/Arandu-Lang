@@ -115,12 +115,14 @@ pub(super) fn workspace_symbols(
     dispatcher::spawn_json(ctx.state, ctx.pool, ctx.job_tx, id, move |snap, docs| {
         let list: Vec<ide::DocSnap> = docs
             .iter()
-            .map(|(uri_s, info)| ide::DocSnap {
-                source: info.source,
-                path: Arc::clone(&info.path),
-                uri: crate::uri_util::parse_uri(uri_s)
-                    .or_else(|| crate::uri_util::uri_from_path(&info.path))
-                    .unwrap_or_else(|| crate::uri_util::parse_uri("file:///").expect("valid uri")),
+            .filter_map(|(uri_s, info)| {
+                let uri = crate::uri_util::parse_uri(uri_s)
+                    .or_else(|| crate::uri_util::uri_from_path(&info.path))?;
+                Some(ide::DocSnap {
+                    source: info.source,
+                    path: Arc::clone(&info.path),
+                    uri,
+                })
             })
             .collect();
         let syms = ide::workspace_symbols(snap, &list, &query);

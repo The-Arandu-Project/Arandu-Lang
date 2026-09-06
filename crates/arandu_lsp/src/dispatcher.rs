@@ -285,7 +285,8 @@ pub(crate) fn spawn_goto(
                             value,
                         });
                     }
-                    Err(_) => {
+                    Err(payload) => {
+                        crate::logging::log_panic("goto request", &payload);
                         let _ = tx.send(JobResult::Failed {
                             id: Some(req_id),
                             revision,
@@ -335,7 +336,8 @@ pub(crate) fn spawn_json<F>(
                             value,
                         });
                     }
-                    Err(_) => {
+                    Err(payload) => {
+                        crate::logging::log_panic("interactive request", &payload);
                         let _ = tx.send(JobResult::Failed {
                             id: Some(req_id),
                             revision,
@@ -398,7 +400,8 @@ pub(crate) fn spawn_json_result<F>(
                             message,
                         });
                     }
-                    Err(_) => {
+                    Err(payload) => {
+                        crate::logging::log_panic("result request", &payload);
                         let _ = tx.send(JobResult::Failed {
                             id: Some(req_id),
                             revision,
