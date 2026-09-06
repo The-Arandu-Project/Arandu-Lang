@@ -12,75 +12,102 @@
 use crate::poll_runtime::{ar_co_block_on_i64, ar_co_free};
 use std::sync::Mutex;
 
-struct TaskSlot {
-    state: *mut u8,
-    done: bool,
-    result: i64,
+/// Ownership of the coroutine blob changes exactly once at Pending -> Running.
+/// Running stores no pointer: only the joining thread can poll/free the blob.
+enum TaskState {
+    Pending(*mut u8),
+    Running { cancel_requested: bool },
+    Completed(i64),
 }
 
-// Safety: JIT is single-threaded today; Mutex for future multi-thread SyncExecutor.
-unsafe impl Send for TaskSlot {}
+// SAFETY: pending blobs are accessed only while holding the task-table mutex.
+// A join transfers the pointer to its own thread and leaves no pointer in the
+// shared Running state. Cancellation can only mark that state for retirement.
+unsafe impl Send for TaskState {}
 
-static TASKS: Mutex<Vec<Option<TaskSlot>>> = Mutex::new(Vec::new());
+type TaskTable = Mutex<Vec<Option<TaskState>>>;
+static TASKS: TaskTable = Mutex::new(Vec::new());
 
 /// Spawn a coroutine state onto the SyncExecutor queue. Returns handle (>= 0).
 ///
 /// # Safety
-/// `state` must be a valid coroutine blob (same as poll_runtime).
+/// `state` must be a valid coroutine blob exclusively transferred to this task.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_rt_spawn_i64(state: *mut u8) -> i64 {
+    spawn_on(&TASKS, state)
+}
+
+fn spawn_on(tasks: &TaskTable, state: *mut u8) -> i64 {
     if state.is_null() {
         std::process::abort();
     }
-    let mut guard = TASKS.lock().unwrap_or_else(|e| e.into_inner());
-    let slot = TaskSlot {
-        state,
-        done: false,
-        result: 0,
+    let mut guard = tasks.lock().unwrap_or_else(|e| e.into_inner());
+    let index = guard
+        .iter()
+        .position(Option::is_none)
+        .unwrap_or(guard.len());
+    let Ok(handle) = i64::try_from(index) else {
+        std::process::abort();
     };
-    // Reuse free slots
-    if let Some(idx) = guard.iter().position(|s| s.is_none()) {
-        guard[idx] = Some(slot);
-        return idx as i64;
+    if index == guard.len() {
+        guard.push(Some(TaskState::Pending(state)));
+    } else {
+        guard[index] = Some(TaskState::Pending(state));
     }
-    let id = guard.len();
-    guard.push(Some(slot));
-    id as i64
+    handle
 }
 
-/// Drive task `handle` to completion; returns i64 payload. Invalid handle aborts.
+/// Drive task to completion. Rejoining a completed live handle returns its
+/// cached result. Cancellation during the join retires the handle on completion.
 ///
 /// # Safety
-/// `handle` must come from [`ar_rt_spawn_i64`].
+/// `handle` must be live. Only one concurrent join may claim it. A cancel racing
+/// with this call must run after the join has claimed the task.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_rt_join_i64(handle: i64) -> i64 {
-    if handle < 0 {
+    // SAFETY: the public caller provides the live, exclusively joined handle;
+    // join_on owns the claimed blob until it has been polled and freed.
+    unsafe { join_on(&TASKS, handle, |state| ar_co_block_on_i64(state)) }
+}
+
+unsafe fn join_on(tasks: &TaskTable, handle: i64, drive: impl FnOnce(*mut u8) -> i64) -> i64 {
+    let Ok(index) = usize::try_from(handle) else {
         std::process::abort();
-    }
-    let idx = handle as usize;
+    };
     let state = {
-        let mut guard = TASKS.lock().unwrap_or_else(|e| e.into_inner());
-        let slot = guard.get_mut(idx).and_then(|s| s.as_mut());
-        let Some(slot) = slot else {
+        let mut guard = tasks.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(Some(slot)) = guard.get_mut(index) else {
             std::process::abort();
         };
-        if slot.done {
-            return slot.result;
-        }
-        slot.state
-    };
-    let result = unsafe { ar_co_block_on_i64(state) };
-    {
-        let mut guard = TASKS.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(Some(slot)) = guard.get_mut(idx) {
-            slot.done = true;
-            slot.result = result;
-            // Free blob after join (ownership transfer to runtime).
-            unsafe {
-                ar_co_free(slot.state);
+        match slot {
+            TaskState::Completed(result) => return *result,
+            TaskState::Running { .. } => std::process::abort(),
+            TaskState::Pending(state) => {
+                let state = *state;
+                *slot = TaskState::Running {
+                    cancel_requested: false,
+                };
+                state
             }
-            slot.state = std::ptr::null_mut();
         }
+    };
+    let result = drive(state);
+    // SAFETY: the Pending -> Running transition transferred sole ownership to
+    // this join; cancel_on cannot access or free the pointer while it is running.
+    unsafe { ar_co_free(state) };
+    let mut guard = tasks.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(slot) = guard.get_mut(index) else {
+        std::process::abort();
+    };
+    match slot {
+        Some(TaskState::Running { cancel_requested }) => {
+            *slot = if *cancel_requested {
+                None
+            } else {
+                Some(TaskState::Completed(result))
+            };
+        }
+        _ => std::process::abort(),
     }
     result
 }
@@ -94,23 +121,41 @@ pub unsafe extern "C" fn ar_rt_block_on_i64(state: *mut u8) -> i64 {
     unsafe { ar_co_block_on_i64(state) }
 }
 
-/// Drop a finished/unneeded handle without joining (frees if not done).
+/// Release a handle. If a join owns the blob, request retirement when it finishes.
 ///
 /// # Safety
-/// Handle from spawn; not usable after.
+/// Handle from spawn; not usable after this call. When racing with join, the
+/// join must already have claimed the task.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_rt_cancel_i64(handle: i64) {
-    if handle < 0 {
+    // SAFETY: the caller relinquishes this live task handle.
+    unsafe { cancel_on(&TASKS, handle) };
+}
+
+unsafe fn cancel_on(tasks: &TaskTable, handle: i64) {
+    let Ok(index) = usize::try_from(handle) else {
         return;
-    }
-    let idx = handle as usize;
-    let mut guard = TASKS.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(slot) = guard.get_mut(idx).and_then(|s| s.take())
-        && !slot.state.is_null()
-    {
-        unsafe {
-            ar_co_free(slot.state);
+    };
+    let pending = {
+        let mut guard = tasks.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(slot) = guard.get_mut(index) else {
+            return;
+        };
+        match slot.take() {
+            Some(TaskState::Pending(state)) => Some(state),
+            Some(TaskState::Running { .. }) => {
+                *slot = Some(TaskState::Running {
+                    cancel_requested: true,
+                });
+                None
+            }
+            Some(TaskState::Completed(_)) | None => None,
         }
+    };
+    if let Some(state) = pending {
+        // SAFETY: removing Pending transfers sole ownership to this cancel;
+        // there is no joining thread using that blob.
+        unsafe { ar_co_free(state) };
     }
 }
 
@@ -451,7 +496,7 @@ pub unsafe extern "sysv64" fn ar_str_split_last(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::poll_runtime::ar_co_make_ready_i64;
+    use crate::poll_runtime::{ar_co_make_ready_i64, ar_co_pending_once_i64};
 
     #[test]
     fn spawn_join_ready() {
@@ -459,6 +504,78 @@ mod tests {
             let s = ar_co_make_ready_i64(42);
             let h = ar_rt_spawn_i64(s);
             assert_eq!(ar_rt_join_i64(h), 42);
+            ar_rt_cancel_i64(h);
+        }
+    }
+
+    #[test]
+    fn completed_join_is_cached_until_cancel_releases_the_slot() {
+        let tasks = TaskTable::new(Vec::new());
+        // SAFETY: every blob is transferred to its own live task and freed by
+        // join/cancel; the isolated table prevents unrelated tests reusing slots.
+        unsafe {
+            for value in 0..64 {
+                let handle = spawn_on(&tasks, ar_co_make_ready_i64(value));
+                assert_eq!(handle, 0, "cancel must make the slot reusable");
+                assert_eq!(join_on(&tasks, handle, |s| ar_co_block_on_i64(s)), value);
+                assert_eq!(
+                    join_on(&tasks, handle, |_| unreachable!(
+                        "cached join must not poll"
+                    )),
+                    value
+                );
+                cancel_on(&tasks, handle);
+                assert!(tasks.lock().unwrap()[0].is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn cancel_before_join_releases_pending_state_and_slot() {
+        let tasks = TaskTable::new(Vec::new());
+        // SAFETY: no join exists and cancellation receives exclusive ownership.
+        unsafe {
+            for value in 0..64 {
+                let handle = spawn_on(&tasks, ar_co_pending_once_i64(value));
+                assert_eq!(handle, 0);
+                cancel_on(&tasks, handle);
+                assert!(tasks.lock().unwrap()[0].is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn concurrent_join_then_cancel_frees_once() {
+        use std::sync::{Arc, mpsc};
+        let tasks = Arc::new(TaskTable::new(Vec::new()));
+        for value in 0..64 {
+            // SAFETY: the channels establish that join owns the blob before
+            // cancellation. Neither thread accesses the blob after join frees it.
+            unsafe {
+                let handle = spawn_on(&tasks, ar_co_pending_once_i64(value));
+                assert_eq!(handle, 0);
+                let (claimed_tx, claimed_rx) = mpsc::channel();
+                let (resume_tx, resume_rx) = mpsc::channel();
+                let joining_tasks = Arc::clone(&tasks);
+                let joiner = std::thread::spawn(move || {
+                    join_on(&joining_tasks, handle, |state| {
+                        claimed_tx.send(()).unwrap();
+                        resume_rx.recv().unwrap();
+                        ar_co_block_on_i64(state)
+                    })
+                });
+                claimed_rx.recv().unwrap();
+                cancel_on(&tasks, handle);
+                assert!(matches!(
+                    tasks.lock().unwrap()[0],
+                    Some(TaskState::Running {
+                        cancel_requested: true
+                    })
+                ));
+                resume_tx.send(()).unwrap();
+                assert_eq!(joiner.join().unwrap(), value);
+                assert!(tasks.lock().unwrap()[0].is_none());
+            }
         }
     }
 
