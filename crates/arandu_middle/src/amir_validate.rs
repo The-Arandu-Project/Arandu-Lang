@@ -40,6 +40,27 @@ pub fn validate_amir_func(
         return diags;
     }
 
+    // Edges may target blocks later in the table. Validate every parameter
+    // range before following any edge or slicing the dense pool. Malformed
+    // IR must produce a reportable ICE, not panic inside the validator.
+    for (i, block) in func.blocks.iter().enumerate() {
+        let start = block.params.start_usize();
+        let len = block.params.len_usize();
+        if start > func.block_params.len() || len > func.block_params.len() - start {
+            diags.push(Diagnostic::ice(
+                DiagCode::ICEGEN002,
+                format!(
+                    "bb{i} parameter range (start={start}, len={len}) exceeds parameter pool length {} (IR-RANGE)",
+                    func.block_params.len()
+                ),
+                span,
+            ));
+        }
+    }
+    if !diags.is_empty() {
+        return diags;
+    }
+
     for (i, block) in func.blocks.iter().enumerate() {
         if block.id.as_usize() != i {
             diags.push(Diagnostic::ice(

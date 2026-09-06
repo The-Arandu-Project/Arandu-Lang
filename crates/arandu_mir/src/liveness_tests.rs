@@ -60,6 +60,33 @@ fn empty_block(id: usize) -> AmirBasicBlock {
 // ── analyze_local_liveness ──
 
 #[test]
+fn large_cfg_without_variables_has_empty_liveness() {
+    let count = 1_100;
+    let blocks = (0..count)
+        .map(|id| {
+            let mut block = empty_block(id);
+            if id + 1 < count {
+                block.terminator = AmirTerminator::Goto {
+                    target: block_id(id + 1),
+                    args: Vec::new(),
+                };
+            }
+            block
+        })
+        .collect();
+    let mut func = void_func(blocks, AmirStmtTable::new());
+    func.locals.clear();
+    let locals = analyze_local_liveness(&func);
+    let temps = crate::liveness::analyze_temp_liveness(&func);
+    for id in 0..count {
+        assert!(locals.live_in(block_id(id)).is_empty());
+        assert!(locals.live_out(block_id(id)).is_empty());
+        assert!(temps.live_in(block_id(id)).is_empty());
+        assert!(temps.live_out(block_id(id)).is_empty());
+    }
+}
+
+#[test]
 fn single_block_no_uses_or_defs() {
     let stmts = AmirStmtTable::new();
     let func = void_func(vec![empty_block(0)], stmts);

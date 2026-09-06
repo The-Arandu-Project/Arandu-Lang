@@ -855,6 +855,51 @@ fn validate_amir_rejects_inconsistent_gen_payload_and_handle_types() {
 }
 
 #[test]
+fn validate_amir_rejects_invalid_block_parameter_ranges_before_following_edges() {
+    let interner = arandu_middle::types::TypeInterner::new();
+    // Cover a dangling empty range, a missing element, and a range whose end
+    // would overflow usize on 32-bit hosts. None may reach unchecked slicing.
+    for params in [
+        DenseRange::new(1, 0),
+        DenseRange::new(0, 1),
+        DenseRange {
+            start: u32::MAX,
+            len: u32::MAX,
+        },
+    ] {
+        let blocks = vec![
+            AmirBasicBlock {
+                id: BlockId::from_usize(0),
+                statements: DenseRange::empty(),
+                params: DenseRange::empty(),
+                terminator: AmirTerminator::Goto {
+                    target: BlockId::from_usize(1),
+                    args: Vec::new(),
+                },
+            },
+            AmirBasicBlock {
+                id: BlockId::from_usize(1),
+                statements: DenseRange::empty(),
+                params,
+                terminator: AmirTerminator::Return,
+            },
+        ];
+        let func = test_func(Vec::new(), Vec::new(), blocks, AmirStmtTable::new());
+        let issues = arandu_middle::amir_validate::validate_amir_func(
+            &func,
+            &validation_symbols(),
+            &interner,
+        );
+        assert!(
+            issues.iter().any(|issue| {
+                issue.code == DiagCode::ICEGEN002 && issue.message.contains("IR-RANGE")
+            }),
+            "invalid parameter range must produce an ICE: {issues:?}"
+        );
+    }
+}
+
+#[test]
 fn validate_amir_rejects_overlapping_and_out_of_bounds_statement_ranges() {
     let interner = arandu_middle::types::TypeInterner::new();
     let mut stmts = AmirStmtTable::new();
