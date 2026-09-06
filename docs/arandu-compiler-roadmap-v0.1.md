@@ -90,6 +90,22 @@ quando cumprir seu contrato atual.
 ### Fila de execução
 
 1. Concluir a campanha de auditoria, documentação, modularização e portabilidade.
+   A rodada rc.5 corrigiu ciclos/renumeração no SimplifyCFG, validação de
+   parâmetros densos, liveness de domínio vazio, pilha recursiva do RPO e dispatch Linux de sockets
+   sem timer; a evidência fica na [auditoria](./arandu-architecture-audit-v0.1.md).
+   Antes de encerrar: executar os novos casos nos runners nativos, perfilar
+   validação incremental do corpus válido de 50 módulos, aprofundar limites
+   de dataflow e pressão da fila de resultados LSP. Remoção de
+   cópias redundantes não promove O2 nem constitui benchmark de velocidade.
+   Decisão de fechamento: o S0 exige o workspace nativo em Linux, Windows e
+   macOS quando houver mudança de produto; publicar somente após resultado
+   verde do PR, mantendo o soak/SDK como evidência separada. As extrações
+   CLI/runner/IDE já existem. Renomear `arandu_package` e substituir guardrails
+   ou estruturas de memória exige benefício demonstrado, não contagem de linhas.
+   A revisão pré-commit corrigiu ownership join/cancel, empréstimo de ExprKind
+   e recuperação sintática no IDE sem duplicar lowering. O probe de 64 funções
+   comprova cutoff dos resumos de borrow; a granularidade de lower_amir e a
+   pressão do canal de resultados LSP continuam abertas com evidência na auditoria.
 2. Concluir o soak e promover [SL_T](./arandu-testing-benchmark-harness-v0.1.md) a `gold`.
 3. Entregar a `SL_S-Core`:
    fundação `core`/`alloc`, targets `bin`/`lib`, link multi-file, módulos,

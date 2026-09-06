@@ -38,11 +38,42 @@ cancel<T>
 
 ABI: `Coroutine[T]` is a state-blob pointer; `job as ptr[u8]` is the host bridge.
 
+The host task table distinguishes pending, running and completed tasks. A join
+claims the pending blob under the table lock and becomes its sole polling/free
+owner. Cancellation of a running task requests retirement after that join;
+cancellation of a pending task frees it immediately. A completed live handle
+retains its result for a sequential rejoin until cancellation releases its slot.
+Cancellation invalidates the handle. Concurrent cancellation must follow the
+join's ownership claim; this API does not promise arbitrary concurrent use of
+retired/reused handles. Tests coordinate that claim with channels rather than
+timing assumptions, and verify slot reuse before/during/after join.
+
 ### SL_R.2 / SL_R.3 — Reactor (`std.runtime.reactor`)
 
 - `EpollReactor` + sleep/arm/poll
 - `reactor_backend()`: **0** portable, **1** epoll, **2** io_uring (runtime detect)
 - Sleep prefers io_uring timeout when backend is 2, else epoll+timerfd
+
+#### Native platform contract
+
+| Operation | Linux | Windows | macOS |
+| --- | --- | --- | --- |
+| Timer sleep/arm/poll | epoll + timerfd; optional io_uring sleep | portable deadline | portable deadline |
+| Direct TCP wait / wait-wake | poll | WSAPoll | poll |
+| Register TCP socket with reactor | epoll, one-shot; register again to rearm | unsupported (`-1`) | unsupported (`-1`) |
+
+Socket readiness on the Linux reactor is independent of an armed timer.
+Polling dispatches registered socket events to their wakers even when there
+is no timer. The poll return value retains the timer contract (1 when the
+timer fires, 0 otherwise); socket notification is observed through the waker.
+The portable reactor supports timers, not socket registration. Direct TCP
+wait remains available on Windows/macOS; it is a distinct operation.
+
+Native SDK/VSIX tests exercise selected installed-product flows on all three
+platforms. They do not imply complete runtime parity or replace the entire
+Rust workspace suite. Socket tests allocate ephemeral loopback ports and
+fail if networking is unavailable instead of reporting success without
+exercising their assertions.
 
 ### Waker / Context (`std.runtime.waker`)
 
