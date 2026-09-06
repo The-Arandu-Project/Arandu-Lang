@@ -121,12 +121,6 @@ pub fn mark_sweep_dce(func: &mut AmirFunc) -> Result<bool, Diagnostic> {
     }
 
     // --- Sweep phase: rebuild stmt table, moving live stmts (no clone) -----
-    let block_stmt_ids: Vec<Vec<crate::amir::InstrId>> = func
-        .blocks
-        .iter()
-        .map(|b| func.block_stmt_ids(b.id).collect())
-        .collect();
-
     let any_removed = live.iter().any(|&l| !l);
     if !any_removed {
         return Ok(false);
@@ -138,11 +132,12 @@ pub fn mark_sweep_dce(func: &mut AmirFunc) -> Result<bool, Diagnostic> {
     let mut new_stmts = crate::amir::AmirStmtTable::new();
     let mut new_ranges: Vec<DenseRange> = Vec::with_capacity(func.blocks.len());
 
-    for ids in &block_stmt_ids {
+    // Blocks already retain their statement ranges while the old payload
+    // table is moved. Iterate those ranges instead of copying every ID.
+    for block in &func.blocks {
         let start = new_stmts.len();
         let mut kept = 0usize;
-        for &stmt_id in ids {
-            let idx = stmt_id.as_usize();
+        for idx in block.statements.as_range() {
             if live[idx] {
                 let stmt = slots.get_mut(idx).and_then(Option::take).ok_or_else(|| {
                     Diagnostic::ice(

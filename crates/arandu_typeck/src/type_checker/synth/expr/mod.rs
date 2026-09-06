@@ -40,27 +40,30 @@ fn synth_expr_inner(
     expected: Option<TypeId>,
 ) -> TypeId {
     let span = checker.pool.expr_span(expr);
-    let kind = checker.pool.expr(expr).clone();
+    // Copy the immutable pool reference, not the expression payload. Its
+    // lifetime is independent of the mutable checker borrow used below.
+    let pool = checker.pool;
+    let kind = pool.expr(expr);
 
-    if let ExprKind::VariantSugar { name, args } = &kind {
+    if let ExprKind::VariantSugar { name, args } = kind {
         return synth_variant_sugar(checker, expr, name, *args, expected, span);
     }
 
-    if let Some(id) = synth_literal_expr(checker, expr, &kind, span, expected) {
+    if let Some(id) = synth_literal_expr(checker, expr, kind, span, expected) {
         return id;
     }
-    if let Some(id) = synth_call_expr(checker, expr, &kind, span, expected) {
+    if let Some(id) = synth_call_expr(checker, expr, kind, span, expected) {
         return id;
     }
-    if let Some(id) = synth_binary_unary_expr(checker, expr, &kind, span) {
+    if let Some(id) = synth_binary_unary_expr(checker, expr, kind, span) {
         return id;
     }
-    if let Some(id) = synth_control_flow_expr(checker, expr, &kind, span, expected) {
+    if let Some(id) = synth_control_flow_expr(checker, expr, kind, span, expected) {
         return id;
     }
 
     match kind {
-        ExprKind::Group { expr: inner_expr } => synth_expr_expected(checker, inner_expr, expected),
+        ExprKind::Group { expr: inner_expr } => synth_expr_expected(checker, *inner_expr, expected),
         ExprKind::Error => checker.intern(ArType::Error),
         _ => checker.intern(ArType::Error),
     }

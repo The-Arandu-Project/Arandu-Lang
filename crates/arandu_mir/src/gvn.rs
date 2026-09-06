@@ -29,30 +29,8 @@ pub fn gvn(func: &mut AmirFunc) -> bool {
     let doms = Dominators::new(func);
     let mut changed = false;
 
-    // Maps TempId -> defining block and canonical temporary leader
+    // Maps TempId -> canonical temporary leader.
     let mut temp_leader: Vec<TempId> = (0..func.temps.len()).map(TempId::from_usize).collect();
-    let mut temp_def_block: Vec<Option<BlockId>> = vec![None; func.temps.len()];
-
-    // Record block parameters definition blocks
-    for (bi, block) in func.blocks.iter().enumerate() {
-        let bid = BlockId::from_usize(bi);
-        for param in func.block_params(block.params) {
-            temp_def_block[param.id.as_usize()] = Some(bid);
-        }
-    }
-
-    // Record statement definition blocks
-    for bi in 0..n_blocks {
-        let bid = BlockId::from_usize(bi);
-        let stmt_ids: Vec<InstrId> = func.block_stmt_ids(bid).collect();
-        for stmt_id in stmt_ids {
-            if let AmirStmt::Assign { lhs, .. } = func.stmt(stmt_id)
-                && lhs.as_usize() < temp_def_block.len()
-            {
-                temp_def_block[lhs.as_usize()] = Some(bid);
-            }
-        }
-    }
 
     // Canonical expression table: ValueExpr -> (Leader TempId, Defining Block)
     let mut expr_table: FxHashMap<ValueExpr, Vec<(TempId, BlockId)>> = FxHashMap::default();
@@ -60,16 +38,15 @@ pub fn gvn(func: &mut AmirFunc) -> bool {
 
     for bi in 0..n_blocks {
         let bid = BlockId::from_usize(bi);
-        let stmt_ids: Vec<InstrId> = func.block_stmt_ids(bid).collect();
-        for stmt_id in stmt_ids {
-            let stmt = func.stmt(stmt_id).clone();
-            if let AmirStmt::Assign { lhs, rhs } = stmt {
-                if let AmirRvalue::Use(op) = &rhs
+        for stmt_id in func.block_stmt_ids(bid) {
+            if let AmirStmt::Assign { lhs, rhs } = func.stmt(stmt_id) {
+                let lhs = *lhs;
+                if let AmirRvalue::Use(op) = rhs
                     && let Some(t) = canonicalize_temp(op, &temp_leader)
                 {
                     temp_leader[lhs.as_usize()] = t;
                 }
-                let expr = match to_value_expr(&rhs, &temp_leader) {
+                let expr = match to_value_expr(rhs, &temp_leader) {
                     Some(e) => e,
                     None => continue,
                 };
