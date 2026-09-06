@@ -12,16 +12,7 @@ mod common;
 
 /// Cria diretório temporário único.
 fn temp_dir(label: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "arandu-adv-{}-{}",
-        label,
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    fs::create_dir_all(&dir).unwrap();
-    dir
+    common::temp_dir(&format!("arandu-adv-{label}")).expect("reserve fresh temporary directory")
 }
 
 /// Cria um projeto Arandu mínimo com src/main.aru contendo testes declarados.

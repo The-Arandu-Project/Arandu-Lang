@@ -6,15 +6,29 @@ use std::fs;
 mod common;
 
 fn temp_dir() -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "arandu-slt5-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    fs::create_dir_all(&dir).unwrap();
-    dir
+    common::temp_dir("arandu-slt5").expect("reserve fresh temporary directory")
+}
+
+#[test]
+fn temporary_directories_are_exclusive_under_parallel_creation() {
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(32));
+    let threads: Vec<_> = (0..32)
+        .map(|_| {
+            let barrier = std::sync::Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                temp_dir()
+            })
+        })
+        .collect();
+    let directories: std::collections::BTreeSet<_> = threads
+        .into_iter()
+        .map(|thread| thread.join().unwrap())
+        .collect();
+    assert_eq!(directories.len(), 32);
+    for directory in directories {
+        fs::remove_dir(directory).unwrap();
+    }
 }
 
 fn create_project(tmp: &std::path::Path) -> std::path::PathBuf {

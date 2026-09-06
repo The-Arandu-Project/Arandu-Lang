@@ -6,15 +6,7 @@ use std::fs;
 mod common;
 
 fn temporary_directory() -> std::path::PathBuf {
-    let directory = std::env::temp_dir().join(format!(
-        "arandu-test-list-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    fs::create_dir_all(&directory).unwrap();
-    directory
+    common::temp_dir("arandu-test-list").expect("reserve fresh temporary directory")
 }
 
 #[test]

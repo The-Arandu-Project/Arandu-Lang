@@ -3,7 +3,9 @@
 
 use std::fs;
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+
+#[allow(dead_code)]
+mod common;
 
 #[test]
 fn check_rejects_source_directory_symlink_escape() {
@@ -79,11 +81,5 @@ fn run(dir: &std::path::Path, args: &[&str]) {
 }
 
 fn temp_dir(prefix: &str) -> std::path::PathBuf {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let path = std::env::temp_dir().join(format!("{prefix}-{}-{nonce}", std::process::id()));
-    fs::create_dir_all(&path).unwrap();
-    path
+    common::temp_dir(prefix).expect("reserve fresh temporary directory")
 }

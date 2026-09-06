@@ -6,16 +6,7 @@ use std::fs;
 mod common;
 
 fn temp_dir(label: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "arandu-slt3-{}-{}",
-        label,
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    fs::create_dir_all(&dir).unwrap();
-    dir
+    common::temp_dir(&format!("arandu-slt3-{label}")).expect("reserve fresh temporary directory")
 }
 
 fn create_project(root: &std::path::Path, name: &str, main_src: &str) {
