@@ -1,0 +1,69 @@
+module std.runtime.reactor
+
+/// experimental — not Minimal 0.1 — epoll / io_uring reactor.
+///
+/// Moved out of the former `std.runtime` monolith. Owns the reactor only;
+/// sockets live in `std.net` (registration takes a raw host socket id), so the
+/// reactor stays socket-agnostic.
+
+import std.runtime.waker as waker
+
+extern "C" {
+    func ar_rt_reactor_create(): int
+    func ar_rt_reactor_destroy(id: int): void
+    func ar_rt_reactor_sleep_ms(id: int, ms: int): int
+    func ar_rt_reactor_arm_timer_ms(id: int, ms: int): int
+    func ar_rt_reactor_poll_ms(id: int, timeout_ms: int): int
+    func ar_rt_reactor_backend(): int
+    func ar_rt_reactor_register_socket(reactor_id: int, sock_id: int, events: int, waker_id: int): int
+}
+
+/// experimental — not Minimal 0.1
+public struct EpollReactor {
+    id: int
+}
+
+/// 0 = portable, 1 = epoll, 2 = io_uring (runtime detect).
+public func reactorBackend(): int {
+    unsafe {
+        return ar_rt_reactor_backend()
+    }
+}
+
+public func newEpollReactor(): EpollReactor {
+    unsafe {
+        return EpollReactor { id: ar_rt_reactor_create() }
+    }
+}
+
+public func destroyReactor(r: ref EpollReactor): void {
+    unsafe {
+        ar_rt_reactor_destroy(r.id)
+    }
+}
+
+public func reactorSleepMs(r: ref EpollReactor, ms: int): int {
+    unsafe {
+        return ar_rt_reactor_sleep_ms(r.id, ms)
+    }
+}
+
+public func reactorArmTimerMs(r: ref EpollReactor, ms: int): int {
+    unsafe {
+        return ar_rt_reactor_arm_timer_ms(r.id, ms)
+    }
+}
+
+public func reactorPollMs(r: ref EpollReactor, timeoutMs: int): int {
+    unsafe {
+        return ar_rt_reactor_poll_ms(r.id, timeoutMs)
+    }
+}
+
+/// Registers a raw socket (by host id) with the reactor. The socket type lives
+/// in `std.net`; the reactor itself remains socket-agnostic.
+public func reactorRegisterSocket(r: ref EpollReactor, sockId: int, events: int, w: ref waker.Waker): int {
+    unsafe {
+        return ar_rt_reactor_register_socket(r.id, sockId, events, w.id)
+    }
+}

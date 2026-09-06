@@ -88,6 +88,7 @@ dependencies = [
  "arandu_backend_cranelift",
  "arandu_base",
  "arandu_codegen",
+ "arandu_doc",
  "arandu_fmt",
  "arandu_lexer",
  "arandu_middle",
@@ -124,6 +125,15 @@ version = "0.1.0-rc.4"
 dependencies = [
  "arandu_base",
  "miette",
+]
+
+[[package]]
+name = "arandu_doc"
+version = "0.1.0-rc.4"
+dependencies = [
+ "arandu_middle",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -181,6 +191,7 @@ dependencies = [
  "arandu_parser",
  "rustc-hash 2.1.3",
  "salsa",
+ "serde",
  "smallvec",
  "smol_str",
  "tracing",

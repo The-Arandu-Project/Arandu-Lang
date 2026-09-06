@@ -1,6 +1,6 @@
 module examples.minimal.m07_async_spawn_join
 
-import std.runtime as rt
+import std.runtime.executor as rt
 
 async func answer(): int {
     return 42

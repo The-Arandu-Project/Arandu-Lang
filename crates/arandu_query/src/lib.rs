@@ -4,6 +4,7 @@ pub mod dataflow;
 pub mod db;
 pub mod debounce;
 pub mod doc_store;
+pub mod docs;
 pub mod edit_vfs;
 pub mod explain;
 pub mod highlight;
@@ -34,6 +35,7 @@ pub use dataflow::{
 };
 pub use db::{ArandCompilerDb, DatabaseImpl, RegistryMetrics, SourceFile};
 pub use doc_store::{DocumentId, DocumentStore, OpenDocument};
+pub use docs::{file_doctests, item_doc, module_doc};
 pub use explain::{any_execute, RebuildCounts, RebuildEvent, RebuildLog};
 pub use highlight::{
     compute_highlights, file_highlights, highlights_in_range, HlKind, HlToken, MOD_DECLARATION,

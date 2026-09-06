@@ -2,6 +2,7 @@
 
 pub mod bench;
 pub mod build;
+pub mod doc;
 pub mod doctor;
 pub mod hash;
 pub mod project;
@@ -42,6 +43,7 @@ pub fn run(raw_args: Vec<String>) -> CliResult {
 
     // ── Project / environment commands (no mandatory .aru path) ──────────
     match command {
+        "doc" => return doc::cmd_doc(&inv.args, &inv.project_flags, inv.data_layout),
         "new" => return project::cmd_new(&inv.args),
         "init" => return project::cmd_init(&inv.args),
         "doctor" => {
@@ -110,6 +112,7 @@ pub fn run(raw_args: Vec<String>) -> CliResult {
             let mut exact = None;
             let mut filter = None;
             let mut harness_child = false;
+            let mut doc_tests = false;
             let mut runner = test_runner::RunnerOptions {
                 jobs: 1,
                 timeout: std::time::Duration::from_secs(300),
@@ -124,6 +127,8 @@ pub fn run(raw_args: Vec<String>) -> CliResult {
             while let Some(argument) = arguments.next() {
                 if argument == "--list" {
                     list = true;
+                } else if argument == "--doc" {
+                    doc_tests = true;
                 } else if argument == "--harness-child" {
                     harness_child = true;
                 } else if argument == "--exact" {
@@ -189,6 +194,7 @@ pub fn run(raw_args: Vec<String>) -> CliResult {
                 harness_child,
                 &runner,
                 inv.data_layout,
+                doc_tests,
             );
         }
         "bench" => {

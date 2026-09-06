@@ -1,0 +1,70 @@
+module std.runtime.supervisor
+
+/// experimental — not Minimal 0.1 — SL_R.1 process supervisor.
+///
+/// Moved out of the former `std.runtime` monolith. Owns worker process
+/// isolation and restart; has no dependency on the executor.
+
+extern "C" {
+    func ar_rt_supervisor_create(): int
+    func ar_rt_supervisor_destroy(id: int): void
+    func ar_rt_supervisor_spawn(sup: int, path_ptr: ptr[u8], path_len: int, max_restarts: int): int
+    func ar_rt_supervisor_poll(sup: int, worker: int): int
+    func ar_rt_supervisor_wait(sup: int, worker: int): int
+    func ar_rt_supervisor_kill(sup: int, worker: int): int
+}
+
+// Host wrapper that accepts language `str` (fat) — declared with str ABI.
+extern "C" {
+    func ar_rt_supervisor_spawn_str(sup: int, path: str, max_restarts: int): int
+}
+
+/// experimental — not Minimal 0.1
+public struct Supervisor {
+    id: int
+}
+
+/// experimental — not Minimal 0.1
+///
+/// POD auto-copy (`id: int`).
+public struct WorkerHandle {
+    id: int
+}
+
+public func newSupervisor(): Supervisor {
+    unsafe {
+        return Supervisor { id: ar_rt_supervisor_create() }
+    }
+}
+
+public func destroySupervisor(s: ref Supervisor): void {
+    unsafe {
+        ar_rt_supervisor_destroy(s.id)
+    }
+}
+
+/// Spawn `path` as a worker. `maxRestarts` allows automatic restart on exit.
+/// Path is a fat `str` (ptr+len ABI).
+public func supervisorSpawn(s: ref Supervisor, path: str, maxRestarts: int): WorkerHandle {
+    unsafe {
+        return WorkerHandle { id: ar_rt_supervisor_spawn_str(s.id, path, maxRestarts) }
+    }
+}
+
+public func supervisorPoll(s: ref Supervisor, w: WorkerHandle): int {
+    unsafe {
+        return ar_rt_supervisor_poll(s.id, w.id)
+    }
+}
+
+public func supervisorWait(s: ref Supervisor, w: WorkerHandle): int {
+    unsafe {
+        return ar_rt_supervisor_wait(s.id, w.id)
+    }
+}
+
+public func supervisorKill(s: ref Supervisor, w: WorkerHandle): int {
+    unsafe {
+        return ar_rt_supervisor_kill(s.id, w.id)
+    }
+}

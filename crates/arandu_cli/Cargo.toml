@@ -26,6 +26,7 @@ arandu_codegen = { path = "../arandu_codegen" }
 arandu_runtime = { path = "../arandu_runtime" }
 arandu_query = { path = "../arandu_query" }
 arandu_fmt = { path = "../arandu_fmt" }
+arandu_doc = { path = "../arandu_doc" }
 
 arandu_middle = { path = "../arandu_middle" }
 arandu_base = { path = "../arandu_base" }

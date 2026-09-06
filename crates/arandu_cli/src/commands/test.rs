@@ -93,6 +93,7 @@ pub fn cmd_project_test_list(
     harness_child: bool,
     runner: &test_runner::RunnerOptions,
     data_layout: arandu_middle::layout::DataLayout,
+    doc_tests: bool,
 ) -> CliResult {
     let mut db = arandu_query::DatabaseImpl::new();
     db.set_target_config(data_layout);
@@ -126,19 +127,35 @@ pub fn cmd_project_test_list(
             ));
         }
         let text = file.text(&db);
-        for case in arandu_query::file_test_manifest(&db, file).iter() {
-            let id = format!("{}::{module}::{}", ctx.name, case.name);
-            let (line, column_utf16) = discovery_position(text, case.span.start);
-            discovered.push(DiscoveryCase {
-                id: id.clone(),
-                path: discovery_path(&ctx.root, &path),
-                line,
-                column_utf16,
-            });
-            registry.insert(arandu_codegen::testing::TestEntry {
-                id,
-                function: case.name.to_string(),
-            });
+        if doc_tests {
+            for (idx, doctest) in arandu_query::file_doctests(&db, file).iter().enumerate() {
+                let id = format!("{}::{module}::doctest_{idx}", ctx.name);
+                discovered.push(DiscoveryCase {
+                    id: id.clone(),
+                    path: discovery_path(&ctx.root, &path),
+                    line: doctest.line_offset,
+                    column_utf16: 0,
+                });
+                registry.insert(arandu_codegen::testing::TestEntry {
+                    id,
+                    function: format!("doctest_{idx}"),
+                });
+            }
+        } else {
+            for case in arandu_query::file_test_manifest(&db, file).iter() {
+                let id = format!("{}::{module}::{}", ctx.name, case.name);
+                let (line, column_utf16) = discovery_position(text, case.span.start);
+                discovered.push(DiscoveryCase {
+                    id: id.clone(),
+                    path: discovery_path(&ctx.root, &path),
+                    line,
+                    column_utf16,
+                });
+                registry.insert(arandu_codegen::testing::TestEntry {
+                    id,
+                    function: case.name.to_string(),
+                });
+            }
         }
     }
     let cases: Vec<String> = registry.iter().map(|entry| entry.id.clone()).collect();

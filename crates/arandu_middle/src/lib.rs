@@ -18,6 +18,7 @@ pub mod amir_validate;
 pub mod cfg;
 pub mod db;
 pub mod diagnostics;
+pub mod docs;
 pub mod effects;
 pub mod hir;
 pub mod ice;

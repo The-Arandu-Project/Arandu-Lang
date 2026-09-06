@@ -6,7 +6,11 @@
 |-------|------|----------------|
 | **Compiler (A3)** | `async`/`await`, `Coroutine[T]`, `Poll[T]`, suspend CFG | threads, epoll, spawn queues |
 | **`std.core.future`** | `Poll` enum | OS reactor |
-| **`std.runtime` (SL_R)** | Executor, reactor, waker, sockets, supervisor | language `await` syntax |
+| **`std.runtime.executor`** | SL_R.0 executor (`SyncExecutor`, `TaskHandle`, `spawn`/`join`/`blockOn`/`cancel`) | OS reactor, wakers, sockets, supervisor |
+| **`std.runtime.waker`** | `Waker` / `Context` (async token) | OS reactor, sockets |
+| **`std.runtime.reactor`** | OS Reactor (epoll/io_uring) | sockets, supervisor |
+| **`std.runtime.supervisor`** | Worker-process isolation/restart | executor, sockets |
+| **`std.net`** | Raw + high-level TCP sockets | OS reactor, wakers |
 
 ---
 
@@ -17,33 +21,40 @@ de host, evitando que scheduler ou I/O vazem para a linguagem/IR.
 
 ## Detalhes Técnicos da Implementação
 
+O antigo monólito `stdlib/std/runtime.aru` foi quebrado em submódulos
+`stdlib/std/runtime/*` (padrão de namespace por diretório, como
+`stdlib/alloc/*`). A superfície de mono auxiliar (`*_int` / `*_i64`) foi
+removida da API pública: hoje `spawn<T>` / `join<T>` / `blockOn<T>` inferem
+`T` de `Coroutine[T]` entre módulos.
+
 ### Shipped surfaces
 
-### SL_R.0 — SyncExecutor + Coroutine
+### SL_R.0 — SyncExecutor + Coroutine (`std.runtime.executor`)
 
 ```text
-spawn_int / join_int / block_on_int   // multi-file reliable (concrete)
-spawn<T> / join<T> / block_on<T>      // generic; prefer explicit type args for mono
+spawn<T> / join<T> / block_on<T>   // generic; infers T from Coroutine[T]
+cancel<T>
 ```
 
 ABI: `Coroutine[T]` is a state-blob pointer; `job as ptr[u8]` is the host bridge.
 
-### SL_R.2 / SL_R.3 — Reactor
+### SL_R.2 / SL_R.3 — Reactor (`std.runtime.reactor`)
 
 - `EpollReactor` + sleep/arm/poll
 - `reactor_backend()`: **0** portable, **1** epoll, **2** io_uring (runtime detect)
 - Sleep prefers io_uring timeout when backend is 2, else epoll+timerfd
 
-### Waker / Context
+### Waker / Context (`std.runtime.waker`)
 
 - `Waker`, `new_waker`, `waker_wake`, `waker_wait`, `destroy_waker`
 - `Context` holds a `Waker` (explicit, no global)
 
-### TCP sockets (blocking host MVP)
+### TCP sockets (`std.net`)
 
-- `tcp_listen` / `tcp_accept` / `tcp_connect` / `tcp_read` / `tcp_write` / close
+- raw: `tcp_listen` / `tcp_accept` / `tcp_connect` / `tcp_read` / `tcp_write` / close
+- safe: `TcpListener.bind` / `TcpStream.connect` / `read` / `write` / `close`
 
-### SL_R.1 — Supervisor
+### SL_R.1 — Supervisor (`std.runtime.supervisor`)
 
 - `Supervisor` + `supervisor_spawn(path, max_restarts)` / `poll` / `wait` / `kill`
 - Worker processes bound blast radius under process abort policy

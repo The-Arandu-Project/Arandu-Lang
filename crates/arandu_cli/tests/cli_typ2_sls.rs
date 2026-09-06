@@ -39,7 +39,7 @@ fn import_std_runtime_scaffold_checks() {
         &file,
         r#"
 module tests.cli.std_runtime
-import std.runtime as rt
+import std.runtime.executor as rt
 func main(): int {
     let ex = rt.newSyncExecutor()
     return ex.flags
@@ -100,7 +100,7 @@ fn run_sync_executor_new() {
         &file,
         r#"
 module tests.cli.sync_ex
-import std.runtime as rt
+import std.runtime.executor as rt
 func main(): int {
     let ex = rt.newSyncExecutor()
     return ex.flags
@@ -118,49 +118,6 @@ func main(): int {
     );
 }
 
-/// SL_R.0 end-to-end: multi-file `std.runtime` bodies + host `ar_rt_spawn/join`
-/// driving a Ready coroutine blob (`ar_co_make_ready_i64`).
-///
-/// Uses statement-form `unsafe { … }` (AMIR supports that path; expr-form U001).
-#[test]
-fn run_sync_executor_spawn_join_ready() {
-    let dir = std::env::temp_dir();
-    let file = dir.join("arandu_cli_slr_spawn_join.aru");
-    fs::write(
-        &file,
-        r#"
-module tests.cli.slr_spawn_join
-import std.runtime as rt
-
-extern "C" {
-    func ar_co_make_ready_i64(payload: int): ptr[u8]
-}
-
-func make_ready(payload: int): ptr[u8] {
-    unsafe {
-        return ar_co_make_ready_i64(payload)
-    }
-}
-
-func main(): int {
-    let ex = rt.newSyncExecutor()
-    let state = make_ready(42)
-    let h = rt.spawnI64(ex, state)
-    return rt.joinI64(ex, h)
-}
-"#,
-    )
-    .unwrap();
-    let root = workspace_root();
-    let out = run_cli_in(&root, &["run", file.to_str().unwrap()]);
-    assert_eq!(
-        out.status.code(),
-        Some(42),
-        "slr spawn/join: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
-
 /// Multi-file inferred generic `rt.spawn` / `rt.join` (no explicit type args).
 #[test]
 fn run_import_inferred_spawn_join() {
@@ -170,7 +127,7 @@ fn run_import_inferred_spawn_join() {
         &file,
         r#"
 module tests.cli.import_infer_spawn
-import std.runtime as rt
+import std.runtime.executor as rt
 
 async func answer(): int {
     return 42
@@ -178,8 +135,8 @@ async func answer(): int {
 
 func main(): int {
     let ex = rt.newSyncExecutor()
-    let h = rt.spawnInt(ex, answer())
-    return rt.joinInt(ex, h)
+    let h = rt.spawn(ex, answer())
+    return rt.join(ex, h)
 }
 "#,
     )
@@ -250,14 +207,14 @@ func main(): int {
 
 /// Typed spawn/join over A3 `async func` → `Coroutine<int>`.
 #[test]
-fn run_typed_spawn_int_async_func() {
+fn run_typed_spawn_async_func() {
     let dir = std::env::temp_dir();
     let file = dir.join("arandu_cli_typed_spawn.aru");
     fs::write(
         &file,
         r#"
 module tests.cli.typed_spawn
-import std.runtime as rt
+import std.runtime.executor as rt
 
 async func answer(): int {
     return 42
@@ -265,8 +222,8 @@ async func answer(): int {
 
 func main(): int {
     let ex = rt.newSyncExecutor()
-    let h = rt.spawnInt(ex, answer())
-    return rt.joinInt(ex, h)
+    let h = rt.spawn(ex, answer())
+    return rt.join(ex, h)
 }
 "#,
     )
@@ -343,13 +300,13 @@ fn run_waker_wake_and_wait() {
         &file,
         r#"
 module tests.cli.waker
-import std.runtime as rt
+import std.runtime.waker as waker
 
 func main(): int {
-    let w = rt.newWaker()
-    rt.wakerWake(w)
-    let rc = rt.wakerWait(w, 100)
-    rt.destroyWaker(w)
+    let w = waker.newWaker()
+    waker.wakerWake(w)
+    let rc = waker.wakerWait(w, 100)
+    waker.destroyWaker(w)
     if rc != 1 {
         return 1
     }
@@ -376,10 +333,10 @@ fn run_reactor_backend_is_supported_or_portable() {
         &file,
         r#"
 module tests.cli.backend
-import std.runtime as rt
+import std.runtime.reactor as reactor
 
 func main(): int {
-    let b = rt.reactorBackend()
+    let b = reactor.reactorBackend()
     // Portable fallback: 0; Linux: 1 = epoll, 2 = io_uring.
     if b < 0 {
         return 1
@@ -410,28 +367,29 @@ fn run_tcp_async_wait_wake() {
         &file,
         r#"
 module tests.cli.tcp_async
-import std.runtime as rt
+import std.net as net
+import std.runtime.waker as waker
 
 func main(): int {
-    let lis = rt.tcpListen(18770)
+    let lis = net.tcpListen(18770)
     if lis.id < 0 {
         return 1
     }
-    let client = rt.tcpConnect(18770)
+    let client = net.tcpConnect(18770)
     if client.id < 0 {
         return 2
     }
-    let server = rt.tcpAccept(lis)
+    let server = net.tcpAccept(lis)
     if server.id < 0 {
         return 3
     }
-    let nb = rt.tcpSetNonblocking(server, 1)
+    let nb = net.tcpSetNonblocking(server, 1)
     if nb != 0 {
         return 4
     }
-    let w = rt.newWaker()
+    let w = waker.newWaker()
     // Timeout with no data
-    let t0 = rt.tcpWaitWake(server, rt.tcpWaitReadFlag(), 5, w)
+    let t0 = net.tcpWaitWake(server, net.tcpWaitReadFlag(), 5, w)
     if t0 != 0 {
         return 5
     }
@@ -439,14 +397,14 @@ func main(): int {
     // Use write_async (io_uring when available)
     // We cannot easily pass string buffers without alloc; skip payload e2e here.
     // Wait writable on client should succeed.
-    let wr = rt.tcpWait(client, rt.tcpWaitWriteFlag(), 100)
+    let wr = net.tcpWait(client, net.tcpWaitWriteFlag(), 100)
     if wr < 1 {
         return 6
     }
-    rt.destroyWaker(w)
-    rt.tcpCloseStream(client)
-    rt.tcpCloseStream(server)
-    rt.tcpCloseListener(lis)
+    waker.destroyWaker(w)
+    net.tcpCloseStream(client)
+    net.tcpCloseStream(server)
+    net.tcpCloseListener(lis)
     return 0
 }
 "#,
@@ -478,19 +436,19 @@ fn run_supervisor_true() {
         &file,
         r#"
 module tests.cli.supervisor
-import std.runtime as rt
+import std.runtime.supervisor as sup
 
 func main(): int {
-    let s = rt.newSupervisor()
+    let s = sup.newSupervisor()
     if s.id < 0 {
         return 1
     }
-    let w = rt.supervisorSpawn(s, "__WORKER_PATH__", 0)
+    let w = sup.supervisorSpawn(s, "__WORKER_PATH__", 0)
     if w.id < 0 {
         return 2
     }
-    let code = rt.supervisorWait(s, w)
-    rt.destroySupervisor(s)
+    let code = sup.supervisorWait(s, w)
+    sup.destroySupervisor(s)
     return code
 }
 "#
@@ -509,14 +467,14 @@ func main(): int {
 
 /// Typed block_on over async func (no spawn).
 #[test]
-fn run_typed_block_on_int() {
+fn run_typed_block_on() {
     let dir = std::env::temp_dir();
     let file = dir.join("arandu_cli_typed_block_on.aru");
     fs::write(
         &file,
         r#"
 module tests.cli.typed_block_on
-import std.runtime as rt
+import std.runtime.executor as rt
 
 async func answer(): int {
     return 7
@@ -524,7 +482,7 @@ async func answer(): int {
 
 func main(): int {
     let ex = rt.newSyncExecutor()
-    return rt.blockOnInt(ex, answer())
+    return rt.blockOn(ex, answer())
 }
 "#,
     )
@@ -548,15 +506,15 @@ fn run_reactor_sleep_ms() {
         &file,
         r#"
 module tests.cli.reactor_sleep
-import std.runtime as rt
+import std.runtime.reactor as reactor
 
 func main(): int {
-    let r = rt.newEpollReactor()
+    let r = reactor.newEpollReactor()
     if r.id < 0 {
         return 1
     }
-    let rc = rt.reactorSleepMs(r, 5)
-    rt.destroyReactor(r)
+    let rc = reactor.reactorSleepMs(r, 5)
+    reactor.destroyReactor(r)
     if rc != 0 {
         return 2
     }
@@ -584,29 +542,30 @@ fn run_reactor_arm_poll_with_spawn() {
         &file,
         r#"
 module tests.cli.reactor_spawn
-import std.runtime as rt
+import std.runtime.executor as rt
+import std.runtime.reactor as reactor
 
 async func ready(): int {
     return 99
 }
 
 func main(): int {
-    let r = rt.newEpollReactor()
+    let r = reactor.newEpollReactor()
     let ex = rt.newSyncExecutor()
     if r.id < 0 {
         return 1
     }
-    let h = rt.spawnInt(ex, ready())
-    let arm = rt.reactorArmTimerMs(r, 5)
+    let h = rt.spawn(ex, ready())
+    let arm = reactor.reactorArmTimerMs(r, 5)
     if arm != 0 {
         return 2
     }
-    let fired = rt.reactorPollMs(r, 200)
+    let fired = reactor.reactorPollMs(r, 200)
     if fired != 1 {
         return 3
     }
-    let v = rt.joinInt(ex, h)
-    rt.destroyReactor(r)
+    let v: int = rt.join(ex, h)
+    reactor.destroyReactor(r)
     return v
 }
 "#,

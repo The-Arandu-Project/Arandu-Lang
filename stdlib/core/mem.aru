@@ -41,6 +41,15 @@ extern "arandu-intrinsic" {
 ///
 /// # Safety
 /// Both `x` and `y` must be valid, properly aligned, non-overlapping pointers.
+///
+/// # Examples
+/// ```arandu
+/// let mut a: int = 100
+/// let mut b: int = 200
+/// mem.swap(&mut a, &mut b)
+/// assert(a == 200)
+/// assert(b == 100)
+/// ```
 public func swap<T>(x: ptr[T], y: ptr[T]): void {
     unsafe {
         let tmp = ptrRead(x)
@@ -53,6 +62,14 @@ public func swap<T>(x: ptr[T], y: ptr[T]): void {
 ///
 /// # Safety
 /// `dest` must be a valid, properly aligned pointer with write permissions.
+///
+/// # Examples
+/// ```arandu
+/// let mut buffer: int = 50
+/// let old = mem.replace(&mut buffer, 100)
+/// assert(old == 50)
+/// assert(buffer == 100)
+/// ```
 public func replace<T>(dest: ptr[T], src: T): T {
     unsafe {
         let old = ptrRead(dest)
@@ -65,6 +82,14 @@ public func replace<T>(dest: ptr[T], src: T): T {
 ///
 /// # Safety
 /// `dest` must be a valid, properly aligned pointer with write permissions.
+///
+/// # Examples
+/// ```arandu
+/// let mut opt = Option.Some(42)
+/// let prev = mem.take(&mut opt)
+/// assert(prev.isSome())
+/// assert(opt.isNone())
+/// ```
 public func take<T>(dest: ptr[Option<T>]): Option<T> {
     return replace<Option<T>>(dest, Option.None)
 }

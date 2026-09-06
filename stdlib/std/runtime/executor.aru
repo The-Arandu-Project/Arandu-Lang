@@ -1,0 +1,76 @@
+module std.runtime.executor
+
+/// SL_R.0 — cooperative async **executor** (moved out of the former
+/// `std.runtime` monolith).
+///
+/// Design: docs/arandu-async-runtime-design-v0.1.md
+/// - `await` / `Coroutine[T]` = compiler (A3)
+/// - this module = multi-task drive only; OS reactor, waker and process
+///   isolation live in `std.runtime.reactor` / `std.runtime.waker` /
+///   `std.runtime.supervisor`
+///
+/// ## Arandu Minimal 0.1 — **IN** surface
+/// `SyncExecutor`, `TaskHandle`, `newSyncExecutor`, `spawn`/`join`/`blockOn`/
+/// `cancel`. Default templates may use only this surface.
+///
+/// Host symbols (`ar_rt_*`) are linked by the Cranelift JIT.
+
+// -- Host: SyncExecutor queue ------------------------------------------------
+extern "C" {
+    func ar_rt_block_on_i64(state: ptr[u8]): int
+    func ar_rt_spawn_i64(state: ptr[u8]): int
+    func ar_rt_join_i64(handle: int): int
+    func ar_rt_cancel_i64(handle: int): void
+}
+
+// ===========================================================================
+// SL_R.0 — SyncExecutor + generic Coroutine surface
+// ===========================================================================
+
+public struct SyncExecutor {
+    flags: int
+}
+
+/// Opaque join handle (host queue id). Payload type is recovered at `join<T>`.
+///
+/// POD auto-copy (`id: int`): pass/reuse by value without move consumption.
+public struct TaskHandle {
+    id: int
+}
+
+public func newSyncExecutor(): SyncExecutor {
+    return SyncExecutor { flags: 0 }
+}
+
+// -- Generic spawn / join / block_on (infers T from Coroutine[T]) ------------
+// Host payload is i64 bits; `as T` is the ABI bridge for type params.
+
+/// Drive `job` to completion; returns payload as `T` (i64-sized host MVP).
+public func blockOn<T>(ex: ref SyncExecutor, job: Coroutine<T>): T {
+    unsafe {
+        let v = ar_rt_block_on_i64(job as ptr[u8])
+        return v as T
+    }
+}
+
+/// Spawn `job`; join with `join<T>`.
+public func spawn<T>(ex: ref SyncExecutor, job: Coroutine<T>): TaskHandle {
+    unsafe {
+        let id = ar_rt_spawn_i64(job as ptr[u8])
+        return TaskHandle { id: id }
+    }
+}
+
+/// Join handle from `spawn`; returns payload as `T`.
+public func join<T>(ex: ref SyncExecutor, handle: TaskHandle): T {
+    unsafe {
+        let v = ar_rt_join_i64(handle.id)
+        return v as T
+    }
+}
+
+public func cancel(ex: ref SyncExecutor, handle: TaskHandle): void {
+    unsafe {
+        ar_rt_cancel_i64(handle.id)
+    }
+}

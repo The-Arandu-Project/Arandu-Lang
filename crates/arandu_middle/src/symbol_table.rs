@@ -150,14 +150,15 @@ mod tests {
 }
 
 use rustc_hash::FxHashMap;
+use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
 use arandu_lexer::Span;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct LocalSymbolId(pub u32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SymbolId {
     pub file_id: crate::db::FileId,
     pub local_id: LocalSymbolId,
@@ -177,10 +178,10 @@ impl SymbolId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ScopeId(pub u32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SymbolKind {
     Module,
     ImportValue,
