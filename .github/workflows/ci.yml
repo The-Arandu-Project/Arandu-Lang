@@ -109,6 +109,21 @@ jobs:
       - name: Test the complete workspace on native Windows
         run: cargo test --workspace --locked
 
+  macos-portability:
+    name: macOS portability
+    if: needs.scope.outputs.code == 'true'
+    needs: scope
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: macos-portability-rust-1.97.1
+      - name: Test the complete workspace on native macOS
+        run: cargo test --workspace --locked
+
   diag-determinism:
     name: Diagnostic determinism
     if: needs.scope.outputs.code == 'true'
@@ -297,6 +312,7 @@ jobs:
       - preflight
       - rust-core
       - windows-portability
+      - macos-portability
       - diag-determinism
       - editor
       - distribution
@@ -311,6 +327,7 @@ jobs:
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
           RUST_RESULT: ${{ needs.rust-core.result }}
           WINDOWS_RESULT: ${{ needs.windows-portability.result }}
+          MACOS_RESULT: ${{ needs.macos-portability.result }}
           DIAG_RESULT: ${{ needs.diag-determinism.result }}
           EDITOR_RESULT: ${{ needs.editor.result }}
           DISTRIBUTION_RESULT: ${{ needs.distribution.result }}
@@ -342,6 +359,7 @@ jobs:
           require_success preflight "$PREFLIGHT_RESULT"
           require_if_selected rust-core "$CODE_SCOPE" "$RUST_RESULT"
           require_if_selected windows-portability "$CODE_SCOPE" "$WINDOWS_RESULT"
+          require_if_selected macos-portability "$CODE_SCOPE" "$MACOS_RESULT"
           require_if_selected diagnostic-determinism "$CODE_SCOPE" "$DIAG_RESULT"
           require_if_selected editor "$EDITOR_SCOPE" "$EDITOR_RESULT"
           require_if_selected distribution "$DISTRIBUTION_SCOPE" "$DISTRIBUTION_RESULT"
