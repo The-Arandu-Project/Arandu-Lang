@@ -413,4 +413,20 @@ mod tests {
         );
         assert_eq!(substitute_type(&ArType::Error, &subst, &i), ArType::Error);
     }
+
+    #[test]
+    fn substitution_does_not_expand_a_concrete_replacement_recursively() {
+        let interner = new_interner();
+        let parameter = SymbolId::new(0, 1);
+        let parameter_ty = ArType::named(parameter, &[], &interner);
+        let parameter_id = interner.intern(parameter_ty.clone());
+        let replacement = ArType::Option(parameter_id);
+        let subst = build_subst(&[parameter], std::slice::from_ref(&replacement));
+
+        assert_eq!(
+            substitute_type(&parameter_ty, &subst, &interner),
+            replacement,
+            "substitution must insert a finite replacement without alias expansion"
+        );
+    }
 }
