@@ -199,6 +199,33 @@ mod tests {
     }
 
     #[test]
+    fn subtree_reparse_matches_cold_tree_when_item_boundaries_change() {
+        for (before, after) in [
+            (
+                "public func value(): int { return 1 }\n",
+                "import graph.main as root\npublic func value(): int { return root.main() }\n",
+            ),
+            ("func a() {}\nfunc b() {}\n", "func a() {\nfunc b() {}\n"),
+            ("func a() {}\nfunc b() {}\n", "func a() {/*\nfunc b() {}\n"),
+        ] {
+            let old = parse_syntax(before);
+            let (start, end, replacement) = single_contiguous_edit(before, after).expect("edit");
+            let (_, edited) = reparse_subtree(&old, start, end, &replacement);
+            let cold = parse_syntax(after);
+            assert_eq!(
+                edited.root().green(),
+                cold.root().green(),
+                "CST differs after {after:?}"
+            );
+            assert_eq!(
+                edited.tokens(),
+                cold.tokens(),
+                "token stream differs after {after:?}"
+            );
+        }
+    }
+
+    #[test]
     fn flat_syntax_covers_full_source() {
         let src = main_func();
         let tree = parse_syntax(src);

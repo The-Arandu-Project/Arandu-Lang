@@ -1,4 +1,4 @@
-use super::build::{SyntaxTree, build_item_green, parse_syntax};
+use super::build::{SyntaxTree, build_item_green, find_top_level_item_spans, parse_syntax};
 use super::kind::{SyntaxKind, SyntaxNode};
 use arandu_lexer::{Token, TokenKind, lex_recovering};
 use rowan::NodeOrToken;
@@ -230,6 +230,24 @@ pub fn reparse_subtree(
     // Re-lex + rebuild structured green for ONLY the edited item slice.
     let item_text = &new_source[new_s as usize..new_e as usize];
     let item_lexed = lex_recovering(item_text);
+    // Containment in the OLD item does not imply the replacement is one item.
+    // Building it unconditionally as a single node can hide a new declaration
+    // from green-guided AST lowering, despite preserving every source byte.
+    // Unclosed lexical constructs or braces can also consume the next sibling.
+    let brace_depth = item_lexed
+        .tokens
+        .iter()
+        .try_fold(0u32, |depth, token| match token.kind {
+            TokenKind::LBrace => depth.checked_add(1),
+            TokenKind::RBrace => depth.checked_sub(1),
+            _ => Some(depth),
+        });
+    if !item_lexed.diagnostics.is_empty()
+        || brace_depth != Some(0)
+        || find_top_level_item_spans(item_text, &item_lexed.tokens, new_e - new_s).len() != 1
+    {
+        return fallback(new_source);
+    }
     let new_item = build_item_green(item_text, &item_lexed.tokens);
 
     let new_green = root_green.replace_child(child_index, NodeOrToken::Node(new_item));
@@ -287,10 +305,5 @@ pub fn reparse_subtree(
         tokens: Arc::new(spliced),
         lex_diagnostics: Arc::new(merged_diags),
     };
-    // If a local edit introduced/removed top-level items (rare), prefer full structure.
-    if tree.items().len() != old_items.len() {
-        return fallback(new_source);
-    }
-
     (new_source, tree)
 }
