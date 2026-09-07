@@ -2,7 +2,7 @@ use super::LowerCtx;
 use crate::SymbolTable;
 use crate::amir::{AmirOperand, AmirRvalue, TempId};
 use crate::diagnostics::Diagnostic;
-use crate::hir::HirExprId;
+use crate::hir::{HirExprId, HirExprKind};
 use crate::ops::{BinaryOp, UnaryOp};
 use crate::passes::type_checker::types::ArType;
 
@@ -186,7 +186,42 @@ impl LowerCtx<'_> {
             return Ok(AmirOperand::Copy(dest));
         }
 
-        let op = self.lower_expr(arg, None, symbols)?;
+        // Preserve the source place for named-field move arguments. Ordinary field
+        // value lowering produces `FieldAccess`, which intentionally carries only the
+        // ordinal needed by codegen and loses the ownership path. A direct
+        // `Load(place)` keeps stable field symbols without rebuilding them later.
+        let projected_place = matches!(&arg_expr.kind, HirExprKind::Field { .. });
+        let op = if !mode.is_borrow() && !arg_is_ref && projected_place {
+            match self.lower_expr_to_place(arg, symbols) {
+                Ok(place) => {
+                    let root_has_destructor =
+                        self.locals
+                            .get(place.local.as_usize())
+                            .is_some_and(|local| {
+                                self.tc
+                                    .type_info
+                                    .destructor_instances
+                                    .contains_key(&local.ty)
+                            });
+                    if !place.projections.is_empty() && root_has_destructor {
+                        return Err(Diagnostic::error(
+                            crate::DiagCode::U001FeatureNotSupported,
+                            "cannot move a field out of a value with an explicit destructor",
+                            arg_expr.span,
+                        )
+                        .with_note(
+                            "the destructor requires the complete value; move the whole value or borrow the field",
+                        ));
+                    }
+                    self.load_place(&place, arg_expr.ty)?
+                }
+                // A projection on a temporary is a value expression rather than a
+                // place rooted in a local. Keep ordinary lowering for that case.
+                Err(_) => self.lower_expr(arg, None, symbols)?,
+            }
+        } else {
+            self.lower_expr(arg, None, symbols)?
+        };
         if mode.is_borrow() || arg_is_ref {
             // shared/mut self or already a reference: do not move.
             Ok(op)

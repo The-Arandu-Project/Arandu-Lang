@@ -127,6 +127,7 @@ pub struct CheckedProgram {
 
 /// Render non-fatal Salsa diagnostics or terminate through the typed diagnostic path.
 pub fn handle_accumulated_diags(
+    db: &dyn arandu_query::db::ArandCompilerDb,
     diags: &[impl std::ops::Deref<Target = arandu_middle::db::DiagnosticsAccumulator>],
     filepath: &str,
 ) {
@@ -144,12 +145,32 @@ pub fn handle_accumulated_diags(
         .iter()
         .any(|d| matches!(d.severity, arandu_middle::Severity::Error))
     {
-        print_diagnostics_and_exit(deduped.into_iter().cloned(), filepath);
+        let target_path = deduped
+            .iter()
+            .find(|d| matches!(d.severity, arandu_middle::Severity::Error))
+            .and_then(|d| {
+                if d.span.file_id != 0 {
+                    Some(db.file_path(d.span.file_id).to_string_lossy().to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| filepath.to_string());
+        print_diagnostics_and_exit(deduped.into_iter().cloned(), &target_path);
     }
-    let source = std::fs::read_to_string(filepath).unwrap_or_default();
-    let source_arc: std::sync::Arc<str> = source.into();
     for diagnostic in deduped {
-        let named_source = miette::NamedSource::new(filepath, source_arc.clone());
+        let (path_str, text_arc) = if diagnostic.span.file_id != 0 {
+            (
+                db.file_path(diagnostic.span.file_id)
+                    .to_string_lossy()
+                    .to_string(),
+                db.source_text(diagnostic.span.file_id),
+            )
+        } else {
+            let s = std::fs::read_to_string(filepath).unwrap_or_default();
+            (filepath.to_string(), s.into())
+        };
+        let named_source = miette::NamedSource::new(path_str, text_arc);
         let report = miette::Report::new(diagnostic.clone()).with_source_code(named_source);
         eprintln!("{:?}", report);
     }
@@ -182,7 +203,7 @@ pub fn pipeline_lower(
         .iter()
         .any(|d| matches!(d.0.severity, arandu_middle::Severity::Error))
     {
-        handle_accumulated_diags(&type_diags, filepath);
+        handle_accumulated_diags(db, &type_diags, filepath);
     }
 
     let artifacts = {
@@ -192,7 +213,7 @@ pub fn pipeline_lower(
     let lower_diags = arandu_query::passes::lower_amir::accumulated::<
         arandu_middle::db::DiagnosticsAccumulator,
     >(db, file);
-    handle_accumulated_diags(&lower_diags, filepath);
+    handle_accumulated_diags(db, &lower_diags, filepath);
 
     std::sync::Arc::clone(&artifacts.value)
 }
@@ -220,7 +241,7 @@ pub fn parse_and_check(
     let diagnostics = arandu_query::passes::type_check::accumulated::<
         arandu_middle::db::DiagnosticsAccumulator,
     >(db, file);
-    handle_accumulated_diags(&diagnostics, filepath);
+    handle_accumulated_diags(db, &diagnostics, filepath);
 
     // TypeCheckResult is Arc-heavy (symbols/resolved/type_info) — clone is O(1) for IR.
     CheckedProgram {

@@ -42,6 +42,21 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                             self.builder.def_var(var_ptr, ptr_val);
                             self.builder.def_var(var_len, len_val);
                         }
+                        if let Some(&slot) = self.local_stack_slots.get(&lhs.local) {
+                            let addr = self.builder.ins().stack_addr(self.ptr_type, slot, 0);
+                            self.builder.ins().store(
+                                cranelift_codegen::ir::MemFlagsData::new(),
+                                ptr_val,
+                                addr,
+                                0,
+                            );
+                            self.builder.ins().store(
+                                cranelift_codegen::ir::MemFlagsData::new(),
+                                len_val,
+                                addr,
+                                self.ptr_type.bytes() as i32,
+                            );
+                        }
                     } else {
                         let (base_ptr, offset) = self.translate_place_address_for_load(lhs);
                         self.builder.ins().store(

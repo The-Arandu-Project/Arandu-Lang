@@ -220,14 +220,99 @@ func main() {
 }
 
 #[test]
+fn partial_field_move_drops_only_the_remaining_field() {
+    let src = r#"
+struct ResourceA { handle: ptr[u8] }
+@Destructor
+func ResourceA.close(own self): void {}
+
+struct ResourceB { handle: ptr[u8] }
+@Destructor
+func ResourceB.close(own self): void {}
+
+struct Container { a: ResourceA b: ResourceB }
+func consume(own value: ResourceA): void {}
+
+func main() {
+    let c = Container {
+        a: ResourceA { handle: nil },
+        b: ResourceB { handle: nil },
+    }
+    consume(c.a)
+}
+"#;
+    let program = arandu_parser::parse(src).expect("parse");
+    let resolution = resolve_for_test(0, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
+    assert!(tc.diagnostics.is_empty(), "{:?}", tc.diagnostics);
+    let hir = lower_to_hir(&mut tc, &program).expect("HIR");
+    let amir = lower_to_amir(&tc, &hir, 64).expect("AMIR");
+
+    let main = amir
+        .funcs
+        .iter()
+        .find(|func| tc.symbols.get(func.symbol).name == "main")
+        .expect("main");
+    let destroys: Vec<_> = main
+        .blocks
+        .iter()
+        .flat_map(|block| main.block_stmts(block.id))
+        .filter_map(|stmt| match stmt {
+            AmirStmt::Destroy(place) => Some(place),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(destroys.len(), 1, "only the live sibling needs drop glue");
+    let AmirProjection::Field(field) = destroys[0].projections[0] else {
+        panic!("remaining drop must target a named field")
+    };
+    assert_eq!(tc.symbols.get(field).name, "b");
+}
+
+#[test]
+fn partial_move_from_explicit_destructor_type_is_rejected() {
+    let src = r#"
+struct Resource { payload: str }
+@Destructor
+func Resource.close(own self): void {}
+func consume(own payload: str): void {}
+
+func main() {
+    let resource = Resource { payload: "owned" }
+    consume(resource.payload)
+}
+"#;
+    let program = arandu_parser::parse(src).expect("parse");
+    let resolution = resolve_for_test(0, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
+    assert!(tc.diagnostics.is_empty(), "{:?}", tc.diagnostics);
+    let hir = lower_to_hir(&mut tc, &program).expect("HIR");
+    let diagnostics = lower_to_amir(&tc, &hir, 64).expect_err("partial move must be rejected");
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == DiagCode::U001FeatureNotSupported),
+        "expected U001 for a partial move from a destructor type: {diagnostics:?}"
+    );
+}
+
+#[test]
 fn non_copy_local_use_after_move_fails_during_amir_analysis() {
     let src = r#"
 struct Boxed {
-    value: str
+    handle: ptr[u8]
 }
 
 func main() {
-    let a: Boxed = Boxed { value: "one" }
+    let a: Boxed = Boxed { handle: nil }
     let b: Boxed = a
     let c: Boxed = a
 }
@@ -279,11 +364,11 @@ func main() {
 fn branch_move_mismatch_reports_o007() {
     let src = r#"
 struct Boxed {
-    value: str
+    handle: ptr[u8]
 }
 
 func main(cond: bool) {
-    let a: Boxed = Boxed { value: "one" }
+    let a: Boxed = Boxed { handle: nil }
     if cond {
         let b: Boxed = a
     }

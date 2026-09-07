@@ -838,7 +838,7 @@ impl miette::Diagnostic for Diagnostic {
             None,
             miette::SourceSpan::new(
                 (self.span.start as usize).into(),
-                (self.span.end - self.span.start) as usize,
+                (self.span.end.saturating_sub(self.span.start)) as usize,
             ),
         ));
         let secondary = self.labels.iter().map(|label| {
@@ -846,7 +846,7 @@ impl miette::Diagnostic for Diagnostic {
                 Some(label.message.clone()),
                 miette::SourceSpan::new(
                     (label.span.start as usize).into(),
-                    (label.span.end - label.span.start) as usize,
+                    (label.span.end.saturating_sub(label.span.start)) as usize,
                 ),
             )
         });

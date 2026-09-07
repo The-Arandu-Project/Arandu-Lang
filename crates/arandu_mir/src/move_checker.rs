@@ -1,17 +1,18 @@
 //! Intraprocedural AMIR move checking (M1).
 //!
-//! This pass tracks whole-local ownership state across the AMIR CFG. It is
-//! intentionally conservative for v0.1: projections are treated as reads of the
-//! base local and moves are recovered from `Load(place)` followed by consuming
-//! `Move(temp)` operands.
+//! This pass tracks dense whole-local state plus sparse named-field move paths
+//! across the AMIR CFG. Index and dereference projections remain conservative;
+//! moves are recovered from `Load(place)` followed by consuming `Move(temp)`
+//! operands.
 
 use crate::amir::{
-    AmirFunc, AmirOperand, AmirPlace, AmirRvalue, AmirStmt, AmirTerminator, BlockId, LocalId,
-    TempId, for_each_rvalue_operand, for_each_rvalue_place,
+    AmirFunc, AmirOperand, AmirPlace, AmirProjection, AmirRvalue, AmirStmt, AmirTerminator,
+    BlockId, LocalId, TempId, for_each_rvalue_operand, for_each_rvalue_place,
 };
 use crate::diagnostics::{DiagCode, Diagnostic};
 use crate::{BitSet, SymbolTable};
 use arandu_lexer::Span;
+use smallvec::SmallVec;
 use std::collections::VecDeque;
 
 /// Sink for block-tagged move diagnostics during CFG walk.
@@ -24,22 +25,13 @@ enum LocalMoveState {
     MaybeMoved,
 }
 
-/// Ownership state used by drop elaboration at a block boundary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DropState {
-    Available,
-    Moved,
-    MaybeMoved,
-}
-
-/// Whole-local ownership state after each block, computed by the same
-/// transfer function as move diagnostics so cleanup cannot diverge from the
-/// move checker.
+/// Ownership paths after each block, computed by the same transfer function as
+/// diagnostics so cleanup cannot diverge from the move checker.
 #[must_use]
-pub fn move_states_at_block_exit(func: &AmirFunc) -> Vec<Vec<DropState>> {
+pub(crate) fn move_states_at_block_exit(func: &AmirFunc) -> Vec<MoveState> {
     let bump = bumpalo::Bump::new();
     let Some(block_in) = compute_move_in(func, &bump) else {
-        return vec![vec![DropState::Available; func.locals.len()]; func.blocks.len()];
+        return vec![MoveState::new(func.locals.len()); func.blocks.len()];
     };
     let origins = temp_origins(func, &bump);
     block_in
@@ -48,22 +40,17 @@ pub fn move_states_at_block_exit(func: &AmirFunc) -> Vec<Vec<DropState>> {
         .map(|(index, incoming)| {
             let mut state = incoming.clone();
             apply_block(BlockId::from_usize(index), func, &origins, &mut state, None);
-            func.locals
-                .iter()
-                .map(|local| match state.get(local.id) {
-                    LocalMoveState::Available => DropState::Available,
-                    LocalMoveState::Moved => DropState::Moved,
-                    LocalMoveState::MaybeMoved => DropState::MaybeMoved,
-                })
-                .collect()
+            state
         })
         .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-struct MoveState {
+pub(crate) struct MoveState {
     moved: BitSet<LocalId>,
     maybe_moved: BitSet<LocalId>,
+    moved_fields: SmallVec<[AmirPlace; 4]>,
+    maybe_moved_fields: SmallVec<[AmirPlace; 4]>,
 }
 
 impl MoveState {
@@ -71,32 +58,52 @@ impl MoveState {
         Self {
             moved: BitSet::with_capacity(num_locals),
             maybe_moved: BitSet::with_capacity(num_locals),
+            moved_fields: SmallVec::new(),
+            maybe_moved_fields: SmallVec::new(),
         }
     }
 
     #[tracing::instrument(level = "trace", target = "arandu_mir::move_checker", skip_all)]
     fn join_predecessors<'a>(preds: impl Iterator<Item = &'a Self>, num_locals: usize) -> Self {
-        let mut preds = preds.peekable();
+        let mut preds = preds;
         let Some(first) = preds.next() else {
             return Self::new(num_locals);
         };
         let mut acc = first.clone();
-
         for pred in preds {
-            // symmetric difference of moved sets → maybe_moved
-            // one BitSet clone instead of two
-            let mut sym = acc.moved.clone();
-            sym.union_with(&pred.moved);
-            acc.moved.intersect_with(&pred.moved);
-            sym.difference_with(&acc.moved);
-
-            acc.maybe_moved.union_with(&pred.maybe_moved);
-            acc.maybe_moved.union_with(&sym);
+            acc = acc.join(pred, num_locals);
         }
         acc
     }
 
-    fn get(&self, local: LocalId) -> LocalMoveState {
+    fn join(&self, other: &Self, num_locals: usize) -> Self {
+        let mut joined = Self::new(num_locals);
+        for index in 0..num_locals {
+            let local = LocalId::from_usize(index);
+            joined.set(
+                local,
+                join_move_state(self.root_state(local), other.root_state(local)),
+            );
+        }
+
+        let field_places = self
+            .moved_fields
+            .iter()
+            .chain(&self.maybe_moved_fields)
+            .chain(&other.moved_fields)
+            .chain(&other.maybe_moved_fields);
+        for place in field_places {
+            if joined.has_exact_field(place) {
+                continue;
+            }
+            let state =
+                join_move_state(self.field_fact_state(place), other.field_fact_state(place));
+            joined.push_field_state(place.clone(), state);
+        }
+        joined
+    }
+
+    fn root_state(&self, local: LocalId) -> LocalMoveState {
         if self.moved.contains(local) {
             LocalMoveState::Moved
         } else if self.maybe_moved.contains(local) {
@@ -107,6 +114,8 @@ impl MoveState {
     }
 
     fn set(&mut self, local: LocalId, state: LocalMoveState) {
+        self.moved_fields.retain(|place| place.local != local);
+        self.maybe_moved_fields.retain(|place| place.local != local);
         match state {
             LocalMoveState::Available => {
                 self.moved.remove(local);
@@ -122,6 +131,113 @@ impl MoveState {
             }
         }
     }
+
+    pub(crate) fn place_itself_is_available(&self, place: &AmirPlace) -> bool {
+        self.field_fact_state(place) == LocalMoveState::Available
+    }
+
+    fn place_state(&self, place: &AmirPlace) -> LocalMoveState {
+        let root = self.root_state(place.local);
+        if root != LocalMoveState::Available {
+            return root;
+        }
+        if self
+            .moved_fields
+            .iter()
+            .any(|moved| places_overlap(moved, place))
+        {
+            LocalMoveState::Moved
+        } else if self
+            .maybe_moved_fields
+            .iter()
+            .any(|moved| places_overlap(moved, place))
+        {
+            LocalMoveState::MaybeMoved
+        } else {
+            LocalMoveState::Available
+        }
+    }
+
+    fn field_fact_state(&self, place: &AmirPlace) -> LocalMoveState {
+        let root = self.root_state(place.local);
+        if root != LocalMoveState::Available {
+            return root;
+        }
+        if self
+            .moved_fields
+            .iter()
+            .any(|moved| place_is_prefix(moved, place))
+        {
+            LocalMoveState::Moved
+        } else if self
+            .maybe_moved_fields
+            .iter()
+            .any(|moved| place_is_prefix(moved, place))
+        {
+            LocalMoveState::MaybeMoved
+        } else {
+            LocalMoveState::Available
+        }
+    }
+
+    fn place_base_state(&self, place: &AmirPlace) -> LocalMoveState {
+        let root = self.root_state(place.local);
+        if root != LocalMoveState::Available {
+            return root;
+        }
+        let strict_ancestor = |moved: &AmirPlace| {
+            moved.projections.len() < place.projections.len() && place_is_prefix(moved, place)
+        };
+        if self.moved_fields.iter().any(strict_ancestor) {
+            LocalMoveState::Moved
+        } else if self.maybe_moved_fields.iter().any(strict_ancestor) {
+            LocalMoveState::MaybeMoved
+        } else {
+            LocalMoveState::Available
+        }
+    }
+
+    fn move_place(&mut self, place: &AmirPlace) {
+        let tracked = tracked_move_place(place);
+        if tracked.projections.is_empty() {
+            self.set(tracked.local, LocalMoveState::Moved);
+        } else {
+            self.push_field_state(tracked, LocalMoveState::Moved);
+        }
+    }
+
+    fn restore_place(&mut self, place: &AmirPlace) {
+        let tracked = tracked_move_place(place);
+        if tracked.projections.is_empty() {
+            self.set(tracked.local, LocalMoveState::Available);
+            return;
+        }
+        self.moved_fields
+            .retain(|moved| !place_is_prefix(&tracked, moved));
+        self.maybe_moved_fields
+            .retain(|moved| !place_is_prefix(&tracked, moved));
+    }
+
+    fn has_exact_field(&self, place: &AmirPlace) -> bool {
+        self.moved_fields.contains(place) || self.maybe_moved_fields.contains(place)
+    }
+
+    fn push_field_state(&mut self, place: AmirPlace, state: LocalMoveState) {
+        match state {
+            LocalMoveState::Available => {}
+            LocalMoveState::Moved => {
+                if !self.moved_fields.contains(&place) {
+                    self.moved_fields.push(place);
+                }
+            }
+            LocalMoveState::MaybeMoved => {
+                if !self.maybe_moved_fields.contains(&place) {
+                    self.maybe_moved_fields.push(place);
+                }
+            }
+        }
+    }
+
     fn is_monotonic_from(&self, old: &Self) -> bool {
         if !self.moved.is_superset_of(&old.moved) {
             return false;
@@ -131,8 +247,50 @@ impl MoveState {
                 return false;
             }
         }
-        true
+        old.moved_fields
+            .iter()
+            .chain(&old.maybe_moved_fields)
+            .all(|place| self.place_state(place) != LocalMoveState::Available)
     }
+}
+
+fn join_move_state(left: LocalMoveState, right: LocalMoveState) -> LocalMoveState {
+    if left == right {
+        left
+    } else {
+        LocalMoveState::MaybeMoved
+    }
+}
+
+fn tracked_move_place(place: &AmirPlace) -> AmirPlace {
+    let projections = if !place.projections.is_empty()
+        && place
+            .projections
+            .iter()
+            .all(|projection| matches!(projection, AmirProjection::Field(_)))
+    {
+        place.projections.clone()
+    } else {
+        SmallVec::new()
+    };
+    AmirPlace {
+        local: place.local,
+        projections,
+    }
+}
+
+fn place_is_prefix(prefix: &AmirPlace, place: &AmirPlace) -> bool {
+    prefix.local == place.local
+        && prefix.projections.len() <= place.projections.len()
+        && prefix
+            .projections
+            .iter()
+            .zip(&place.projections)
+            .all(|(left, right)| left == right)
+}
+
+fn places_overlap(left: &AmirPlace, right: &AmirPlace) -> bool {
+    place_is_prefix(left, right) || place_is_prefix(right, left)
 }
 
 /// Count of locals that are `Moved` or `MaybeMoved` at each block entry.
@@ -144,7 +302,14 @@ pub fn moved_in_counts(func: &AmirFunc) -> Vec<u32> {
     };
     block_in
         .iter()
-        .map(|s| (s.moved.len() + s.maybe_moved.len()) as u32)
+        .map(|state| {
+            let mut locals = state.moved.clone();
+            locals.union_with(&state.maybe_moved);
+            for place in state.moved_fields.iter().chain(&state.maybe_moved_fields) {
+                locals.insert(place.local);
+            }
+            locals.len() as u32
+        })
         .collect()
 }
 
@@ -181,7 +346,26 @@ pub fn check_moves_by_block(
         );
     }
 
-    diagnostics
+    // A non-Copy value is represented as `Load(place)` followed by a consuming
+    // `Move(temp)`. If the place was already moved, both instructions observe the
+    // same source error. Keep one diagnostic per block/code/source expression while
+    // preserving traversal order and the first (read-site) explanation.
+    let mut unique = Vec::with_capacity(diagnostics.len());
+    for candidate in diagnostics {
+        let (candidate_block, candidate_diagnostic) = &candidate;
+        if !unique
+            .iter()
+            .any(|(block, diagnostic): &(BlockId, Diagnostic)| {
+                block == candidate_block
+                    && diagnostic.code == candidate_diagnostic.code
+                    && diagnostic.span == candidate_diagnostic.span
+                    && diagnostic.message == candidate_diagnostic.message
+            })
+        {
+            unique.push(candidate);
+        }
+    }
+    unique
 }
 
 fn compute_move_in<'bump>(
@@ -250,15 +434,21 @@ fn compute_move_in<'bump>(
 fn temp_origins<'bump>(
     func: &AmirFunc,
     bump: &'bump bumpalo::Bump,
-) -> bumpalo::collections::Vec<'bump, Option<LocalId>> {
+) -> bumpalo::collections::Vec<'bump, Option<AmirPlace>> {
     let mut origins =
         bumpalo::collections::Vec::from_iter_in(std::iter::repeat_n(None, func.temps.len()), bump);
     for (i, &param_temp) in func.params.iter().enumerate() {
-        origins[param_temp.as_usize()] = Some(LocalId::from_usize(i));
+        origins[param_temp.as_usize()] = Some(AmirPlace {
+            local: LocalId::from_usize(i),
+            projections: SmallVec::new(),
+        });
     }
     for block in &func.blocks {
         for param in func.block_params(block.params) {
-            origins[param.id.as_usize()] = Some(param.local);
+            origins[param.id.as_usize()] = Some(AmirPlace {
+                local: param.local,
+                projections: SmallVec::new(),
+            });
         }
     }
     let mut changed = true;
@@ -269,11 +459,13 @@ fn temp_origins<'bump>(
                 if let AmirStmt::Assign { lhs, rhs } = stmt {
                     let mut found_origin = None;
                     match rhs {
-                        AmirRvalue::Load(place) if place.projections.is_empty() => {
-                            found_origin = Some(place.local);
+                        // Named fields remain sparse move paths; dynamic index and
+                        // dereference projections collapse to their root conservatively.
+                        AmirRvalue::Load(place) => {
+                            found_origin = Some(tracked_move_place(place));
                         }
                         AmirRvalue::Use(AmirOperand::Copy(t) | AmirOperand::Move(t)) => {
-                            found_origin = origins[t.as_usize()];
+                            found_origin = origins[t.as_usize()].clone();
                         }
                         _ => {}
                     }
@@ -293,7 +485,7 @@ fn temp_origins<'bump>(
 fn apply_block(
     block: crate::amir::BlockId,
     func: &AmirFunc,
-    temp_origins: &[Option<LocalId>],
+    temp_origins: &[Option<AmirPlace>],
     state: &mut MoveState,
     mut diagnostics: MoveDiagSink<'_>,
 ) {
@@ -305,12 +497,10 @@ fn apply_block(
             }
             AmirStmt::Store { lhs, rhs } => {
                 if !lhs.projections.is_empty() {
-                    check_place_read(lhs, func, state, &mut diagnostics);
+                    check_place_state(lhs, state.place_base_state(lhs), func, &mut diagnostics);
                 }
                 consume_operand(rhs, func, temp_origins, state, &mut diagnostics, false);
-                if lhs.projections.is_empty() {
-                    state.set(lhs.local, LocalMoveState::Available);
-                }
+                state.restore_place(lhs);
             }
             AmirStmt::Call { callee, args, .. } => {
                 consume_operand(callee, func, temp_origins, state, &mut diagnostics, false);
@@ -323,7 +513,7 @@ fn apply_block(
             }
             AmirStmt::Destroy(place) => {
                 check_consume_place(place, func, state, &mut diagnostics, true);
-                state.set(place.local, LocalMoveState::Moved);
+                state.move_place(place);
             }
             AmirStmt::StorageLive(_) | AmirStmt::StorageDead(_) | AmirStmt::Nop => {}
         }
@@ -432,7 +622,7 @@ fn check_rvalue_reads(
 fn consume_rvalue(
     rvalue: &AmirRvalue,
     func: &AmirFunc,
-    temp_origins: &[Option<LocalId>],
+    temp_origins: &[Option<AmirPlace>],
     state: &mut MoveState,
     diagnostics: &mut MoveDiagSink<'_>,
 ) {
@@ -446,22 +636,22 @@ fn consume_rvalue(
 fn check_operand_read(
     op: &AmirOperand,
     func: &AmirFunc,
-    temp_origins: &[Option<LocalId>],
+    temp_origins: &[Option<AmirPlace>],
     state: &MoveState,
     diagnostics: &mut MoveDiagSink<'_>,
 ) {
     let (AmirOperand::Copy(temp) | AmirOperand::Move(temp)) = op else {
         return;
     };
-    if let Some(local) = origin_for(*temp, temp_origins) {
-        check_local_read(local, func, state, diagnostics);
+    if let Some(place) = origin_for(*temp, temp_origins) {
+        check_place_read(place, func, state, diagnostics);
     }
 }
 
 fn consume_operand(
     op: &AmirOperand,
     func: &AmirFunc,
-    temp_origins: &[Option<LocalId>],
+    temp_origins: &[Option<AmirPlace>],
     state: &mut MoveState,
     diagnostics: &mut MoveDiagSink<'_>,
     double_free: bool,
@@ -474,11 +664,11 @@ fn consume_operand(
     if func.temps[temp.as_usize()].is_copy {
         return;
     }
-    let Some(local) = origin_for(*temp, temp_origins) else {
+    let Some(place) = origin_for(*temp, temp_origins) else {
         return;
     };
-    check_consume_local(local, func, state, diagnostics, double_free);
-    state.set(local, LocalMoveState::Moved);
+    check_consume_place(place, func, state, diagnostics, double_free);
+    state.move_place(place);
 }
 
 fn check_place_read(
@@ -487,36 +677,26 @@ fn check_place_read(
     state: &MoveState,
     diagnostics: &mut MoveDiagSink<'_>,
 ) {
-    check_local_read(place.local, func, state, diagnostics);
+    check_place_state(place, state.place_state(place), func, diagnostics);
 }
 
-fn check_consume_place(
+fn check_place_state(
     place: &AmirPlace,
+    state: LocalMoveState,
     func: &AmirFunc,
-    state: &MoveState,
-    diagnostics: &mut MoveDiagSink<'_>,
-    double_free: bool,
-) {
-    check_consume_local(place.local, func, state, diagnostics, double_free);
-}
-
-fn check_local_read(
-    local: LocalId,
-    func: &AmirFunc,
-    state: &MoveState,
     diagnostics: &mut MoveDiagSink<'_>,
 ) {
     let Some((symbols, block, diagnostics)) = diagnostics.as_mut() else {
         return;
     };
     let block = *block;
-    match state.get(local) {
+    match state {
         LocalMoveState::Available => {}
         LocalMoveState::Moved => diagnostics.push((
             block,
             move_diag(
                 DiagCode::O001UseAfterMove,
-                local,
+                place.local,
                 func,
                 symbols,
                 "use of moved value",
@@ -527,7 +707,7 @@ fn check_local_read(
             block,
             move_diag(
                 DiagCode::O007InconsistentMoveBetweenBranches,
-                local,
+                place.local,
                 func,
                 symbols,
                 "value may have been moved on some control-flow paths",
@@ -537,8 +717,8 @@ fn check_local_read(
     }
 }
 
-fn check_consume_local(
-    local: LocalId,
+fn check_consume_place(
+    place: &AmirPlace,
     func: &AmirFunc,
     state: &MoveState,
     diagnostics: &mut MoveDiagSink<'_>,
@@ -548,13 +728,13 @@ fn check_consume_local(
         return;
     };
     let block = *block;
-    match state.get(local) {
+    match state.place_state(place) {
         LocalMoveState::Available => {}
         LocalMoveState::Moved if double_free => diagnostics.push((
             block,
             move_diag(
                 DiagCode::O005DoubleFree,
-                local,
+                place.local,
                 func,
                 symbols,
                 "double free/drop of moved value",
@@ -565,7 +745,7 @@ fn check_consume_local(
             block,
             move_diag(
                 DiagCode::O001UseAfterMove,
-                local,
+                place.local,
                 func,
                 symbols,
                 "use of moved value",
@@ -576,7 +756,7 @@ fn check_consume_local(
             block,
             move_diag(
                 DiagCode::O007InconsistentMoveBetweenBranches,
-                local,
+                place.local,
                 func,
                 symbols,
                 "value may have been moved on some control-flow paths",
@@ -586,8 +766,8 @@ fn check_consume_local(
     }
 }
 
-fn origin_for(temp: TempId, temp_origins: &[Option<LocalId>]) -> Option<LocalId> {
-    temp_origins.get(temp.as_usize()).copied().flatten()
+fn origin_for(temp: TempId, temp_origins: &[Option<AmirPlace>]) -> Option<&AmirPlace> {
+    temp_origins.get(temp.as_usize()).and_then(Option::as_ref)
 }
 
 #[cold]

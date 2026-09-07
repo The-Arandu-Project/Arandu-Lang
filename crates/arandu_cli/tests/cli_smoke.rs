@@ -914,7 +914,7 @@ fn check_own_self_use_after_move_fails() {
     fs::write(
         &file,
         r#"struct Holder {
-    text: str
+    handle: ptr[u8]
 }
 
 func Holder.take(own self): int {
@@ -922,7 +922,7 @@ func Holder.take(own self): int {
 }
 
 func main(): int {
-    let b = Holder { text: "moved" }
+    let b = Holder { handle: nil }
     let n = b.take()
     return n + b.take()
 }

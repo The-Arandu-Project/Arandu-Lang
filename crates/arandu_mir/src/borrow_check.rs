@@ -103,7 +103,7 @@ fn check_stmt(
     stmt_index: usize,
     live: &BitSet<TempId>,
     facts: &FuncBorrowFacts,
-    temp_origins: &[Option<LocalId>],
+    temp_origins: &[Option<AmirPlace>],
     func: &AmirFunc,
     symbols: &SymbolTable,
     diags: &mut Vec<(BlockId, Diagnostic)>,
@@ -263,7 +263,7 @@ fn check_rvalue_moves(
     point: ProgramPoint,
     live: &BitSet<TempId>,
     facts: &FuncBorrowFacts,
-    temp_origins: &[Option<LocalId>],
+    temp_origins: &[Option<AmirPlace>],
     func: &AmirFunc,
     symbols: &SymbolTable,
     diags: &mut Vec<(BlockId, Diagnostic)>,
@@ -279,7 +279,7 @@ fn check_terminator_moves(
     stmt_index: usize,
     live: &BitSet<TempId>,
     facts: &FuncBorrowFacts,
-    temp_origins: &[Option<LocalId>],
+    temp_origins: &[Option<AmirPlace>],
     func: &AmirFunc,
     symbols: &SymbolTable,
     diags: &mut Vec<(BlockId, Diagnostic)>,
@@ -363,7 +363,7 @@ fn check_operand_move(
     point: ProgramPoint,
     live: &BitSet<TempId>,
     facts: &FuncBorrowFacts,
-    temp_origins: &[Option<LocalId>],
+    temp_origins: &[Option<AmirPlace>],
     func: &AmirFunc,
     symbols: &SymbolTable,
     diags: &mut Vec<(BlockId, Diagnostic)>,
@@ -374,25 +374,15 @@ fn check_operand_move(
     if func.temps.get(temp.as_usize()).is_some_and(|t| t.is_copy) {
         return;
     }
-    let Some(local) = temp_origins.get(temp.as_usize()).copied().flatten() else {
+    let Some(place) = temp_origins.get(temp.as_usize()).and_then(Option::as_ref) else {
         return;
     };
-    if place_borrowed(local, live, facts, point) {
+    if place_borrowed_at(place, live, facts, point) {
         diags.push((
             point.block,
-            move_while_borrowed_diag(local, func, symbols, facts, live, point.block),
+            move_while_borrowed_diag(place.local, func, symbols, facts, live, point.block),
         ));
     }
-}
-
-fn place_borrowed(
-    local: LocalId,
-    live: &BitSet<TempId>,
-    facts: &FuncBorrowFacts,
-    point: ProgramPoint,
-) -> bool {
-    active_kind(local, LoanKind::Shared, live, facts, point)
-        || active_kind(local, LoanKind::Exclusive, live, facts, point)
 }
 
 fn place_borrowed_at(
@@ -445,24 +435,6 @@ fn places_may_overlap(
     }
     // Equal paths and prefix paths overlap (`pair` overlaps `pair.left`).
     true
-}
-
-fn active_kind(
-    local: LocalId,
-    kind: LoanKind,
-    live: &BitSet<TempId>,
-    facts: &FuncBorrowFacts,
-    point: ProgramPoint,
-) -> bool {
-    for (loan_index, loan) in facts.loans.iter().enumerate() {
-        if loan.place_local != local || loan.kind != kind {
-            continue;
-        }
-        if loan_holders_live(loan_index, loan, live, facts, point) {
-            return true;
-        }
-    }
-    false
 }
 
 fn loan_holders_live(
@@ -573,7 +545,7 @@ fn mark_place_index_uses(place: &AmirPlace, live: &mut BitSet<TempId>) {
 }
 
 /// Map each temp to a stack local origin when it is a Load of that local (move path).
-fn temp_origins_from_loads(func: &AmirFunc) -> Vec<Option<LocalId>> {
+fn temp_origins_from_loads(func: &AmirFunc) -> Vec<Option<AmirPlace>> {
     let mut origins = vec![None; func.temps.len()];
     let mut changed = true;
     let mut iterations = 0;
@@ -586,11 +558,10 @@ fn temp_origins_from_loads(func: &AmirFunc) -> Vec<Option<LocalId>> {
                     lhs,
                     rhs: AmirRvalue::Load(place),
                 } = stmt
-                    && place.projections.is_empty()
                 {
-                    let old = origins[lhs.as_usize()];
-                    let new = Some(place.local);
-                    if old != new {
+                    let old = &origins[lhs.as_usize()];
+                    let new = Some(place.clone());
+                    if *old != new {
                         origins[lhs.as_usize()] = new;
                         changed = true;
                     }
@@ -600,9 +571,9 @@ fn temp_origins_from_loads(func: &AmirFunc) -> Vec<Option<LocalId>> {
                     rhs: AmirRvalue::Use(AmirOperand::Copy(t) | AmirOperand::Move(t)),
                 } = stmt
                 {
-                    let old = origins[lhs.as_usize()];
-                    let new = origins[t.as_usize()];
-                    if old != new {
+                    let old = &origins[lhs.as_usize()];
+                    let new = origins[t.as_usize()].clone();
+                    if *old != new {
                         origins[lhs.as_usize()] = new;
                         changed = true;
                     }

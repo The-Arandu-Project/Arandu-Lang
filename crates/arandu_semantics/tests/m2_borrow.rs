@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use arandu_semantics::{
-    DiagCode, Severity, lower_to_amir, lower_to_amir_with_interfaces, lower_to_hir,
+    DiagCode, Diagnostic, Severity, lower_to_amir, lower_to_amir_with_interfaces, lower_to_hir,
     resolve_for_test, type_check,
 };
 use std::fmt::Write as _;
@@ -88,7 +88,7 @@ fn emit_two_loan_program(
     source
 }
 
-fn ownership_codes(src: &str) -> Vec<DiagCode> {
+fn ownership_diagnostics(src: &str) -> Vec<Diagnostic> {
     let program = arandu_parser::parse(src).expect("parse");
     let resolution = resolve_for_test(0, &program);
     let mut tc = type_check(
@@ -103,13 +103,17 @@ fn ownership_codes(src: &str) -> Vec<DiagCode> {
         .collect();
     assert!(type_errors.is_empty(), "typeck errors: {type_errors:?}");
     let hir = lower_to_hir(&mut tc, &program).expect("hir");
-    let diagnostics = match lower_to_amir_with_interfaces(&mut tc, &hir, 64) {
+    match lower_to_amir_with_interfaces(&mut tc, &hir, 64) {
         Ok((_, diagnostics)) | Err(diagnostics) => diagnostics,
-    };
-    let mut codes: Vec<_> = diagnostics
+    }
+}
+
+fn ownership_codes(src: &str) -> Vec<DiagCode> {
+    let mut codes: Vec<_> = ownership_diagnostics(src)
         .into_iter()
         .filter_map(|diagnostic| match diagnostic.code {
-            code @ (DiagCode::O002MoveWhileBorrowed
+            code @ (DiagCode::O001UseAfterMove
+            | DiagCode::O002MoveWhileBorrowed
             | DiagCode::O003MutableBorrowConflict
             | DiagCode::O004GenerationalFallback
             | DiagCode::O005DoubleFree
@@ -187,6 +191,166 @@ func main(): int {
 }
 "#;
     assert_deterministic("disjoint struct fields", source, &[]);
+}
+
+#[test]
+fn nested_field_paths_follow_prefix_and_sibling_alias_rules() {
+    let disjoint_nested = r#"
+struct Pair { left: int right: int }
+struct Outer { first: Pair second: Pair }
+func sum(left: mut ref int, right: mut ref int): int { return *left + *right }
+func main(): int {
+    let first = Pair { left: 20, right: 21 }
+    let second = Pair { left: 1, right: 2 }
+    let mut outer = Outer { first, second }
+    let left = &mut outer.first.left
+    let right = &mut outer.first.right
+    set outer.second.left = 3
+    return sum(left, right) + outer.second.left
+}
+"#;
+    assert_deterministic("nested sibling fields", disjoint_nested, &[]);
+
+    let parent_and_child = r#"
+struct Pair { left: int right: int }
+func sum(pair: ref Pair, left: mut ref int): int { return pair.right + *left }
+func main(): int {
+    let mut pair = Pair { left: 20, right: 22 }
+    let whole = &pair
+    let left = &mut pair.left
+    return sum(whole, left)
+}
+"#;
+    assert_deterministic(
+        "parent and child paths",
+        parent_and_child,
+        &[DiagCode::O003MutableBorrowConflict],
+    );
+}
+
+#[test]
+fn moving_a_field_checks_only_overlapping_loans() {
+    let disjoint = r#"
+struct Resource { handle: ptr[u8] }
+struct Pair { left: Resource right: Resource }
+func consume(own text: Resource): int { return 1 }
+func main(): int {
+    let pair = Pair { left: Resource { handle: nil }, right: Resource { handle: nil } }
+    let loan = &pair.left
+    let result = consume(pair.right)
+    let keepAlive = loan.handle
+    return result
+}
+"#;
+    assert_deterministic("move disjoint field", disjoint, &[]);
+
+    let overlapping = r#"
+struct Resource { handle: ptr[u8] }
+struct Pair { left: Resource right: Resource }
+func consume(own text: Resource): int { return 1 }
+func main(): int {
+    let pair = Pair { left: Resource { handle: nil }, right: Resource { handle: nil } }
+    let loan = &pair.left
+    let result = consume(pair.left)
+    let keepAlive = loan.handle
+    return result
+}
+"#;
+    assert_deterministic(
+        "move borrowed field",
+        overlapping,
+        &[DiagCode::O002MoveWhileBorrowed],
+    );
+
+    let reuse_same_field_after_move = r#"
+struct Resource { handle: ptr[u8] }
+struct Pair { left: Resource right: Resource }
+func consume(own text: Resource): int { return 1 }
+func main(): int {
+    let pair = Pair { left: Resource { handle: nil }, right: Resource { handle: nil } }
+    let result = consume(pair.left)
+    return consume(pair.left) + result
+}
+"#;
+    assert_deterministic(
+        "reuse same field after move",
+        reuse_same_field_after_move,
+        &[DiagCode::O001UseAfterMove],
+    );
+    assert_eq!(
+        ownership_diagnostics(reuse_same_field_after_move)
+            .iter()
+            .filter(|diagnostic| diagnostic.code == DiagCode::O001UseAfterMove)
+            .count(),
+        1,
+        "one invalid source move must produce one O001 diagnostic"
+    );
+
+    let use_sibling_after_field_move = r#"
+struct Resource { handle: ptr[u8] }
+struct Pair { left: Resource right: Resource }
+func consume(own text: Resource): int { return 1 }
+func main(): int {
+    let pair = Pair { left: Resource { handle: nil }, right: Resource { handle: nil } }
+    let result = consume(pair.left)
+    return consume(pair.right) + result
+}
+"#;
+    assert_deterministic(
+        "use sibling after field move",
+        use_sibling_after_field_move,
+        &[],
+    );
+}
+
+#[test]
+fn partial_field_moves_join_and_reinitialize_by_path() {
+    let sibling_after_partial_branch = r#"
+struct Resource { handle: ptr[u8] }
+struct Pair { left: Resource right: Resource }
+func consume(own text: Resource): int { return 1 }
+func main(): int {
+    let pair = Pair { left: Resource { handle: nil }, right: Resource { handle: nil } }
+    let mut result = 0
+    if result == 0 { result = consume(pair.left) } else { result = 2 }
+    return consume(pair.right) + result
+}
+"#;
+    assert_deterministic(
+        "sibling after partial branch move",
+        sibling_after_partial_branch,
+        &[],
+    );
+
+    let same_field_after_partial_branch = r#"
+struct Resource { handle: ptr[u8] }
+struct Pair { left: Resource right: Resource }
+func consume(own text: Resource): int { return 1 }
+func main(): int {
+    let pair = Pair { left: Resource { handle: nil }, right: Resource { handle: nil } }
+    let mut result = 0
+    if result == 0 { result = consume(pair.left) } else { result = 2 }
+    return consume(pair.left) + result
+}
+"#;
+    assert_deterministic(
+        "same field after partial branch move",
+        same_field_after_partial_branch,
+        &[DiagCode::O007InconsistentMoveBetweenBranches],
+    );
+
+    let reinitialized_field = r#"
+struct Resource { handle: ptr[u8] }
+struct Pair { left: Resource right: Resource }
+func consume(own text: Resource): int { return 1 }
+func main(): int {
+    let mut pair = Pair { left: Resource { handle: nil }, right: Resource { handle: nil } }
+    let first = consume(pair.left)
+    set pair.left = Resource { handle: nil }
+    return consume(pair.left) + first
+}
+"#;
+    assert_deterministic("reinitialized moved field", reinitialized_field, &[]);
 }
 
 #[test]
@@ -445,20 +609,20 @@ func main(): int {
     );
 
     let partial_move_diamond = r#"
-struct Box { value: str }
+struct Box { handle: ptr[u8] }
 func consume(own item: Box): int { return 7 }
 func main(): int {
-    let item = Box { value: "x" }
+    let item = Box { handle: nil }
     let mut result = 0
     if result == 0 { result = consume(item) } else { result = 1 }
     return consume(item) + result
 }
 "#;
     let partial_move_match = r#"
-struct Box { value: str }
+struct Box { handle: ptr[u8] }
 func consume(own item: Box): int { return 7 }
 func main(): int {
-    let item = Box { value: "x" }
+    let item = Box { handle: nil }
     let mut result = 0
     match result {
         0 => { result = consume(item) }

@@ -1708,3 +1708,27 @@ fn jit_vec_legacy_handle_len_abi() {
     };
     assert_eq!(result, 2);
 }
+
+#[test]
+fn jit_ref_str_deref() {
+    let src = r#"
+func check(s: ref str): bool {
+    let val: str = *s
+    return val == "hello"
+}
+
+func main(): bool {
+    let greeting: str = "hello"
+    return check(&greeting)
+}
+"#;
+    let (amir, symbols, type_info) = compile_src(src);
+    let backend = backend_for_test();
+    let module = backend.compile(&amir, &symbols, &type_info).unwrap();
+
+    let result: bool = unsafe {
+        let f: unsafe fn() -> bool = module.get_fn("main").unwrap();
+        f()
+    };
+    assert!(result);
+}

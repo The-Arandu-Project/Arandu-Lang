@@ -374,7 +374,11 @@ impl TypeInfo {
         }
         self.type_interner.with_type(id, |ty| match ty {
             ArType::Primitive(p) => {
-                p.is_numeric() || matches!(p, Primitive::Bool | Primitive::Char | Primitive::Byte)
+                p.is_numeric()
+                    || matches!(
+                        p,
+                        Primitive::Bool | Primitive::Char | Primitive::Byte | Primitive::Str
+                    )
             }
             ArType::IntLiteral | ArType::FloatLiteral | ArType::GenRef => true,
             ArType::Named(sym, args) => {
