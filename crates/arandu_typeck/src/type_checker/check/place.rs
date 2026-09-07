@@ -86,12 +86,13 @@ pub(crate) fn synth_place(checker: &mut TypeChecker<'_>, place: &arandu_parser::
                 let field_from_struct = if let Some((struct_id, args)) = struct_info_opt {
                     let resolved_args: Vec<ArType> =
                         args.iter().map(|&a| interner.resolve(a)).collect();
-                    if let Some(fields_map) = super::super::types::struct_fields_instantiated(
+                    if let Some(field_ty) = super::super::types::struct_field_instantiated(
                         checker,
                         struct_id,
                         &resolved_args,
+                        name.as_str(),
                     ) {
-                        fields_map.get(name.as_str()).cloned()
+                        Some(field_ty)
                     } else {
                         checker
                             .type_info
