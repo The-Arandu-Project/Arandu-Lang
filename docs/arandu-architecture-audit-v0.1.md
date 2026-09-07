@@ -208,6 +208,25 @@ evidências necessárias; esta seção não mantém outra fila de implementaçã
 
 ### Validação de mercado
 
+O alvo `fuzz_module_graph` amplia o oracle incremental para remoção, recriação,
+renomeação, imports ausentes, assinaturas e ciclos de três módulos. A suíte
+limitada executa 100 pares com restauração e 32 sequências de 24 operações:
+1.268 edições. O writer atualiza `DirectoryListing`; a DB fria recebe apenas o
+estado final de cada passo. A comparação normaliza identidades de arquivos por
+caminho, preservando spans, ordem, mensagens, labels e replacements. O sentinel
+sem fonte usado pela recuperação de ciclos permanece distinto dos arquivos.
+
+A sequência reduzida `03 08` encontrou uma função ausente na AST incremental.
+Adicionar um import e alterar o corpo dentro do intervalo do item antigo
+produzia um único nó CST contendo dois itens. O teste posterior de quantidade
+de nós não detectava isso, pois a substituição já forçava um único nó. O reparse
+agora verifica a quantidade de itens nos tokens novos, equilíbrio de chaves e
+erros lexicais antes da substituição; mudanças de fronteira usam parse completo.
+Edições locais válidas mantêm o reuso dos irmãos, coberto pelo teste de identidade
+green existente. A regressão compara CST e tokens com parse frio, incluindo
+import novo, chave removida e comentário não terminado. A seed reduzida é
+reexecutada pelo runner isolado, além da matriz de fuzzing existente.
+
 O alvo `fuzz_incremental` complementa fuzzing de crashes com um oracle
 diferencial: após cada edição, compara o conteúdo completo dos diagnósticos
 IDE de dois módulos em uma DB aquecida e uma DB nova. A ordem de registro

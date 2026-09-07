@@ -6,6 +6,7 @@
 use arandu_query::{AnalysisHost, DatabaseImpl};
 
 mod incremental;
+mod module_graph;
 
 pub const MAX_INPUT_BYTES: usize = 64 * 1024;
 
@@ -19,10 +20,11 @@ pub enum Target {
     Structured,
     GenRef,
     Incremental,
+    ModuleGraph,
 }
 
 impl Target {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Lex,
         Self::Syntax,
         Self::Pipeline,
@@ -31,6 +33,7 @@ impl Target {
         Self::Structured,
         Self::GenRef,
         Self::Incremental,
+        Self::ModuleGraph,
     ];
 
     pub const fn name(self) -> &'static str {
@@ -43,6 +46,7 @@ impl Target {
             Self::Structured => "structured",
             Self::GenRef => "genref",
             Self::Incremental => "incremental",
+            Self::ModuleGraph => "module-graph",
         }
     }
 
@@ -64,6 +68,7 @@ pub fn run(target: Target, data: &[u8]) {
         Target::Structured => run_structured(data),
         Target::GenRef => run_genref(data),
         Target::Incremental => incremental::run(data),
+        Target::ModuleGraph => module_graph::run(data),
     }
 }
 

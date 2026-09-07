@@ -8,6 +8,12 @@ publish = false
 cargo-fuzz = true
 
 [[bin]]
+name = "fuzz_module_graph"
+path = "fuzz_targets/fuzz_module_graph.rs"
+test = false
+doc = false
+
+[[bin]]
 name = "fuzz_incremental"
 path = "fuzz_targets/fuzz_incremental.rs"
 test = false

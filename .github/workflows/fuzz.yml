@@ -28,6 +28,7 @@ jobs:
           - fuzz_cycles
           - fuzz_genref
           - fuzz_incremental
+          - fuzz_module_graph
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
