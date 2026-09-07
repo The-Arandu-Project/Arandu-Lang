@@ -192,3 +192,66 @@ fn file_ide_diagnostics_fingerprint_stable_on_noop() {
     let fp2 = arandu_query::ide_diags_fingerprint(d2);
     assert_eq!(fp1, fp2);
 }
+
+#[test]
+fn unicode_incremental_adversarial_edits_preserve_cst_and_item_boundaries() {
+    let mut db = DatabaseImpl::new();
+    let initial_src = r#"
+func cálculo(x: int): int {
+    return x + 10
+}
+
+func maçã(): str {
+    return "🍎 delicioso"
+}
+
+func operação_válida(): int {
+    return 42
+}
+"#;
+    let file = db.new_file("unicode_adv.aru".into(), initial_src.into());
+
+    let funcs1 = file_func_symbols(&db, file);
+    assert_eq!(
+        funcs1.value.len(),
+        3,
+        "expected 3 Unicode functions initially"
+    );
+    let diags1 = file_ide_diagnostics(&db, file);
+    assert_eq!(diags1.value.len(), 0, "no diagnostics expected initially");
+
+    // Edit only maçã with astral and multi-byte characters
+    let edited_src = r#"
+func cálculo(x: int): int {
+    return x + 10
+}
+
+func maçã(): str {
+    let detalhe = "🌟 super maçã 🍏 com açúcar"
+    return detalhe
+}
+
+func operação_válida(): int {
+    return 42
+}
+"#;
+    file.set_text(&mut db).to(Arc::from(edited_src));
+
+    let funcs2 = file_func_symbols(&db, file);
+    assert_eq!(
+        funcs2.value.len(),
+        3,
+        "expected 3 Unicode functions after incremental edit"
+    );
+    let diags2 = file_ide_diagnostics(&db, file);
+    assert_eq!(diags2.value.len(), 0, "no diagnostics expected after edit");
+
+    // Verify AMIR is reachable for all items
+    for &func_sym in funcs2.value.iter() {
+        let amir = func_amir(&db, file, func_sym);
+        assert!(
+            !amir.blocks.is_empty(),
+            "each function should have non-empty blocks"
+        );
+    }
+}

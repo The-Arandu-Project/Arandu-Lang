@@ -444,6 +444,16 @@ pub fn expand_aliases(checker: &mut TypeChecker<'_>, ty: ArType) -> ArType {
 
 fn expand_aliases_rec(checker: &mut TypeChecker<'_>, ty: ArType, depth: usize) -> ArType {
     if depth > 64 {
+        let span = match &ty {
+            ArType::Named(symbol_id, _) => checker.symbols.try_get(*symbol_id).map(|s| s.span),
+            _ => None,
+        }
+        .unwrap_or_else(|| arandu_lexer::Span::new(0, 0, 0));
+        checker.diagnostics.push(crate::Diagnostic::error(
+            crate::DiagCode::T029RecursiveStructInfiniteSize,
+            "recursive type expansion exceeds recursion limit".to_string(),
+            span,
+        ));
         return ArType::Error;
     }
     match ty {

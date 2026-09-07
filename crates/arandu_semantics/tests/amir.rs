@@ -1040,3 +1040,91 @@ func main(): int {
         x.span
     );
 }
+
+#[test]
+fn validate_amir_rejects_mismatched_suspend_edge_arguments() {
+    use arandu_semantics::passes::type_checker::types::Primitive;
+    let interner = arandu_middle::types::TypeInterner::new();
+    let int_ty = interner.intern(ArType::Primitive(Primitive::Int));
+    let bool_ty = interner.intern(ArType::Primitive(Primitive::Bool));
+
+    // Block 1 expects 1 parameter of type int_ty
+    let blocks = vec![
+        AmirBasicBlock {
+            id: BlockId::from_usize(0),
+            statements: DenseRange::empty(),
+            params: DenseRange::empty(),
+            // Suspend passes 0 arguments to bb1, which expects 1 parameter (SSA-EDGE violation)
+            terminator: AmirTerminator::Suspend {
+                future: AmirOperand::Constant(AmirConstant::Nil),
+                resume: BlockId::from_usize(1),
+                args: Vec::new(),
+            },
+        },
+        AmirBasicBlock {
+            id: BlockId::from_usize(1),
+            statements: DenseRange::empty(),
+            params: DenseRange::new(0, 1),
+            terminator: AmirTerminator::Return,
+        },
+    ];
+
+    let func = AmirFunc {
+        symbol: symbol(0),
+        return_type: int_ty,
+        receiver: None,
+        params: Vec::new(),
+        locals: Vec::new(),
+        temps: vec![AmirTemp {
+            id: temp(0),
+            ty: bool_ty,
+            is_copy: true,
+            is_nullable: false,
+            span: dummy_span(),
+        }],
+        cfg: arandu_semantics::cfg::compute_cfg_edges(&blocks),
+        blocks,
+        block_params: vec![BlockParam {
+            id: temp(0),
+            local: local(0),
+            ty: int_ty,
+            from: None,
+            moved: false,
+        }],
+        stmts: AmirStmtTable::new(),
+    };
+    let program = arandu_semantics::amir::AmirProgram {
+        funcs: vec![func],
+        literal_pool: AmirLiteralPool::default(),
+        extern_funcs: Default::default(),
+    };
+
+    let issues = validate_amir_program(&program, &validation_symbols(), &interner);
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.code == DiagCode::ICEGEN002 && issue.message.contains("SSA-EDGE")),
+        "expected SSA-EDGE validation error for mismatched Suspend arguments count: {issues:?}"
+    );
+
+    // Now test SSA-TYPE mismatch: pass 1 argument of type bool_ty when int_ty is expected
+    let mut func_type_mismatch = program.funcs[0].clone();
+    func_type_mismatch.blocks[0].terminator = AmirTerminator::Suspend {
+        future: AmirOperand::Constant(AmirConstant::Nil),
+        resume: BlockId::from_usize(1),
+        args: vec![AmirOperand::Copy(temp(0))], // temp(0) has type bool_ty
+    };
+    let program_type_mismatch = arandu_semantics::amir::AmirProgram {
+        funcs: vec![func_type_mismatch],
+        literal_pool: AmirLiteralPool::default(),
+        extern_funcs: Default::default(),
+    };
+    let issues_type =
+        validate_amir_program(&program_type_mismatch, &validation_symbols(), &interner);
+    assert!(
+        issues_type
+            .iter()
+            .any(|issue| issue.code == DiagCode::ICEGEN002 && issue.message.contains("SSA-TYPE")),
+        "expected SSA-TYPE validation error for incompatible Suspend argument type: {issues_type:?}"
+    );
+}

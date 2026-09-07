@@ -58,7 +58,7 @@ impl DataLayout {
     /// - `i64`/`u64`/`f64` = 8/8
     #[must_use]
     pub fn ptr_width(w: u64) -> Self {
-        debug_assert!(
+        assert!(
             w == 4 || w == 8,
             "DataLayout::ptr_width expects 4 or 8, got {w}"
         );
@@ -151,5 +151,11 @@ mod tests {
     fn object_size_bound_follows_target_pointer_width() {
         assert_eq!(DataLayout::ptr_width(4).object_size_bound(), 1_u64 << 31);
         assert_eq!(DataLayout::ptr_width(8).object_size_bound(), 1_u64 << 63);
+    }
+
+    #[test]
+    #[should_panic(expected = "DataLayout::ptr_width expects 4 or 8, got 2")]
+    fn ptr_width_rejects_unsupported_widths() {
+        let _ = DataLayout::ptr_width(2);
     }
 }

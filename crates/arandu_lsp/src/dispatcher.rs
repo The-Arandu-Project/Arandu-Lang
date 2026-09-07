@@ -529,13 +529,13 @@ fn handle_job_result(
         JobResult::JsonResponse { id, .. }
         | JobResult::JsonError { id, .. }
         | JobResult::Failed { id: Some(id), .. }
-        | JobResult::Cancelled { id } => {
+        | JobResult::Cancelled { id }
+        | JobResult::Rejected { id } => {
             state.pending_requests.remove(id);
         }
         JobResult::WorkspaceReload(_)
         | JobResult::Diagnostics { .. }
-        | JobResult::Failed { id: None, .. }
-        | JobResult::Rejected { .. } => {}
+        | JobResult::Failed { id: None, .. } => {}
     }
     match job {
         JobResult::WorkspaceReload(reload) if !state.pending_requests.is_empty() => {
