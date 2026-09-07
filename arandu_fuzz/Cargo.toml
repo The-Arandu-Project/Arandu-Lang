@@ -7,6 +7,12 @@ publish = false
 [package.metadata]
 cargo-fuzz = true
 
+[[bin]]
+name = "fuzz_incremental"
+path = "fuzz_targets/fuzz_incremental.rs"
+test = false
+doc = false
+
 [dependencies]
 libfuzzer-sys = "0.4.13"
 arandu_lexer = { path = "../crates/arandu_lexer" }

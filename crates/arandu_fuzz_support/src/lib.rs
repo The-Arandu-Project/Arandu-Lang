@@ -5,6 +5,8 @@
 
 use arandu_query::{AnalysisHost, DatabaseImpl};
 
+mod incremental;
+
 pub const MAX_INPUT_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -16,10 +18,11 @@ pub enum Target {
     LexSimd,
     Structured,
     GenRef,
+    Incremental,
 }
 
 impl Target {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Lex,
         Self::Syntax,
         Self::Pipeline,
@@ -27,6 +30,7 @@ impl Target {
         Self::LexSimd,
         Self::Structured,
         Self::GenRef,
+        Self::Incremental,
     ];
 
     pub const fn name(self) -> &'static str {
@@ -38,6 +42,7 @@ impl Target {
             Self::LexSimd => "lex-simd",
             Self::Structured => "structured",
             Self::GenRef => "genref",
+            Self::Incremental => "incremental",
         }
     }
 
@@ -58,6 +63,7 @@ pub fn run(target: Target, data: &[u8]) {
         Target::LexSimd => run_lex_simd(data),
         Target::Structured => run_structured(data),
         Target::GenRef => run_genref(data),
+        Target::Incremental => incremental::run(data),
     }
 }
 
