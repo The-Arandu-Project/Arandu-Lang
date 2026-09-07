@@ -33,6 +33,11 @@ pub(crate) const LSP_CONTENT_MODIFIED: i32 = -32801;
 pub(crate) const LSP_REQUEST_CANCELLED: i32 = -32800;
 pub(crate) const LSP_SERVER_CANCELLED: i32 = -32802;
 pub(crate) const JSON_RPC_INTERNAL_ERROR: i32 = -32603;
+// Includes running jobs and results awaiting publication, unlike pool capacity.
+const MAX_PENDING_REQUESTS: usize = 64;
+
+#[cfg(test)]
+mod tests;
 
 /// Outcomes sent from worker threads back to the main loop.
 pub(crate) enum JobResult {
@@ -68,6 +73,33 @@ pub(crate) enum JobResult {
     },
 }
 
+enum Event {
+    Protocol(Result<Message, crossbeam_channel::RecvError>),
+    Job(Result<JobResult, crossbeam_channel::RecvError>),
+    Workspace(Result<WorkspaceEvent, crossbeam_channel::RecvError>),
+    Timeout,
+}
+
+fn next_event(
+    connection: &Connection,
+    jobs: &Receiver<JobResult>,
+    workspace: &Receiver<WorkspaceEvent>,
+    requests_pending: bool,
+    timeout: Duration,
+) -> Event {
+    // Keep discovery in its bounded producer channel until every admitted
+    // request has delivered a terminal response. Worker retirement is too
+    // early: its result may still be waiting in `jobs` at the old revision.
+    let paused = never();
+    let workspace = if requests_pending { &paused } else { workspace };
+    select_biased! {
+        recv(connection.receiver) -> message => Event::Protocol(message),
+        recv(jobs) -> job => Event::Job(job),
+        recv(workspace) -> event => Event::Workspace(event),
+        default(timeout) => Event::Timeout,
+    }
+}
+
 pub(crate) fn event_loop(
     connection: &Connection,
     state: &mut ServerState,
@@ -79,13 +111,20 @@ pub(crate) fn event_loop(
     let mut workspace_progress_started = false;
     let mut workspace_done = false;
     loop {
+        apply_deferred_reload(connection, state, pool, &job_tx)?;
         let timeout = state
             .vfs
             .next_deadline()
             .unwrap_or(Duration::from_secs(3600));
 
-        select_biased! {
-            recv(connection.receiver) -> msg => {
+        match next_event(
+            connection,
+            &job_rx,
+            &workspace_rx,
+            !state.pending_requests.is_empty(),
+            timeout,
+        ) {
+            Event::Protocol(msg) => {
                 let Ok(msg) = msg else { break };
                 match msg {
                     Message::Request(req) => {
@@ -110,59 +149,62 @@ pub(crate) fn event_loop(
                         handlers::dispatch_notification(&mut ctx, not)?;
                     }
                     Message::Response(response)
-                        if response.id == RequestId::from(WORKSPACE_PROGRESS_REQUEST_ID.to_owned())
-                            && response.response_result.is_ok() => {
-                            send_workspace_progress(connection, WorkDoneProgress::Begin(
-                                lsp_types::WorkDoneProgressBegin {
-                                    title: "Indexing Arandu workspace".into(),
-                                    cancellable: Some(false),
-                                    message: Some("Discovering packages and source files".into()),
-                                    percentage: None,
-                                },
-                            ))?;
-                            workspace_progress_started = true;
-                            if workspace_done {
-                                finish_workspace_progress(connection)?;
-                                workspace_progress_started = false;
-                            }
+                        if response.id
+                            == RequestId::from(WORKSPACE_PROGRESS_REQUEST_ID.to_owned())
+                            && response.response_result.is_ok() =>
+                    {
+                        send_workspace_progress(
+                            connection,
+                            WorkDoneProgress::Begin(lsp_types::WorkDoneProgressBegin {
+                                title: "Indexing Arandu workspace".into(),
+                                cancellable: Some(false),
+                                message: Some("Discovering packages and source files".into()),
+                                percentage: None,
+                            }),
+                        )?;
+                        workspace_progress_started = true;
+                        if workspace_done {
+                            finish_workspace_progress(connection)?;
+                            workspace_progress_started = false;
                         }
+                    }
                     Message::Response(_) => {}
                 }
             }
-            recv(job_rx) -> job => {
+            Event::Job(job) => {
                 if let Ok(job) = job {
                     handle_job_result(connection, state, pool, &job_tx, job)?;
                 }
             }
-            recv(workspace_rx) -> event => {
-                match event {
-                    Ok(WorkspaceEvent::Project(project)) => {
-                        let mut project = *project;
-                        for file in project.module_files.drain(..) {
-                            crate::workspace::register_workspace_file(state, file);
-                        }
-                        state.configure_package(project).map_err(std::io::Error::other)?;
-                    }
-                    Ok(WorkspaceEvent::File(file)) => {
+            Event::Workspace(event) => match event {
+                Ok(WorkspaceEvent::Project(project)) => {
+                    let mut project = *project;
+                    for file in project.module_files.drain(..) {
                         crate::workspace::register_workspace_file(state, file);
                     }
-                    Ok(WorkspaceEvent::Error(error)) => {
-                        send_server_status(connection, "error", &error)?;
-                    }
-                    Ok(WorkspaceEvent::Done) => {
-                        spawn_open_diagnostics(state, pool, &job_tx);
-                        workspace_done = true;
-                        if workspace_progress_started {
-                            finish_workspace_progress(connection)?;
-                            workspace_progress_started = false;
-                        }
-                        send_server_status(connection, "ready", "Workspace ready")?;
-                        workspace_rx = never();
-                    }
-                    Err(_) => workspace_rx = never(),
+                    state
+                        .configure_package(project)
+                        .map_err(std::io::Error::other)?;
                 }
-            }
-            default(timeout) => {
+                Ok(WorkspaceEvent::File(file)) => {
+                    crate::workspace::register_workspace_file(state, file);
+                }
+                Ok(WorkspaceEvent::Error(error)) => {
+                    send_server_status(connection, "error", &error)?;
+                }
+                Ok(WorkspaceEvent::Done) => {
+                    spawn_open_diagnostics(state, pool, &job_tx);
+                    workspace_done = true;
+                    if workspace_progress_started {
+                        finish_workspace_progress(connection)?;
+                        workspace_progress_started = false;
+                    }
+                    send_server_status(connection, "ready", "Workspace ready")?;
+                    workspace_rx = never();
+                }
+                Err(_) => workspace_rx = never(),
+            },
+            Event::Timeout => {
                 if state.vfs.has_pending() {
                     pool.cancel_requests();
                 }
@@ -241,13 +283,16 @@ pub(crate) fn flush_for_request(
 /// Clones the URI/FileId maps up front; the closure only touches the captured
 /// snapshot, never live server state.
 pub(crate) fn spawn_goto(
-    state: &ServerState,
+    state: &mut ServerState,
     pool: &WorkerPool,
     job_tx: &Sender<JobResult>,
     req_id: RequestId,
     uri: lsp_types::Uri,
     pos: lsp_types::Position,
 ) {
+    if reject_saturated_request(state, job_tx, &req_id) {
+        return;
+    }
     let snap = state.snapshot();
     let revision = snap.revision;
     let by_uri = state.by_uri.clone();
@@ -298,12 +343,14 @@ pub(crate) fn spawn_goto(
         .is_err()
     {
         let _ = job_tx.send(JobResult::Rejected { id: rejected_id });
+    } else {
+        state.pending_requests.insert(rejected_id);
     }
 }
 
 /// Runs `f` over the snapshot on an interactive worker and replies with JSON.
 pub(crate) fn spawn_json<F>(
-    state: &ServerState,
+    state: &mut ServerState,
     pool: &WorkerPool,
     job_tx: &Sender<JobResult>,
     req_id: RequestId,
@@ -311,6 +358,9 @@ pub(crate) fn spawn_json<F>(
 ) where
     F: FnOnce(&AnalysisSnapshot, &FxHashMap<String, DocInfo>) -> serde_json::Value + Send + 'static,
 {
+    if reject_saturated_request(state, job_tx, &req_id) {
+        return;
+    }
     let snap = state.snapshot();
     let revision = snap.revision;
     let docs = state.doc_info_map();
@@ -349,12 +399,14 @@ pub(crate) fn spawn_json<F>(
         .is_err()
     {
         let _ = job_tx.send(JobResult::Rejected { id: rejected_id });
+    } else {
+        state.pending_requests.insert(rejected_id);
     }
 }
 
 /// Like [`spawn_json`], but `f` may produce a protocol error response.
 pub(crate) fn spawn_json_result<F>(
-    state: &ServerState,
+    state: &mut ServerState,
     pool: &WorkerPool,
     job_tx: &Sender<JobResult>,
     req_id: RequestId,
@@ -367,6 +419,9 @@ pub(crate) fn spawn_json_result<F>(
         + Send
         + 'static,
 {
+    if reject_saturated_request(state, job_tx, &req_id) {
+        return;
+    }
     let snap = state.snapshot();
     let revision = snap.revision;
     let docs = state.doc_info_map();
@@ -413,6 +468,8 @@ pub(crate) fn spawn_json_result<F>(
         .is_err()
     {
         let _ = job_tx.send(JobResult::Rejected { id: rejected_id });
+    } else {
+        state.pending_requests.insert(rejected_id);
     }
 }
 
@@ -429,6 +486,38 @@ pub(crate) fn send_cancelled_if_needed(
     true
 }
 
+fn reject_saturated_request(
+    state: &ServerState,
+    job_tx: &Sender<JobResult>,
+    id: &RequestId,
+) -> bool {
+    if state.pending_requests.len() < MAX_PENDING_REQUESTS {
+        return false;
+    }
+    let _ = job_tx.send(JobResult::Rejected { id: id.clone() });
+    true
+}
+
+fn apply_deferred_reload(
+    connection: &Connection,
+    state: &mut ServerState,
+    pool: &WorkerPool,
+    job_tx: &Sender<JobResult>,
+) -> Result<(), Box<dyn Error + Sync + Send>> {
+    if state.pending_requests.is_empty() {
+        if let Some(reload) = state.deferred_reload.take() {
+            handle_job_result(
+                connection,
+                state,
+                pool,
+                job_tx,
+                JobResult::WorkspaceReload(reload),
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn handle_job_result(
     connection: &Connection,
     state: &mut ServerState,
@@ -436,7 +525,24 @@ fn handle_job_result(
     job_tx: &Sender<JobResult>,
     job: JobResult,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
+    match &job {
+        JobResult::JsonResponse { id, .. }
+        | JobResult::JsonError { id, .. }
+        | JobResult::Failed { id: Some(id), .. }
+        | JobResult::Cancelled { id } => {
+            state.pending_requests.remove(id);
+        }
+        JobResult::WorkspaceReload(_)
+        | JobResult::Diagnostics { .. }
+        | JobResult::Failed { id: None, .. }
+        | JobResult::Rejected { .. } => {}
+    }
     match job {
+        JobResult::WorkspaceReload(reload) if !state.pending_requests.is_empty() => {
+            // Background commits obey the same writer barrier as discovery.
+            // Retain only the latest completed plan while requests are active.
+            state.deferred_reload = Some(reload);
+        }
         JobResult::WorkspaceReload(Ok(project)) => {
             let mut project = *project;
             for file in project.module_files.drain(..) {
