@@ -208,6 +208,45 @@ evidências necessárias; esta seção não mantém outra fila de implementaçã
 
 ### Validação de mercado
 
+O alvo `fuzz_incremental` complementa fuzzing de crashes com um oracle
+diferencial: após cada edição, compara o conteúdo completo dos diagnósticos
+IDE de dois módulos em uma DB aquecida e uma DB nova. A ordem de registro
+permanece igual para preservar a correspondência dos IDs; a ordem de demanda
+alterna. O gerador cobre corpo e assinatura exportada, renomeação de símbolo,
+recuperação sintática, símbolo ausente, Unicode, função irmã e restauração.
+Cada entrada executa no máximo 24 edições, sem snapshots retidos na mutação.
+
+A suíte comum executa todos os 100 pares de operações seguidos de restauração
+e uma sequência de 15 edições: 415 edições e 830 comparações. O mesmo código
+atende libFuzzer e o replay isolado de `check-fuzz-regressions`. A seed inicial
+é preventiva, não representa um bug encontrado. A campanha longa usa o
+workflow de fuzzing existente; uma falha deve ser reproduzida e reduzida antes
+de virar regressão e correção da causa raiz.
+
+Esse oracle encontra desacordo incremental, não prova que ambas as análises
+estão semanticamente corretas. Ainda não cobre alteração do grafo de arquivos,
+execução dos backends nem todas as capacidades LSP. A fila de expansão segue
+no roadmap único. A abordagem adapta a comparação independente do
+[Csmith](https://github.com/csmith-project/csmith) e a redução de casos do
+[guia de fuzzing do rustc](https://rustc-dev-guide.rust-lang.org/fuzzing.html).
+
+Na validação Linux desta campanha, a primeira execução do workspace falhou em
+`stdio_open_document_stays_interactive_during_discovery`: completion recebeu
+ContentModified (-32801). A repetição completa e 30 execuções isoladas passaram.
+A investigação seguinte reproduziu a ordenação incorreta com canais: enquanto
+o worker aguarda liberação, a descoberta já está pronta e o seletor antigo a
+consome. O registro pode avançar a revisão antes da entrega do resultado.
+
+O dispatcher agora mantém até 64 identidades de requests admitidos até a
+entrega terminal. Nesse intervalo, deixa a descoberta no canal limitado
+existente e mantém protocolo, resultados e debounce ativos. Reloads de pacote
+também aguardam, em um único slot que conserva o plano concluído mais recente.
+Sucesso, erro, panic capturado e cancelamento liberam a barreira; rejeições por
+saturação não entram nela. O teste de ordenação falhou antes da correção e
+passou depois, sem sleeps. A checagem de revisão permanece: uma edição real
+ainda causa ContentModified para resultado obsoleto. Não houve relaxamento do
+teste stdio. O marco correspondente é DX.6a do roadmap.
+
 O modelo segue o red-green incremental do rustc: pureza, fingerprints estáveis
 e projeções pequenas evitam propagação falsa. O rust-analyzer confirma a
 necessidade de cancelamento/snapshots ao aplicar mudanças Salsa. O critério de

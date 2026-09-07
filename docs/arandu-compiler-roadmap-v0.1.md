@@ -152,7 +152,7 @@ contrato, benchmark ou prova de segurança que justifique o custo.
 | --- | --- | --- | --- |
 | Typed holes e sintaxe total | `planned` | LSP mantém tipos, completion e hover durante código incompleto; execução continua bloqueada enquanto houver holes | [Hazelnut Live](https://arxiv.org/abs/1805.00155), [Live Pattern Matching with Typed Holes](https://doi.org/10.1145/3586048) |
 | Effects + capabilities | `planned` | A2 evolui de rótulos de efeito para autoridade explícita sobre rede, filesystem, processos e FFI | [Effect Capabilities for Haskell](https://doi.org/10.1016/j.scico.2015.12.002), [Object-Capability Model](https://arxiv.org/abs/1907.07154) |
-| Teste diferencial/metamórfico | `planned` | SL_T compara C/Cranelift e transformações semanticamente equivalentes para encontrar bugs sem oracle manual | [Csmith](https://users.cs.utah.edu/~regehr/papers/pldi11-preprint.pdf), [Metamorphic Testing de compiladores](https://onlinelibrary.wiley.com/doi/10.1002/stvr.1812) |
+| Teste diferencial/metamórfico | `partial` | Fuzzing incremental compara diagnósticos após edições com uma DB nova; ampliar a comparação C/Cranelift e transformações semanticamente equivalentes no SL_T permanece pendente | [Csmith](https://users.cs.utah.edu/~regehr/papers/pldi11-preprint.pdf), [Metamorphic Testing de compiladores](https://onlinelibrary.wiley.com/doi/10.1002/stvr.1812) |
 | Equality saturation/e-graphs | `research` | Otimizações AMIR para expressões puras depois de benchmark de custo e limite de crescimento do e-graph | [egg](https://arxiv.org/abs/2004.03082) |
 | WebAssembly Component Model/WIT | `planned` | target WASM, plugins e compiler service com interfaces tipadas e ABI portável; substitui a ideia de usar Protobuf como ABI | [WIT](https://component-model.bytecodealliance.org/design/wit.html), [Component Model](https://component-model.bytecodealliance.org/design/component-model-concepts.html) |
 | Refinement types leves | `research` | Contratos opcionais para índices, paths, handles e estados de recursos sem introduzir tipos dependentes completos | [Refinement Types: A Tutorial](https://arxiv.org/abs/2010.07763) |
@@ -258,6 +258,10 @@ Fase 3 — OSSA Avançado, Semântica e OS Runtime (v0.3) · [PARCIAL; vários m
    └─ [x] DX.6   LSP gold — `arandu_lsp` com `lsp-server` + main síncrona + VFS debounce +
                  snapshot workers (`AnalysisHost`/`AnalysisSnapshot`); diagnostics + goto-def +
                  multi-file; `DocumentId` geracional; stale revision descarta jobs
+[x] DX.6a   Descoberta inicial e reload de pacote aguardam a entrega das respostas
+            interativas; controle limitado a 64 requests e um reload coalescido.
+            Regressões controladas cobrem ordenação, erro, cancelamento, saturação
+            e revisão stale sem relaxar `stdio_open_document_stays_interactive_during_discovery`.
 [x] PERF.5  Arc nos campos pesados de TypeCheckResult (pré-requisito para DX.6)
    │  Feito: symbols / resolved / type_info atrás de `Arc`; diagnostics por valor.
    │  Clone de `TypeCheckResult` é O(1) atomic refcount; `type_info_mut()` /
