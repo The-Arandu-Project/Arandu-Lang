@@ -427,7 +427,12 @@ impl<const N: usize> IntegerProgram<N> {
 
     fn emit_source(&self) -> String {
         let mut source = String::with_capacity(768);
-        writeln!(source, "func main(): int {{").unwrap();
+        self.emit_function(&mut source, "main");
+        source
+    }
+
+    fn emit_function(&self, source: &mut String, name: &str) {
+        writeln!(source, "func {name}(): int {{").unwrap();
         writeln!(source, "    let mut value: int = {}", self.initial).unwrap();
         for (&operation, &operand) in self.operations.iter().zip(&self.operands) {
             let operator = match operation {
@@ -460,8 +465,40 @@ impl<const N: usize> IntegerProgram<N> {
         writeln!(source, "    }}").unwrap();
         writeln!(source, "    return value").unwrap();
         writeln!(source, "}}").unwrap();
-        source
     }
+}
+
+const STRUCTURAL_INTEGER_SEEDS: [u64; 8] = [
+    0,
+    1,
+    0x243f_6a88_85a3_08d3,
+    0x1319_8a2e_0370_7344,
+    0xa409_3822_299f_31d0,
+    0x082e_fa98_ec4e_6c89,
+    u64::MAX - 1,
+    u64::MAX,
+];
+
+fn structural_integer_suite() -> String {
+    let mut source = String::with_capacity(STRUCTURAL_INTEGER_SEEDS.len() * 768);
+    let mut expected = [0i32; STRUCTURAL_INTEGER_SEEDS.len()];
+    for (index, seed) in STRUCTURAL_INTEGER_SEEDS.into_iter().enumerate() {
+        let program = IntegerProgram::<12>::from_seed(seed);
+        program.emit_function(&mut source, &format!("generated{index}"));
+        expected[index] = program.evaluate();
+    }
+    writeln!(source, "func main(): int {{").unwrap();
+    for (index, expected) in expected.into_iter().enumerate() {
+        writeln!(
+            source,
+            "    if generated{index}() != {expected} {{ return {} }}",
+            index + 1
+        )
+        .unwrap();
+    }
+    writeln!(source, "    return 0").unwrap();
+    writeln!(source, "}}").unwrap();
+    source
 }
 
 fn test_execution_parity(name: &str, src: &str) {
@@ -659,18 +696,7 @@ fn optimization_levels_preserve_the_generated_integer_oracle() {
 
 #[test]
 fn structural_integer_programs_agree_across_optimization_levels() {
-    const SEEDS: [u64; 8] = [
-        0,
-        1,
-        0x243f_6a88_85a3_08d3,
-        0x1319_8a2e_0370_7344,
-        0xa409_3822_299f_31d0,
-        0x082e_fa98_ec4e_6c89,
-        u64::MAX - 1,
-        u64::MAX,
-    ];
-
-    for seed in SEEDS {
+    for seed in STRUCTURAL_INTEGER_SEEDS {
         let program = IntegerProgram::<12>::from_seed(seed);
         let source = program.emit_source();
         let expected = program.evaluate();
@@ -692,6 +718,27 @@ fn structural_integer_programs_agree_across_optimization_levels() {
                 "seed {seed:#018x} changed under {level:?}\n{source}"
             );
         }
+    }
+}
+
+#[test]
+fn structural_integer_suite_agrees_between_backends_and_opt_levels() {
+    let source = structural_integer_suite();
+
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let (mut amir, tc) = compile_src(&source);
+        optimize_amir_checked_with_level(
+            &mut amir,
+            tc.symbols.as_ref(),
+            &tc.type_info.type_interner,
+            level,
+        )
+        .unwrap_or_else(|error| panic!("{level:?} rejected structural suite: {error:?}"));
+
+        let jit = execute_cranelift(&amir, &tc);
+        let c = execute_c(&format!("structural_integer_{level:?}"), &amir, &tc);
+        assert_eq!(jit, 0, "{level:?} Cranelift failed generated case {jit}");
+        assert_eq!(c, 0, "{level:?} C failed generated case {c}");
     }
 }
 
