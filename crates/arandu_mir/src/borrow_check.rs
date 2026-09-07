@@ -15,8 +15,8 @@
 
 use crate::BitSet;
 use crate::amir::{
-    AmirFunc, AmirOperand, AmirPlace, AmirRvalue, AmirStmt, AmirTerminator, BlockId, LocalId,
-    TempId, for_each_rvalue_operand, for_each_rvalue_place,
+    AmirFunc, AmirOperand, AmirPlace, AmirProjection, AmirRvalue, AmirStmt, AmirTerminator,
+    BlockId, LocalId, TempId, for_each_rvalue_operand, for_each_rvalue_place,
 };
 // for_each_rvalue_place used in reverse_transfer_stmt
 use crate::borrow_facts::{FuncBorrowFacts, Loan, LoanKind, ProgramPoint, analyze_borrow_facts};
@@ -114,7 +114,7 @@ fn check_stmt(
         AmirStmt::Assign { rhs, .. } => match rhs {
             AmirRvalue::Borrow(place) => {
                 check_new_loan(
-                    place.local,
+                    place,
                     LoanKind::Shared,
                     point,
                     live,
@@ -126,7 +126,7 @@ fn check_stmt(
             }
             AmirRvalue::BorrowMut(place) => {
                 check_new_loan(
-                    place.local,
+                    place,
                     LoanKind::Exclusive,
                     point,
                     live,
@@ -137,8 +137,12 @@ fn check_stmt(
                 );
             }
             AmirRvalue::RelativeBorrow { local, mutable } => {
+                let place = AmirPlace {
+                    local: *local,
+                    projections: smallvec::SmallVec::new(),
+                };
                 check_new_loan(
-                    *local,
+                    &place,
                     if *mutable {
                         LoanKind::Exclusive
                     } else {
@@ -167,11 +171,11 @@ fn check_stmt(
         },
         AmirStmt::Store { lhs, rhs } => {
             // Mutation of the place (whole struct or projected field/element) while borrowed.
-            if place_borrowed(lhs.local, live, facts, point) {
+            if place_borrowed_at(lhs, live, facts, point) {
                 diags.push((
                     block,
                     conflict_diag(
-                        lhs.local,
+                        lhs,
                         func,
                         symbols,
                         facts,
@@ -203,7 +207,7 @@ fn check_stmt(
             check_operand_move(op, point, live, facts, temp_origins, func, symbols, diags);
         }
         AmirStmt::Destroy(place) => {
-            if place_borrowed(place.local, live, facts, point) {
+            if place_borrowed_at(place, live, facts, point) {
                 diags.push((
                     block,
                     destroy_diag(place.local, func, symbols, facts, live, block),
@@ -215,7 +219,7 @@ fn check_stmt(
 }
 
 fn check_new_loan(
-    place: LocalId,
+    place: &AmirPlace,
     kind: LoanKind,
     point: ProgramPoint,
     live: &BitSet<TempId>,
@@ -224,8 +228,8 @@ fn check_new_loan(
     symbols: &SymbolTable,
     diags: &mut Vec<(BlockId, Diagnostic)>,
 ) {
-    let active_shared = active_kind(place, LoanKind::Shared, live, facts, point);
-    let active_excl = active_kind(place, LoanKind::Exclusive, live, facts, point);
+    let active_shared = active_kind_at(place, LoanKind::Shared, live, facts, point);
+    let active_excl = active_kind_at(place, LoanKind::Exclusive, live, facts, point);
 
     let conflict = match kind {
         // `&` conflicts only with active `&mut`
@@ -389,6 +393,58 @@ fn place_borrowed(
 ) -> bool {
     active_kind(local, LoanKind::Shared, live, facts, point)
         || active_kind(local, LoanKind::Exclusive, live, facts, point)
+}
+
+fn place_borrowed_at(
+    place: &AmirPlace,
+    live: &BitSet<TempId>,
+    facts: &FuncBorrowFacts,
+    point: ProgramPoint,
+) -> bool {
+    active_kind_at(place, LoanKind::Shared, live, facts, point)
+        || active_kind_at(place, LoanKind::Exclusive, live, facts, point)
+}
+
+fn active_kind_at(
+    place: &AmirPlace,
+    kind: LoanKind,
+    live: &BitSet<TempId>,
+    facts: &FuncBorrowFacts,
+    point: ProgramPoint,
+) -> bool {
+    facts.loans.iter().enumerate().any(|(loan_index, loan)| {
+        loan.kind == kind
+            && places_may_overlap(
+                place.local,
+                &place.projections,
+                loan.place_local,
+                &loan.place_projections,
+            )
+            && loan_holders_live(loan_index, loan, live, facts, point)
+    })
+}
+
+fn places_may_overlap(
+    left_local: LocalId,
+    left: &[AmirProjection],
+    right_local: LocalId,
+    right: &[AmirProjection],
+) -> bool {
+    if left_local != right_local {
+        return false;
+    }
+    for (left, right) in left.iter().zip(right) {
+        match (left, right) {
+            (AmirProjection::Field(left), AmirProjection::Field(right)) if left != right => {
+                return false;
+            }
+            (AmirProjection::Field(_), AmirProjection::Field(_)) => {}
+            // Index operands and dereferences may refer to the same storage.
+            _ => return true,
+        }
+    }
+    // Equal paths and prefix paths overlap (`pair` overlaps `pair.left`).
+    true
 }
 
 fn active_kind(
@@ -590,6 +646,7 @@ fn local_span(local: LocalId, func: &AmirFunc, symbols: &SymbolTable) -> Span {
 
 fn first_loan_span(
     local: LocalId,
+    borrowed_place: Option<&AmirPlace>,
     facts: &FuncBorrowFacts,
     live: &BitSet<TempId>,
     func: &AmirFunc,
@@ -598,6 +655,16 @@ fn first_loan_span(
 ) -> Span {
     for loan in &facts.loans {
         if loan.place_local != local {
+            continue;
+        }
+        if let Some(place) = borrowed_place
+            && !places_may_overlap(
+                place.local,
+                &place.projections,
+                loan.place_local,
+                &loan.place_projections,
+            )
+        {
             continue;
         }
         let Some(loan_index) = facts
@@ -645,7 +712,7 @@ fn move_while_borrowed_diag(
 ) -> Diagnostic {
     let name = local_name(local, func, symbols);
     let span = local_span(local, func, symbols);
-    let origin = first_loan_span(local, facts, live, func, symbols, current_block);
+    let origin = first_loan_span(local, None, facts, live, func, symbols, current_block);
     Diagnostic::error(
         DiagCode::O002MoveWhileBorrowed,
         format!("cannot move '{name}' while borrowed"),
@@ -665,7 +732,7 @@ fn destroy_diag(
 ) -> Diagnostic {
     let name = local_name(local, func, symbols);
     let span = local_span(local, func, symbols);
-    let origin = first_loan_span(local, facts, live, func, symbols, current_block);
+    let origin = first_loan_span(local, None, facts, live, func, symbols, current_block);
     Diagnostic::error(
         DiagCode::O006DestroyWhileBorrowed,
         format!("cannot destroy '{name}' while borrowed"),
@@ -676,7 +743,7 @@ fn destroy_diag(
 }
 
 fn conflict_diag(
-    local: LocalId,
+    place: &AmirPlace,
     func: &AmirFunc,
     symbols: &SymbolTable,
     facts: &FuncBorrowFacts,
@@ -685,9 +752,18 @@ fn conflict_diag(
     note: &str,
     current_block: BlockId,
 ) -> Diagnostic {
+    let local = place.local;
     let name = local_name(local, func, symbols);
     let span = local_span(local, func, symbols);
-    let origin = first_loan_span(local, facts, live, func, symbols, current_block);
+    let origin = first_loan_span(
+        local,
+        Some(place),
+        facts,
+        live,
+        func,
+        symbols,
+        current_block,
+    );
     Diagnostic::error(
         DiagCode::O003MutableBorrowConflict,
         format!("mutable borrow conflict on '{name}'"),

@@ -45,6 +45,28 @@ fn temp(i: usize, ty: crate::types::TypeId) -> AmirTemp {
     }
 }
 
+#[test]
+fn place_overlap_distinguishes_fields_and_keeps_aliasing_conservative() {
+    let root = LocalId::from_usize(0);
+    let left = SymbolId::new(0, 10);
+    let right = SymbolId::new(0, 11);
+    let left_path = [AmirProjection::Field(left)];
+    let right_path = [AmirProjection::Field(right)];
+    let nested_left = [AmirProjection::Field(left), AmirProjection::Field(right)];
+    let deref = [AmirProjection::Deref];
+
+    assert!(!places_may_overlap(root, &left_path, root, &right_path));
+    assert!(places_may_overlap(root, &[], root, &left_path));
+    assert!(places_may_overlap(root, &left_path, root, &nested_left));
+    assert!(places_may_overlap(root, &deref, root, &deref));
+    assert!(!places_may_overlap(
+        root,
+        &left_path,
+        LocalId::from_usize(1),
+        &left_path,
+    ));
+}
+
 /// `&mut x` then `&x` while first loan live → O003.
 #[test]
 fn o003_shared_while_exclusive() {

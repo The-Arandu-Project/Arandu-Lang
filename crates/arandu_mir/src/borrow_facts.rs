@@ -66,6 +66,9 @@ pub struct Loan {
     pub kind: LoanKind,
     /// Root local of the borrowed place (`x` in `ref x` / `ref x.f`).
     pub place_local: LocalId,
+    /// Projection path retained for field-sensitive conflict checks. Index and
+    /// dereference projections remain conservative because they may alias.
+    pub place_projections: smallvec::SmallVec<[crate::amir::AmirProjection; 2]>,
     /// SSA temps that currently hold this reference value.
     pub holder_temps: BitSet<TempId>,
     /// Stack locals that currently hold this reference value (`let p = &x`).
@@ -290,7 +293,7 @@ fn collect_loans(func: &AmirFunc) -> (Vec<Loan>, Vec<u32>) {
                         borrow_site_counts[bi] += 1;
                         loans.push(new_loan(
                             LoanKind::Shared,
-                            place.local,
+                            place.clone(),
                             *lhs,
                             block.id,
                             false,
@@ -302,7 +305,7 @@ fn collect_loans(func: &AmirFunc) -> (Vec<Loan>, Vec<u32>) {
                         borrow_site_counts[bi] += 1;
                         loans.push(new_loan(
                             LoanKind::Exclusive,
-                            place.local,
+                            place.clone(),
                             *lhs,
                             block.id,
                             false,
@@ -319,7 +322,10 @@ fn collect_loans(func: &AmirFunc) -> (Vec<Loan>, Vec<u32>) {
                             } else {
                                 LoanKind::Shared
                             },
-                            *local,
+                            crate::amir::AmirPlace {
+                                local: *local,
+                                projections: smallvec::SmallVec::new(),
+                            },
                             *lhs,
                             block.id,
                             true,
@@ -470,13 +476,17 @@ fn collect_loans(func: &AmirFunc) -> (Vec<Loan>, Vec<u32>) {
 
 fn new_loan(
     kind: LoanKind,
-    place_local: LocalId,
+    place: crate::amir::AmirPlace,
     holder: TempId,
     origin_block: BlockId,
     relative: bool,
     num_temps: usize,
     num_locals: usize,
 ) -> Loan {
+    let crate::amir::AmirPlace {
+        local: place_local,
+        projections: place_projections,
+    } = place;
     let mut holder_temps = BitSet::with_capacity(num_temps);
     holder_temps.insert(holder);
     let mut holder_temp_paths = vec![BTreeSet::new(); num_temps];
@@ -486,6 +496,7 @@ fn new_loan(
     Loan {
         kind,
         place_local,
+        place_projections,
         holder_temps,
         holder_locals: BitSet::with_capacity(num_locals),
         holder_temp_paths,

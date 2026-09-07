@@ -3,6 +3,90 @@ use arandu_semantics::{
     DiagCode, Severity, lower_to_amir, lower_to_amir_with_interfaces, lower_to_hir,
     resolve_for_test, type_check,
 };
+use std::fmt::Write as _;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ModelLoanKind {
+    Shared,
+    Exclusive,
+}
+
+impl ModelLoanKind {
+    const ALL: [Self; 2] = [Self::Shared, Self::Exclusive];
+
+    const fn conflicts_with(self, other: Self) -> bool {
+        matches!(self, Self::Exclusive) || matches!(other, Self::Exclusive)
+    }
+
+    const fn type_syntax(self) -> &'static str {
+        match self {
+            Self::Shared => "ref int",
+            Self::Exclusive => "mut ref int",
+        }
+    }
+
+    const fn expression_syntax(self) -> &'static str {
+        match self {
+            Self::Shared => "&value",
+            Self::Exclusive => "&mut value",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ModelCfgShape {
+    Linear,
+    Diamond,
+}
+
+impl ModelCfgShape {
+    const ALL: [Self; 2] = [Self::Linear, Self::Diamond];
+}
+
+fn emit_two_loan_program(
+    first: ModelLoanKind,
+    second: ModelLoanKind,
+    shape: ModelCfgShape,
+) -> String {
+    let mut source = String::with_capacity(512);
+    writeln!(
+        source,
+        "func consume(first: {}, second: {}): int {{ return *first + *second }}",
+        first.type_syntax(),
+        second.type_syntax()
+    )
+    .unwrap();
+    writeln!(source, "func main(): int {{").unwrap();
+    writeln!(source, "    let mut value = 21").unwrap();
+    writeln!(source, "    let first = {}", first.expression_syntax()).unwrap();
+    match shape {
+        ModelCfgShape::Linear => {
+            writeln!(source, "    let second = {}", second.expression_syntax()).unwrap();
+            writeln!(source, "    return consume(first, second)").unwrap();
+        }
+        ModelCfgShape::Diamond => {
+            writeln!(source, "    if value > 0 {{").unwrap();
+            writeln!(
+                source,
+                "        let second = {}",
+                second.expression_syntax()
+            )
+            .unwrap();
+            writeln!(source, "        return consume(first, second)").unwrap();
+            writeln!(source, "    }} else {{").unwrap();
+            writeln!(
+                source,
+                "        let second = {}",
+                second.expression_syntax()
+            )
+            .unwrap();
+            writeln!(source, "        return consume(first, second)").unwrap();
+            writeln!(source, "    }}").unwrap();
+        }
+    }
+    writeln!(source, "}}").unwrap();
+    source
+}
 
 fn ownership_codes(src: &str) -> Vec<DiagCode> {
     let program = arandu_parser::parse(src).expect("parse");
@@ -63,6 +147,46 @@ fn assert_cfg_equivalent(case: &str, left: &str, right: &str, expected: &[DiagCo
         first, expected,
         "{case}: unexpected ownership classification"
     );
+}
+
+#[test]
+fn two_loan_model_matches_all_kinds_and_cfg_shapes() {
+    for first in ModelLoanKind::ALL {
+        for second in ModelLoanKind::ALL {
+            let expected: &[_] = if first.conflicts_with(second) {
+                &[DiagCode::O003MutableBorrowConflict]
+            } else {
+                &[]
+            };
+            let linear = emit_two_loan_program(first, second, ModelCfgShape::Linear);
+            let diamond = emit_two_loan_program(first, second, ModelCfgShape::Diamond);
+            assert_cfg_equivalent(
+                &format!("{first:?}/{second:?}"),
+                &linear,
+                &diamond,
+                expected,
+            );
+        }
+    }
+
+    for shape in ModelCfgShape::ALL {
+        let source = emit_two_loan_program(ModelLoanKind::Shared, ModelLoanKind::Shared, shape);
+        assert_deterministic("shared/shared", &source, &[]);
+    }
+}
+
+#[test]
+fn borrow_of_one_field_does_not_block_a_disjoint_field() {
+    let source = r#"
+struct Pair { left: int right: int }
+func main(): int {
+    let mut pair = Pair { left: 20, right: 21 }
+    let left = &pair.left
+    set pair.right = 22
+    return *left + pair.right
+}
+"#;
+    assert_deterministic("disjoint struct fields", source, &[]);
 }
 
 #[test]
