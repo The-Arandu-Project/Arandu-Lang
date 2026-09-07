@@ -220,7 +220,7 @@ fn assert_backend_rejection_parity(
     assert!(c_error.message.contains(expected_marker));
 }
 
-fn test_execution_parity(name: &str, src: &str) {
+fn test_execution_result(name: &str, src: &str) -> (i32, i32) {
     let (amir, tc) = compile_src(src);
 
     // 1. Generate C (no debug dumps — keep tests pure / CI-friendly).
@@ -275,7 +275,12 @@ int main() {
         .output()
         .expect("failed to run compiled executable");
 
-    assert!(output.status.success(), "C program crashed for {}", name);
+    assert!(
+        output.status.success(),
+        "C program crashed for {name}: status={}, stderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     // Last line is the harness exit code (`printf("%d\n", res)`). Earlier lines
     // may be `io.println` output (ToStr product path).
@@ -298,6 +303,11 @@ int main() {
         "Execution mismatch for {}! Cranelift={}, C={}",
         name, expected, actual_result
     );
+    (expected, actual_result)
+}
+
+fn test_execution_parity(name: &str, src: &str) {
+    let _ = test_execution_result(name, src);
 }
 
 #[test]
@@ -455,6 +465,56 @@ fn parity_index_addressing_combined_with_shift() {
         }
         "#,
     );
+}
+
+#[test]
+fn generated_integer_programs_match_independent_oracle() {
+    const CASES: i64 = 64;
+    let mut source = String::new();
+    let mut expected = 0i64;
+    let mut state = 0x6a09_e667_f3bc_c909u64;
+
+    for index in 0..CASES {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let a = i64::from(state.to_le_bytes()[1] % 31) - 15;
+        let b = i64::from(state.to_le_bytes()[3] % 19) - 9;
+        let c = i64::from(state.to_le_bytes()[5] % 23) - 11;
+        let divisor = i64::from(state.to_le_bytes()[7] % 7) + 1;
+        let value = ((a * b) + c) / divisor;
+        let threshold = i64::from(state.to_le_bytes()[0] % 11) - 5;
+        let selected = if value >= threshold {
+            value + index
+        } else {
+            threshold - value
+        };
+        expected += selected;
+        source.push_str(&format!(
+            "func generated{index}(): int {{\n\
+             let a: int = {a}\n\
+             let b: int = {b}\n\
+             let c: int = {c}\n\
+             let value: int = ((a * b) + c) / {divisor}\n\
+             if value >= {threshold} {{ return value + {index} }}\n\
+             return {threshold} - value\n\
+             }}\n"
+        ));
+    }
+    source.push_str("func main(): int {\n    return ");
+    for index in 0..CASES {
+        if index != 0 {
+            source.push_str(" + ");
+        }
+        source.push_str(&format!("generated{index}()"));
+    }
+    source.push_str("\n}\n");
+
+    let expected = i32::try_from(expected).expect("bounded oracle result");
+    let (jit, c) = test_execution_result("generated_integer_oracle", &source);
+    assert_eq!(
+        jit, expected,
+        "Cranelift disagreed with the independent oracle"
+    );
+    assert_eq!(c, expected, "C disagreed with the independent oracle");
 }
 
 #[test]
