@@ -1372,6 +1372,7 @@ Analisador estático avançado de uso de memória e desempenho.
 | 2026-07 | Antigravity | **Evolução do Ecossistema (E1–E5)**: Documentadas as propostas de evolução de ferramentas integradas (REPL, Gerador de Docs, FFI Bindgen, Package Manager e Linter de Alocação). |
 | 2026-08 | Codex | **Linhas de pesquisa avaliadas**: typed holes, effects/capabilities, teste diferencial/metamórfico, e-graphs, WebAssembly Component Model/WIT, refinement types, prova formal OSSA/GenRef e incrementalidade orientada à demanda; somente as linhas com contrato e evidência futura poderão virar implementação. |
 | 2026-08 | Codex | **Roadmap de otimização AMIR consolidado**: estado honesto de O0/O1/O2, análises cooperativas, LoopInfo, semântica de places/alias/ModRef, dataflow, canonicalização, MemorySSA virtual, TCO/escape e gates de correção e benchmark. |
+| 2026-09 | Codex | **Fechamento de hipóteses rc.5 em tipos, runtime e genéricos**: a substituição estrutural ganhou regressão que prova inserção finita sem expansão recursiva de aliases; o reactor passou a descartar o registro inteiro e liberar recursos após poison, restaurando um estado conhecido antes de aceitar novos IDs; acessos a um único campo genérico deixaram de materializar o mapa completo da struct; e um teste de integração passou a provar que instanciações genéricas idênticas feitas por módulos distintos convergem para uma única definição AMIR. |
 
 ---
 
