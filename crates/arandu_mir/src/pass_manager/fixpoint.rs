@@ -12,12 +12,16 @@ use crate::{DiagCode, Diagnostic, Span};
 /// previous inline limit in `optimize.rs`).
 pub(super) const DEFAULT_MAX_FIXPOINT_ITERATIONS: usize = 100;
 
-pub(super) fn run_pipeline_to_fixpoint(
+pub(super) fn run_pipeline_to_fixpoint<F>(
     passes: &[Box<dyn FunctionPass>],
     func: &mut AmirFunc,
     literal_pool: &mut AmirLiteralPool,
     max_iterations: usize,
-) -> Result<PassStats, Diagnostic> {
+    validate: &mut F,
+) -> Result<PassStats, Diagnostic>
+where
+    F: FnMut(&AmirFunc, &'static str) -> Result<(), Diagnostic>,
+{
     let mut stats = PassStats::default();
     // One scratch arena per function; reset between mutating rounds so
     // SCCP/SimplifyCFG allocations stay O(function size) overall.
@@ -35,6 +39,7 @@ pub(super) fn run_pipeline_to_fixpoint(
                     stats.note_change(pass.name());
                     changed = true;
                 }
+                validate(func, pass.name())?;
             }
         }
         if !changed {

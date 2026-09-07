@@ -6,7 +6,8 @@ use arandu_middle::amir::{AmirConstant, AmirOperand, AmirProgram, AmirRvalue, Am
 use arandu_middle::layout::DataLayout;
 use arandu_middle::ops::BinaryOp;
 use arandu_semantics::{
-    CodegenBackend, TypeCheckResult, lower_to_amir, lower_to_hir, resolve_for_test, type_check,
+    CodegenBackend, OptLevel, TypeCheckResult, lower_to_amir, lower_to_hir,
+    optimize_amir_checked_with_level, resolve_for_test, type_check,
 };
 use std::env;
 use std::fs;
@@ -220,11 +221,9 @@ fn assert_backend_rejection_parity(
     assert!(c_error.message.contains(expected_marker));
 }
 
-fn test_execution_result(name: &str, src: &str) -> (i32, i32) {
-    let (amir, tc) = compile_src(src);
-
+fn execute_c(name: &str, amir: &AmirProgram, tc: &TypeCheckResult) -> i32 {
     // 1. Generate C (no debug dumps — keep tests pure / CI-friendly).
-    let mut c_code = emit_c(&amir, &tc);
+    let mut c_code = emit_c(amir, tc);
 
     // CEmitter emits `int32_t main(void)`. We rename it to `arandu_main` via a preprocessor
     // macro so we can wrap it in a standard C `main` that captures and prints the return
@@ -295,6 +294,13 @@ int main() {
         .parse()
         .unwrap_or_else(|_| panic!("failed to parse C exit line as integer: {stdout:?}"));
 
+    actual_result
+}
+
+fn test_execution_result(name: &str, src: &str) -> (i32, i32) {
+    let (amir, tc) = compile_src(src);
+    let actual_result = execute_c(name, &amir, &tc);
+
     // 2. Run via Cranelift
     let expected = execute_cranelift(&amir, &tc);
 
@@ -304,6 +310,52 @@ int main() {
         name, expected, actual_result
     );
     (expected, actual_result)
+}
+
+fn generated_integer_fixture() -> (String, i32) {
+    const CASES: i64 = 64;
+    let mut source = String::new();
+    let mut expected = 0i64;
+    let mut state = 0x6a09_e667_f3bc_c909u64;
+
+    for index in 0..CASES {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let a = i64::from(state.to_le_bytes()[1] % 31) - 15;
+        let b = i64::from(state.to_le_bytes()[3] % 19) - 9;
+        let c = i64::from(state.to_le_bytes()[5] % 23) - 11;
+        let divisor = i64::from(state.to_le_bytes()[7] % 7) + 1;
+        let value = ((a * b) + c) / divisor;
+        let threshold = i64::from(state.to_le_bytes()[0] % 11) - 5;
+        let selected = if value >= threshold {
+            value + index
+        } else {
+            threshold - value
+        };
+        expected += selected;
+        source.push_str(&format!(
+            "func generated{index}(): int {{\n\
+             let a: int = {a}\n\
+             let b: int = {b}\n\
+             let c: int = {c}\n\
+             let value: int = ((a * b) + c) / {divisor}\n\
+             if value >= {threshold} {{ return value + {index} }}\n\
+             return {threshold} - value\n\
+             }}\n"
+        ));
+    }
+    source.push_str("func main(): int {\n    return ");
+    for index in 0..CASES {
+        if index != 0 {
+            source.push_str(" + ");
+        }
+        source.push_str(&format!("generated{index}()"));
+    }
+    source.push_str("\n}\n");
+
+    (
+        source,
+        i32::try_from(expected).expect("bounded oracle result"),
+    )
 }
 
 fn test_execution_parity(name: &str, src: &str) {
@@ -469,52 +521,34 @@ fn parity_index_addressing_combined_with_shift() {
 
 #[test]
 fn generated_integer_programs_match_independent_oracle() {
-    const CASES: i64 = 64;
-    let mut source = String::new();
-    let mut expected = 0i64;
-    let mut state = 0x6a09_e667_f3bc_c909u64;
-
-    for index in 0..CASES {
-        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
-        let a = i64::from(state.to_le_bytes()[1] % 31) - 15;
-        let b = i64::from(state.to_le_bytes()[3] % 19) - 9;
-        let c = i64::from(state.to_le_bytes()[5] % 23) - 11;
-        let divisor = i64::from(state.to_le_bytes()[7] % 7) + 1;
-        let value = ((a * b) + c) / divisor;
-        let threshold = i64::from(state.to_le_bytes()[0] % 11) - 5;
-        let selected = if value >= threshold {
-            value + index
-        } else {
-            threshold - value
-        };
-        expected += selected;
-        source.push_str(&format!(
-            "func generated{index}(): int {{\n\
-             let a: int = {a}\n\
-             let b: int = {b}\n\
-             let c: int = {c}\n\
-             let value: int = ((a * b) + c) / {divisor}\n\
-             if value >= {threshold} {{ return value + {index} }}\n\
-             return {threshold} - value\n\
-             }}\n"
-        ));
-    }
-    source.push_str("func main(): int {\n    return ");
-    for index in 0..CASES {
-        if index != 0 {
-            source.push_str(" + ");
-        }
-        source.push_str(&format!("generated{index}()"));
-    }
-    source.push_str("\n}\n");
-
-    let expected = i32::try_from(expected).expect("bounded oracle result");
+    let (source, expected) = generated_integer_fixture();
     let (jit, c) = test_execution_result("generated_integer_oracle", &source);
     assert_eq!(
         jit, expected,
         "Cranelift disagreed with the independent oracle"
     );
     assert_eq!(c, expected, "C disagreed with the independent oracle");
+}
+
+#[test]
+fn optimization_levels_preserve_the_generated_integer_oracle() {
+    let (source, expected) = generated_integer_fixture();
+
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let (mut amir, tc) = compile_src(&source);
+        optimize_amir_checked_with_level(
+            &mut amir,
+            tc.symbols.as_ref(),
+            &tc.type_info.type_interner,
+            level,
+        )
+        .unwrap_or_else(|error| panic!("{level:?} optimization rejected valid AMIR: {error:?}"));
+
+        let jit = execute_cranelift(&amir, &tc);
+        let c = execute_c(&format!("generated_integer_{level:?}"), &amir, &tc);
+        assert_eq!(jit, expected, "{level:?} Cranelift result changed");
+        assert_eq!(c, expected, "{level:?} C result changed");
+    }
 }
 
 #[test]

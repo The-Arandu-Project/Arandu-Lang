@@ -3,7 +3,6 @@ use crate::amir::{
 };
 use crate::literal_pool::{AmirLiteralEntry, AmirLiteralPool};
 use crate::ops::{BinaryOp, UnaryOp};
-use std::collections::VecDeque;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LatticeVal {
@@ -34,50 +33,7 @@ pub(super) fn sccp(func: &mut AmirFunc, pool: &mut AmirLiteralPool, bump: &bumpa
     let (lattice, sccp_reachable) = analyse(func, pool, bump);
 
     // Phase 2 – apply results to the function
-    let changed = apply(func, pool, &lattice, bump);
-
-    // If SCCP proved a block dead that is statically reachable from the CFG,
-    // the outer pipeline needs to re-run SimplifyCFG even if apply found
-    // nothing to rewrite (e.g. the terminator was already a Goto from a
-    // prior call).
-    if !changed {
-        let static_reachable = raw_cfg_reachable(func, bump);
-        for i in 0..n_blocks {
-            if static_reachable[i] && !sccp_reachable[i] {
-                return true;
-            }
-        }
-    }
-
-    changed
-}
-
-/// BFS from entry block following `func.cfg` successor edges (ignoring
-/// condition values).  Every block that has at least one predecessor in
-/// the static CFG is considered statically reachable.
-fn raw_cfg_reachable<'bump>(
-    func: &AmirFunc,
-    bump: &'bump bumpalo::Bump,
-) -> bumpalo::collections::Vec<'bump, bool> {
-    let n = func.blocks.len();
-    let mut reachable =
-        bumpalo::collections::Vec::from_iter_in(std::iter::repeat_n(false, n), bump);
-    if n == 0 {
-        return reachable;
-    }
-    let mut queue = VecDeque::new();
-    reachable[0] = true;
-    queue.push_back(BlockId::from_usize(0));
-    while let Some(bid) = queue.pop_front() {
-        for succ in func.successors(bid) {
-            let sidx = succ.as_usize();
-            if sidx < n && !reachable[sidx] {
-                reachable[sidx] = true;
-                queue.push_back(*succ);
-            }
-        }
-    }
-    reachable
+    apply(func, pool, &lattice, &sccp_reachable, bump)
 }
 
 // ---------------------------------------------------------------------------
@@ -164,6 +120,7 @@ fn apply(
     func: &mut AmirFunc,
     pool: &mut AmirLiteralPool,
     lattice: &[LatticeVal],
+    reachable: &[bool],
     bump: &bumpalo::Bump,
 ) -> bool {
     let mut changed = false;
@@ -194,6 +151,16 @@ fn apply(
         }
         if let Some(new_term) = try_simplify_terminator(term, lattice, pool) {
             func.block_mut(bid).terminator = new_term;
+            changed = true;
+        }
+    }
+
+    // Branch folding can disconnect blocks. Keep every individual pass output
+    // valid by explicitly terminating SCCP-dead blocks; SimplifyCFG removes
+    // them and compacts ids later in the pipeline.
+    for (index, is_reachable) in reachable.iter().copied().enumerate().skip(1) {
+        if !is_reachable && !matches!(func.blocks[index].terminator, AmirTerminator::Unreachable) {
+            func.blocks[index].terminator = AmirTerminator::Unreachable;
             changed = true;
         }
     }
