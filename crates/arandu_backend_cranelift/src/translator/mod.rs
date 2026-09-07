@@ -115,11 +115,17 @@ impl<'a, 'b, M: Module> FunctionTranslator<'a, 'b, M> {
     /// Scalars that normally live in registers need a stack home when
     /// address-taken (`is_memory` from F2.0 `&`/`&mut` lower).
     ///
-    /// Pointer-valued / aggregate locals already hold an address in SSA.
+    /// Pointer/reference locals are scalar **cells**: when address-taken for an
+    /// out-param or `&x` the borrowed address is the cell itself, so `Ptr`,
+    /// `Ref` and `RefMut` locals also need a home (`is_memory` is only set when
+    /// a real cell address is wanted, never for BC.4a `Deref` borrows).
+    /// Aggregate locals keep their object address in SSA (identity borrow), so
+    /// they need no cell. `Str` has its own dedicated two-slot home.
     pub(crate) fn needs_scalar_stack_home(ty: &ArType) -> bool {
         match ty {
             ArType::Primitive(Primitive::Str) => false,
             ArType::Primitive(_) | ArType::IntLiteral | ArType::FloatLiteral => true,
+            ArType::Ptr(_) => true,
             _ => false,
         }
     }

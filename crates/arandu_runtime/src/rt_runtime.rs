@@ -205,7 +205,7 @@ pub(crate) fn fat_str_from_string(s: String) -> ArFatStr {
     ArFatStr { ptr, len }
 }
 
-fn path_from_fat(ptr: *const u8, len: isize) -> Option<std::path::PathBuf> {
+pub(crate) fn path_from_fat(ptr: *const u8, len: isize) -> Option<std::path::PathBuf> {
     if len < 0 || (len > 0 && ptr.is_null()) {
         return None;
     }

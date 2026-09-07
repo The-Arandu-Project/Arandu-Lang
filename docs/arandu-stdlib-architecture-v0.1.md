@@ -372,6 +372,13 @@ O alias histórico `std.core.ptr` foi removido porque oferecia aritmética de
 ponteiro através de uma função aparentemente segura; uma compatibilidade futura
 só pode voltar junto de funções públicas `unsafe` no contrato da linguagem.
 
+- `std.fs` e `std.env`: `readToString`, `readDir` e `arg(index)` possuem
+  suporte completo em Cranelift JIT e C backend (`emit-c`). O contrato de buffer
+  de `ar_fs_read_all` transfere ownership ao Arandu (`strings.adoptOwned`) com
+  zero-copy; `readDir` empacota entradas em um blob DOD contíguo compacto
+  (`[count][blob_len][entries][names]`) sem `stat` extra por entrada no Linux;
+  códigos de erro são normalizados para o intervalo portável `0-8` (`IoErrorKind`).
+
 ## Futuro e Próximos Passos
 
 Implementar a stdlib na ordem do roadmap mestre, publicando apenas módulos com

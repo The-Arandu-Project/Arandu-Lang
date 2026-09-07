@@ -435,9 +435,14 @@ pub(crate) fn collect_signature_types(checker: &mut TypeChecker<'_>, program: &P
 
                     let mut param_types = Vec::new();
                     for param in &member.params {
-                        let param_ty =
+                        let bare_ty =
                             checker.lower_type_expr(param.ty, checker.symbols.global_scope());
-                        param_types.push(checker.intern(param_ty));
+                        // Reflect `shared`/`mut` ownership (`&T`/`&mut T`) the
+                        // same way defined-function formals do, so W3.3
+                        // auto-ref lower (Borrow/BorrowMut) also applies to
+                        // calls through extern declarations.
+                        let bare = checker.intern(bare_ty);
+                        param_types.push(apply_receiver_ownership(checker, bare, param.ownership));
                     }
 
                     let name_key = crate::NodeKey::from(member.span);
@@ -448,12 +453,17 @@ pub(crate) fn collect_signature_types(checker: &mut TypeChecker<'_>, program: &P
                             || member_name.starts_with("ar_net_")
                         {
                             flags = flags.union(arandu_middle::EffectFlags::NET);
-                        } else if member_name.starts_with("ar_fs_")
-                            || member_name.starts_with("ar_io_")
-                        {
+                        } else if member_name.starts_with("ar_io_") {
                             flags = flags
                                 .union(arandu_middle::EffectFlags::FILE_READ)
                                 .union(arandu_middle::EffectFlags::FILE_WRITE);
+                        } else if member_name.starts_with("ar_fs_") {
+                            flags = flags.union(arandu_middle::EffectFlags::FILE_READ);
+                            // read-only hosts (`ar_fs_read*`) need just FileRead;
+                            // every other FS host may write.
+                            if !member_name.starts_with("ar_fs_read") {
+                                flags = flags.union(arandu_middle::EffectFlags::FILE_WRITE);
+                            }
                         } else if member_name.starts_with("ar_rt_supervisor_")
                             || member_name.starts_with("ar_process_")
                         {

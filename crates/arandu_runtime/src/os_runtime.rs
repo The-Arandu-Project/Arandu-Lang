@@ -8,6 +8,8 @@
 
 use std::time::{Duration, Instant};
 
+use crate::rt_runtime::{ArFatStr, fat_str_from_string};
+
 /// Process start for monotonic offsets (lazy, process-local).
 fn mono_origin() -> Instant {
     static ORIGIN: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
@@ -51,6 +53,49 @@ pub unsafe extern "C" fn ar_env_args_len() -> i64 {
     std::env::args_os().count() as i64
 }
 
+/// Process-start `argv` snapshot (single enumeration, never re-read).
+fn argv_snapshot() -> &'static Vec<std::ffi::OsString> {
+    static ARGV: std::sync::OnceLock<Vec<std::ffi::OsString>> = std::sync::OnceLock::new();
+    ARGV.get_or_init(|| std::env::args_os().collect())
+}
+
+/// `argv[index]` as a UTF-8 fat string (lossy), empty `""` when out of range.
+///
+/// Reading argv is safe on non-UTF-8 bytes (Rust `env::args()` panics; we use
+/// `args_os` + lossy conversion — never a panic on user-provided data).
+/// Bounds check mirrors shell `$n` semantics: out-of-range is `""`, not an
+/// error; callers use `ar_env_args_len` to pre-check.
+fn env_arg_impl(index: isize) -> ArFatStr {
+    if index < 0 || index as usize >= argv_snapshot().len() {
+        return fat_str_from_string(String::new());
+    }
+    fat_str_from_string(
+        argv_snapshot()[index as usize]
+            .to_string_lossy()
+            .into_owned(),
+    )
+}
+
+#[cfg(not(windows))]
+/// Return `argv[index]` empty when out of range.
+///
+/// # Safety
+/// No pointer args; always safe to call from JIT.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ar_env_arg(index: isize) -> ArFatStr {
+    env_arg_impl(index)
+}
+
+#[cfg(windows)]
+/// System V ABI expected by JIT code for fat-string returns.
+///
+/// # Safety
+/// No pointer args; always safe to call from JIT.
+#[unsafe(no_mangle)]
+pub unsafe extern "sysv64" fn ar_env_arg(index: isize) -> ArFatStr {
+    env_arg_impl(index)
+}
+
 /// `1` if the environment variable `name` is set (even to empty), else `0`.
 ///
 /// Mirrors Rust `env::var_os(name).is_some()` and Go `LookupEnv` presence — not “non-empty”.
@@ -91,6 +136,27 @@ mod tests {
     fn args_len_at_least_one() {
         unsafe {
             assert!(ar_env_args_len() >= 1);
+        }
+    }
+
+    #[test]
+    fn env_arg_indexes_match_args_os() {
+        let expected: Vec<String> = std::env::args_os()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(!expected.is_empty(), "test runner must have argv[0]");
+        let n = expected.len();
+        for (i, want) in expected.iter().enumerate() {
+            let got = unsafe { ar_env_arg(i as isize) };
+            // The leaked fat string is readable for `len` bytes.
+            let bytes = unsafe { std::slice::from_raw_parts(got.ptr, got.len as usize) };
+            let text = String::from_utf8_lossy(bytes);
+            assert_eq!(*want, text, "argv[{i}] mismatch");
+        }
+        // Out of range on both sides is empty "", never a panic.
+        for bad in [-1, n as isize, n as isize + 1000] {
+            let got = unsafe { ar_env_arg(bad) };
+            assert_eq!(got.len, 0, "argv[{bad}] must be empty");
         }
     }
 

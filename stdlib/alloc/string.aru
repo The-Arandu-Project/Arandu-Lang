@@ -80,6 +80,21 @@ public struct String {
     capacity: uint
 }
 
+/// Adopts a raw `ar_vec_malloc`-allocated buffer as an owned `String` without
+/// copying: `bufCap` is the allocated capacity, `bufLen` the valid bytes
+/// (`len == bufCap` for exact-size buffers, e.g. a whole-file read).
+///
+/// # Safety
+/// `data` must be a pointer returned by `ar_vec_malloc(bufCap)` (or `nil` with
+/// `0`/`0`); freeing happens exactly once via `destroy`/`ar_vec_buf_free`.
+public func adoptOwned(data: ptr[u8], bufCap: uint, bufLen: uint): String {
+    return String {
+        data: data,
+        len: bufLen,
+        capacity: bufCap,
+    }
+}
+
 /// Creates a new empty `String` without heap allocation.
 ///
 /// # Examples

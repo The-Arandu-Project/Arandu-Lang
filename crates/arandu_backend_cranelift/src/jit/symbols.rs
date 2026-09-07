@@ -278,6 +278,23 @@ pub(crate) fn declare_runtime_imports<M: Module>(
         }
     }
 
+    // `ar_env_arg(i64) -> str`: fat-string return needs SystemV even on Windows
+    // (matches the `extern "sysv64"` host in os_runtime, like ar_path_join).
+    {
+        let mut arg_sig = Signature::new(default_call_conv);
+        #[cfg(windows)]
+        {
+            arg_sig.call_conv = CallConv::SystemV;
+        }
+        arg_sig.params.push(AbiParam::new(ptr_type));
+        arg_sig.returns.push(AbiParam::new(ptr_type));
+        arg_sig.returns.push(AbiParam::new(ptr_type));
+        let id = module
+            .declare_function("ar_env_arg", Linkage::Import, &arg_sig)
+            .map_err(|err| codegen_ice(format!("failed to declare ar_env_arg: {err:?}")))?;
+        insert_sym(func_ids, "ar_env_arg", id);
+    }
+
     // Vec host
     {
         let mut noarg_i64 = Signature::new(default_call_conv);

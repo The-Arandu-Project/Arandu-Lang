@@ -26,6 +26,37 @@ public func newIoError(kind: IoErrorKind, os_code: int): IoError {
     }
 }
 
+/// Maps a stable host error code to a structured `IoError`.
+///
+/// Hosts never leak raw errno across backends; the portable contract is:
+/// 0=ok, 1=NotFound, 2=PermissionDenied, 3=AlreadyExists, 4=WouldBlock,
+/// 5=InvalidInput, 6=BrokenPipe, 7=UnexpectedEof, 8=Other. Unknown codes
+/// map to `Other`; `os_code` keeps the original portable code.
+public func errorFromPortable(code: int): IoError {
+    if code == 1 {
+        return newIoError(IoErrorKind.NotFound, code)
+    }
+    if code == 2 {
+        return newIoError(IoErrorKind.PermissionDenied, code)
+    }
+    if code == 3 {
+        return newIoError(IoErrorKind.AlreadyExists, code)
+    }
+    if code == 4 {
+        return newIoError(IoErrorKind.WouldBlock, code)
+    }
+    if code == 5 {
+        return newIoError(IoErrorKind.InvalidInput, code)
+    }
+    if code == 6 {
+        return newIoError(IoErrorKind.BrokenPipe, code)
+    }
+    if code == 7 {
+        return newIoError(IoErrorKind.UnexpectedEof, code)
+    }
+    return newIoError(IoErrorKind.Other, code)
+}
+
 /// Interface for reading bytes from a stream into a borrowed buffer.
 public interface Read {
     func read(self: mut ref Self, buf: mut ref []u8): Result<uint, IoError>

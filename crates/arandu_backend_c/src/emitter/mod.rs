@@ -21,6 +21,12 @@ pub mod runtime;
 pub mod stmt;
 
 pub(super) fn sanitize_c_ident(name: &str) -> String {
+    match name {
+        "stdin" => return "ar_stdin".to_string(),
+        "stdout" => return "ar_stdout".to_string(),
+        "stderr" => return "ar_stderr".to_string(),
+        _ => {}
+    }
     let mut out = String::with_capacity(name.len() + 4);
     for c in name.chars() {
         if c.is_ascii_alphanumeric() {
@@ -203,6 +209,16 @@ impl<'a> CEmitter<'a> {
                     | "ar_str_find"
                     | "ar_str_split_last"
                     | "ar_string_push_str"
+                    | "exists"
+                    | "ar_fs_open"
+                    | "ar_fs_read"
+                    | "ar_fs_write"
+                    | "ar_fs_close"
+                    | "ar_fs_read_all"
+                    | "ar_fs_readdir"
+                    | "ar_env_args_len"
+                    | "ar_env_arg"
+                    | "ar_env_var_is_set"
             ) {
                 continue;
             }

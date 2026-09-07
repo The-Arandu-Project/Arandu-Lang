@@ -157,10 +157,25 @@ pub(crate) fn create_jit_builder() -> Result<JITBuilder, Diagnostic> {
         "ar_env_args_len",
         crate::os_runtime::ar_env_args_len as *const u8,
     );
+    builder.symbol("ar_env_arg", crate::os_runtime::ar_env_arg as *const u8);
     builder.symbol(
         "ar_env_var_is_set",
         crate::os_runtime::ar_env_var_is_set as *const u8,
     );
+    // FS hosts (owned, zero-copy buffers; see arandu_runtime::fs_runtime).
+    builder.symbol(
+        "ar_fs_read_all",
+        crate::fs_runtime::ar_fs_read_all as *const u8,
+    );
+    builder.symbol(
+        "ar_fs_readdir",
+        crate::fs_runtime::ar_fs_readdir as *const u8,
+    );
+    builder.symbol("ar_fs_open", crate::fs_runtime::ar_fs_open as *const u8);
+    builder.symbol("ar_fs_read", crate::fs_runtime::ar_fs_read as *const u8);
+    builder.symbol("ar_fs_write", crate::fs_runtime::ar_fs_write as *const u8);
+    builder.symbol("ar_fs_close", crate::fs_runtime::ar_fs_close as *const u8);
+    builder.symbol("exists", crate::fs_runtime::exists as *const u8);
 
     // SL_T.3: std.testing expectation and runner symbols
     builder.symbol(

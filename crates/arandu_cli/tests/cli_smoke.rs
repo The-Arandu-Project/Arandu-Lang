@@ -558,6 +558,56 @@ fn emit_c_host_fib_main_contains_int_main() {
 }
 
 #[test]
+fn emit_c_host_m25_fs_env_compiles_and_runs() {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let fixture = std::path::Path::new(manifest_dir)
+        .join("../../examples/minimal/m25_fs_env.aru")
+        .canonicalize()
+        .expect("m25_fs_env.aru");
+    let path = fixture.to_string_lossy();
+    let output = run_cli(&["emit-c", &path, "--layout=host"]);
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let c_source = String::from_utf8_lossy(&output.stdout);
+    assert!(c_source.contains("ar_fs_read_all"));
+    assert!(c_source.contains("ar_fs_readdir"));
+    assert!(c_source.contains("ar_env_arg"));
+
+    if std::process::Command::new("gcc")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        let temp_dir = std::env::temp_dir();
+        let c_file = temp_dir.join("arandu_test_m25_fs_env.c");
+        let bin_file = temp_dir.join("arandu_test_m25_fs_env");
+        fs::write(&c_file, c_source.as_bytes()).expect("write c file");
+        let status = std::process::Command::new("gcc")
+            .arg(&c_file)
+            .arg("-o")
+            .arg(&bin_file)
+            .status()
+            .expect("invoke C compiler");
+        assert!(status.success(), "C compilation of m25_fs_env failed");
+
+        let run_status = std::process::Command::new(&bin_file)
+            .current_dir(manifest_dir.to_owned() + "/../..")
+            .status()
+            .expect("run compiled m25_fs_env");
+        let _ = fs::remove_file(&c_file);
+        let _ = fs::remove_file(&bin_file);
+        assert!(
+            run_status.success(),
+            "compiled m25_fs_env exited with non-zero"
+        );
+    }
+}
+
+#[test]
 fn emit_c_i686_uses_int32_for_platform_int() {
     let dir = std::env::temp_dir();
     let file = dir.join("arandu_cli_emit_c_i686.aru");

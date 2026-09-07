@@ -3,6 +3,7 @@ use arandu_semantics::passes::type_checker::types::{ArType, Primitive};
 use cranelift_codegen::ir::{InstBuilder, Type};
 
 use super::FunctionTranslator;
+use super::operand::FatOperandKind;
 
 impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
     pub(super) fn translate_call(
@@ -46,21 +47,25 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 let mut clif_param_idx = 0;
                 for arg in args {
                     let arg_ty = self.get_operand_ar_type(arg);
-                    if matches!(arg_ty, ArType::Primitive(Primitive::Str)) {
-                        let (ptr_val, len_val) = self.translate_str_operand(arg);
-                        clif_args.push(ptr_val);
-                        clif_args.push(len_val);
-                        clif_param_idx += 2;
-                    } else if matches!(arg_ty, ArType::Slice(_)) {
-                        let (data, len) = self.translate_slice_operand(arg);
-                        clif_args.push(data);
-                        clif_args.push(len);
-                        clif_param_idx += 2;
-                    } else {
-                        let expected = expected_tys.get(clif_param_idx).copied();
-                        let val = self.translate_operand(arg, expected);
-                        clif_args.push(val);
-                        clif_param_idx += 1;
+                    match self.fat_operand_kind(&arg_ty) {
+                        FatOperandKind::Str => {
+                            let (ptr_val, len_val) = self.translate_str_operand(arg);
+                            clif_args.push(ptr_val);
+                            clif_args.push(len_val);
+                            clif_param_idx += 2;
+                        }
+                        FatOperandKind::Slice => {
+                            let (data, len) = self.translate_slice_operand(arg);
+                            clif_args.push(data);
+                            clif_args.push(len);
+                            clif_param_idx += 2;
+                        }
+                        FatOperandKind::None => {
+                            let expected = expected_tys.get(clif_param_idx).copied();
+                            let val = self.translate_operand(arg, expected);
+                            clif_args.push(val);
+                            clif_param_idx += 1;
+                        }
                     }
                 }
 
