@@ -10,6 +10,7 @@ use arandu_semantics::{
     optimize_amir_checked_with_level, resolve_for_test, type_check,
 };
 use std::env;
+use std::fmt::Write as _;
 use std::fs;
 use std::process::Command;
 
@@ -358,6 +359,111 @@ fn generated_integer_fixture() -> (String, i32) {
     )
 }
 
+#[derive(Clone, Copy, Debug)]
+enum IntegerOp {
+    Add,
+    Subtract,
+    Multiply,
+    Xor,
+}
+
+struct IntegerProgram<const N: usize> {
+    operations: [IntegerOp; N],
+    operands: [i64; N],
+    initial: i64,
+    threshold: i64,
+    branch_delta: i64,
+    loop_delta: i64,
+    loop_count: i64,
+}
+
+impl<const N: usize> IntegerProgram<N> {
+    fn from_seed(seed: u64) -> Self {
+        let mut state = seed;
+        let mut next = || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            state.to_le_bytes()[4]
+        };
+        let operations = std::array::from_fn(|_| match next() % 4 {
+            0 => IntegerOp::Add,
+            1 => IntegerOp::Subtract,
+            2 => IntegerOp::Multiply,
+            _ => IntegerOp::Xor,
+        });
+        let operands = std::array::from_fn(|index| match operations[index] {
+            IntegerOp::Multiply => i64::from(next() % 5) - 2,
+            IntegerOp::Xor => i64::from(next() % 32),
+            IntegerOp::Add | IntegerOp::Subtract => i64::from(next() % 17) - 8,
+        });
+        Self {
+            operations,
+            operands,
+            initial: i64::from(next() % 41) - 20,
+            threshold: i64::from(next() % 31) - 15,
+            branch_delta: i64::from(next() % 13) - 6,
+            loop_delta: i64::from(next() % 7) - 3,
+            loop_count: i64::from(next() % 4),
+        }
+    }
+
+    fn evaluate(&self) -> i32 {
+        let mut value = self.initial;
+        for (&operation, &operand) in self.operations.iter().zip(&self.operands) {
+            value = match operation {
+                IntegerOp::Add => value + operand,
+                IntegerOp::Subtract => value - operand,
+                IntegerOp::Multiply => value * operand,
+                IntegerOp::Xor => value ^ operand,
+            };
+        }
+        if value >= self.threshold {
+            value += self.branch_delta;
+        } else {
+            value -= self.branch_delta;
+        }
+        value += self.loop_delta * self.loop_count;
+        i32::try_from(value).expect("bounded structural integer oracle")
+    }
+
+    fn emit_source(&self) -> String {
+        let mut source = String::with_capacity(768);
+        writeln!(source, "func main(): int {{").unwrap();
+        writeln!(source, "    let mut value: int = {}", self.initial).unwrap();
+        for (&operation, &operand) in self.operations.iter().zip(&self.operands) {
+            let operator = match operation {
+                IntegerOp::Add => '+',
+                IntegerOp::Subtract => '-',
+                IntegerOp::Multiply => '*',
+                IntegerOp::Xor => '^',
+            };
+            writeln!(source, "    set value = value {operator} ({operand})").unwrap();
+        }
+        writeln!(source, "    if value >= {} {{", self.threshold).unwrap();
+        writeln!(
+            source,
+            "        set value = value + ({})",
+            self.branch_delta
+        )
+        .unwrap();
+        writeln!(source, "    }} else {{").unwrap();
+        writeln!(
+            source,
+            "        set value = value - ({})",
+            self.branch_delta
+        )
+        .unwrap();
+        writeln!(source, "    }}").unwrap();
+        writeln!(source, "    let mut index: int = 0").unwrap();
+        writeln!(source, "    while index < {} {{", self.loop_count).unwrap();
+        writeln!(source, "        set value = value + ({})", self.loop_delta).unwrap();
+        writeln!(source, "        set index = index + 1").unwrap();
+        writeln!(source, "    }}").unwrap();
+        writeln!(source, "    return value").unwrap();
+        writeln!(source, "}}").unwrap();
+        source
+    }
+}
+
 fn test_execution_parity(name: &str, src: &str) {
     let _ = test_execution_result(name, src);
 }
@@ -548,6 +654,44 @@ fn optimization_levels_preserve_the_generated_integer_oracle() {
         let c = execute_c(&format!("generated_integer_{level:?}"), &amir, &tc);
         assert_eq!(jit, expected, "{level:?} Cranelift result changed");
         assert_eq!(c, expected, "{level:?} C result changed");
+    }
+}
+
+#[test]
+fn structural_integer_programs_agree_across_optimization_levels() {
+    const SEEDS: [u64; 8] = [
+        0,
+        1,
+        0x243f_6a88_85a3_08d3,
+        0x1319_8a2e_0370_7344,
+        0xa409_3822_299f_31d0,
+        0x082e_fa98_ec4e_6c89,
+        u64::MAX - 1,
+        u64::MAX,
+    ];
+
+    for seed in SEEDS {
+        let program = IntegerProgram::<12>::from_seed(seed);
+        let source = program.emit_source();
+        let expected = program.evaluate();
+
+        for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+            let (mut amir, tc) = compile_src(&source);
+            optimize_amir_checked_with_level(
+                &mut amir,
+                tc.symbols.as_ref(),
+                &tc.type_info.type_interner,
+                level,
+            )
+            .unwrap_or_else(|error| {
+                panic!("seed {seed:#018x} {level:?} rejected valid AMIR: {error:?}\n{source}")
+            });
+            let actual = execute_cranelift(&amir, &tc);
+            assert_eq!(
+                actual, expected,
+                "seed {seed:#018x} changed under {level:?}\n{source}"
+            );
+        }
     }
 }
 
