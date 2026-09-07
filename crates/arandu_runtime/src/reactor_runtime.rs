@@ -42,7 +42,44 @@ struct ReactorSlot {
 static REACTORS: Mutex<Vec<Option<ReactorSlot>>> = Mutex::new(Vec::new());
 
 fn lock_reactors() -> std::sync::MutexGuard<'static, Vec<Option<ReactorSlot>>> {
-    REACTORS.lock().unwrap_or_else(|e| e.into_inner())
+    lock_reactor_table(&REACTORS)
+}
+
+fn lock_reactor_table(
+    table: &Mutex<Vec<Option<ReactorSlot>>>,
+) -> std::sync::MutexGuard<'_, Vec<Option<ReactorSlot>>> {
+    match table.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            // A panic while holding the registry lock means the interrupted
+            // mutation cannot be proven complete. Invalidate every opaque id
+            // and release owned OS resources instead of exposing partial state.
+            let mut guard = poisoned.into_inner();
+            for slot in guard.drain(..).flatten() {
+                close_reactor_slot(slot);
+            }
+            table.clear_poison();
+            guard
+        }
+    }
+}
+
+fn close_reactor_slot(slot: ReactorSlot) {
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(timer_fd) = slot.timer_fd {
+            unsafe {
+                let _ = libc::close(timer_fd);
+            }
+        }
+        unsafe {
+            let _ = libc::close(slot.epoll_fd);
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = slot;
+    }
 }
 
 fn probe_backend() -> i64 {
@@ -141,21 +178,7 @@ pub unsafe extern "C" fn ar_rt_reactor_destroy(id: ReactorId) {
     let Some(slot) = guard.get_mut(id as usize).and_then(|s| s.take()) else {
         return;
     };
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(tfd) = slot.timer_fd {
-            unsafe {
-                let _ = libc::close(tfd);
-            }
-        }
-        unsafe {
-            let _ = libc::close(slot.epoll_fd);
-        }
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = slot;
-    }
+    close_reactor_slot(slot);
 }
 
 /// Sleeps for `ms` milliseconds using the reactor.
@@ -515,6 +538,24 @@ pub unsafe extern "C" fn ar_rt_reactor_register_socket(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn poisoned_registry_is_quarantined_before_reuse() {
+        let table = std::sync::Arc::new(Mutex::new(vec![None]));
+        let poison_target = std::sync::Arc::clone(&table);
+        let _ = std::thread::spawn(move || {
+            let mut guard = poison_target.lock().expect("fresh registry lock");
+            guard.push(None);
+            panic!("interrupt registry mutation");
+        })
+        .join();
+
+        assert!(table.is_poisoned());
+        let guard = lock_reactor_table(&table);
+        assert!(guard.is_empty(), "partial registry state must be discarded");
+        drop(guard);
+        assert!(!table.is_poisoned(), "recovered registry must be reusable");
+    }
 
     #[cfg(not(target_os = "linux"))]
     #[test]
