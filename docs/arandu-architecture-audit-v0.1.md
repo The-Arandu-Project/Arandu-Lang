@@ -23,10 +23,27 @@ mudanças de IDs, interners, allocator ou fusão de queries.
 | Runtime / tarefas | cancelamento podia liberar o blob durante join; a guarda proposta também impedia aposentar slots concluídos | estados Pending/Running/Completed transferem ownership ao join; cancel em execução solicita aposentadoria; canais substituem sleep e testes verificam reutilização do slot |
 | Parser / IDE | recuperação pulava tokens sem atualizar a supressão; falha de parse podia deixar Problems vazio | contar avanço de recuperação e publicar todos os erros por accumulator privado da query parse, sem repetir o lowering CST→AST |
 | LSP | panics capturados não tinham contexto no log e URIs inválidas recebiam uma identidade fictícia | logging compartilhado em stderr, sem clone do payload; símbolos sem URI válida não são publicados; regressão stdio verifica respostas e revisão final |
+| C / Cranelift | casos manuais podiam concordar no mesmo resultado incorreto | corpus determinístico gera 64 funções com aritmética, branches e chamadas; C e Cranelift precisam coincidir com um oráculo independente |
+| Runtime de strings | helpers `ToStr` e concatenação alocam buffers sem drop glue no fat `str` | ASan/LSan encontrou quatro leaks e 20 bytes no caso reduzido; correção depende do contrato de ownership BC.1a, sem `free` local inseguro |
 
 A falha local anterior de `run_tcp_async_wait_wake` foi isolada: criar um
 socket na sandbox retorna `Operation not permitted`; o mesmo teste passa
 fora dela. Essa evidência não justifica uma alteração semântica no TCP.
+
+A campanha diferencial C/Cranelift adicionou um corpus reproduzível de 64
+funções. Os operandos vêm de um PRNG com seed fixa e limites que evitam overflow
+e divisão por zero; o teste calcula o valor esperado em Rust e exige o mesmo
+retorno nos dois backends. Isso cobre soma, subtração, multiplicação, divisão,
+comparações, branches e chamadas em uma unidade compilada, sem dependência nova.
+
+Com `ARANDU_C_SANITIZERS=1`, os 30 casos sem strings passaram e quatro casos com
+`ToStr`/interpolação falharam somente no LeakSanitizer. O caso reduzido aloca
+20 bytes em quatro buffers: duas conversões e duas concatenações. O código
+declara explicitamente “process-lifetime leak”, mas o contrato público diz que
+o chamador possui o buffer sem representar esse ownership na AMIR. Inserir
+`free` no helper seria incorreto porque o fat `str` ainda pode escapar ou ser
+usado por uma concatenação. O fechamento exige distinguir views estáticas de
+buffers owned e elaborar seu drop nos dois backends; permanece em BC.1a.
 
 Foram removidas cópias redundantes no DCE (listas de IDs já representadas por
 faixas densas) e no GVN (cópias dos statements, listas intermediárias de IDs

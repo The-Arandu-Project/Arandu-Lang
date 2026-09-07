@@ -222,6 +222,9 @@ Fase 2 — A Construção da Infraestrutura & Execução (v0.2) · [FECHADA no c
 [ ] A12    Deterministic CTFE & Comptime Engine (AMIR VM, Salsa queries puras, fuel budget)
 [x] BC     Backend Cranelift (Dev/Debug com compilador em memória)
    ├─ [x] BC.1   Fat Pointer String JIT (tratar String como ptr + len na convenção de chamadas do Cranelift)
+   ├─ [ ] BC.1a  Fechar ownership de buffers produzidos por `ToStr`, interpolação
+   │              e helpers de path nos dois backends; hoje o fat `str` não carrega
+   │              drop glue e os buffers sobrevivem até o fim do processo.
    ├─ [x] BC.2   Implementar EnumPayload & Discriminant no Cranelift JIT (Garantia estática contra double-free depende de M2; atualmente mitigado via poison-check em debug)
    ├─ [x] BC.3   Implementar IndexAccess & Array/Tuple no Cranelift JIT (Garantia estática contra double-free depende de M2; atualmente mitigado via poison-check em debug)
    ├─ [x] BC.4a  Borrow/BorrowMut no Cranelift JIT
