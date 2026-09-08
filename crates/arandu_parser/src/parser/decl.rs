@@ -413,6 +413,9 @@ impl<'a> Parser<'a> {
             self.start_node(crate::syntax::SyntaxKind::STMT);
             fields.push(self.parse_field_decl(true)?);
             self.finish_node();
+            if self.eat_name("COMMA") {
+                continue;
+            }
         }
         self.expect_name("RBRACE")?;
         self.finish_node(); // BLOCK

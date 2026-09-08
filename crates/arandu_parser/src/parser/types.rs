@@ -536,25 +536,73 @@ impl<'a> Parser<'a> {
             })
     }
 
+    /// Find the `>` closing the generic argument list that opens at `start`.
+    ///
+    /// The scan is **delimiter-aware**: a `>` nested inside `()`, `[]` or `{}`
+    /// groups opened after the `<` cannot close the generic list. Without this,
+    /// `while a < b { x = c > (y) }` would match the `<` in `a < b` with the
+    /// `>` of a later comparison (crossing a block boundary) and misparse the
+    /// comparison as generic arguments.
+    ///
+    /// The search also **aborts at statement/expression boundaries** before the
+    /// closing `>` is found: a `;` (explicit or ASI), a top-level `=` or a
+    /// top-level closing delimiter (`)`, `]`, `}`) means the `<` is a
+    /// comparison, not a generic argument list — the list could only span a
+    /// statement if no closing `>` existed inside it.
     pub(super) fn find_matching_gt(&self, start: usize) -> Option<usize> {
         if !matches!(self.tokens.get(start)?.kind, TokenKind::Lt) {
             return None;
         }
 
-        let mut depth = 0usize;
-        for (index, token) in self.tokens.iter().enumerate().skip(start) {
+        // Record the delimiter level of every `<`. A `>` closes only an opener
+        // at its own level: this distinguishes `F<(G<T>)>` from a comparison
+        // inside a grouped expression without allocating on ordinary nesting.
+        let mut generic_open_depths = SmallVec::<[usize; 8]>::new();
+        generic_open_depths.push(0);
+        let mut delimiter_depth = 0usize;
+        for (index, token) in self.tokens.iter().enumerate().skip(start + 1) {
             match token.kind {
-                TokenKind::Lt => depth += 1,
+                TokenKind::Lt => generic_open_depths.push(delimiter_depth),
                 TokenKind::Gt => {
-                    depth = depth.saturating_sub(1);
-                    if depth == 0 {
-                        return Some(index);
+                    if generic_open_depths.last() == Some(&delimiter_depth) {
+                        generic_open_depths.pop();
+                        if generic_open_depths.is_empty() {
+                            return Some(index);
+                        }
                     }
                 }
                 TokenKind::ShiftRight => {
-                    depth = depth.saturating_sub(2);
-                    if depth == 0 {
-                        return Some(index);
+                    for _ in 0..2 {
+                        if generic_open_depths.last() == Some(&delimiter_depth) {
+                            generic_open_depths.pop();
+                            if generic_open_depths.is_empty() {
+                                return Some(index);
+                            }
+                        }
+                    }
+                }
+                TokenKind::LBrace if delimiter_depth == 0 => return None,
+                TokenKind::LBrace | TokenKind::LBracket | TokenKind::LParen => {
+                    delimiter_depth += 1;
+                }
+                TokenKind::RBrace | TokenKind::RBracket | TokenKind::RParen => {
+                    if delimiter_depth == 0 {
+                        // Closing a group that opened before the `<` — the
+                        // generic list, if any, would have closed before this.
+                        return None;
+                    }
+                    delimiter_depth -= 1;
+                }
+                TokenKind::Semicolon => {
+                    // Top-level statement terminator (explicit or ASI): a
+                    // generic list cannot span statements.
+                    if delimiter_depth == 0 {
+                        return None;
+                    }
+                }
+                TokenKind::Equal => {
+                    if delimiter_depth == 0 {
+                        return None;
                     }
                 }
                 TokenKind::Eof => return None,
