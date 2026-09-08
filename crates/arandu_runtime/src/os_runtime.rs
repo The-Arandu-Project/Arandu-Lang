@@ -8,7 +8,7 @@
 
 use std::time::{Duration, Instant};
 
-use crate::rt_runtime::{ArFatStr, fat_str_from_string};
+use crate::rt_runtime::ArFatStr;
 
 /// Process start for monotonic offsets (lazy, process-local).
 fn mono_origin() -> Instant {
@@ -44,19 +44,39 @@ pub unsafe extern "C" fn ar_time_monotonic_ns() -> i64 {
     i64::try_from(elapsed.as_nanos()).unwrap_or(i64::MAX)
 }
 
+static PROGRAM_ARGV: std::sync::OnceLock<Box<[String]>> = std::sync::OnceLock::new();
+static HOST_ARGV: std::sync::OnceLock<Box<[String]>> = std::sync::OnceLock::new();
+
+/// Installs the argument vector visible to JIT-compiled code.
+///
+/// A standalone AOT executable reads its own process arguments. A JIT program
+/// shares the compiler process, so the CLI must replace that host vector with
+/// the program entry path followed by the values after `arandu run ... --`.
+pub fn install_program_args(args: Box<[String]>) -> Result<(), Box<[String]>> {
+    PROGRAM_ARGV.set(args)
+}
+
+fn argv_snapshot() -> &'static [String] {
+    PROGRAM_ARGV.get().map_or_else(
+        || {
+            HOST_ARGV.get_or_init(|| {
+                std::env::args_os()
+                    .map(|arg| arg.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice()
+            })
+        },
+        Box::as_ref,
+    )
+}
+
 /// Number of process arguments including `argv[0]` (like Go `len(os.Args)` / Rust `env::args().len()`).
 ///
 /// # Safety
 /// No pointer args.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_env_args_len() -> i64 {
-    std::env::args_os().count() as i64
-}
-
-/// Process-start `argv` snapshot (single enumeration, never re-read).
-fn argv_snapshot() -> &'static Vec<std::ffi::OsString> {
-    static ARGV: std::sync::OnceLock<Vec<std::ffi::OsString>> = std::sync::OnceLock::new();
-    ARGV.get_or_init(|| std::env::args_os().collect())
+    argv_snapshot().len() as i64
 }
 
 /// `argv[index]` as a UTF-8 fat string (lossy), empty `""` when out of range.
@@ -67,13 +87,16 @@ fn argv_snapshot() -> &'static Vec<std::ffi::OsString> {
 /// error; callers use `ar_env_args_len` to pre-check.
 fn env_arg_impl(index: isize) -> ArFatStr {
     if index < 0 || index as usize >= argv_snapshot().len() {
-        return fat_str_from_string(String::new());
+        return ArFatStr {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+        };
     }
-    fat_str_from_string(
-        argv_snapshot()[index as usize]
-            .to_string_lossy()
-            .into_owned(),
-    )
+    let argument = &argv_snapshot()[index as usize];
+    ArFatStr {
+        ptr: argument.as_ptr().cast_mut(),
+        len: argument.len() as isize,
+    }
 }
 
 #[cfg(not(windows))]

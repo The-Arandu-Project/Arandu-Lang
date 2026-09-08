@@ -30,15 +30,27 @@ pub fn runtime_library() -> Result<PathBuf, CliFailure> {
     } else {
         "libarandu_runtime.a"
     };
-    let mut candidates = Vec::new();
     if let Some(explicit) = std::env::var_os("ARANDU_RUNTIME_LIB") {
-        candidates.push(PathBuf::from(explicit));
+        let explicit = PathBuf::from(explicit);
+        return if explicit.is_file() {
+            Ok(explicit)
+        } else {
+            Err(CliFailure::operational(
+                "locate Arandu AOT runtime",
+                Some(explicit),
+                "ARANDU_RUNTIME_LIB does not name a regular file",
+            ))
+        };
     }
+    let mut candidates = Vec::new();
     if let Ok(executable) = std::env::current_exe()
         && let Some(bin) = executable.parent()
     {
         // Cargo development layout: target/{debug,release}/arandu_cli.
         candidates.push(bin.join(filename));
+        if let Some(hashed) = hashed_development_runtime(bin, filename) {
+            candidates.push(hashed);
+        }
         // Installed SDK layout: bin/arandu + lib/<host>/runtime.
         if let Some(prefix) = bin.parent() {
             candidates.push(
@@ -69,6 +81,44 @@ pub fn runtime_library() -> Result<PathBuf, CliFailure> {
                 ),
             )
         })
+}
+
+/// Finds Cargo's hashed staticlib in a development profile directory.
+///
+/// Installed SDKs use the exact filename above. Cargo dependencies live under
+/// `target/<profile>/deps`; selecting the most recently built matching archive
+/// mirrors Cargo's incremental artifact choice and makes `cargo run -p
+/// arandu_cli -- build` usable without a separate runtime build command.
+fn hashed_development_runtime(profile_dir: &Path, filename: &str) -> Option<PathBuf> {
+    let (prefix, extension) = if cfg!(windows) {
+        ("arandu_runtime-", "lib")
+    } else {
+        ("libarandu_runtime-", "a")
+    };
+    let deps = profile_dir.join("deps");
+    let mut candidates = fs::read_dir(deps)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_stem()
+                .and_then(|stem| stem.to_str())
+                .is_some_and(|stem| stem.starts_with(prefix))
+                && path.extension().and_then(|ext| ext.to_str()) == Some(extension)
+                && path.file_name().and_then(|name| name.to_str()) != Some(filename)
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        let modified = |path: &Path| {
+            fs::metadata(path)
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+        };
+        modified(left)
+            .cmp(&modified(right))
+            .then_with(|| left.cmp(right))
+    });
+    candidates.pop()
 }
 
 /// Links a Cranelift object with the target-matched Arandu runtime.

@@ -37,6 +37,9 @@ pub fn run(raw_args: Vec<String>) -> CliResult {
     }
 
     let command = inv.args[1].as_str();
+    if !inv.program_args.is_empty() && command != "run" {
+        fail_usage("arguments after `--` are supported only by `arandu run`");
+    }
     if inv.project_flags.accept_lock && command != "update" {
         fail_usage("--accept is valid only with 'arandu update'");
     }
@@ -371,6 +374,7 @@ pub fn run(raw_args: Vec<String>) -> CliResult {
                     inv.opt,
                     inv.debug,
                     inv.data_layout,
+                    &inv.program_args,
                 );
             }
         }

@@ -53,6 +53,38 @@ fn missing_file_exits_with_code_1() {
 }
 
 #[test]
+fn run_forwards_only_arguments_after_separator_to_jit_program() {
+    let file = std::env::temp_dir().join("arandu_cli_program_args.aru");
+    fs::write(
+        &file,
+        r#"import io
+import std.env as env
+
+func main(): int {
+    io.println(env.argsLen())
+    io.println(env.arg(1))
+    return 0
+}
+"#,
+    )
+    .expect("fixture should be writable");
+
+    let path = file.to_string_lossy();
+    let output = run_cli(&["run", &path, "--", "program-sentinel"]);
+    let _ = fs::remove_file(&file);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "2\nprogram-sentinel"
+    );
+}
+
+#[test]
 fn lex_parse_and_check_valid_files_exit_successfully() {
     let dir = std::env::temp_dir();
     let file = dir.join("arandu_cli_smoke.aru");
