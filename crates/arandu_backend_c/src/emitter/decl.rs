@@ -46,7 +46,8 @@ impl<'a> CEmitter<'a> {
         }
         for (glue, (ty, destructor)) in payloads {
             let payload_c = self.format_type(&ty);
-            let destructor_c = sanitize_c_ident(&self.symbols.get(destructor).name);
+            let destructor_sym = self.symbols.get(destructor);
+            let destructor_c = sanitize_c_ident(self.symbols.host_func_name(destructor_sym));
             let _ = writeln!(
                 &mut self.output,
                 "static void {glue}(void *raw) {{ {destructor_c}(*({payload_c} *)raw); }}"
@@ -56,7 +57,8 @@ impl<'a> CEmitter<'a> {
 
     /// C linkage name for a function's return type (`main` is always `int`).
     pub(super) fn c_func_return_type(&self, func: &AmirFunc) -> String {
-        let name = sanitize_c_ident(&self.symbols.get(func.symbol).name);
+        let sym = self.symbols.get(func.symbol);
+        let name = sanitize_c_ident(self.symbols.host_func_name(sym));
         if name == "main" {
             return "int".to_string();
         }
@@ -158,7 +160,8 @@ impl<'a> CEmitter<'a> {
     }
 
     pub(super) fn emit_func_decl(&mut self, func: &AmirFunc) {
-        let name = sanitize_c_ident(&self.symbols.get(func.symbol).name);
+        let sym = self.symbols.get(func.symbol);
+        let name = sanitize_c_ident(self.symbols.host_func_name(sym));
         let ret_ty = self.c_func_return_type(func);
         let _ = write!(&mut self.output, "{} {}(", ret_ty, name);
         for (i, param) in func.params.iter().enumerate() {

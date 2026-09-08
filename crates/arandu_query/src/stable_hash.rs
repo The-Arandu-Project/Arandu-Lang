@@ -191,6 +191,13 @@ fn hash_symbol_table(hasher: &mut Hasher, table: &SymbolTable, include_spans: bo
         hasher.update(&u32_le(symbol.scope.0));
         hasher.update(&[u8::from(symbol.is_public)]);
     }
+    let mut host_names: Vec<_> = table.host_function_names.iter().collect();
+    host_names.sort_by_key(|(symbol, _)| (symbol.file_id, symbol.local_id.0));
+    hasher.update(&u64_le(host_names.len() as u64));
+    for (symbol, name) in host_names {
+        hash_symbol_id(hasher, *symbol);
+        hash_str(hasher, name);
+    }
 }
 
 impl StableHash for ResolutionResult {

@@ -329,31 +329,31 @@ pub fn run_exact_test(
             artifacts.type_check.type_info.as_ref(),
         )
         .map_err(|diag| CliFailure::diagnostics([diag], Some(path.clone())))?;
-        let return_type = artifacts
-            .amir
-            .funcs
-            .iter()
-            .find(|func_def| {
-                artifacts
-                    .type_check
-                    .symbols
-                    .get(func_def.symbol)
-                    .name
-                    .as_str()
-                    == function
-            })
-            .map(|func_def| {
-                artifacts
-                    .type_check
-                    .type_info
-                    .type_interner
-                    .resolve(func_def.return_type)
-            });
+        let function_def = artifacts.amir.funcs.iter().find(|func_def| {
+            artifacts
+                .type_check
+                .symbols
+                .get(func_def.symbol)
+                .name
+                .as_str()
+                == function
+        });
+        let return_type = function_def.map(|func_def| {
+            artifacts
+                .type_check
+                .type_info
+                .type_interner
+                .resolve(func_def.return_type)
+        });
+        let host_name = function_def.map(|func_def| {
+            let symbol = artifacts.type_check.symbols.get(func_def.symbol);
+            artifacts.type_check.symbols.host_func_name(symbol)
+        });
         unsafe {
             if matches!(return_type, Some(arandu_semantics::types::ArType::Void)) {
-                if let Some(test_fn) =
-                    arandu_semantics::CompiledCode::get_fn::<unsafe fn()>(&output, function)
-                {
+                if let Some(test_fn) = host_name.as_ref().and_then(|name| {
+                    arandu_semantics::CompiledCode::get_fn::<unsafe fn()>(&output, name)
+                }) {
                     test_fn();
                     return Ok(CliSuccess::Done);
                 }
@@ -362,9 +362,9 @@ pub fn run_exact_test(
                     artifacts.type_check.type_info.type_interner.resolve(ok),
                     arandu_semantics::types::ArType::Void
                 )
-                && let Some(test_fn) = arandu_semantics::CompiledCode::get_fn::<
-                    unsafe fn() -> *mut u8,
-                >(&output, function)
+                && let Some(test_fn) = host_name.as_ref().and_then(|name| {
+                    arandu_semantics::CompiledCode::get_fn::<unsafe fn() -> *mut u8>(&output, name)
+                })
             {
                 let result = test_fn();
                 if result.is_null() || *(result.cast::<usize>()) == 0 {

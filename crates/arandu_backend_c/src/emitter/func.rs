@@ -10,7 +10,8 @@ use super::{CEmitter, sanitize_c_ident};
 
 impl<'a> CEmitter<'a> {
     pub(super) fn emit_func(&mut self, func: &AmirFunc) {
-        let name = sanitize_c_ident(&self.symbols.get(func.symbol).name);
+        let sym = self.symbols.get(func.symbol);
+        let name = sanitize_c_ident(self.symbols.host_func_name(sym));
         let ret_ty = self.c_func_return_type(func);
         let _ = write!(&mut self.output, "{} {}(", ret_ty, name);
         for (i, param) in func.params.iter().enumerate() {

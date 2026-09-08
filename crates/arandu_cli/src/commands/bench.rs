@@ -213,10 +213,14 @@ pub fn run_exact_benchmark(
             artifacts.type_check.type_info.as_ref(),
         )
         .map_err(|diagnostic| CliFailure::diagnostics([diagnostic], Some(path.clone())))?;
+        let host_name = artifacts.amir.funcs.iter().find_map(|func_def| {
+            let symbol = artifacts.type_check.symbols.get(func_def.symbol);
+            (symbol.name == function).then(|| artifacts.type_check.symbols.host_func_name(symbol))
+        });
         unsafe {
-            if let Some(benchmark_fn) =
-                arandu_semantics::CompiledCode::get_fn::<unsafe fn(*mut i64)>(&output, function)
-            {
+            if let Some(benchmark_fn) = host_name.and_then(|name| {
+                arandu_semantics::CompiledCode::get_fn::<unsafe fn(*mut i64)>(&output, name)
+            }) {
                 let mut handle = 1_i64;
                 benchmark_fn(&raw mut handle);
                 return Ok(CliSuccess::Done);

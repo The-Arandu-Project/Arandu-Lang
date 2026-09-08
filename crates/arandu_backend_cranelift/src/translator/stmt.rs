@@ -104,8 +104,9 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 if let ArType::Named(_, _) = ty
                     && let Some(destructor) = self.type_info.destructor_instances.get(&ty_id)
                 {
-                    let name = self.symbol_table.get(*destructor).name.as_str();
-                    if let Some(&id) = self.func_ids.get(name) {
+                    let symbol = self.symbol_table.get(*destructor);
+                    let host_name = self.symbol_table.host_func_name(symbol);
+                    if let Some(&id) = self.func_ids.get(host_name) {
                         let ptr_val = if place.projections.is_empty() {
                             if let Some(&var) = self.local_map.get(&place.local) {
                                 self.builder.use_var(var)
@@ -125,7 +126,7 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                         self.builder.ins().call(function, &[ptr_val]);
                     } else {
                         self.record_ice(
-                            format!("missing @Destructor function '{name}'"),
+                            format!("missing @Destructor function '{}'", symbol.name),
                             self.local_span(place.local),
                         );
                     }

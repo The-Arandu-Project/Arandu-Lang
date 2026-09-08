@@ -288,6 +288,8 @@ pub struct SymbolTable {
     pub imported_symbols: FxHashMap<SymbolId, Symbol>,
     pub module_members: FxHashMap<(SmolStr, SmolStr), SymbolId>,
     pub associated_members: FxHashMap<(SymbolId, SmolStr), SymbolId>,
+    /// Canonical flat backend names, computed once from defining module paths.
+    pub host_function_names: FxHashMap<SymbolId, SmolStr>,
     /// Type-parameter symbols for named types (`struct` / `enum` / …), in declaration order.
     /// Used so methods on `Box<T>` can import `T` into their type scope.
     pub type_params: FxHashMap<SymbolId, smallvec::SmallVec<[SymbolId; 4]>>,
@@ -316,6 +318,7 @@ impl SymbolTable {
             imported_symbols: FxHashMap::default(),
             module_members: FxHashMap::default(),
             associated_members: FxHashMap::default(),
+            host_function_names: FxHashMap::default(),
             type_params: FxHashMap::default(),
             global_scope_id: ScopeId(0),
             builtins: BuiltinTypes::default(),
@@ -396,6 +399,11 @@ impl SymbolTable {
         for ((ty, member), old_symbol_id) in other.associated_members {
             self.associated_members
                 .insert((map_symbol(ty), member), map_symbol(old_symbol_id));
+        }
+
+        for (old_symbol_id, name) in other.host_function_names {
+            self.host_function_names
+                .insert(map_symbol(old_symbol_id), name);
         }
 
         // 5. Merge type-parameter tables
@@ -668,6 +676,18 @@ impl SymbolTable {
 
     pub fn iter(&self) -> impl Iterator<Item = &Symbol> {
         self.symbols.iter().chain(self.imported_symbols.values())
+    }
+
+    /// Deterministic flat symbol name used by native backends.
+    ///
+    /// The resolver records the defining module once. Import aliases never
+    /// participate in this identity, so adding or renaming an import cannot
+    /// change generated symbols or create a backend collision.
+    #[must_use]
+    pub fn host_func_name<'a>(&'a self, sym: &'a Symbol) -> &'a str {
+        self.host_function_names
+            .get(&sym.id)
+            .map_or_else(|| sym.name.as_str(), SmolStr::as_str)
     }
 
     #[must_use]

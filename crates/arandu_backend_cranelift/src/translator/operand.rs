@@ -277,7 +277,8 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
             },
             AmirOperand::FunctionRef(sym_id) => {
                 let sym = self.symbol_table.get(*sym_id);
-                let func_id = match self.func_ids.get(sym.name.as_str()) {
+                let host_name = self.symbol_table.host_func_name(sym);
+                let func_id = match self.func_ids.get(host_name) {
                     Some(func_id) => *func_id,
                     None => {
                         self.record_ice(
