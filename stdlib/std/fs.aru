@@ -93,6 +93,10 @@ public func readToString(path: str): Result<strings.String, io.IoError> {
 /// per-entry stat). Ordering is the host filesystem order (unspecified, like
 /// POSIX `readdir`). Free the blob exactly once with `destroy`.
 public struct DirListing {
+    // Scratch fat descriptor used by `nameStr`; `strView` borrows these first
+    // two words from the listing, so the name cannot outlive its owner.
+    viewData: ptr[u8]
+    viewLen: uint
     data: ptr[u8]
     count: uint
     capacity: uint
@@ -116,6 +120,8 @@ public func readDir(path: str): Result<DirListing, io.IoError> {
         return Result.Err(io.errorFromPortable(errCode))
     }
     return Result.Ok(DirListing {
+        viewData: nil,
+        viewLen: 0,
         data: buf,
         count: count,
         capacity: cap,
@@ -167,6 +173,28 @@ public func DirListing.name(self: ref DirListing, index: uint): []u8 {
     }
 }
 
+/// Returns the name of the entry at `index` as a borrowed string view,
+/// or an empty string when `index` is out of range.
+///
+/// The view borrows `self`; the string remains valid until `destroy`.
+public func DirListing.nameStr(self: mut ref DirListing, index: uint): ref str {
+    if index >= self.count {
+        self.viewData = self.data
+        self.viewLen = 0
+        return intrinsics.strView<DirListing>(self)
+    }
+    unsafe {
+        let entryOff: uint = 8 + index * 16
+        let nameOff = readU32At(self.data, entryOff) as uint
+        let nameLen = readU32At(self.data, entryOff + 4) as uint
+        let namesBase = mem.ptrOffset<u8>(self.data, (8 + self.count * 16) as i32)
+        let namePtr = mem.ptrOffset<u8>(namesBase, nameOff as i32)
+        self.viewData = namePtr
+        self.viewLen = nameLen
+        return intrinsics.strView<DirListing>(self)
+    }
+}
+
 /// Frees the listing blob.
 @Destructor
 public func DirListing.destroy(self: own DirListing): void {
@@ -177,6 +205,8 @@ public func DirListing.destroy(self: own DirListing): void {
 func destroyListing(l: mut ref DirListing): void {
     let data = l.data
     let capacity = l.capacity
+    l.viewData = nil
+    l.viewLen = 0
     l.data = nil
     l.capacity = 0
     l.count = 0

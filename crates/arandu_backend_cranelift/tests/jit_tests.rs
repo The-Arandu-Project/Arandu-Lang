@@ -1140,6 +1140,35 @@ fn jit_struct_literal() {
 }
 
 #[test]
+fn jit_borrows_named_struct_field_as_aggregate_pointer() {
+    let src = r#"
+    struct Stats {
+        code: int
+    }
+    func Stats.add(self: mut ref Stats, other: ref Stats): void {
+        self.code = self.code + other.code
+    }
+    struct Report {
+        total: Stats
+    }
+    func main(): int {
+        let mut report = Report { total: Stats { code: 1 } }
+        let delta = Stats { code: 41 }
+        report.total.add(delta)
+        return report.total.code
+    }
+    "#;
+    let (amir, symbols, type_info) = compile_src(src);
+    let backend = backend_for_test();
+    let module = backend.compile(&amir, &symbols, &type_info).unwrap();
+    let result: i32 = unsafe {
+        let f: unsafe fn() -> i32 = module.get_fn("main").unwrap();
+        f()
+    };
+    assert_eq!(result, 42);
+}
+
+#[test]
 fn jit_returns_ice_on_invalid_literal_pool() {
     let (mut amir, symbols, type_info) = compile_src("func main(): int { return 42; }");
     for entry in &mut amir.literal_pool.entries {

@@ -193,6 +193,38 @@ func main(): int {
 }
 
 #[test]
+fn directory_name_view_blocks_listing_destruction() {
+    let output = check(
+        r#"module tests.borrowed_views.directory
+import io
+import std.fs as fs
+
+@Effects(FileRead, Foreign)
+func main(): int {
+    match fs.readDir(".") {
+        Ok(listing) => {
+            let name = listing.nameStr(0)
+            listing.destroy()
+            io.println(*name)
+        }
+        Err(_) => {}
+    }
+    return 0
+}
+"#,
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "dangling directory name view passed"
+    );
+    assert!(
+        stderr.contains("O002") || stderr.contains("O003"),
+        "expected ownership conflict, got: {stderr}"
+    );
+}
+
+#[test]
 fn jit_appends_utf8_and_reads_string_view() {
     let output = invoke(
         "run",

@@ -747,6 +747,7 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
             }
             AmirRvalue::Borrow(place) | AmirRvalue::BorrowMut(place) => {
                 let ty = self.local_ar_ty(place.local);
+                let borrowed_ty = self.place_ar_ty(place);
                 let local_is_memory = self.current_func.locals[place.local.as_usize()].is_memory;
                 let has_stack_home = self.local_stack_slots.contains_key(&place.local);
                 // BC.4a: Deref means base local already holds a materialised pointer
@@ -779,6 +780,27 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
 
                 if is_memory_backed {
                     let (base_ptr, offset) = self.translate_place_address_for_load(place);
+                    // Named aggregates use a pointer representation in the JIT.
+                    // A projected struct field therefore contains the aggregate
+                    // pointer; borrowing that field passes the pointer value, not
+                    // the address of the field slot that stores it. Scalar fields
+                    // still borrow their slot address.
+                    if matches!(borrowed_ty, ArType::Named(_, _))
+                        && matches!(
+                            place.projections.last(),
+                            Some(
+                                arandu_semantics::amir::AmirProjection::Field(_)
+                                    | arandu_semantics::amir::AmirProjection::Index(_)
+                            )
+                        )
+                    {
+                        return self.builder.ins().load(
+                            self.ptr_type,
+                            cranelift_codegen::ir::MemFlagsData::new(),
+                            base_ptr,
+                            offset,
+                        );
+                    }
                     if offset == 0 {
                         base_ptr
                     } else {
