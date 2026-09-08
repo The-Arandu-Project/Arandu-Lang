@@ -96,6 +96,16 @@ fn analyse<'bump>(
                         lattice[lhs.as_usize()] = merged;
                         changed = true;
                     }
+                } else if let AmirStmt::Call { lhs: Some(lhs), .. } = stmt {
+                    // A call result is a runtime definition. Leaving it at
+                    // `Undefined` makes a phi meet ignore that incoming edge,
+                    // so a constant from another edge can win unsoundly.
+                    let old = lattice[lhs.as_usize()];
+                    let merged = meet(old, LatticeVal::Overdefined);
+                    if merged != old {
+                        lattice[lhs.as_usize()] = merged;
+                        changed = true;
+                    }
                 }
             }
 
@@ -600,6 +610,121 @@ mod tests {
             is_nullable: false,
             span: arandu_lexer::Span::new(0, 0, 0),
         }
+    }
+
+    fn bool_temp(id: usize) -> AmirTemp {
+        AmirTemp {
+            id: TempId::from_usize(id),
+            ty: intern_ty(ArType::Primitive(Primitive::Bool)),
+            is_copy: true,
+            is_nullable: false,
+            span: arandu_lexer::Span::new(0, 0, 0),
+        }
+    }
+
+    #[test]
+    fn call_result_contribution_keeps_join_overdefined() {
+        let mut pool = AmirLiteralPool::default();
+        let bool_ty = intern_ty(ArType::Primitive(Primitive::Bool));
+        let mut stmts = AmirStmtTable::new();
+        let call = stmts.push(AmirStmt::Call {
+            lhs: Some(TempId::from_usize(1)),
+            callee: AmirOperand::FunctionRef(crate::SymbolId::new(0, 1)),
+            args: smallvec::smallvec![],
+            return_borrow: None,
+        });
+        let mut call_range = DenseRange::empty();
+        extend_block_range(&mut call_range, call);
+
+        let blocks = vec![
+            AmirBasicBlock {
+                id: BlockId::from_usize(0),
+                statements: DenseRange::empty(),
+                params: DenseRange::empty(),
+                terminator: AmirTerminator::Branch {
+                    condition: AmirOperand::Copy(TempId::from_usize(0)),
+                    if_true: BlockId::from_usize(1),
+                    true_args: Vec::new(),
+                    if_false: BlockId::from_usize(2),
+                    false_args: Vec::new(),
+                },
+            },
+            AmirBasicBlock {
+                id: BlockId::from_usize(1),
+                statements: call_range,
+                params: DenseRange::empty(),
+                terminator: AmirTerminator::Goto {
+                    target: BlockId::from_usize(3),
+                    args: vec![AmirOperand::Copy(TempId::from_usize(1))],
+                },
+            },
+            AmirBasicBlock {
+                id: BlockId::from_usize(2),
+                statements: DenseRange::empty(),
+                params: DenseRange::empty(),
+                terminator: AmirTerminator::Goto {
+                    target: BlockId::from_usize(3),
+                    args: vec![AmirOperand::Constant(AmirConstant::Bool(false))],
+                },
+            },
+            AmirBasicBlock {
+                id: BlockId::from_usize(3),
+                statements: DenseRange::empty(),
+                params: DenseRange::new(0, 1),
+                terminator: AmirTerminator::Branch {
+                    condition: AmirOperand::Copy(TempId::from_usize(2)),
+                    if_true: BlockId::from_usize(4),
+                    true_args: Vec::new(),
+                    if_false: BlockId::from_usize(5),
+                    false_args: Vec::new(),
+                },
+            },
+            AmirBasicBlock {
+                id: BlockId::from_usize(4),
+                statements: DenseRange::empty(),
+                params: DenseRange::empty(),
+                terminator: AmirTerminator::Return,
+            },
+            AmirBasicBlock {
+                id: BlockId::from_usize(5),
+                statements: DenseRange::empty(),
+                params: DenseRange::empty(),
+                terminator: AmirTerminator::Return,
+            },
+        ];
+        let cfg = compute_cfg_edges(&blocks);
+        let mut func = AmirFunc {
+            symbol: crate::SymbolId::new(0, 0),
+            return_type: intern_ty(ArType::Void),
+            receiver: None,
+            params: Vec::new(),
+            locals: vec![AmirLocal {
+                id: LocalId::from_usize(0),
+                ty: bool_ty,
+                is_memory: false,
+                symbol: None,
+                span: arandu_lexer::Span::new(0, 0, 0),
+                use_span: None,
+            }],
+            temps: vec![bool_temp(0), bool_temp(1), bool_temp(2)],
+            blocks,
+            block_params: vec![BlockParam {
+                id: TempId::from_usize(2),
+                local: LocalId::from_usize(0),
+                ty: bool_ty,
+                from: None,
+                moved: false,
+            }],
+            stmts,
+            cfg,
+        };
+
+        let bump = bumpalo::Bump::new();
+        let _ = sccp(&mut func, &mut pool, &bump);
+        assert!(matches!(
+            func.block(BlockId::from_usize(3)).terminator,
+            AmirTerminator::Branch { .. }
+        ));
     }
 
     /// Join: both preds pass the same constant into a block param → param is constant.
