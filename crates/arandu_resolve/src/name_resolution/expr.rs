@@ -250,8 +250,17 @@ impl<'a> Resolver<'a> {
     pub(crate) fn resolve_pattern(&mut self, scope: ScopeId, pattern: PatternId) {
         match self.pool.pattern(pattern) {
             Pattern::Wildcard { .. } => {}
-            Pattern::Bind { span, name } => {
+            Pattern::Bind {
+                span,
+                name,
+                mutable,
+            } => {
                 self.define(scope, name, SymbolKind::Local, *span);
+                if *mutable
+                    && let Some(symbol) = self.resolved.definitions.get(&(*span).into()).copied()
+                {
+                    self.resolved.mutable_symbols.insert(symbol);
+                }
             }
             Pattern::Literal { expr, .. } => self.resolve_expr(scope, *expr),
             Pattern::Enum {

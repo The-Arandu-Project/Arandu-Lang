@@ -304,7 +304,15 @@ fn dump_match_arm_body(pool: &AstPool, body: &MatchArmBody) -> String {
 pub(super) fn dump_pattern(pool: &AstPool, pattern: &Pattern) -> String {
     match pattern {
         Pattern::Wildcard { span } => format!("Wildcard {}", dump_span(*span)),
-        Pattern::Bind { span, name } => format!("Bind {}({name})", dump_span(*span)),
+        Pattern::Bind {
+            span,
+            name,
+            mutable,
+        } => format!(
+            "Bind {}({}{name})",
+            dump_span(*span),
+            if *mutable { "mut " } else { "" }
+        ),
         Pattern::Literal { span, expr } => {
             format!("Literal {}({})", dump_span(*span), dump_expr(pool, *expr))
         }

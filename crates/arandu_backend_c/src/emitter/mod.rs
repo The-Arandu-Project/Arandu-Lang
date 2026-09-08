@@ -197,6 +197,7 @@ impl<'a> CEmitter<'a> {
                 "ar_path_is_absolute"
                     | "ar_path_is_empty"
                     | "ar_path_join"
+                    | "ar_path_join_owned"
                     | "ar_path_file_name"
                     | "ar_vec_malloc"
                     | "ar_vec_buf_free"

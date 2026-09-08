@@ -282,6 +282,32 @@ func main(): int {
 }
 
 #[test]
+fn owned_path_join_runs_and_destroys_its_buffer() {
+    let output = invoke(
+        "run",
+        r#"module tests.borrowed_views.owned_path_join
+import std.path as path
+import std.alloc.string as strings
+
+func main(): int {
+    let joined: strings.String = path.joinOwned("/tmp", "owned")
+    if *joined.asStr() != "/tmp/owned" {
+        return 1
+    }
+    joined.destroy()
+    return 0
+}
+"#,
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "owned path join failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn directory_name_view_blocks_listing_destruction() {
     let output = check(
         r#"module tests.borrowed_views.directory
@@ -291,10 +317,9 @@ import std.fs as fs
 @Effects(FileRead, Foreign)
 func main(): int {
     match fs.readDir(".") {
-        Ok(listing) => {
-            let mut owned = listing
-            let name = owned.nameStr(0)
-            owned.destroy()
+        Ok(mut listing) => {
+            let name = listing.nameStr(0)
+            listing.destroy()
             io.println(*name)
         }
         Err(_) => {}

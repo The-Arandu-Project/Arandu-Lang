@@ -47,10 +47,10 @@ pub fn runtime_library() -> Result<PathBuf, CliFailure> {
         && let Some(bin) = executable.parent()
     {
         // Cargo development layout: target/{debug,release}/arandu_cli.
-        candidates.push(bin.join(filename));
         if let Some(hashed) = hashed_development_runtime(bin, filename) {
             candidates.push(hashed);
         }
+        candidates.push(bin.join(filename));
         // Installed SDK layout: bin/arandu + lib/<host>/runtime.
         if let Some(prefix) = bin.parent() {
             candidates.push(

@@ -156,11 +156,13 @@ impl<'a> Parser<'a> {
                 payload: IndexRange::empty(),
             }));
         }
-        if matches!(self.current().kind, TokenKind::IdentValue) {
+        let mutable = self.eat_name("KW_MUT");
+        if mutable || matches!(self.current().kind, TokenKind::IdentValue) {
             let name = self.expect_ident_value()?;
             return Ok(self.pool.alloc_pattern(Pattern::Bind {
                 span: self.span_from_mark(start),
                 name,
+                mutable,
             }));
         }
         let literal = self.parse_literal_pattern_expr()?;

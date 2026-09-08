@@ -251,6 +251,10 @@ pub(crate) fn create_jit_builder() -> Result<JITBuilder, Diagnostic> {
         crate::vec_runtime::ar_vec_realloc as *const u8,
     );
     builder.symbol(
+        "ar_path_join_owned",
+        crate::rt_runtime::ar_path_join_owned as *const u8,
+    );
+    builder.symbol(
         "ar_string_push_str",
         crate::vec_runtime::ar_string_push_str as *const u8,
     );

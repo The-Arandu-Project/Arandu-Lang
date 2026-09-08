@@ -580,7 +580,7 @@ Fields:
 `Pattern` variants:
 
 - `LiteralPattern`
-- `BindingPattern`
+- `BindingPattern` with a `mutable` flag
 - `TypeVariantPattern`
 - `WildcardPattern`
 - `EnumPattern`
@@ -591,6 +591,7 @@ Fields:
 Invariant:
 
 - `_` is always `WildcardPattern`, never a binding.
+- `mut name` creates a mutable binding while preserving the matched value's type.
 - Pattern exhaustiveness is checked later, not during parsing.
 
 ### MatchArm

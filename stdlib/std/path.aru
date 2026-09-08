@@ -1,5 +1,8 @@
 module std.path
 
+import std.alloc.string as strings
+import std.core.intrinsics as intrinsics
+
 /// Path manipulation utilities.
 ///
 /// Provides both borrowed zero-copy views (`Path`) and owned buffers (`PathBuf`),
@@ -8,6 +11,7 @@ module std.path
 extern "C" {
     func ar_path_is_absolute(p: str): int
     func ar_path_join(a: str, b: str): str
+    func ar_path_join_owned(a: str, b: str, outBuf: mut ref ptr[u8], outLen: mut ref uint, outCap: mut ref uint): bool
     func ar_path_file_name(p: str): str
 }
 
@@ -53,6 +57,15 @@ public func Path.joinStr(self: ref Path, other: str): str {
     unsafe {
         return ar_path_join(self.raw, other)
     }
+}
+
+/// Joins two paths into an explicitly owned string.
+///
+/// The returned value owns its buffer and releases it through
+/// `String.destroy`. Allocation failure follows the infallible owned-string
+/// operations and aborts.
+public func Path.joinOwned(self: ref Path, other: str): strings.String {
+    return joinOwned(self.raw, other)
 }
 
 /// Owned filesystem path buffer.
@@ -107,6 +120,19 @@ public func join(a: str, b: str): str {
     unsafe {
         return ar_path_join(a, b)
     }
+}
+
+/// Joins two paths into an explicitly owned buffer.
+public func joinOwned(a: str, b: str): strings.String {
+    let mut buf: ptr[u8] = nil
+    let mut len: uint = 0
+    let mut cap: uint = 0
+    unsafe {
+        if !ar_path_join_owned(a, b, buf, len, cap) {
+            intrinsics.abort()
+        }
+    }
+    return strings.adoptOwned(buf, cap, len)
 }
 
 /// Final path component, or empty string when none (free function for backward compatibility).

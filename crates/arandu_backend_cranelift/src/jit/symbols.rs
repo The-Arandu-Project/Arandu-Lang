@@ -207,6 +207,20 @@ pub(crate) fn declare_runtime_imports<M: Module>(
             .map_err(|err| codegen_ice(format!("failed to declare ar_path_join: {err:?}")))?;
         insert_sym(func_ids, "ar_path_join", id);
 
+        let mut owned_join_sig = Signature::new(default_call_conv);
+        for _ in 0..2 {
+            owned_join_sig.params.push(AbiParam::new(ptr_type));
+            owned_join_sig.params.push(AbiParam::new(ptr_type));
+        }
+        for _ in 0..3 {
+            owned_join_sig.params.push(AbiParam::new(ptr_type));
+        }
+        owned_join_sig.returns.push(AbiParam::new(I8));
+        let id = module
+            .declare_function("ar_path_join_owned", Linkage::Import, &owned_join_sig)
+            .map_err(|err| codegen_ice(format!("failed to declare ar_path_join_owned: {err:?}")))?;
+        insert_sym(func_ids, "ar_path_join_owned", id);
+
         let mut file_sig = Signature::new(default_call_conv);
         #[cfg(windows)]
         {

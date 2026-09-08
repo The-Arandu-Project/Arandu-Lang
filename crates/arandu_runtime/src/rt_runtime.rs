@@ -233,6 +233,53 @@ unsafe fn ar_path_join_impl(
     fat_str_from_string(joined.to_string_lossy().into_owned())
 }
 
+/// Join two paths into an exact-size buffer owned by the caller.
+///
+/// # Safety
+/// Input pairs must satisfy the fat-string ABI and all out-pointers must be
+/// writable. A successful non-empty buffer must be released with
+/// `ar_vec_buf_free(ptr, capacity)`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ar_path_join_owned(
+    a_ptr: *const u8,
+    a_len: isize,
+    b_ptr: *const u8,
+    b_len: isize,
+    out_buf: *mut *mut u8,
+    out_len: *mut usize,
+    out_cap: *mut usize,
+) -> i8 {
+    if out_buf.is_null() || out_len.is_null() || out_cap.is_null() {
+        return 0;
+    }
+    unsafe {
+        *out_buf = std::ptr::null_mut();
+        *out_len = 0;
+        *out_cap = 0;
+    }
+    let (Some(a), Some(b)) = (path_from_fat(a_ptr, a_len), path_from_fat(b_ptr, b_len)) else {
+        return 0;
+    };
+    let joined = a.join(b);
+    let Some(bytes) = joined.to_str().map(str::as_bytes) else {
+        return 0;
+    };
+    if bytes.is_empty() {
+        return 1;
+    }
+    let data = unsafe { crate::vec_runtime::ar_vec_malloc(bytes.len()) };
+    if data.is_null() {
+        return 0;
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len());
+        *out_buf = data;
+        *out_len = bytes.len();
+        *out_cap = bytes.len();
+    }
+    1
+}
+
 /// File name component (`Path::file_name`); empty string when none.
 ///
 /// # Safety
@@ -625,6 +672,30 @@ mod tests {
             let leaf = ar_path_file_name(b"leaf".as_ptr(), 4);
             let sl = std::slice::from_raw_parts(leaf.ptr, leaf.len as usize);
             assert_eq!(sl, b"leaf");
+        }
+    }
+
+    #[test]
+    fn owned_path_join_returns_an_exact_caller_owned_buffer() {
+        unsafe {
+            let mut data = std::ptr::null_mut();
+            let mut len = 0;
+            let mut capacity = 0;
+            assert_eq!(
+                ar_path_join_owned(
+                    b"/tmp".as_ptr(),
+                    4,
+                    b"owned".as_ptr(),
+                    5,
+                    &mut data,
+                    &mut len,
+                    &mut capacity,
+                ),
+                1
+            );
+            assert_eq!(std::slice::from_raw_parts(data, len), b"/tmp/owned");
+            assert_eq!(capacity, len);
+            crate::vec_runtime::ar_vec_buf_free(data, capacity);
         }
     }
 

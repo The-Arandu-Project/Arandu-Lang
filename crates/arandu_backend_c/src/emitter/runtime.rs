@@ -248,6 +248,25 @@ static ArStr ar_path_join(ArStr a, ArStr b) {{
     buf[total] = 0;
     return ar_str_pack(buf, total);
 }}
+static bool ar_path_join_owned(ArStr a, ArStr b, uint8_t **out_buf, {len_c_ty} *out_len, {len_c_ty} *out_cap) {{
+    if (!out_buf || !out_len || !out_cap || a.len < 0 || b.len < 0 ||
+        (a.len > 0 && !a.ptr) || (b.len > 0 && !b.ptr)) return false;
+    *out_buf = NULL; *out_len = 0; *out_cap = 0;
+    bool absolute = b.len > 0 && b.ptr[0] == '/';
+    {len_c_ty} al = absolute ? 0 : a.len;
+    bool need_sep = al > 0 && b.len > 0 && a.ptr[al - 1] != '/';
+    if (al > INT64_MAX - b.len - (need_sep ? 1 : 0)) return false;
+    {len_c_ty} total = al + b.len + (need_sep ? 1 : 0);
+    if (total == 0) return true;
+    uint8_t *buf = (uint8_t*)ar_vec_malloc(({len_c_ty})total);
+    if (!buf) return false;
+    {len_c_ty} off = 0;
+    if (al > 0) {{ memcpy(buf, a.ptr, (size_t)al); off = al; }}
+    if (need_sep) buf[off++] = '/';
+    if (b.len > 0) memcpy(buf + off, b.ptr, (size_t)b.len);
+    *out_buf = buf; *out_len = total; *out_cap = total;
+    return true;
+}}
 static ArStr ar_path_file_name(ArStr p) {{
     if (p.len <= 0 || !p.ptr) return ar_str_pack((const uint8_t*)"", 0);
     {len_c_ty} i = p.len;

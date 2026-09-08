@@ -378,6 +378,7 @@ TYPE_U8 TYPE_U16 TYPE_U32 TYPE_U64
 TYPE_F32 TYPE_F64
 TYPE_BOOL TYPE_BYTE TYPE_CHAR TYPE_STR TYPE_ANY TYPE_ERR
 IDENT_TYPE
+KW_MUT followed by IDENT_VALUE
 LBRACKET
 KW_FUNC
 LPAREN
@@ -571,7 +572,7 @@ LPAREN
 Pattern forms:
 
 - Literal pattern
-- Binding pattern
+- Binding pattern: `value` or mutable `mut value`
 - Wildcard pattern
 - Type variant pattern: `Some(value)`
 - Enum pattern: `Result.Ok(value)`
@@ -582,6 +583,7 @@ Pattern forms:
 Parser decision:
 
 - `_` lexes as `IDENT_VALUE("_")`, but parser converts it to `WildcardPattern` in pattern context.
+- `mut` is accepted only before a value binding and marks that arm-local binding mutable.
 - Try wildcard, range, enum, struct, and tuple patterns before simple binding/type patterns.
 - `IDENT_TYPE DOT IDENT_TYPE` starts an enum pattern.
 - `IDENT_TYPE LBRACE` starts a struct pattern.
