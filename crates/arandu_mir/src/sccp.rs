@@ -54,6 +54,12 @@ fn analyse<'bump>(
         std::iter::repeat_n(LatticeVal::Undefined, n_temps),
         bump,
     );
+    for &param in &func.params {
+        lattice[param.as_usize()] = LatticeVal::Overdefined;
+    }
+    if let Some(receiver) = &func.receiver {
+        lattice[receiver.temp.as_usize()] = LatticeVal::Overdefined;
+    }
     let mut reachable =
         bumpalo::collections::Vec::from_iter_in(std::iter::repeat_n(false, n_blocks), bump);
     reachable[0] = true;

@@ -85,6 +85,54 @@ func main(): int {
 }
 
 #[test]
+fn logical_operators_short_circuit_rhs_effects_with_and_without_opt() {
+    let file = std::env::temp_dir().join("arandu_cli_short_circuit.aru");
+    fs::write(
+        &file,
+        r#"import io
+
+func observed(): bool {
+    io.println("rhs evaluated")
+    return true
+}
+
+func matchesMarker(value: u8): bool {
+    return value == 32 || value == 9 || value == 13
+}
+
+func main(): int {
+    let andValue = false && observed()
+    let orValue = true || observed()
+    if andValue || !orValue || matchesMarker(105) {
+        return 1
+    }
+    return 0
+}
+"#,
+    )
+    .expect("fixture should be writable");
+
+    let path = file.to_string_lossy();
+    for args in [
+        vec!["run", path.as_ref()],
+        vec!["run", "--opt", path.as_ref()],
+    ] {
+        let output = run_cli(&args);
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "short-circuited RHS produced output: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+    let _ = fs::remove_file(file);
+}
+
+#[test]
 fn lex_parse_and_check_valid_files_exit_successfully() {
     let dir = std::env::temp_dir();
     let file = dir.join("arandu_cli_smoke.aru");
