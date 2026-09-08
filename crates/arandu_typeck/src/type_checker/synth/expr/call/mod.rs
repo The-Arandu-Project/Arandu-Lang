@@ -489,6 +489,13 @@ pub(super) fn synth_call_expr(
                                         arg_index: 0,
                                     },
                                 );
+                            } else {
+                                super::super::ctor::validate_exclusive_receiver_autoref(
+                                    checker,
+                                    base_id,
+                                    receiver_ty_id,
+                                    actual_base_ty_id,
+                                );
                             }
                             let explicit_params = &params[1..];
                             let arg_ids = checker.pool.expr_list(args_range).to_vec();
