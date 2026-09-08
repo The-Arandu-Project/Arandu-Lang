@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::artifact;
 use crate::cli_error::{CliFailure, CliResult, CliSuccess};
-use crate::pipeline::{ensure_host_jit_layout, open_entry_file, pipeline_lower};
+use crate::pipeline::{ensure_host_jit_layout, pipeline_lower};
 use crate::project::{self, ProjectFlags};
 use crate::test_runner;
 
@@ -189,7 +189,7 @@ pub fn cmd_project_test_list(
                 .unwrap_or(0);
             let temp_root = std::env::var_os("ARANDU_TEST_TEMP_ROOT").map(PathBuf::from);
             arandu_runtime::testing_runtime::init_test_context(exact, sequence, temp_root);
-            let result = run_exact_test(&ctx, exact, data_layout);
+            let result = run_exact_test(&db, &ctx, exact, data_layout);
             let outcome = arandu_runtime::testing_runtime::finish_test_context();
 
             let (status, failure) =
@@ -299,6 +299,7 @@ pub fn cmd_project_test_list(
 }
 
 pub fn run_exact_test(
+    db: &arandu_query::DatabaseImpl,
     ctx: &project::ProjectContext,
     exact: &str,
     data_layout: arandu_middle::layout::DataLayout,
@@ -312,13 +313,15 @@ pub fn run_exact_test(
         if !exact.eq(&target) {
             continue;
         }
-        let mut db = arandu_query::DatabaseImpl::new();
-        db.set_target_config(data_layout);
-        db.set_stdlib_root(ctx.stdlib.path.clone());
-        crate::pipeline::register_stdlib_sources(&mut db, &ctx.stdlib.path);
-        let (file, filepath) =
-            open_entry_file(&db, &mut arandu_base::SourceRegistry::default(), &path);
-        let artifacts = pipeline_lower(&db, file, &filepath);
+        let filepath = path.to_string_lossy().into_owned();
+        let file = db.source_file_by_path(&filepath).ok_or_else(|| {
+            CliFailure::operational(
+                "run test case",
+                Some(path.clone()),
+                "test source was not registered in the project database",
+            )
+        })?;
+        let artifacts = pipeline_lower(db, file, &filepath);
         ensure_host_jit_layout(data_layout)?;
         let backend = arandu_backend_cranelift::CraneliftBackend::try_new()
             .map_err(|diag| CliFailure::diagnostics([diag], Some(path.clone())))?;
