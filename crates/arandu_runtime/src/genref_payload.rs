@@ -232,6 +232,16 @@ impl OwnedPayload {
         deallocate(this.ptr, expected_layout);
         Ok(())
     }
+
+    /// Release the allocation after another owner consumed the value in place.
+    ///
+    /// # Safety
+    /// The value at [`Self::as_mut_ptr`] must have been moved out or destroyed
+    /// exactly once and must no longer be initialized.
+    pub(crate) unsafe fn release_consumed(self) {
+        let this = ManuallyDrop::new(self);
+        deallocate(this.ptr, this.descriptor.layout);
+    }
 }
 
 impl Drop for OwnedPayload {
@@ -271,6 +281,46 @@ unsafe extern "C" fn drop_value<T>(value: *mut u8) {
     // SAFETY: PayloadDescriptor::for_type<T> pairs this glue with T's exact
     // layout, and OwnedPayload calls it once while the value is initialized.
     unsafe { ptr::drop_in_place(value.cast::<T>()) };
+}
+
+/// Allocated but uninitialized storage for one erased payload.
+pub(crate) struct UninitPayload {
+    ptr: NonNull<u8>,
+    descriptor: PayloadDescriptor,
+}
+
+impl UninitPayload {
+    pub(crate) fn try_new(descriptor: PayloadDescriptor) -> Result<Self, GenError> {
+        let aligned_zst = NonNull::new(ptr::without_provenance_mut(descriptor.layout.align))
+            .ok_or(GenError::InvalidLayout)?;
+        let ptr = allocate(descriptor.layout, aligned_zst)?;
+        Ok(Self { ptr, descriptor })
+    }
+
+    #[must_use]
+    pub(crate) fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.ptr.as_ptr()
+    }
+
+    /// Promote storage after an ABI producer initialized its value.
+    ///
+    /// # Safety
+    /// The buffer must contain exactly one live value described by the stored
+    /// descriptor.
+    pub(crate) unsafe fn assume_init(self) -> OwnedPayload {
+        let this = ManuallyDrop::new(self);
+        OwnedPayload {
+            ptr: this.ptr,
+            descriptor: this.descriptor,
+            marker: PhantomData,
+        }
+    }
+}
+
+impl Drop for UninitPayload {
+    fn drop(&mut self) {
+        deallocate(self.ptr, self.descriptor.layout);
+    }
 }
 
 #[cfg(test)]

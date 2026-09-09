@@ -354,7 +354,9 @@ Fase 3 — OSSA Avançado, Semântica e OS Runtime (v0.3) · [PARCIAL; vários m
            integração Pypor → medições e matriz nativa Linux/Windows/macOS.
            Progresso: bounds canônicos Send/Sync provam armazenamento conservador;
            contexto own e retorno agregado genérico preservam campos e cleanup
-           exato nos pipelines JIT/C. Transporte entre workers ainda não existe.
+           exato nos pipelines JIT/C. O runtime já transporta payloads erased
+           Send com layout/alinhamento e cleanup definidos; geração do thunk,
+           espelho C, fila limitada e pool reutilizável ainda estão pendentes.
            Não promover Send/Sync, handles i64 ou SyncExecutor existentes a
            garantias de paralelismo sem implementar e testar esses contratos.
 [x] SL_T   [Testing & Benchmark Harness](./arandu-testing-benchmark-harness-v0.1.md):

@@ -202,6 +202,33 @@ passed, followed by architecture and line-ending checks. Pypor again passed
 `check .` and its four smoke tests with the checkout CLI. Native Windows/macOS
 execution and a worker ABI remain subsequent gates.
 
+## Worker transport ABI
+
+The runtime now has an internal `WorkerTask` transport built on the existing
+validated `OwnedPayload` allocation contract. It moves a Send-proven context
+into a worker, reserves result storage using the result's exact size and
+alignment, and returns an opaque `WorkerResult` that retains the Send proof.
+`OwnedPayload` itself remains thread-confined, so GenRef storage does not gain
+an accidental global Send implementation.
+
+The erased thunk has one typed status contract: it consumes context on every
+return, initializes result only on completion, and never unwinds across its C
+ABI. Dropping a task before execution runs context cleanup; failure and unknown
+status release uninitialized result storage without invoking result drop glue.
+Tests exercise an actual OS-thread crossing, exact-once context/result drops,
+failure, invalid status and 64-byte result alignment. Construction is unsafe
+because only compiler-generated glue can prove the erased thunk matches the
+declared context/result descriptors.
+
+Zero-sized results use an aligned sentinel derived from their descriptor rather
+than a byte-aligned dangling pointer; a 128-byte-aligned ZST regression guards
+the strict pointer-alignment requirement even when no allocation occurs.
+
+This is not yet a public language ABI. Compiler thunk generation, a standalone
+C mirror, bounded admission, worker reuse and running-task cancellation remain
+required before exposing a parallel operation. No scheduler dependency or
+second payload allocator was introduced.
+
 Validation of the initial storage proof (Linux, 2026-09-09): the ordered workspace
 fmt/check/Clippy/test/diagnostic-catalog/rustdoc sequence passed, followed by
 single-vs-eight-thread diagnostic determinism, architecture and line-ending
