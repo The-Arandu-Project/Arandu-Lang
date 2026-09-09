@@ -246,6 +246,10 @@ pub enum LangItem {
     Coroutine,
     String,
     Vec,
+    Send,
+    Sync,
+    /// Cooperative executor handle; its opaque ID is not a transfer proof.
+    TaskHandle,
 }
 
 #[derive(Debug, Clone)]

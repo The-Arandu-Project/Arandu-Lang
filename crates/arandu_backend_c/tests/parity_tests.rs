@@ -120,6 +120,7 @@ func main(): int {
     let resource = Resource { handle: nil }
     return 0
 }
+
 "#,
     );
 }
@@ -223,6 +224,10 @@ fn assert_backend_rejection_parity(
 }
 
 fn execute_c(name: &str, amir: &AmirProgram, tc: &TypeCheckResult) -> i32 {
+    execute_c_output(name, amir, tc).0
+}
+
+fn execute_c_output(name: &str, amir: &AmirProgram, tc: &TypeCheckResult) -> (i32, String) {
     // 1. Generate C (no debug dumps — keep tests pure / CI-friendly).
     let mut c_code = emit_c(amir, tc);
 
@@ -295,7 +300,7 @@ int main() {
         .parse()
         .unwrap_or_else(|_| panic!("failed to parse C exit line as integer: {stdout:?}"));
 
-    actual_result
+    (actual_result, stdout)
 }
 
 fn test_execution_result(name: &str, src: &str) -> (i32, i32) {
@@ -1130,4 +1135,49 @@ fn parity_mixed_alignment_packing() {
     }
     "#;
     test_execution_parity("mixed_alignment_packing", src);
+}
+
+#[test]
+fn coroutine_value_uses_pointer_abi_in_both_backends() {
+    let result = test_execution_result(
+        "coroutine_pointer_abi",
+        r#"
+extern "C" { func ar_co_block_on_i64(state: ptr[u8]): int }
+async func answer(): int { return 42 }
+func main(): int {
+    let job = answer()
+    return unsafe { ar_co_block_on_i64(job as ptr[u8]) }
+}
+"#,
+    );
+    assert_eq!(result, (42, 42));
+}
+
+#[test]
+fn owned_job_lifecycle_preserves_fields_and_cleanup_in_c() {
+    let source = include_str!("../../arandu_cli/tests/fixtures/owned_result_lifecycle.aru");
+    for optimized in [false, true] {
+        let (mut amir, tc) = compile_src(source);
+        if optimized {
+            optimize_amir_checked_with_level(
+                &mut amir,
+                tc.symbols.as_ref(),
+                &tc.type_info.type_interner,
+                OptLevel::O2,
+            )
+            .expect("valid owned job must optimize");
+        }
+        let name = if optimized {
+            "owned_job_opt"
+        } else {
+            "owned_job"
+        };
+        let (status, stdout) = execute_c_output(name, &amir, &tc);
+        assert_eq!(status, 0);
+        assert_eq!(
+            stdout.replace("\r\n", "\n"),
+            "30\n20\n0\n",
+            "optimized={optimized}"
+        );
+    }
 }

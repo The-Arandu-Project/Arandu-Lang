@@ -850,5 +850,34 @@ fn substitute(ty: &ArType, subst: &FxHashMap<SymbolId, TypeId>, interner: &TypeI
     }
 }
 
+/// Resolve a declared field through the concrete arguments used by layout.
+/// Returns `None` for unavailable metadata or an inconsistent generic arity.
+#[must_use]
+pub fn instantiated_field_type(
+    owner: &ArType,
+    field_name: &str,
+    interner: &TypeInterner,
+    provider: &dyn StructLayoutProvider,
+) -> Option<TypeId> {
+    let ArType::Named(symbol, arguments) = owner else {
+        return None;
+    };
+    let field = provider.get_struct_fields(*symbol)?.get(field_name)?.ty;
+    let parameters = provider.get_generic_params(*symbol).unwrap_or(&[]);
+    let arguments = interner.type_args(*arguments);
+    if parameters.len() != arguments.len() {
+        return None;
+    }
+    if parameters.is_empty() {
+        return Some(field);
+    }
+    let substitution = crate::types::build_subst_ids(parameters, &arguments, interner);
+    Some(crate::types::substitute_type_id(
+        field,
+        &substitution,
+        interner,
+    ))
+}
+
 #[cfg(test)]
 mod tests;

@@ -417,6 +417,11 @@ impl TypeInfo {
         args: &[TypeId],
         visiting: &mut FxHashMap<TypeId, bool>,
     ) -> bool {
+        // A destructor is an ownership obligation even for empty/scalar storage.
+        // Copying such a value would duplicate that obligation.
+        if self.destructors.contains_key(&sym) {
+            return false;
+        }
         let Some(fields) = self.struct_fields.get(&sym) else {
             return false;
         };

@@ -276,13 +276,14 @@ func main() {
 #[test]
 fn partial_move_from_explicit_destructor_type_is_rejected() {
     let src = r#"
-struct Resource { payload: str }
+struct Payload { handle: ptr[u8] }
+struct Resource { payload: Payload }
 @Destructor
 func Resource.close(own self): void {}
-func consume(own payload: str): void {}
+func consume(own payload: Payload): void {}
 
 func main() {
-    let resource = Resource { payload: "owned" }
+    let resource = Resource { payload: Payload { handle: nil } }
     consume(resource.payload)
 }
 "#;

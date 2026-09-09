@@ -10,7 +10,7 @@ use crate::amir::{
 };
 use crate::move_checker::{MoveState, move_states_at_block_exit};
 use arandu_middle::SymbolId;
-use arandu_middle::layout::DenseRange;
+use arandu_middle::layout::{DenseRange, instantiated_field_type};
 use arandu_middle::types::{ArType, TypeId};
 use arandu_typeck::TypeInfo;
 use smallvec::SmallVec;
@@ -25,7 +25,14 @@ fn type_needs_drop(ty: TypeId, type_info: &TypeInfo) -> bool {
             }
             if let Some(fields) = type_info.struct_fields.get(&sym) {
                 for f in fields.iter() {
-                    if type_needs_drop(f.ty, type_info) {
+                    let field_ty = instantiated_field_type(
+                        &resolved,
+                        &f.name,
+                        &type_info.type_interner,
+                        type_info,
+                    )
+                    .unwrap_or(f.ty);
+                    if type_needs_drop(field_ty, type_info) {
                         return true;
                     }
                 }
@@ -59,8 +66,19 @@ fn emit_recursive_drops(
         }
 
         if let Some(fields) = type_info.struct_fields.get(&sym) {
-            let mut indexed: Vec<(usize, Option<SymbolId>, TypeId)> =
-                fields.iter().map(|f| (f.index, f.symbol, f.ty)).collect();
+            let mut indexed: Vec<(usize, Option<SymbolId>, TypeId)> = fields
+                .iter()
+                .map(|f| {
+                    let ty = instantiated_field_type(
+                        &resolved,
+                        &f.name,
+                        &type_info.type_interner,
+                        type_info,
+                    )
+                    .unwrap_or(f.ty);
+                    (f.index, f.symbol, ty)
+                })
+                .collect();
             indexed.sort_by_key(|(idx, _, _)| std::cmp::Reverse(*idx));
 
             for (_, fsym, fty) in indexed {

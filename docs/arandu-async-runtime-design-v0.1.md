@@ -38,6 +38,27 @@ cancel<T>
 
 ABI: `Coroutine[T]` is a state-blob pointer; `job as ptr[u8]` is the host bridge.
 
+`spawn<T>` returns `TaskHandle<T>` and `join<T>` consumes that type information
+to infer/check its result. Requesting `bool` from a handle returned by an `int`
+coroutine is a type error. `cancel<T>` accepts the same typed handle. The type
+argument adds no runtime field: the handle retains its integer queue ID layout.
+Code that explicitly annotated the old bare `TaskHandle` must now supply its
+result argument; ordinary inferred spawn/join/cancel calls need no annotation.
+
+This repairs result-type erasure, not the host payload ABI: the cooperative MVP
+still transports i64-sized result bits. It is not the generic aggregate-result
+transport required for structured parallel jobs. Handles remain copyable and
+the existing cancellation/reuse restrictions below continue to apply. The canonical
+`TaskHandle<T>` is rejected by the initial `Send`/`Sync` storage proof: an opaque
+integer queue ID does not establish a cross-thread ownership contract.
+
+The C backend represents coroutine values as opaque state pointers, consistent
+with `LayoutEngine`, and supplies `ar_co_block_on_i64`. It does not currently
+supply the `ar_rt_spawn_i64`/`ar_rt_join_i64`/`ar_rt_cancel_i64` queue hosts or
+the `ar_rt_block_on_i64` alias in standalone output. Thus coroutine pointer ABI
+parity does not establish standalone C support for `std.runtime.executor`.
+That host-surface gap must be closed before promoting executor backend parity.
+
 The host task table distinguishes pending, running and completed tasks. A join
 claims the pending blob under the table lock and becomes its sole polling/free
 owner. Cancellation of a running task requests retirement after that join;

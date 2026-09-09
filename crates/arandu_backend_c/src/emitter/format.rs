@@ -113,6 +113,9 @@ impl<'a> CEmitter<'a> {
             ArType::Primitive(Primitive::Str) => Cow::Borrowed("ArStr"),
             ArType::Primitive(Primitive::Float) | ArType::FloatLiteral => Cow::Borrowed("double"),
             ArType::Void => Cow::Borrowed("void"),
+            // Coroutine values point to runtime state, independently of their
+            // result type. LayoutEngine also models them as one target pointer.
+            ArType::Coroutine(_) => Cow::Borrowed("void*"),
             ArType::Ptr(inner) | ArType::Ref(inner) | ArType::RefMut(inner) => Cow::Owned(format!(
                 "{}*",
                 self.format_type(&self.interner.resolve(*inner))

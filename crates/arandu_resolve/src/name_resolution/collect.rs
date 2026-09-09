@@ -133,13 +133,20 @@ impl<'a> Resolver<'a> {
                 }
             },
             TopLevelDecl::Struct(decl) => {
-                self.define_vis(
+                let symbol = self.define_vis(
                     scope,
                     &decl.name,
                     SymbolKind::Struct,
                     decl.span,
                     is_public(decl.visibility),
                 );
+                if let Some(symbol) = symbol
+                    && self.current_module.as_deref() == Some("std.runtime.executor")
+                    && decl.name == "TaskHandle"
+                {
+                    self.symbols
+                        .set_lang_item(symbol, arandu_middle::symbol_table::LangItem::TaskHandle);
+                }
             }
             TopLevelDecl::Enum(decl) => {
                 let pub_ = is_public(decl.visibility);
@@ -230,13 +237,24 @@ impl<'a> Resolver<'a> {
                 }
             }
             TopLevelDecl::Interface(decl) => {
-                self.define_vis(
+                let symbol = self.define_vis(
                     scope,
                     &decl.name,
                     SymbolKind::Interface,
                     decl.span,
                     is_public(decl.visibility),
                 );
+                if let Some(symbol) = symbol {
+                    use arandu_middle::symbol_table::LangItem;
+                    let capability = match (self.current_module.as_deref(), decl.name.as_str()) {
+                        (Some("std.core.marker"), "Send") => Some(LangItem::Send),
+                        (Some("std.core.marker"), "Sync") => Some(LangItem::Sync),
+                        _ => None,
+                    };
+                    if let Some(capability) = capability {
+                        self.symbols.set_lang_item(symbol, capability);
+                    }
+                }
             }
             TopLevelDecl::Extern(decl) => {
                 // Intrinsics / FFI block members are the module surface (exportable).

@@ -12,6 +12,31 @@ mod symbols;
 mod types;
 mod util;
 
+/// Decode canonical core identities at the import boundary; semantic consumers
+/// use LangItem/SymbolId, never the imported alias or a bare type spelling.
+fn core_lang_item(path: &str, name: &str) -> Option<arandu_middle::symbol_table::LangItem> {
+    use arandu_middle::symbol_table::LangItem;
+    let (module, file, item) = match name {
+        "Poll" => ("std.core.future", "core/future.aru", LangItem::Poll),
+        "Result" => ("std.core.result", "core/result.aru", LangItem::Result),
+        "Option" => ("std.core.option", "core/option.aru", LangItem::Option),
+        "Coroutine" => (
+            "std.core.coroutine",
+            "core/coroutine.aru",
+            LangItem::Coroutine,
+        ),
+        "Send" => ("std.core.marker", "core/marker.aru", LangItem::Send),
+        "Sync" => ("std.core.marker", "core/marker.aru", LangItem::Sync),
+        "TaskHandle" => (
+            "std.runtime.executor",
+            "std/runtime/executor.aru",
+            LangItem::TaskHandle,
+        ),
+        _ => return None,
+    };
+    (path == module || std::path::Path::new(path).ends_with(file)).then_some(item)
+}
+
 /// Builtin prelude modules injected by `define_prelude` / this helper.
 /// Kept in one place so Salsa import resolution can short-circuit without
 /// requiring on-disk `io.aru` / `err.aru` files.
@@ -268,30 +293,7 @@ pub fn resolve_imports_and_bodies(
                                 .map(|(n, &(id, _))| (n.as_str(), id))
                                 .collect();
                         for (name, &(id, kind)) in &exports.symbols {
-                            let item_lang = match (path.as_str(), name.as_str()) {
-                                (p, "Poll")
-                                    if p.ends_with("core/future.aru") || p == "std.core.future" =>
-                                {
-                                    Some(arandu_middle::symbol_table::LangItem::Poll)
-                                }
-                                (p, "Result")
-                                    if p.ends_with("core/result.aru") || p == "std.core.result" =>
-                                {
-                                    Some(arandu_middle::symbol_table::LangItem::Result)
-                                }
-                                (p, "Option")
-                                    if p.ends_with("core/option.aru") || p == "std.core.option" =>
-                                {
-                                    Some(arandu_middle::symbol_table::LangItem::Option)
-                                }
-                                (p, "Coroutine")
-                                    if p.ends_with("core/coroutine.aru")
-                                        || p == "std.core.coroutine" =>
-                                {
-                                    Some(arandu_middle::symbol_table::LangItem::Coroutine)
-                                }
-                                _ => None,
-                            };
+                            let item_lang = core_lang_item(path, name);
                             let sym = arandu_middle::Symbol {
                                 id,
                                 name: name.clone().into(),
@@ -355,33 +357,7 @@ pub fn resolve_imports_and_bodies(
                         for item in items {
                             if let Some(&(id, kind)) = exports.symbols.get(item.name.as_str()) {
                                 let import_name = item.alias.as_ref().unwrap_or(&item.name).clone();
-                                let item_lang = match (path.as_str(), item.name.as_str()) {
-                                    (p, "Poll")
-                                        if p.ends_with("core/future.aru")
-                                            || p == "std.core.future" =>
-                                    {
-                                        Some(arandu_middle::symbol_table::LangItem::Poll)
-                                    }
-                                    (p, "Result")
-                                        if p.ends_with("core/result.aru")
-                                            || p == "std.core.result" =>
-                                    {
-                                        Some(arandu_middle::symbol_table::LangItem::Result)
-                                    }
-                                    (p, "Option")
-                                        if p.ends_with("core/option.aru")
-                                            || p == "std.core.option" =>
-                                    {
-                                        Some(arandu_middle::symbol_table::LangItem::Option)
-                                    }
-                                    (p, "Coroutine")
-                                        if p.ends_with("core/coroutine.aru")
-                                            || p == "std.core.coroutine" =>
-                                    {
-                                        Some(arandu_middle::symbol_table::LangItem::Coroutine)
-                                    }
-                                    _ => None,
-                                };
+                                let item_lang = core_lang_item(path, &item.name);
                                 let sym = arandu_middle::Symbol {
                                     id,
                                     name: import_name.clone(),

@@ -385,7 +385,7 @@ pub(super) fn synth_call_expr(
                                 .map(|aid| synth_expr(checker, aid))
                                 .collect();
                             if let Some((ip, ir)) = infer_and_instantiate_func(
-                                checker, &gp, &params, ret, &arg_tys, expected,
+                                checker, &gp, &params, ret, &arg_tys, expected, span,
                             ) {
                                 params = ip;
                                 ret = ir;
@@ -652,9 +652,9 @@ pub(super) fn synth_call_expr(
                         .copied()
                         .map(|aid| synth_expr(checker, aid))
                         .collect();
-                    if let Some((ip, ir)) =
-                        infer_and_instantiate_func(checker, &gp, &params, ret, &arg_tys, expected)
-                    {
+                    if let Some((ip, ir)) = infer_and_instantiate_func(
+                        checker, &gp, &params, ret, &arg_tys, expected, span,
+                    ) {
                         params = ip;
                         ret = ir;
                         let func_ty = ArType::func(&params, ret, &checker.type_info.type_interner);

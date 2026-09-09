@@ -9,7 +9,7 @@ use std::fmt::Write;
 
 use arandu_middle::amir::{AmirFunc, AmirProgram};
 use arandu_middle::layout::{LayoutEngine, StructLayoutProvider};
-use arandu_middle::types::{ArType, TypeInterner, build_subst_ids, substitute_type};
+use arandu_middle::types::{ArType, TypeInterner};
 use arandu_middle::{DiagCode, Diagnostic, Span};
 use arandu_semantics::SymbolTable;
 
@@ -105,28 +105,13 @@ impl<'a> CEmitter<'a> {
     /// field (`T*`) for `Vec<int>` produces a translation unit whose temporary
     /// declarations and field accesses disagree.
     pub(super) fn instantiated_field_ty(&self, named_ty: &ArType, field_name: &str) -> ArType {
-        let ArType::Named(struct_id, generic_args) = named_ty else {
-            return ArType::Error;
-        };
-        let Some(field_ty) = self
-            .provider
-            .get_struct_fields(*struct_id)
-            .and_then(|fields| fields.get(field_name))
-            .map(|f| f.ty)
-        else {
-            return ArType::Error;
-        };
-        let field_ty = self.interner.resolve(field_ty);
-        if generic_args.is_empty() {
-            return field_ty;
-        }
-        let generic_args_vec = self.interner.type_args(*generic_args);
-        let substitution = build_subst_ids(
-            self.symbols.type_params_of(*struct_id),
-            &generic_args_vec,
+        arandu_middle::layout::instantiated_field_type(
+            named_ty,
+            field_name,
             self.interner,
-        );
-        substitute_type(&field_ty, &substitution, self.interner)
+            self.provider,
+        )
+        .map_or(ArType::Error, |id| self.interner.resolve(id))
     }
 
     pub(super) fn record_codegen_ice(&mut self, func: &AmirFunc, message: impl Into<String>) {

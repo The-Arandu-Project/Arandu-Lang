@@ -502,11 +502,7 @@ fn validate_type_expr_constraints(
                     .map(|&id| checker.resolve(id))
                     .collect();
                 crate::type_checker::types::interfaces::check_instantiation_constraints(
-                    checker,
-                    struct_or_enum_id,
-                    &params,
-                    &arg_tys,
-                    *span,
+                    checker, &params, &arg_tys, *span,
                 );
             }
         }

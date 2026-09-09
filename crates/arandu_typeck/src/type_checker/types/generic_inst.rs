@@ -196,13 +196,7 @@ pub fn struct_fields_instantiated(
         return None;
     }
     let span = checker.symbols.get(struct_id).span;
-    super::interfaces::check_instantiation_constraints(
-        checker,
-        struct_id,
-        &params,
-        &generic_args,
-        span,
-    );
+    super::interfaces::check_instantiation_constraints(checker, &params, &generic_args, span);
     let subst = build_subst(&params, &generic_args);
     let res: FxHashMap<String, ArType> = fields
         .iter()
@@ -231,13 +225,7 @@ pub fn struct_field_instantiated(
         return None;
     }
     let span = checker.symbols.get(struct_id).span;
-    super::interfaces::check_instantiation_constraints(
-        checker,
-        struct_id,
-        &params,
-        &generic_args,
-        span,
-    );
+    super::interfaces::check_instantiation_constraints(checker, &params, &generic_args, span);
     let subst = build_subst(&params, &generic_args);
     let ty = checker.resolve(field_ty);
     Some(instantiate_type(
@@ -394,13 +382,7 @@ pub fn synth_generic_instantiation(
     };
 
     let subst = build_subst(&param_symbols, &arg_tys);
-    super::interfaces::check_instantiation_constraints(
-        checker,
-        callee_symbol,
-        &param_symbols,
-        &arg_tys,
-        span,
-    );
+    super::interfaces::check_instantiation_constraints(checker, &param_symbols, &arg_tys, span);
     instantiate_type(&template, &subst, &mut checker.type_info.type_interner)
 }
 

@@ -243,7 +243,10 @@ impl LowerCtx<'_> {
                                     .destructor_instances
                                     .contains_key(&local.ty)
                             });
-                    if !place.projections.is_empty() && root_has_destructor {
+                    if !place.projections.is_empty()
+                        && root_has_destructor
+                        && !self.tc.type_info.is_copy(arg_expr.ty)
+                    {
                         return Err(Diagnostic::error(
                             crate::DiagCode::U001FeatureNotSupported,
                             "cannot move a field out of a value with an explicit destructor",

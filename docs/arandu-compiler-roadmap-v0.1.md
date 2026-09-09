@@ -347,6 +347,16 @@ Fase 3 — OSSA Avançado, Semântica e OS Runtime (v0.3) · [PARCIAL; vários m
 [x] SL_S-Host   APIs de sistema: host path/rt helpers, filesystem e processos;
                 depende de A2 e de contratos nativos por plataforma
 [x] SL_R   Async Runtime: SL_R.0 typed spawn/join/block_on Coroutine + SyncExecutor; SL_R.2 EpollReactor (epoll+timerfd); SL_R.1/3 open
+[ ] SL_P   Processamento paralelo estruturado — campanha iniciada; API não publicada.
+           Design/evidência: [campanha ativa](./campaigns/structured-parallelism.md).
+           Ordem: baseline Pypor/arrays → trabalho tipado e ABI → prova de
+           transferência/borrows → executor limitado → redução progressiva →
+           integração Pypor → medições e matriz nativa Linux/Windows/macOS.
+           Progresso: bounds canônicos Send/Sync provam armazenamento conservador;
+           contexto own e retorno agregado genérico preservam campos e cleanup
+           exato nos pipelines JIT/C. Transporte entre workers ainda não existe.
+           Não promover Send/Sync, handles i64 ou SyncExecutor existentes a
+           garantias de paralelismo sem implementar e testar esses contratos.
 [x] SL_T   [Testing & Benchmark Harness](./arandu-testing-benchmark-harness-v0.1.md):
            implementação, SDK/VSIX e matriz nativa concluídos; soak operacional
            permanece como único requisito para promoção formal a Gold

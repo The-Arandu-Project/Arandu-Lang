@@ -11,8 +11,12 @@ public func phantom<T>(): PhantomData<T> {
 /// Marker interface for types whose memory can be safely duplicated via byte copy.
 public interface Copy {}
 
-/// Marker interface for types that can be safely transferred across concurrency boundaries.
+/// Compiler-checked transfer bound for owned scalar storage and aggregates.
+/// Views, raw pointers, coroutine state and resources with destructors are
+/// conservatively rejected until their transfer contracts are supported.
+/// Generic arguments participate in the proof, including PhantomData<T>.
 public interface Send {}
 
-/// Marker interface for types that can be safely referenced concurrently.
+/// Compiler-checked sharing bound for the same conservative owned-storage subset.
+/// This does not establish a borrowed scope lifetime or permit concurrent mutation.
 public interface Sync {}

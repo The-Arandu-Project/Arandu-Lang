@@ -883,6 +883,7 @@ pub(crate) fn synth_method_call(
             ret,
             &arg_tys,
             None,
+            call_span,
         ) {
             let mut new_params = Vec::with_capacity(ip.len() + 1);
             new_params.push(params[0]);
