@@ -5,8 +5,10 @@
 //! io_uring fast path on Linux ([`reactor_runtime`]), TCP sockets
 //! ([`socket_runtime`]), wakers, coroutine poll/block-on state, SyncExecutor
 //! spawn/join plus path/string hosts ([`rt_runtime`]), dynamic vectors
-//! ([`vec_runtime`]), generational arenas ([`gen_runtime`]), OS essentials,
-//! ToStr/IO hosts and fat-string helpers.
+//! ([`vec_runtime`]), generational arenas ([`gen_runtime`]), ownership-aware
+//! worker transport ([`worker_runtime`]) and the bounded reusable worker pool
+//! ([`worker_scheduler`]), OS essentials, ToStr/IO hosts and fat-string
+//! helpers.
 //!
 //! These functions are plain `extern "C"` host symbols: they hold no dependency
 //! on Cranelift or on any IR. `arandu_backend_cranelift` registers them as
@@ -30,6 +32,7 @@ pub mod to_str_runtime;
 pub mod vec_runtime;
 pub mod waker_runtime;
 pub mod worker_runtime;
+pub mod worker_scheduler;
 
 #[cfg(test)]
 mod genref_gold_model;

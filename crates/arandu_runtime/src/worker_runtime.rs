@@ -21,6 +21,9 @@ pub enum WorkerError {
     Payload(GenError),
     TaskFailed,
     InvalidStatus(i32),
+    /// The outcome channel closed before the result was delivered (the pool
+    /// shut down or the producing worker vanished).
+    Canceled,
 }
 
 impl From<GenError> for WorkerError {
@@ -30,6 +33,7 @@ impl From<GenError> for WorkerError {
 }
 
 /// One owned context plus the metadata needed to produce an owned result.
+#[derive(Debug)]
 pub struct WorkerTask {
     context: Option<OwnedPayload>,
     result: PayloadDescriptor,

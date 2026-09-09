@@ -111,6 +111,17 @@ the existing memory model, including partial initialization and failure paths.
 
 ## Execution and allocation decisions
 
+Bounded admission and worker reuse are now implemented in
+`crates/arandu_runtime/src/worker_scheduler.rs`: a bounded `sync_channel`
+queue shared across long-lived OS workers, per-task one-shot result channels,
+work that drains before joining on pool drop, and a `PoolCore` weak handle so
+nested submissions do not keep the pool alive. A worker whose queue fills never
+blocks: it executes the nested task inline, so nested work progresses with a
+single worker and no recursive pool is spawned. Decision: the bounded scheduler
+uses the standard library's `sync_channel` with a mutex-shared receiver; no new
+dependency and no lock-free queue were introduced, matching the guidance that
+neither is a prerequisite.
+
 Compare a bounded scheduler with an established work-stealing implementation
 before selecting dependencies. A new lock-free queue is not a prerequisite.
 One worker and nested work must make progress without spawning recursive pools.
@@ -230,9 +241,9 @@ and the block-on alias) as static functions over a growable slot table: pending
 blobs are reclaimed by cancel, running rows are retired after `cancel_requested`,
 a cached join is stable until cancel releases the row, and `free` fails closed on
 a mismatched magic. The C emitter skips these externs so the C mirror is the only
-link. Compiler thunk generation, bounded admission, worker reuse and
-running-task cancellation remain required before exposing a parallel operation.
-No scheduler dependency or second payload allocator was introduced.
+link. Compiler thunk generation and running-task cancellation remain required
+before exposing a parallel operation. No scheduler dependency or second payload
+allocator was introduced.
 
 Validation of the initial storage proof (Linux, 2026-09-09): the ordered workspace
 fmt/check/Clippy/test/diagnostic-catalog/rustdoc sequence passed, followed by
@@ -247,3 +258,10 @@ returns the payload, cancel-before-join reuses the freed slot, and a cached
 join is stable until cancel. The ordered workspace fmt/check/Clippy/test/
 diagnostic-catalog/rustdoc sequence passed, followed by architecture and
 line-ending checks.
+
+Worker pool validation (Linux, 2026-09-09): 83 runtime unit tests pass,
+including bounded admission with a blocked worker, a single worker whose nested
+task executes inline when the queue is full, dropped result handles releasing
+at worker completion, drain-before-join on pool drop, external blocking
+submission that wakes on progress, and rejection of zero workers or a zero
+bound. `WorkerError::Canceled` reports a pool lost before delivery.
