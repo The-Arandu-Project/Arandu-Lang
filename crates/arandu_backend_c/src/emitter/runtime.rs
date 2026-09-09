@@ -419,6 +419,97 @@ static inline void* ar_co_await_ptr(uint8_t* aw) {{
         );
     }
 
+    /// SL_R.0 cooperative task table mirror (JIT `ar_rt_*`) for the C backend.
+    ///
+    /// Mirrors `arandu_runtime::rt_runtime`: a growable table of slots with
+    /// Pending/Running/Completed states. A Pending blob is owned by the row;
+    /// a join claims it, drives it, releases it, then caches the result. A
+    /// cancel releases a Pending blob or marks a Running row for retirement.
+    /// Cooperative only: the joining thread drives the blob; standalone C has
+    /// no OS-worker scheduling at this surface.
+    pub(super) fn emit_task_runtime(&mut self) {
+        let _ = writeln!(
+            &mut self.output,
+            r#"/* SL_R.0 cooperative task table (mirrors JIT ar_rt_*). */
+typedef struct {{
+    int32_t state;          /* 0 EMPTY, 1 PENDING, 2 RUNNING, 3 COMPLETED */
+    int32_t cancel_requested;
+    uint8_t *blob;          /* owned while PENDING; RUNNING stores none */
+    int64_t result;         /* COMPLETED cache */
+}} ar_rt_slot;
+static ar_rt_slot *ar_rt_slots = NULL;
+static uint64_t ar_rt_capacity = 0;
+static uint64_t ar_rt_len = 0;
+
+static int64_t ar_rt_spawn_i64(uint8_t *state) {{
+    if (!state) abort();
+    uint64_t index = ar_rt_capacity;
+    for (uint64_t i = 0; i < ar_rt_len; i++) {{
+        if (ar_rt_slots[i].state == 0) {{ index = i; break; }}
+    }}
+    if (index == ar_rt_capacity) {{
+        if (ar_rt_len == ar_rt_capacity) {{
+            uint64_t new_cap = ar_rt_capacity == 0 ? 8 : ar_rt_capacity * 2;
+            if (new_cap > (uint64_t)INT64_MAX) abort();
+            ar_rt_slot *next = (ar_rt_slot*)realloc(
+                ar_rt_slots, (size_t)(new_cap * sizeof(ar_rt_slot)));
+            if (!next) abort();
+            memset(next + ar_rt_capacity, 0,
+                (size_t)((new_cap - ar_rt_capacity) * sizeof(ar_rt_slot)));
+            ar_rt_slots = next;
+            ar_rt_capacity = new_cap;
+        }}
+        index = ar_rt_len++;
+    }}
+    ar_rt_slots[index].state = 1;
+    ar_rt_slots[index].cancel_requested = 0;
+    ar_rt_slots[index].blob = state;
+    return (int64_t)index;
+}}
+
+static int64_t ar_rt_join_i64(int64_t handle) {{
+    if (handle < 0 || (uint64_t)handle >= ar_rt_len) abort();
+    ar_rt_slot *slot = &ar_rt_slots[(uint64_t)handle];
+    if (slot->state == 3) return slot->result;
+    if (slot->state != 1) abort(); /* RUNNING = concurrent join; EMPTY = invalid */
+    uint8_t *blob = slot->blob;
+    slot->state = 2;
+    slot->cancel_requested = 0;
+    int64_t result = ar_co_block_on_i64(blob);
+    if (*(uint32_t*)(blob + 4) != 0x4152434fu) abort(); /* fail-closed magic */
+    free(blob);
+    if (slot->cancel_requested) {{
+        slot->state = 0;
+        slot->blob = NULL;
+    }} else {{
+        slot->state = 3;
+        slot->result = result;
+    }}
+    return result;
+}}
+
+static void ar_rt_cancel_i64(int64_t handle) {{
+    if (handle < 0 || (uint64_t)handle >= ar_rt_len) return;
+    ar_rt_slot *slot = &ar_rt_slots[(uint64_t)handle];
+    if (slot->state == 1) {{
+        uint8_t *blob = slot->blob;
+        slot->state = 0;
+        slot->blob = NULL;
+        if (*(uint32_t*)(blob + 4) != 0x4152434fu) abort(); /* fail-closed magic */
+        free(blob);
+    }} else if (slot->state == 2) {{
+        slot->cancel_requested = 1;
+    }} else if (slot->state == 3) {{
+        slot->state = 0; /* cached row is retired by cancel (JIT slot.take) */
+    }} /* EMPTY: no-op */
+}}
+
+static int64_t ar_rt_block_on_i64(uint8_t *state) {{
+    return ar_co_block_on_i64(state);
+}}"#
+        );
+    }
+
     /// Host filesystem helpers for `std.fs` (mirrors JIT `ar_fs_*`).
     pub(super) fn emit_fs_runtime(&mut self, uint_c_ty: &str, int_c_ty: &str) {
         let _ = writeln!(
@@ -827,6 +918,8 @@ static {int_c_ty} ar_env_var_is_set(ArStr name) {{
         self.emit_vec_buf_runtime(uint_c_ty);
         // A3.6: poll / block_on for coroutine state blobs (disc@0, payload@8).
         self.emit_co_poll_runtime();
+        // SL_R.0: cooperative task table mirror (SyncExecutor host surface).
+        self.emit_task_runtime();
         // std.fs / std.env runtime hosts.
         self.emit_fs_runtime(uint_c_ty, len_c_ty);
         self.emit_env_runtime(len_c_ty);

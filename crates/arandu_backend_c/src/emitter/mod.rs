@@ -205,6 +205,10 @@ impl<'a> CEmitter<'a> {
                     | "ar_env_args_len"
                     | "ar_env_arg"
                     | "ar_env_var_is_set"
+                    | "ar_rt_block_on_i64"
+                    | "ar_rt_spawn_i64"
+                    | "ar_rt_join_i64"
+                    | "ar_rt_cancel_i64"
             ) {
                 continue;
             }

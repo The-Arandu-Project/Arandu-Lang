@@ -1154,6 +1154,81 @@ func main(): int {
 }
 
 #[test]
+fn cooperative_task_table_matches_in_both_backends() {
+    let result = test_execution_result(
+        "rt_task_table",
+        r#"
+extern "C" {
+    func ar_rt_spawn_i64(state: ptr[u8]): int
+    func ar_rt_join_i64(handle: int): int
+    func ar_rt_cancel_i64(handle: int): void
+}
+async func answer(): int { return 42 }
+func main(): int {
+    let job = answer()
+    let handle = unsafe { ar_rt_spawn_i64(job as ptr[u8]) }
+    return unsafe { ar_rt_join_i64(handle) }
+}
+"#,
+    );
+    assert_eq!(result, (42, 42));
+}
+
+#[test]
+fn cooperative_cancel_before_join_recovers_slot_in_c() {
+    let result = test_execution_result(
+        "rt_task_cancel",
+        r#"
+extern "C" {
+    func ar_rt_spawn_i64(state: ptr[u8]): int
+    func ar_rt_join_i64(handle: int): int
+    func ar_rt_cancel_i64(handle: int): void
+}
+async func answer(): int { return 42 }
+func main(): int {
+    let job = answer()
+    let handle = unsafe { ar_rt_spawn_i64(job as ptr[u8]) }
+    unsafe { ar_rt_cancel_i64(handle) }
+    let job2 = answer()
+    let handle2 = unsafe { ar_rt_spawn_i64(job2 as ptr[u8]) }
+    if handle2 != handle {
+        return 1
+    }
+    return unsafe { ar_rt_join_i64(handle2) }
+}
+"#,
+    );
+    assert_eq!(result, (42, 42));
+}
+
+#[test]
+fn cooperative_cached_join_reuses_result_without_polling() {
+    let result = test_execution_result(
+        "rt_task_cached",
+        r#"
+extern "C" {
+    func ar_rt_spawn_i64(state: ptr[u8]): int
+    func ar_rt_join_i64(handle: int): int
+    func ar_rt_cancel_i64(handle: int): void
+}
+async func answer(): int { return 42 }
+func main(): int {
+    let job = answer()
+    let handle = unsafe { ar_rt_spawn_i64(job as ptr[u8]) }
+    let first = unsafe { ar_rt_join_i64(handle) }
+    let cached = unsafe { ar_rt_join_i64(handle) }
+    if first != 42 || cached != 42 {
+        return 1
+    }
+    unsafe { ar_rt_cancel_i64(handle) }
+    return 0
+}
+"#,
+    );
+    assert_eq!(result, (0, 0));
+}
+
+#[test]
 fn owned_job_lifecycle_preserves_fields_and_cleanup_in_c() {
     let source = include_str!("../../arandu_cli/tests/fixtures/owned_result_lifecycle.aru");
     for optimized in [false, true] {

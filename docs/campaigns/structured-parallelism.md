@@ -224,10 +224,15 @@ Zero-sized results use an aligned sentinel derived from their descriptor rather
 than a byte-aligned dangling pointer; a 128-byte-aligned ZST regression guards
 the strict pointer-alignment requirement even when no allocation occurs.
 
-This is not yet a public language ABI. Compiler thunk generation, a standalone
-C mirror, bounded admission, worker reuse and running-task cancellation remain
-required before exposing a parallel operation. No scheduler dependency or
-second payload allocator was introduced.
+This is not yet a public language ABI. The standalone C backend now mirrors the
+cooperative task table (`ar_rt_spawn_i64`, `ar_rt_join_i64`, `ar_rt_cancel_i64`
+and the block-on alias) as static functions over a growable slot table: pending
+blobs are reclaimed by cancel, running rows are retired after `cancel_requested`,
+a cached join is stable until cancel releases the row, and `free` fails closed on
+a mismatched magic. The C emitter skips these externs so the C mirror is the only
+link. Compiler thunk generation, bounded admission, worker reuse and
+running-task cancellation remain required before exposing a parallel operation.
+No scheduler dependency or second payload allocator was introduced.
 
 Validation of the initial storage proof (Linux, 2026-09-09): the ordered workspace
 fmt/check/Clippy/test/diagnostic-catalog/rustdoc sequence passed, followed by
@@ -235,3 +240,10 @@ single-vs-eight-thread diagnostic determinism, architecture and line-ending
 checks. The Pypor consumer passed `check .` and all four smoke tests using the
 checkout CLI. This does not replace native Windows/macOS validation or establish
 parallel execution performance.
+
+Validation of the standalone C mirror (Linux, 2026-09-09): parity tests compile
+the same source through Cranelift and C and compare exit codes — spawn+join
+returns the payload, cancel-before-join reuses the freed slot, and a cached
+join is stable until cancel. The ordered workspace fmt/check/Clippy/test/
+diagnostic-catalog/rustdoc sequence passed, followed by architecture and
+line-ending checks.
