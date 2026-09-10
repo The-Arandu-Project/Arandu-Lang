@@ -265,3 +265,65 @@ task executes inline when the queue is full, dropped result handles releasing
 at worker completion, drain-before-join on pool drop, external blocking
 submission that wakes on progress, and rejection of zero workers or a zero
 bound. `WorkerError::Canceled` reports a pool lost before delivery.
+
+## Compiler-generated worker thunk (Fase 4)
+
+The thunk is now a real generic function written in Arandu source with the
+exact `WorkThunk` machine ABI `(ptr[C], ptr[R]) -> i32` (`WORK_COMPLETED = 0`):
+
+    func dispatch<R, C: Job<R>>(context: ptr[C], result: ptr[R]): i32 {
+        let job = unsafe { ptrRead<C>(context) }
+        let out = job.run()
+        unsafe { ptrWrite<R>(result, out) }
+        return 0
+    }
+
+`dispatch<Stats, CountJob>` monomorphizes to a standalone instance
+`_A$dispatch$I_Stats_T_CountJob_$E` (multi-argument separator `_T_`), registered
+in the JIT under its host-callable name and emitted as a real C function by the
+C backend (sanitized `_A_dispatch_I_Stats_T_CountJob__E`). The generic ABI
+`arandu-intrinsic` requires a `module std.core.*` path in the file (U001);
+`ptrRead`/`ptrWrite` are declared inline and `alloc`/`free` builtins avoid any
+extern C malloc dependency, so the same source type-checks and lowers in both
+backends without a stdlib harness.
+
+Coverage in `crates/arandu_backend_c/tests/parity_tests.rs`:
+`compile_src_mono` runs parse → resolve → type_check → `lower_to_hir` →
+`monomorphize_program` → `lower_to_amir`, mirroring the production pipeline that
+the plain parity helper lacks (its `lower_to_amir` inlined generic calls, so no
+`_A$` instance existed). The three regressions are the parity test — the same
+instance executed by `main` under Cranelift and C returns the same exit code —
+plus host calls to the JIT instance at the WorkThunk ABI with raw stack blobs,
+and a task submitted through `WorkerPool::new(2, 4)` whose payload/result
+cross an actual OS worker thread and get verified after `try_take`.
+
+Investigating the host call exposed an ABI-representation gap between the
+backends. The JIT represents named aggregates behind object pointers
+(`clif_type`, `StructLiteral` → `malloc` blob), and `ptrRead`/`ptrWrite` loaded
+the raw payload bits into those pointer slots: `dispatch` loaded 37 into the
+receiver register, `run` dereferenced address 37 and crashed; `ptrWrite`
+likewise stored the 8-byte result pointer instead of copying the 24-byte
+`Stats` payload. The C backend is by-value (stack copy, `run(&local)`), so the
+WorkThunk raw-blob contract only held there. Fix: `PtrRead`/`PtrWrite` now
+perform a real by-value copy for named structs — `ptrRead<T>` materialises a
+fresh `malloc` copy of `layout.size` bytes and returns its address;
+`ptrWrite<T>` `memcpy`s the value blob into the destination — while every other
+aggregate path keeps its pointer representation. The same source and same host
+blobs now round-trip identically in Cranelift and C, and `main` sets up a raw
+payload blob (no pointer indirection). The parity suite and the full workspace
+suite pass unchanged, so no existing test depended on the load-as-bits
+behaviour.
+
+Deferred to Fase 5: a stable, user-visible host name for generic instances
+(`host_function_names` only carries top-level functions; instances fall back to
+their mangled `sym.name`). The tests discover the instance through
+`host_func_name`, keeping this session offline of `arandu_query`. The
+trivially-droppable C/R restriction of the MVP remains; `PayloadDropGlue`
+handles runs and methods via drop glue, only context/result transport matters
+for the worker.
+
+Validation (Linux, 2026-09-10): the ordered workspace fmt/check/Clippy/test/
+diagnostic-catalog/rustdoc sequence passed, followed by architecture and
+line-ending checks. Worker-pool thread-crossing runs under both backends.
+Native Windows/macOS execution and a public parallel API remain subsequent
+gates.

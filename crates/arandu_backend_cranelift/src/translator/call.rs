@@ -1,6 +1,6 @@
 use arandu_semantics::amir::{AmirOperand, TempId};
 use arandu_semantics::passes::type_checker::types::{ArType, Primitive};
-use cranelift_codegen::ir::{InstBuilder, Type};
+use cranelift_codegen::ir::{InstBuilder, Type, Value};
 
 use super::FunctionTranslator;
 use super::operand::FatOperandKind;
@@ -132,6 +132,24 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 let clif_ty = lhs
                     .and_then(|temp| self.get_temp_clif_type(temp))
                     .unwrap_or(self.ptr_type);
+                let pointee = self.ptr_pointee_ty(&args[0]);
+                // Named-struct presents a raw-memory value at `*p`. The JIT
+                // stores aggregates behind object pointers, so reading a struct
+                // by value must copy the payload bytes into a fresh blob and
+                // return its address; otherwise the load would leak the value
+                // bits into the pointer slot (WorkThunk ABI divergence).
+                if matches!(
+                    pointee,
+                    ArType::Named(_, _) if self.is_named_struct_ty(&pointee)
+                ) && let Some(value) = self.materialize_ptr_read_copy(ptr_val, &pointee)
+                {
+                    if let Some(lhs_temp) = lhs
+                        && let Some(&var) = self.temp_map.get(lhs_temp)
+                    {
+                        self.builder.def_var(var, value);
+                    }
+                    return true;
+                }
                 let loaded_val = self.builder.ins().load(
                     clif_ty,
                     cranelift_codegen::ir::MemFlagsData::new(),
@@ -151,6 +169,23 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 }
                 let ptr_val = self.translate_operand(&args[0], Some(self.ptr_type));
                 let val_to_store = self.translate_operand(&args[1], None);
+                // Match `PtrRead`: writing a named struct by value copies the
+                // object bytes from the value's blob into `*p` instead of
+                // storing the 8-byte object pointer.
+                let val_ty = self.get_operand_ar_type(&args[1]);
+                if self.is_named_struct_ty(&val_ty)
+                    && let Some(memcpy_id) = self.memcpy_func_id()
+                {
+                    let layout = self.checked_layout(&val_ty);
+                    let memcpy_ref = self
+                        .module
+                        .declare_func_in_func(memcpy_id, self.builder.func);
+                    let size_val = self.builder.ins().iconst(self.ptr_type, layout.size as i64);
+                    self.builder
+                        .ins()
+                        .call(memcpy_ref, &[ptr_val, val_to_store, size_val]);
+                    return true;
+                }
                 self.builder.ins().store(
                     cranelift_codegen::ir::MemFlagsData::new(),
                     val_to_store,
@@ -211,5 +246,47 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
             }
             _ => false,
         }
+    }
+
+    /// The pointee `ArType` of a pointer/ref operand (`ptr[T]` → `T`).
+    fn ptr_pointee_ty(&self, operand: &AmirOperand) -> ArType {
+        match &self.get_operand_ar_type(operand) {
+            ArType::Ptr(inner) | ArType::Ref(inner) | ArType::RefMut(inner) => {
+                self.resolve_ty(*inner)
+            }
+            other => other.clone(),
+        }
+    }
+
+    /// Whether `ty` is a named **struct** (not enum/interface) aggregate.
+    fn is_named_struct_ty(&self, ty: &ArType) -> bool {
+        matches!(
+            ty,
+            ArType::Named(sym_id, _)
+                if matches!(
+                    self.symbol_table.get(*sym_id).kind,
+                    arandu_semantics::SymbolKind::Struct
+                )
+        )
+    }
+
+    /// Copies `layout.size` payload bytes at `src` into a fresh `malloc`ed
+    /// blob and returns its address, fed into the aggregate pointer-repr
+    /// value slot used by every other path (`StructLiteral` etc.).
+    fn materialize_ptr_read_copy(&mut self, src: Value, ty: &ArType) -> Option<Value> {
+        let malloc_id = self.malloc_func_id()?;
+        let memcpy_id = self.memcpy_func_id()?;
+        let layout = self.checked_layout(ty);
+        let size_val = self.builder.ins().iconst(self.ptr_type, layout.size as i64);
+        let malloc_ref = self
+            .module
+            .declare_func_in_func(malloc_id, self.builder.func);
+        let call_inst = self.builder.ins().call(malloc_ref, &[size_val]);
+        let dest = self.builder.inst_results(call_inst)[0];
+        let memcpy_ref = self
+            .module
+            .declare_func_in_func(memcpy_id, self.builder.func);
+        self.builder.ins().call(memcpy_ref, &[dest, src, size_val]);
+        Some(dest)
     }
 }

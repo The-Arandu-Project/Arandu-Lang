@@ -47,6 +47,7 @@ dependencies = [
  "arandu_codegen",
  "arandu_middle",
  "arandu_parser",
+ "arandu_runtime",
  "arandu_semantics",
  "rustc-hash 2.1.3",
 ]

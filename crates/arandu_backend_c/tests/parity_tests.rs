@@ -262,7 +262,7 @@ int main() {
         .arg("-o")
         .arg(&exe_file)
         .arg("-lm")
-        .status()
+        .output()
         .unwrap_or_else(|_| {
             panic!(
                 "failed to invoke C compiler '{}'. Parity tests require a C compiler in PATH.",
@@ -271,9 +271,9 @@ int main() {
         });
 
     assert!(
-        compile_status.success(),
-        "C compilation failed for {}",
-        name
+        compile_status.status.success(),
+        "C compilation failed for {name}: {}",
+        String::from_utf8_lossy(&compile_status.stderr)
     );
 
     let output = Command::new(&exe_file)
@@ -1255,4 +1255,208 @@ fn owned_job_lifecycle_preserves_fields_and_cleanup_in_c() {
             "optimized={optimized}"
         );
     }
+}
+
+/// SL_P Fase 4: a compiler-shaped job thunk written as an ordinary generic
+/// function. `dispatch` reads a `Job<R>` payload from `context`, runs it and
+/// writes the `R` result into `result` — the exact `WorkThunk` ABI
+/// (`(ptr, ptr) -> i32`). `main` feeds it blobs through the `alloc`/`free`
+/// builtins so the same source type-checks and lowers in both backends.
+const GENERIC_WORK_THUNK_SRC: &str = r#"
+module std.core.workthunk
+
+extern "arandu-intrinsic" {
+    func ptrRead<T>(p: ptr[T]) : T
+    func ptrWrite<T>(p: ptr[T], val: T) : void
+}
+
+interface Job<R> {
+    func run(shared self): R
+}
+
+struct Stats { code: int, comment: int, blank: int }
+struct CountJob { amount: int }
+
+func CountJob.run(shared self): Stats {
+    return Stats { code: self.amount, comment: 2, blank: 3 }
+}
+
+func dispatch<R, C: Job<R>>(context: ptr[C], result: ptr[R]): i32 {
+    let job = unsafe { ptrRead<C>(context) }
+    let out = job.run()
+    unsafe { ptrWrite<R>(result, out) }
+    return 0
+}
+
+func main(): int {
+    let job = CountJob { amount: 37 }
+    let c = alloc(8) as ptr[CountJob]
+    unsafe { ptrWrite<CountJob>(c, job) }
+    let r = alloc(24) as ptr[Stats]
+    let rc = dispatch<Stats, CountJob>(c, r)
+    let out = unsafe { ptrRead<Stats>(r) }
+    if rc != 0 { return 9 }
+    if out.code != 37 { return 1 }
+    if out.comment != 2 { return 2 }
+    if out.blank != 3 { return 3 }
+    unsafe { free(c) }
+    unsafe { free(r) }
+    return 0
+}
+"#;
+
+#[test]
+fn generic_work_thunk_runs_identically_in_c_and_cranelift() {
+    // Runs the real production pipeline (`monomorphize_program`) on both
+    // backends; `execute_c` wraps the emitted C with a C main and compares the
+    // exit code with the Cranelift-run Arandu `main`.
+    let (amir, tc) = compile_src_mono(GENERIC_WORK_THUNK_SRC);
+    let actual_result = execute_c("generic_work_thunk", &amir, &tc);
+    let expected = execute_cranelift(&amir, &tc);
+    assert_eq!(
+        expected, actual_result,
+        "Execution mismatch for generic_work_thunk! Cranelift={expected}, C={actual_result}"
+    );
+    assert_eq!(expected, 0);
+}
+
+/// Host-side mirror of the Arandu structs fed to/read from the thunk blobs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
+struct CountJobHost {
+    amount: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
+struct StatsHost {
+    code: i64,
+    comment: i64,
+    blank: i64,
+}
+
+/// Compile the generic thunk source and return the exact host name under which
+/// the monomorphized `dispatch<Stats, CountJob>` instance was registered.
+fn compile_generic_work_thunk() -> (AmirProgram, TypeCheckResult, String) {
+    let (amir, tc) = compile_src_mono(GENERIC_WORK_THUNK_SRC);
+    let instance_name = amir
+        .funcs
+        .iter()
+        .filter_map(|f| {
+            let name = tc.symbols.host_func_name(tc.symbols.get(f.symbol));
+            name.starts_with("_A$dispatch$I_").then(|| name.to_string())
+        })
+        .next()
+        .expect("monomorphized dispatch instance missing");
+    (amir, tc, instance_name)
+}
+
+/// Same as [`compile_src`] but runs the monomorphization pass, matching the
+/// production pipeline: generic callees become real instanced functions
+/// (`_A$...`) instead of being inlined at the call site by AMIR lowering.
+fn compile_src_mono(src: &str) -> (AmirProgram, TypeCheckResult) {
+    let program = arandu_parser::parse(src).expect("parse failed");
+    let resolution = resolve_for_test(0, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
+    assert!(
+        tc.diagnostics.is_empty(),
+        "type check failed: {:?}",
+        tc.diagnostics
+    );
+
+    let mut hir = lower_to_hir(&mut tc, &program).expect("HIR lowering failed");
+    let specialized =
+        arandu_semantics::monomorphize_program(&mut tc, &mut hir).expect("monomorphization failed");
+    assert!(
+        specialized > 0,
+        "generic dispatch instance must be specialized"
+    );
+    let amir = lower_to_amir(&tc, &hir, 64).expect("AMIR lowering failed");
+    (amir, tc)
+}
+
+#[test]
+fn generic_work_thunk_is_host_callable_at_workthunk_abi() {
+    let (amir, tc, instance_name) = compile_generic_work_thunk();
+    let backend = CraneliftBackend::try_new().unwrap();
+    let compiled =
+        CodegenBackend::compile(backend, &amir, tc.symbols.as_ref(), tc.type_info.as_ref())
+            .expect("cranelift compile failed");
+
+    let via_main = unsafe {
+        let main_fn =
+            arandu_semantics::CompiledCode::get_fn::<unsafe fn() -> i32>(&compiled, "main")
+                .expect("main not found");
+        main_fn()
+    };
+    assert_eq!(via_main, 0);
+
+    let thunk: arandu_runtime::worker_runtime::WorkThunk = unsafe {
+        arandu_semantics::CompiledCode::get_fn(&compiled, &instance_name)
+            .expect("instance not exported under its host name")
+    };
+
+    let mut context = CountJobHost { amount: 37 };
+    let mut result = std::mem::MaybeUninit::<StatsHost>::uninit();
+    let status = unsafe {
+        thunk(
+            (&mut context as *mut CountJobHost).cast::<u8>(),
+            result.as_mut_ptr().cast::<u8>(),
+        )
+    };
+    assert_eq!(status, arandu_runtime::worker_runtime::WORK_COMPLETED);
+    let stats = unsafe { result.assume_init() };
+    assert_eq!(
+        stats,
+        StatsHost {
+            code: 37,
+            comment: 2,
+            blank: 3
+        }
+    );
+}
+
+#[test]
+fn generic_work_thunk_executes_inside_worker_pool_thread() {
+    let (amir, tc, instance_name) = compile_generic_work_thunk();
+    let backend = CraneliftBackend::try_new().unwrap();
+    let compiled =
+        CodegenBackend::compile(backend, &amir, tc.symbols.as_ref(), tc.type_info.as_ref())
+            .expect("cranelift compile failed");
+    let thunk: arandu_runtime::worker_runtime::WorkThunk = unsafe {
+        arandu_semantics::CompiledCode::get_fn(&compiled, &instance_name)
+            .expect("instance not exported under its host name")
+    };
+
+    let pool = arandu_runtime::worker_scheduler::WorkerPool::new(2, 4)
+        .expect("pool with two workers must spawn");
+    // SAFETY: `CountJobHost`/`StatsHost` mirror the Arandu layouts and the
+    // thunk obeys the `WorkThunk` lifecycle contract.
+    let task = unsafe {
+        arandu_runtime::worker_runtime::WorkerTask::try_new::<CountJobHost, StatsHost>(
+            CountJobHost { amount: 41 },
+            thunk,
+        )
+        .expect("static-sized payload must be encodable")
+    };
+    let pending = pool
+        .core()
+        .submit(task)
+        .expect("bounded admission must accept one task");
+    let result = pending.wait().expect("task must complete before shutdown");
+    let stats = result
+        .try_take::<StatsHost>()
+        .expect("typed result must extract");
+    assert_eq!(
+        stats,
+        StatsHost {
+            code: 41,
+            comment: 2,
+            blank: 3
+        }
+    );
 }
