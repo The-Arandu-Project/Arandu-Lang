@@ -106,7 +106,14 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
         }
 
         match rvalue {
-            AmirRvalue::Use(op) => self.translate_operand(op, expected_ty),
+            AmirRvalue::Use(op) => {
+                let val = self.translate_operand(op, expected_ty);
+                let op_ty = self.get_operand_ar_type(op);
+                if matches!(op, AmirOperand::Copy(_)) && self.is_named_struct_ty(&op_ty) {
+                    return self.materialize_ptr_read_copy(val, &op_ty).unwrap_or(val);
+                }
+                val
+            }
             AmirRvalue::SliceView { data, len, .. } => {
                 let data = self.translate_operand(data, Some(self.ptr_type));
                 let len = self.translate_operand(len, Some(self.ptr_type));
@@ -788,10 +795,7 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                     if matches!(borrowed_ty, ArType::Named(_, _))
                         && matches!(
                             place.projections.last(),
-                            Some(
-                                arandu_semantics::amir::AmirProjection::Field(_)
-                                    | arandu_semantics::amir::AmirProjection::Index(_)
-                            )
+                            Some(arandu_semantics::amir::AmirProjection::Field(_))
                         )
                     {
                         return self.builder.ins().load(

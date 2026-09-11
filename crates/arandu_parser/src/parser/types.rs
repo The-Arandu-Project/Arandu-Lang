@@ -513,7 +513,12 @@ impl<'a> Parser<'a> {
     pub(super) fn looks_like_generic_call_or_block_suffix(&self) -> bool {
         self.find_matching_gt(self.pos)
             .and_then(|gt| self.tokens.get(gt + 1))
-            .is_some_and(|token| matches!(token.kind, TokenKind::LParen | TokenKind::LBrace))
+            .is_some_and(|token| {
+                matches!(
+                    token.kind,
+                    TokenKind::LParen | TokenKind::LBrace | TokenKind::KwAs
+                )
+            })
     }
 
     pub(super) fn looks_like_bare_generic_args(&self) -> bool {

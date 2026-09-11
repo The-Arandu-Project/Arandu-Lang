@@ -109,6 +109,10 @@ pub(crate) fn create_jit_builder() -> Result<JITBuilder, Diagnostic> {
         crate::rt_runtime::ar_rt_cancel_i64 as *const u8,
     );
     builder.symbol(
+        "ar_rt_parallel_fold_run",
+        arandu_runtime::worker_scheduler::ar_rt_parallel_fold_run as *const u8,
+    );
+    builder.symbol(
         "ar_path_is_absolute",
         crate::rt_runtime::ar_path_is_absolute as *const u8,
     );

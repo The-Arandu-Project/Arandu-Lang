@@ -34,6 +34,10 @@ pub(super) fn cast_types_compatible(
     if matches!(found, ArType::Ptr(_)) && matches!(target, ArType::Ptr(_)) {
         return true;
     }
+    // WorkThunk / function-to-pointer cast: allow `func as ptr[T]`.
+    if matches!(found, ArType::Func(_, _)) && matches!(target, ArType::Ptr(_)) {
+        return true;
+    }
     // A3/SL_R ABI: `Coroutine[T]` is a state-blob pointer at runtime (Cranelift
     // `clif_type` → pointer). Allow `job as ptr[u8]` so `std.runtime` typed
     // spawn/block_on can hand the blob to host `ar_rt_*` / `ar_co_*`.

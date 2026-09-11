@@ -3,6 +3,9 @@
 //! This module defines transport and lifecycle only. Queueing, admission,
 //! cancellation and worker selection remain scheduler responsibilities.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::genref::GenError;
 use crate::genref_payload::{OwnedPayload, PayloadDescriptor, UninitPayload};
 
@@ -15,6 +18,7 @@ pub type WorkThunk = unsafe extern "C" fn(context: *mut u8, result: *mut u8) -> 
 
 pub const WORK_COMPLETED: i32 = 0;
 pub const WORK_FAILED: i32 = 1;
+pub const WORK_CANCELED: i32 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkerError {
@@ -22,7 +26,7 @@ pub enum WorkerError {
     TaskFailed,
     InvalidStatus(i32),
     /// The outcome channel closed before the result was delivered (the pool
-    /// shut down or the producing worker vanished).
+    /// shut down or the producing worker vanished) or the task was canceled.
     Canceled,
 }
 
@@ -38,6 +42,7 @@ pub struct WorkerTask {
     context: Option<OwnedPayload>,
     result: PayloadDescriptor,
     thunk: WorkThunk,
+    cancel_token: Option<Arc<AtomicBool>>,
 }
 
 // SAFETY: the typed constructor requires `Send` for context and result. A
@@ -76,10 +81,36 @@ impl WorkerTask {
             context: Some(OwnedPayload::try_new(context)?),
             result: PayloadDescriptor::for_type::<R>(),
             thunk,
+            cancel_token: None,
         })
     }
 
+    /// Attach a cooperative cancellation flag.
+    ///
+    /// If the flag is set before execution begins (JDK-8311867 pre-admission
+    /// check), [`Self::execute`] consumes the context and yields
+    /// [`WorkerError::Canceled`] without invoking the thunk.
+    #[must_use]
+    pub fn with_cancel_token(mut self, token: Arc<AtomicBool>) -> Self {
+        self.cancel_token = Some(token);
+        self
+    }
+
+    #[must_use]
+    pub fn cancel_token(&self) -> Option<&Arc<AtomicBool>> {
+        self.cancel_token.as_ref()
+    }
+
     pub fn execute(mut self) -> Result<WorkerResult, WorkerError> {
+        if self
+            .cancel_token
+            .as_ref()
+            .is_some_and(|token| token.load(Ordering::Acquire))
+        {
+            // Pre-start check (JDK-8311867): context dropped safely, thunk skipped.
+            drop(self.context.take());
+            return Err(WorkerError::Canceled);
+        }
         let mut context = self.context.take().ok_or(WorkerError::TaskFailed)?;
         let mut result = UninitPayload::try_new(self.result)?;
         // SAFETY: both buffers match their descriptors. The thunk contract
@@ -94,6 +125,7 @@ impl WorkerTask {
                 Ok(WorkerResult(unsafe { result.assume_init() }))
             }
             WORK_FAILED => Err(WorkerError::TaskFailed),
+            WORK_CANCELED => Err(WorkerError::Canceled),
             other => Err(WorkerError::InvalidStatus(other)),
         }
     }
@@ -265,5 +297,49 @@ mod tests {
         let task = unsafe { WorkerTask::try_new::<usize, AlignedZst>(0, aligned_zst) }.unwrap();
         let result = task.execute().unwrap();
         assert!(result.try_take::<AlignedZst>().is_ok());
+    }
+
+    unsafe extern "C" fn cancel_thunk(context: *mut u8, _result: *mut u8) -> i32 {
+        // SAFETY: the test pairs this thunk with a Probe context descriptor.
+        drop(unsafe { ptr::read(context.cast::<Probe>()) });
+        WORK_CANCELED
+    }
+
+    #[test]
+    fn canceled_thunk_returns_canceled_error_and_consumes_context() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let task = unsafe {
+            WorkerTask::try_new::<Probe, Probe>(
+                Probe {
+                    value: 1,
+                    drops: Arc::clone(&drops),
+                },
+                cancel_thunk,
+            )
+        }
+        .unwrap();
+        assert_eq!(task.execute().unwrap_err(), WorkerError::Canceled);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn pre_admission_cancellation_skips_thunk_and_consumes_context() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let cancel_flag = Arc::new(AtomicBool::new(true)); // Already canceled!
+        let task = unsafe {
+            WorkerTask::try_new::<Probe, Probe>(
+                Probe {
+                    value: 1,
+                    drops: Arc::clone(&drops),
+                },
+                complete, // would panic/complete if run
+            )
+        }
+        .unwrap()
+        .with_cancel_token(Arc::clone(&cancel_flag));
+
+        // JDK-8311867 pre-admission check: thunk must not execute
+        assert_eq!(task.execute().unwrap_err(), WorkerError::Canceled);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
     }
 }

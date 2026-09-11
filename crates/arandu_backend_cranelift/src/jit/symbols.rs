@@ -174,6 +174,23 @@ pub(crate) fn declare_runtime_imports<M: Module>(
         .map_err(|err| codegen_ice(format!("failed to declare ar_rt_cancel_i64: {err:?}")))?;
     insert_sym(func_ids, "ar_rt_cancel_i64", cancel_id);
 
+    let mut par_fold_sig = Signature::new(default_call_conv);
+    par_fold_sig.params.push(AbiParam::new(I64));
+    par_fold_sig.params.push(AbiParam::new(ptr_type));
+    par_fold_sig.params.push(AbiParam::new(ptr_type));
+    par_fold_sig.params.push(AbiParam::new(ptr_type));
+    par_fold_sig.params.push(AbiParam::new(I64));
+    par_fold_sig.params.push(AbiParam::new(ptr_type));
+    par_fold_sig.returns.push(AbiParam::new(I32));
+    let par_fold_id = module
+        .declare_function("ar_rt_parallel_fold_run", Linkage::Import, &par_fold_sig)
+        .map_err(|err| {
+            codegen_ice(format!(
+                "failed to declare ar_rt_parallel_fold_run: {err:?}"
+            ))
+        })?;
+    insert_sym(func_ids, "ar_rt_parallel_fold_run", par_fold_id);
+
     let mut path_sig = Signature::new(default_call_conv);
     path_sig.params.push(AbiParam::new(ptr_type));
     path_sig.params.push(AbiParam::new(ptr_type));

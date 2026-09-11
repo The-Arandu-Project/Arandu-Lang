@@ -209,6 +209,7 @@ impl<'a> CEmitter<'a> {
                     | "ar_rt_spawn_i64"
                     | "ar_rt_join_i64"
                     | "ar_rt_cancel_i64"
+                    | "ar_rt_parallel_fold_run"
             ) {
                 continue;
             }

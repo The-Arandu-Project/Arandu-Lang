@@ -551,6 +551,14 @@ fn specialize_free_func(
             }
         };
 
+    // Register a stable, qualified host name so runtime, JIT, and backends resolve
+    // this generic instance deterministically without relying on sym.name fallback.
+    let parent_host_name = tc.symbols.host_func_name(tc.symbols.get(key.symbol));
+    let instance_host_name = arandu_middle::SmolStr::new(format!("{parent_host_name}.{mangled}"));
+    tc.symbols_mut()
+        .host_function_names
+        .insert(new_func_sym, instance_host_name);
+
     // Subst and specialized return type
     let subst = build_subst_ids(&params_list, key.type_args, &tc.type_info.type_interner);
     let ret_ty = substitute_type_id(template.return_type, &subst, &tc.type_info.type_interner);

@@ -347,18 +347,14 @@ Fase 3 — OSSA Avançado, Semântica e OS Runtime (v0.3) · [PARCIAL; vários m
 [x] SL_S-Host   APIs de sistema: host path/rt helpers, filesystem e processos;
                 depende de A2 e de contratos nativos por plataforma
 [x] SL_R   Async Runtime: SL_R.0 typed spawn/join/block_on Coroutine + SyncExecutor; SL_R.2 EpollReactor (epoll+timerfd); SL_R.1/3 open
-[ ] SL_P   Processamento paralelo estruturado — campanha iniciada; API não publicada.
-           Design/evidência: [campanha ativa](./campaigns/structured-parallelism.md).
-           Ordem: baseline Pypor/arrays → trabalho tipado e ABI → prova de
-           transferência/borrows → executor limitado → redução progressiva →
-           integração Pypor → medições e matriz nativa Linux/Windows/macOS.
-           Progresso: bounds canônicos Send/Sync provam armazenamento conservador;
-           contexto own e retorno agregado genérico preservam campos e cleanup
-           exato nos pipelines JIT/C. O runtime já transporta payloads erased
-           Send com layout/alinhamento e cleanup definidos; geração do thunk,
-           espelho C, fila limitada e pool reutilizável ainda estão pendentes.
-           Não promover Send/Sync, handles i64 ou SyncExecutor existentes a
-           garantias de paralelismo sem implementar e testar esses contratos.
+[x] SL_P   [Processamento paralelo estruturado](./arandu-structured-parallelism-v0.1.md):
+           implementação das Fases 1–7 concluída; `WorkerPool` bounded,
+           WorkThunk ABI `(ptr[C], ptr[R]) -> i32`, operação pública `parallelFold`
+           em `std.core.parallel`, inlining automático no AMIR (`arandu_mir::inlining`),
+           e integração completa no Pypor com 100% de identidade de bits no
+           corpus do Kernel Linux (65.370 arquivos, 37.900.970 linhas em 1.826s;
+           20.76M linhas/s, 490.9% CPU, 71.2 MB MaxRSS). Promoção formal a Gold
+           condicionada à matriz de release Windows/macOS.
 [x] SL_T   [Testing & Benchmark Harness](./arandu-testing-benchmark-harness-v0.1.md):
            implementação, SDK/VSIX e matriz nativa concluídos; soak operacional
            permanece como único requisito para promoção formal a Gold

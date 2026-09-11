@@ -259,7 +259,7 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
     }
 
     /// Whether `ty` is a named **struct** (not enum/interface) aggregate.
-    fn is_named_struct_ty(&self, ty: &ArType) -> bool {
+    pub(super) fn is_named_struct_ty(&self, ty: &ArType) -> bool {
         matches!(
             ty,
             ArType::Named(sym_id, _)
@@ -273,7 +273,7 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
     /// Copies `layout.size` payload bytes at `src` into a fresh `malloc`ed
     /// blob and returns its address, fed into the aggregate pointer-repr
     /// value slot used by every other path (`StructLiteral` etc.).
-    fn materialize_ptr_read_copy(&mut self, src: Value, ty: &ArType) -> Option<Value> {
+    pub(super) fn materialize_ptr_read_copy(&mut self, src: Value, ty: &ArType) -> Option<Value> {
         let malloc_id = self.malloc_func_id()?;
         let memcpy_id = self.memcpy_func_id()?;
         let layout = self.checked_layout(ty);

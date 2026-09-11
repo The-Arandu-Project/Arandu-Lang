@@ -506,6 +506,26 @@ static void ar_rt_cancel_i64(int64_t handle) {{
 
 static int64_t ar_rt_block_on_i64(uint8_t *state) {{
     return ar_co_block_on_i64(state);
+}}
+
+static int32_t ar_rt_parallel_fold_run(
+    uint64_t num_chunks,
+    uint8_t **contexts,
+    int32_t (*thunk)(uint8_t*, uint8_t*),
+    uint8_t **results,
+    uint64_t workers,
+    int64_t *stop_flag
+) {{
+    if (num_chunks == 0) return 0;
+    for (uint64_t i = 0; i < num_chunks; i++) {{
+        if (stop_flag && *stop_flag != 0) return 2;
+        int32_t code = thunk(contexts[i], results[i]);
+        if (code != 0) {{
+            if (stop_flag) *stop_flag = 1;
+            return code;
+        }}
+    }}
+    return 0;
 }}"#
         );
     }

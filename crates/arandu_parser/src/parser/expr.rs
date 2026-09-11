@@ -50,8 +50,12 @@ impl<'a> Parser<'a> {
 
                         if matches!(self.current().kind, TokenKind::LParen) {
                             left = self.finish_call(left)?;
-                        } else if self.allow_block_calls {
+                        } else if self.allow_block_calls
+                            && matches!(self.current().kind, TokenKind::LBrace)
+                        {
                             left = self.finish_trailing_block_call(left)?;
+                        } else if matches!(self.current().kind, TokenKind::KwAs) {
+                            // Allowed: `func<T> as ptr[u8]` — loop will handle `as` binary op
                         } else {
                             return Err(ParseError::new(
                                 ParseErrorCode::ExpectedToken,

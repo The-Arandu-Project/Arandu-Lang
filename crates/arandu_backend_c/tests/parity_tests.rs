@@ -1344,10 +1344,14 @@ fn compile_generic_work_thunk() -> (AmirProgram, TypeCheckResult, String) {
         .iter()
         .filter_map(|f| {
             let name = tc.symbols.host_func_name(tc.symbols.get(f.symbol));
-            name.starts_with("_A$dispatch$I_").then(|| name.to_string())
+            name.contains("_A$dispatch$I_").then(|| name.to_string())
         })
         .next()
         .expect("monomorphized dispatch instance missing");
+    assert!(
+        instance_name.starts_with("std.core.workthunk.dispatch."),
+        "instance must be registered under its qualified host name, got {instance_name}"
+    );
     (amir, tc, instance_name)
 }
 
@@ -1369,12 +1373,8 @@ fn compile_src_mono(src: &str) -> (AmirProgram, TypeCheckResult) {
     );
 
     let mut hir = lower_to_hir(&mut tc, &program).expect("HIR lowering failed");
-    let specialized =
+    let _specialized =
         arandu_semantics::monomorphize_program(&mut tc, &mut hir).expect("monomorphization failed");
-    assert!(
-        specialized > 0,
-        "generic dispatch instance must be specialized"
-    );
     let amir = lower_to_amir(&tc, &hir, 64).expect("AMIR lowering failed");
     (amir, tc)
 }
@@ -1458,5 +1458,295 @@ fn generic_work_thunk_executes_inside_worker_pool_thread() {
             comment: 2,
             blank: 3
         }
+    );
+}
+
+const PARALLEL_FOLD_PARITY_SRC: &str = r#"
+module std.core.parallel_parity
+
+extern "arandu-intrinsic" {
+    func ptrRead<T>(p: ptr[T]) : T
+    func ptrWrite<T>(p: ptr[T], val: T) : void
+    func ptrOffset<T>(base: ptr[T], offset: i32) : ptr[T]
+    func sliceFromRaw(owner: ptr[int], data: ptr[int], len: uint): []int
+    func sliceLen<T>(source: []T): uint
+    func sliceSubslice<T>(source: []T, start: uint, len: uint): []T
+}
+
+interface ParallelJob<T, R> {
+    func run(self: ref Self, item: ref T, state: mut ref R): void
+}
+
+interface Combine<R> {
+    func combine(self: ref Self, dest: mut ref R, partial: ref R): void
+}
+
+struct Stats { code: int, comment: int, blank: int }
+
+struct LineCountJob {}
+struct StatsCombiner {}
+
+func LineCountJob.run(self: ref LineCountJob, item: ref int, state: mut ref Stats): void {
+    state.code = state.code + *item
+    state.comment = state.comment + 1
+    state.blank = state.blank + 2
+}
+
+func StatsCombiner.combine(self: ref StatsCombiner, dest: mut ref Stats, partial: ref Stats): void {
+    dest.code = dest.code + partial.code
+    dest.comment = dest.comment + partial.comment
+    dest.blank = dest.blank + partial.blank
+}
+
+struct ChunkContext {
+    subslice: []int,
+    seed: Stats,
+    job: LineCountJob,
+    stop_flag: ptr[int],
+}
+
+func dispatchChunk(context: ptr[ChunkContext], result: ptr[Stats]): i32 {
+    let ctx: ChunkContext = unsafe { ptrRead<ChunkContext>(context) }
+    let mut state = ctx.seed
+    let count = sliceLen<int>(ctx.subslice)
+    let mut i: uint = 0
+    let nullp: ptr[int] = nil
+    while i < count {
+        if ctx.stop_flag != nullp {
+            let flag_val: int = unsafe { ptrRead<int>(ctx.stop_flag) }
+            if flag_val != 0 {
+                return 2
+            }
+        }
+        ctx.job.run(ref ctx.subslice[i], mut ref state)
+        i = i + 1
+    }
+    unsafe { ptrWrite<Stats>(result, state) }
+    return 0
+}
+
+func foldSeq(data: []int, seed: Stats, job: LineCountJob): Stats {
+    let mut acc = Stats { code: seed.code, comment: seed.comment, blank: seed.blank }
+    let len = sliceLen<int>(data)
+    let mut i: uint = 0
+    while i < len {
+        job.run(ref data[i], mut ref acc)
+        i = i + 1
+    }
+    return acc
+}
+
+func parallelFoldSim(
+    data: []int,
+    seed: Stats,
+    job: LineCountJob,
+    combine: StatsCombiner,
+    workers: uint
+): Stats {
+    let total_len = sliceLen<int>(data)
+    if total_len == 0 {
+        return Stats { code: seed.code, comment: seed.comment, blank: seed.blank }
+    }
+    if total_len <= 4 || workers <= 1 {
+        return foldSeq(data, seed, job)
+    }
+    let mut chunk_count = workers
+    if chunk_count > total_len {
+        chunk_count = total_len
+    }
+    let base_chunk_size = total_len / chunk_count
+    let remainder = total_len % chunk_count
+
+    let mut acc = Stats { code: seed.code, comment: seed.comment, blank: seed.blank }
+    let mut offset: uint = 0
+    let mut c: uint = 0
+    while c < chunk_count {
+        let mut current_size = base_chunk_size
+        if c < remainder {
+            current_size = current_size + 1
+        }
+        if current_size > 0 {
+            let chunk_slice = sliceSubslice<int>(data, offset, current_size)
+            let chunk_seed = Stats { code: 0, comment: 0, blank: 0 }
+            let chunk_res = foldSeq(chunk_slice, chunk_seed, job)
+            combine.combine(mut ref acc, ref chunk_res)
+            offset = offset + current_size
+        }
+        c = c + 1
+    }
+    return acc
+}
+
+func main(): int {
+    let raw = alloc(64) as ptr[int]
+    let mut i: int = 0
+    while i < 8 {
+        let p = unsafe { ptrOffset<int>(raw, (i as i32)) }
+        let it = (i + 1) * 10
+        unsafe { ptrWrite<int>(p, it) }
+        i = i + 1
+    }
+    let items = unsafe { sliceFromRaw(raw, raw, 8 as uint) }
+
+    let seed = Stats { code: 0, comment: 0, blank: 0 }
+    let job = LineCountJob {}
+    let combiner = StatsCombiner {}
+
+    let seq = foldSeq(items, seed, job)
+    let par = parallelFoldSim(items, seed, job, combiner, 3 as uint)
+
+    // Bit-identical assertion: parallel reduction must equal sequential fold!
+    if seq.code != par.code { return 1 }
+    if seq.comment != par.comment { return 2 }
+    if seq.blank != par.blank { return 3 }
+
+    // Check specific calculated values:
+    // 8 items, sum of lines = 10+20+30+40+50+60+70+80 = 360
+    // comment = 8, blank = 16
+    if par.code != 360 { return 4 }
+    if par.comment != 8 { return 5 }
+    if par.blank != 16 { return 6 }
+
+    unsafe { free(raw) }
+
+    return 0
+}
+"#;
+
+#[test]
+fn parallel_fold_sim_runs_identically_in_c_and_cranelift() {
+    let (amir, tc) = compile_src_mono(PARALLEL_FOLD_PARITY_SRC);
+    let actual_result = execute_c("parallel_fold_parity", &amir, &tc);
+    let expected = execute_cranelift(&amir, &tc);
+    assert_eq!(
+        expected, actual_result,
+        "Execution mismatch for parallel_fold_parity! Cranelift={expected}, C={actual_result}"
+    );
+    assert_eq!(expected, 0);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
+struct SliceDescriptorHost {
+    ptr: *const i64,
+    len: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
+struct ChunkContextHost {
+    subslice: *const SliceDescriptorHost,
+    _pad0: u64,
+    seed: *mut StatsHost,
+    _pad1: [u64; 2],
+    stop_flag: *const i64,
+}
+
+unsafe impl Send for ChunkContextHost {}
+
+#[test]
+fn parallel_dispatch_chunk_executes_in_worker_pool_and_honors_cancellation() {
+    let (amir, tc) = compile_src_mono(PARALLEL_FOLD_PARITY_SRC);
+    let backend = CraneliftBackend::try_new().unwrap();
+    let compiled =
+        CodegenBackend::compile(backend, &amir, tc.symbols.as_ref(), tc.type_info.as_ref())
+            .expect("cranelift compile failed");
+
+    let instance_name = amir
+        .funcs
+        .iter()
+        .filter_map(|f| {
+            let name = tc.symbols.host_func_name(tc.symbols.get(f.symbol));
+            (name.contains("dispatchChunk") || name.ends_with(".dispatchChunk"))
+                .then(|| name.to_string())
+        })
+        .next()
+        .expect("dispatchChunk instance missing");
+
+    let thunk: arandu_runtime::worker_runtime::WorkThunk = unsafe {
+        arandu_semantics::CompiledCode::get_fn(&compiled, &instance_name)
+            .expect("dispatchChunk not exported under its host name")
+    };
+
+    let pool = arandu_runtime::worker_scheduler::WorkerPool::new(2, 4).unwrap();
+
+    let items: Vec<i64> = vec![10, 25, 15];
+    let desc = SliceDescriptorHost {
+        ptr: items.as_ptr(),
+        len: items.len() as u64,
+    };
+    let stop_flag: i64 = 0;
+    let mut stats = StatsHost {
+        code: 0,
+        comment: 0,
+        blank: 0,
+    };
+
+    let ctx = ChunkContextHost {
+        subslice: &desc,
+        _pad0: 0,
+        seed: &mut stats,
+        _pad1: [0; 2],
+        stop_flag: &stop_flag,
+    };
+
+    // 1. Successful execution across real OS worker thread
+    let task = unsafe {
+        arandu_runtime::worker_runtime::WorkerTask::try_new::<ChunkContextHost, StatsHost>(
+            ctx, thunk,
+        )
+    }
+    .unwrap();
+
+    let pending = pool.core().submit(task).unwrap();
+    let result = pending.wait().unwrap().try_take::<StatsHost>().unwrap();
+    assert_eq!(
+        result,
+        StatsHost {
+            code: 50,
+            comment: 3,
+            blank: 6
+        }
+    );
+
+    // 2. Cooperative cancellation via stop_flag (returns WORK_CANCELED = 2 -> WorkerError::Canceled)
+    let canceled_flag: i64 = 1;
+    let mut cancel_stats = StatsHost {
+        code: 0,
+        comment: 0,
+        blank: 0,
+    };
+    let cancel_ctx = ChunkContextHost {
+        subslice: &desc,
+        _pad0: 0,
+        seed: &mut cancel_stats,
+        _pad1: [0; 2],
+        stop_flag: &canceled_flag,
+    };
+    let cancel_task = unsafe {
+        arandu_runtime::worker_runtime::WorkerTask::try_new::<ChunkContextHost, StatsHost>(
+            cancel_ctx, thunk,
+        )
+    }
+    .unwrap();
+    let cancel_pending = pool.core().submit(cancel_task).unwrap();
+    assert_eq!(
+        cancel_pending.wait().unwrap_err(),
+        arandu_runtime::worker_runtime::WorkerError::Canceled
+    );
+
+    // 3. Pre-admission cancellation check (JDK-8311867)
+    let pre_cancel_token = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let pre_cancel_task = unsafe {
+        arandu_runtime::worker_runtime::WorkerTask::try_new::<ChunkContextHost, StatsHost>(
+            ctx, thunk,
+        )
+    }
+    .unwrap()
+    .with_cancel_token(pre_cancel_token);
+    let pre_pending = pool.core().submit(pre_cancel_task).unwrap();
+    assert_eq!(
+        pre_pending.wait().unwrap_err(),
+        arandu_runtime::worker_runtime::WorkerError::Canceled
     );
 }

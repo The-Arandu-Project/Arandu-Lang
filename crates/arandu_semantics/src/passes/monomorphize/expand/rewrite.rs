@@ -138,8 +138,24 @@ pub(super) fn rewrite_expr_calls<'bump>(
     // First recurse into children, then rewrite this node if it is Call(Generic(...)).
     let kind = hir.pool.expr(expr_id).kind.clone();
     match &kind {
-        HirExprKind::Generic { callee, .. }
-        | HirExprKind::Field { base: callee, .. }
+        HirExprKind::Generic { callee, args } => {
+            rewrite_expr_calls(hir, *callee, specialized, tc, bump);
+            if let Some(symbol) = super::super::collect::generic_callee_symbol(*callee, hir, tc) {
+                let type_args = bump.alloc_slice_copy(args);
+                let key = InstantiationKey { symbol, type_args };
+                if let Some(&spec_sym) = specialized.get(&key) {
+                    let call_ty = hir.pool.expr(expr_id).ty;
+                    let path_ty = tc.type_info.decl_type_id(spec_sym).unwrap_or(call_ty);
+                    let span = hir.pool.expr(expr_id).span;
+                    *hir.pool.expr_mut(expr_id) = HirExpr {
+                        kind: HirExprKind::Path { symbol: spec_sym },
+                        ty: path_ty,
+                        span,
+                    };
+                }
+            }
+        }
+        HirExprKind::Field { base: callee, .. }
         | HirExprKind::SafeField { base: callee, .. }
         | HirExprKind::Alloc { expr: callee }
         | HirExprKind::Try { expr: callee }

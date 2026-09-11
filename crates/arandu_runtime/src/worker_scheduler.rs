@@ -75,7 +75,14 @@ impl PoolCore {
     /// On `AdmissionFull` the task is returned untouched so the caller can
     /// retry. When called from a pool worker, full admission does not discard
     /// or delay the task: the worker executes it inline to preserve progress.
+    #[allow(clippy::result_large_err)]
     pub fn try_submit(&self, task: WorkerTask) -> Result<PendingResult, (WorkerTask, PoolError)> {
+        if task
+            .cancel_token()
+            .is_some_and(|tok| tok.load(Ordering::Acquire))
+        {
+            return Ok(run_inline(task));
+        }
         let (result_tx, result_rx) = channel();
         let Some(state) = self.state.upgrade() else {
             return Err((task, PoolError::ShuttingDown));
@@ -106,7 +113,14 @@ impl PoolCore {
     /// A worker thread never blocks on admission: it enqueues when there is
     /// room and executes inline when the queue is full, guaranteeing nested
     /// progress regardless of the admission bound.
+    #[allow(clippy::result_large_err)]
     pub fn submit(&self, task: WorkerTask) -> Result<PendingResult, (WorkerTask, PoolError)> {
+        if task
+            .cancel_token()
+            .is_some_and(|tok| tok.load(Ordering::Acquire))
+        {
+            return Ok(run_inline(task));
+        }
         if IN_WORKER.with(Cell::get) {
             return match self.try_submit(task) {
                 Ok(pending) => Ok(pending),
@@ -219,11 +233,13 @@ impl WorkerPool {
     }
 
     /// Non-blocking submission; see [`PoolCore::try_submit`].
+    #[allow(clippy::result_large_err)]
     pub fn try_submit(&self, task: WorkerTask) -> Result<PendingResult, (WorkerTask, PoolError)> {
         self.core().try_submit(task)
     }
 
     /// Blocking submission; see [`PoolCore::submit`].
+    #[allow(clippy::result_large_err)]
     pub fn submit(&self, task: WorkerTask) -> Result<PendingResult, (WorkerTask, PoolError)> {
         self.core().submit(task)
     }
@@ -244,6 +260,129 @@ impl Drop for WorkerPool {
             let _ = handle.join();
         }
     }
+}
+
+#[derive(Copy, Clone)]
+struct SendPtr(*mut u8);
+unsafe impl Send for SendPtr {}
+unsafe impl Sync for SendPtr {}
+
+impl SendPtr {
+    #[inline]
+    fn get(self) -> *mut u8 {
+        self.0
+    }
+}
+
+/// C ABI entry point for executing `num_chunks` with `thunk` across worker threads.
+///
+/// Returns:
+/// - 0 on success (all chunks completed, result buffers populated).
+/// - 1 on failure (at least one chunk returned error).
+/// - 2 on cancellation (canceled via stop_flag or cooperative token).
+///
+/// # Safety
+/// - `contexts` must point to an array of at least `num_chunks` valid context pointers.
+/// - `results` must point to an array of at least `num_chunks` valid destination pointers.
+/// - `thunk` must be safe to call concurrently with disjoint context/result pairs.
+/// - `stop_flag`, if non-null, must point to an aligned, readable/writable volatile `i64`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ar_rt_parallel_fold_run(
+    num_chunks: u64,
+    contexts: *const *mut u8,
+    thunk: Option<crate::worker_runtime::WorkThunk>,
+    results: *const *mut u8,
+    workers: u64,
+    stop_flag: *mut i64,
+) -> i32 {
+    let Some(thunk) = thunk else {
+        return 1;
+    };
+    if num_chunks == 0 {
+        return 0;
+    }
+    if contexts.is_null() || results.is_null() {
+        return 1;
+    }
+
+    let n = num_chunks as usize;
+    let w = (workers as usize).clamp(1, 64).min(n);
+
+    // Single worker fast-path: run inline without thread spawn overhead
+    if w <= 1 || n == 1 {
+        for i in 0..n {
+            if !stop_flag.is_null() && unsafe { std::ptr::read_volatile(stop_flag) } != 0 {
+                return 2;
+            }
+            let ctx = unsafe { *contexts.add(i) };
+            let res = unsafe { *results.add(i) };
+            let code = unsafe { (thunk)(ctx, res) };
+            if code != 0 {
+                if !stop_flag.is_null() {
+                    unsafe { std::ptr::write_volatile(stop_flag, 1) };
+                }
+                return code;
+            }
+        }
+        return 0;
+    }
+
+    // Parallel multi-worker execution with structured scope
+    let contexts_vec: Vec<SendPtr> = (0..n)
+        .map(|i| unsafe { SendPtr(*contexts.add(i)) })
+        .collect();
+    let results_vec: Vec<SendPtr> = (0..n)
+        .map(|i| unsafe { SendPtr(*results.add(i)) })
+        .collect();
+    let stop_flag_addr = SendPtr(stop_flag.cast::<u8>());
+
+    // Shadow raw pointers so closures only access SendPtr wrappers
+    let _ = (contexts, results, stop_flag);
+
+    let next_chunk = std::sync::atomic::AtomicUsize::new(0);
+    let first_error = std::sync::atomic::AtomicI32::new(0);
+    let stopped = std::sync::atomic::AtomicBool::new(false);
+
+    std::thread::scope(|s| {
+        for _ in 0..w {
+            s.spawn(|| {
+                let stop_ptr = stop_flag_addr.get().cast::<i64>();
+                while !stopped.load(std::sync::atomic::Ordering::Acquire) {
+                    let idx = next_chunk.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if idx >= n {
+                        break;
+                    }
+                    // JDK-8311867 pre-admission check: check before starting chunk
+                    if stopped.load(std::sync::atomic::Ordering::Acquire)
+                        || (!stop_ptr.is_null()
+                            && unsafe { std::ptr::read_volatile(stop_ptr) } != 0)
+                    {
+                        break;
+                    }
+
+                    let ctx = contexts_vec[idx].get();
+                    let res = results_vec[idx].get();
+
+                    let code = unsafe { (thunk)(ctx, res) };
+                    if code != 0 {
+                        let _ = first_error.compare_exchange(
+                            0,
+                            code,
+                            std::sync::atomic::Ordering::SeqCst,
+                            std::sync::atomic::Ordering::SeqCst,
+                        );
+                        stopped.store(true, std::sync::atomic::Ordering::Release);
+                        if !stop_ptr.is_null() {
+                            unsafe { std::ptr::write_volatile(stop_ptr, 1) };
+                        }
+                        break;
+                    }
+                }
+            });
+        }
+    });
+
+    first_error.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 fn run_inline(task: WorkerTask) -> PendingResult {
@@ -552,5 +691,68 @@ mod tests {
     fn invalid_configurations_are_rejected() {
         assert_eq!(WorkerPool::new(0, 1).unwrap_err(), PoolError::InvalidConfig);
         assert_eq!(WorkerPool::new(1, 0).unwrap_err(), PoolError::InvalidConfig);
+    }
+
+    #[test]
+    fn pre_canceled_task_does_not_block_on_full_queue_and_returns_canceled() {
+        let gate = Arc::new(Gate::new());
+        let pool = WorkerPool::new(1, 1).unwrap();
+
+        // Fill worker and queue so any normal submit would block
+        let root = pool.submit(hold_task(&gate)).unwrap();
+        let queued = pool.submit(hold_task(&gate)).unwrap();
+        assert_eq!(pool.queued(), Some(1));
+
+        let cancel_flag = Arc::new(AtomicBool::new(true));
+        let canceled_task = unsafe { WorkerTask::try_new::<usize, usize>(99, pass) }
+            .unwrap()
+            .with_cancel_token(Arc::clone(&cancel_flag));
+
+        // Must complete inline immediately without blocking
+        let pending = pool.submit(canceled_task).unwrap();
+        assert_eq!(pending.wait().unwrap_err(), WorkerError::Canceled);
+
+        gate.release();
+        assert_eq!(root.wait().unwrap().try_take::<usize>().unwrap(), 0);
+        assert_eq!(queued.wait().unwrap().try_take::<usize>().unwrap(), 0);
+    }
+
+    #[test]
+    fn jdk_8311867_queued_task_canceled_before_start_does_not_execute_thunk() {
+        let gate = Arc::new(Gate::new());
+        let pool = WorkerPool::new(1, 2).unwrap();
+
+        // Worker is held by root task
+        let root = pool.submit(hold_task(&gate)).unwrap();
+
+        // Enqueue task while worker is occupied
+        let executed = Arc::new(AtomicBool::new(false));
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+
+        struct ExecProbe(Arc<AtomicBool>);
+        unsafe extern "C" fn probe_thunk(context: *mut u8, _result: *mut u8) -> i32 {
+            let probe = unsafe { std::ptr::read(context.cast::<ExecProbe>()) };
+            probe.0.store(true, Ordering::SeqCst);
+            WORK_COMPLETED
+        }
+
+        let task = unsafe {
+            WorkerTask::try_new::<ExecProbe, usize>(ExecProbe(Arc::clone(&executed)), probe_thunk)
+        }
+        .unwrap()
+        .with_cancel_token(Arc::clone(&cancel_flag));
+
+        let queued = pool.submit(task).unwrap();
+
+        // JDK-8311867 race window: task was admitted into queue, now cancel before worker picks it up
+        cancel_flag.store(true, Ordering::Release);
+
+        // Release the worker to pick up the queued task
+        gate.release();
+
+        assert_eq!(root.wait().unwrap().try_take::<usize>().unwrap(), 0);
+        assert_eq!(queued.wait().unwrap_err(), WorkerError::Canceled);
+        // Assert the thunk was NEVER executed!
+        assert!(!executed.load(Ordering::SeqCst));
     }
 }
