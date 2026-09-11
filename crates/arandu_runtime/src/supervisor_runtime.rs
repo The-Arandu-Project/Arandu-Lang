@@ -250,7 +250,11 @@ mod tests {
         unsafe {
             let s = ar_rt_supervisor_create();
             #[cfg(unix)]
-            let path = "/bin/true".to_string();
+            let path = if std::path::Path::new("/usr/bin/true").is_file() {
+                "/usr/bin/true".to_string()
+            } else {
+                "/bin/true".to_string()
+            };
             #[cfg(windows)]
             let path = std::env::var("WINDIR")
                 .map(|windir| format!("{windir}\\System32\\whoami.exe"))

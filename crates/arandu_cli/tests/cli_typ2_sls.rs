@@ -432,6 +432,8 @@ fn run_supervisor_true() {
         std::env::var("WINDIR")
             .map(|windir| format!(r"{windir}\System32\whoami.exe"))
             .unwrap_or_else(|_| r"C:\Windows\System32\whoami.exe".to_string())
+    } else if std::path::Path::new("/usr/bin/true").is_file() {
+        "/usr/bin/true".to_string()
     } else {
         "/bin/true".to_string()
     }
