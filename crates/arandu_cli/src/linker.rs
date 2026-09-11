@@ -306,6 +306,15 @@ fn run_system_linker(
     output: &Path,
 ) -> Result<(), LinkAttempt> {
     let mut command = Command::new(linker);
+    let (object_arg, work_dir) =
+        if let (Some(parent), Some(file_name)) = (object.parent(), object.file_name()) {
+            (PathBuf::from(file_name), Some(parent))
+        } else {
+            (object.to_path_buf(), None)
+        };
+    if let Some(dir) = work_dir {
+        command.current_dir(dir);
+    }
     if cfg!(windows) {
         command
             .arg("/NOLOGO")
@@ -313,7 +322,7 @@ fn run_system_linker(
             .arg("/Brepro")
             .arg("/SUBSYSTEM:CONSOLE")
             .arg(format!("/OUT:{}", output.display()))
-            .arg(object)
+            .arg(&object_arg)
             .arg(runtime)
             .args([
                 "kernel32.lib",
@@ -324,7 +333,7 @@ fn run_system_linker(
                 "msvcrt.lib",
             ]);
     } else {
-        command.arg(object).arg(runtime).arg("-o").arg(output);
+        command.arg(&object_arg).arg(runtime).arg("-o").arg(output);
         #[cfg(target_os = "linux")]
         command.args([
             "-Wl,--gc-sections",
@@ -341,6 +350,7 @@ fn run_system_linker(
         command.args([
             "-Wl,-dead_strip",
             "-Wl,-x",
+            "-Wl,-S",
             "-framework",
             "Security",
             "-framework",
@@ -373,14 +383,23 @@ fn link_with_rustc(object: &Path, runtime: &Path, output: &Path) -> Result<(), C
             error.to_string(),
         )
     })?;
+    let (object_arg, work_dir) =
+        if let (Some(parent), Some(file_name)) = (object.parent(), object.file_name()) {
+            (PathBuf::from(file_name), Some(parent))
+        } else {
+            (object.to_path_buf(), None)
+        };
     let mut command = Command::new("rustc");
+    if let Some(dir) = work_dir {
+        command.current_dir(dir);
+    }
     command
         .args(["--crate-name", "arandu_link", "--edition", "2024"])
         .arg(&stub)
         .arg("-o")
         .arg(output)
         .arg("-C")
-        .arg(format!("link-arg={}", object.display()))
+        .arg(format!("link-arg={}", object_arg.display()))
         .arg("-C")
         .arg(format!("link-arg={}", runtime.display()))
         .args(rustc_reproducible_link_args());
@@ -405,7 +424,14 @@ fn rustc_reproducible_link_args() -> Vec<&'static str> {
     if cfg!(windows) {
         vec!["-C", "link-arg=/Brepro"]
     } else if cfg!(target_os = "macos") {
-        vec!["-C", "link-arg=-Wl,-dead_strip", "-C", "link-arg=-Wl,-x"]
+        vec![
+            "-C",
+            "link-arg=-Wl,-dead_strip",
+            "-C",
+            "link-arg=-Wl,-x",
+            "-C",
+            "link-arg=-Wl,-S",
+        ]
     } else {
         vec!["-C", "link-arg=-Wl,--build-id=sha1"]
     }

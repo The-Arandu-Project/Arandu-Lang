@@ -25,6 +25,14 @@ pub(super) fn sanitize_c_ident(name: &str) -> String {
         "stdin" => return "ar_stdin".to_string(),
         "stdout" => return "ar_stdout".to_string(),
         "stderr" => return "ar_stderr".to_string(),
+        "write" => return "ar_write".to_string(),
+        "read" => return "ar_read".to_string(),
+        "close" => return "ar_close".to_string(),
+        "open" => return "ar_open".to_string(),
+        "remove" => return "ar_remove".to_string(),
+        "rename" => return "ar_rename".to_string(),
+        "abort" => return "ar_abort".to_string(),
+        "exit" => return "ar_exit".to_string(),
         _ => {}
     }
     let mut out = String::with_capacity(name.len() + 4);
