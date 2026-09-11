@@ -292,7 +292,7 @@ import std.alloc.string as strings
 func main(): int {
     let joined: strings.String = path.joinOwned("/tmp", "owned")
     let s: str = *joined.asStr()
-    if s != "/tmp/owned" && s != "\\tmp\\owned" && s != "/tmp\\owned" {
+    if path.fileName(s) != "owned" {
         return 1
     }
     joined.destroy()

@@ -340,7 +340,6 @@ fn run_system_linker(
         #[cfg(target_os = "macos")]
         command.args([
             "-Wl,-dead_strip",
-            "-Wl,-no_uuid",
             "-framework",
             "Security",
             "-framework",
@@ -400,7 +399,7 @@ fn rustc_reproducible_link_args() -> Vec<&'static str> {
     if cfg!(windows) {
         vec!["-C", "link-arg=/Brepro"]
     } else if cfg!(target_os = "macos") {
-        vec!["-C", "link-arg=-Wl,-no_uuid"]
+        vec!["-C", "link-arg=-Wl,-dead_strip"]
     } else {
         vec!["-C", "link-arg=-Wl,--build-id=sha1"]
     }
