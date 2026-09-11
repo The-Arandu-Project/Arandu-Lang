@@ -42,6 +42,21 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                             self.builder.def_var(var_ptr, ptr_val);
                             self.builder.def_var(var_len, len_val);
                         }
+                        if let Some(&slot) = self.local_stack_slots.get(&lhs.local) {
+                            let addr = self.builder.ins().stack_addr(self.ptr_type, slot, 0);
+                            self.builder.ins().store(
+                                cranelift_codegen::ir::MemFlagsData::new(),
+                                ptr_val,
+                                addr,
+                                0,
+                            );
+                            self.builder.ins().store(
+                                cranelift_codegen::ir::MemFlagsData::new(),
+                                len_val,
+                                addr,
+                                self.ptr_type.bytes() as i32,
+                            );
+                        }
                     } else {
                         let (base_ptr, offset) = self.translate_place_address_for_load(lhs);
                         self.builder.ins().store(
@@ -89,8 +104,9 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 if let ArType::Named(_, _) = ty
                     && let Some(destructor) = self.type_info.destructor_instances.get(&ty_id)
                 {
-                    let name = self.symbol_table.get(*destructor).name.as_str();
-                    if let Some(&id) = self.func_ids.get(name) {
+                    let symbol = self.symbol_table.get(*destructor);
+                    let host_name = self.symbol_table.host_func_name(symbol);
+                    if let Some(&id) = self.func_ids.get(host_name) {
                         let ptr_val = if place.projections.is_empty() {
                             if let Some(&var) = self.local_map.get(&place.local) {
                                 self.builder.use_var(var)
@@ -110,7 +126,7 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                         self.builder.ins().call(function, &[ptr_val]);
                     } else {
                         self.record_ice(
-                            format!("missing @Destructor function '{name}'"),
+                            format!("missing @Destructor function '{}'", symbol.name),
                             self.local_span(place.local),
                         );
                     }

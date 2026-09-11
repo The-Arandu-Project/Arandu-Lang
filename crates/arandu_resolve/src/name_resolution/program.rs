@@ -1,5 +1,6 @@
 use arandu_lexer::Span;
-use arandu_parser::Program;
+use arandu_parser::{FuncName, Program, TopLevelDecl};
+use smol_str::SmolStr;
 
 use crate::{DocCommentMap, NodeKey, ResolutionResult, ResolvedNames, SymbolKind, SymbolTable};
 
@@ -47,6 +48,33 @@ impl<'a> Resolver<'a> {
         for decl_id in &program.decls {
             let decl = self.pool.decl(*decl_id);
             self.collect_top_level(global, decl);
+        }
+
+        if let Some(module) = &program.module {
+            let module_name = module.path.join(".");
+            for decl_id in &program.decls {
+                let TopLevelDecl::Func(decl) = self.pool.decl(*decl_id) else {
+                    continue;
+                };
+                let name_span = match &decl.name {
+                    FuncName::Free { span, .. } | FuncName::Method { span, .. } => *span,
+                };
+                let Some(symbol_id) = self.resolved.definitions.get(&name_span.into()).copied()
+                else {
+                    continue;
+                };
+                let symbol = self.symbols.get(symbol_id);
+                if symbol.name == "main"
+                    || symbol.name.starts_with("_A$")
+                    || matches!(symbol.kind, SymbolKind::ExternFunc)
+                {
+                    continue;
+                }
+                let host_name = SmolStr::new(format!("{}.{}", module_name, symbol.name));
+                self.symbols
+                    .host_function_names
+                    .insert(symbol_id, host_name);
+            }
         }
 
         ResolutionResult {

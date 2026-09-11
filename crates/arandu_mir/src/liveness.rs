@@ -61,6 +61,15 @@ impl TempLiveness {
 pub fn analyze_local_liveness(func: &AmirFunc) -> LocalLiveness {
     let num_blocks = func.blocks.len();
     let num_locals = func.locals.len();
+    // The empty variable domain has exactly one solution. Walking a large
+    // CFG cannot change it and used to exhaust the convergence guard even
+    // for valid functions with no locals.
+    if num_locals == 0 {
+        return LocalLiveness {
+            live_in: vec![BitSet::new(); num_blocks],
+            live_out: vec![BitSet::new(); num_blocks],
+        };
+    }
     let mut block_uses = BitMatrix::<BlockId, LocalId>::new(num_blocks, num_locals);
     let mut block_defs = BitMatrix::<BlockId, LocalId>::new(num_blocks, num_locals);
 
@@ -135,6 +144,12 @@ pub fn analyze_local_liveness(func: &AmirFunc) -> LocalLiveness {
 pub fn analyze_temp_liveness(func: &AmirFunc) -> TempLiveness {
     let num_blocks = func.blocks.len();
     let num_temps = func.temps.len();
+    if num_temps == 0 {
+        return TempLiveness {
+            live_in: vec![BitSet::new(); num_blocks],
+            live_out: vec![BitSet::new(); num_blocks],
+        };
+    }
     let mut block_uses = BitMatrix::<BlockId, TempId>::new(num_blocks, num_temps);
     let mut block_defs = BitMatrix::<BlockId, TempId>::new(num_blocks, num_temps);
 

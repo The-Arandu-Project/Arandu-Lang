@@ -4,6 +4,7 @@ use cranelift_codegen::ir::{BlockArg, InstBuilder, TrapCode};
 use cranelift_frontend::Switch;
 
 use super::FunctionTranslator;
+use super::operand::FatOperandKind;
 use crate::types::{ClifType, clif_type};
 
 impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
@@ -61,17 +62,23 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 let mut clif_args = Vec::new();
                 for (j, arg) in args.iter().enumerate() {
                     let param_ty = self.resolve_ty(target_params[j].ty);
-                    if matches!(&param_ty, ArType::Primitive(Primitive::Str)) {
-                        let (ptr_val, len_val) = self.translate_str_operand(arg);
-                        clif_args.push(BlockArg::Value(ptr_val));
-                        clif_args.push(BlockArg::Value(len_val));
-                    } else if matches!(&param_ty, ArType::Slice(_)) {
-                        let (data, len) = self.translate_slice_operand(arg);
-                        clif_args.push(BlockArg::Value(data));
-                        clif_args.push(BlockArg::Value(len));
-                    } else if let ClifType::Concrete(ty) = clif_type(&param_ty, self.ptr_type) {
-                        let val = self.translate_operand(arg, Some(ty));
-                        clif_args.push(BlockArg::Value(val));
+                    match self.fat_operand_kind(&param_ty) {
+                        FatOperandKind::Str => {
+                            let (ptr_val, len_val) = self.translate_str_operand(arg);
+                            clif_args.push(BlockArg::Value(ptr_val));
+                            clif_args.push(BlockArg::Value(len_val));
+                        }
+                        FatOperandKind::Slice => {
+                            let (data, len) = self.translate_slice_operand(arg);
+                            clif_args.push(BlockArg::Value(data));
+                            clif_args.push(BlockArg::Value(len));
+                        }
+                        FatOperandKind::None => {
+                            if let ClifType::Concrete(ty) = clif_type(&param_ty, self.ptr_type) {
+                                let val = self.translate_operand(arg, Some(ty));
+                                clif_args.push(BlockArg::Value(val));
+                            }
+                        }
                     }
                 }
                 let clif_target = self.block_map[target];
@@ -91,17 +98,23 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 let mut true_clif_args = Vec::new();
                 for (j, arg) in true_args.iter().enumerate() {
                     let param_ty = self.resolve_ty(true_params[j].ty);
-                    if matches!(&param_ty, ArType::Primitive(Primitive::Str)) {
-                        let (ptr_val, len_val) = self.translate_str_operand(arg);
-                        true_clif_args.push(BlockArg::Value(ptr_val));
-                        true_clif_args.push(BlockArg::Value(len_val));
-                    } else if matches!(&param_ty, ArType::Slice(_)) {
-                        let (data, len) = self.translate_slice_operand(arg);
-                        true_clif_args.push(BlockArg::Value(data));
-                        true_clif_args.push(BlockArg::Value(len));
-                    } else if let ClifType::Concrete(ty) = clif_type(&param_ty, self.ptr_type) {
-                        let val = self.translate_operand(arg, Some(ty));
-                        true_clif_args.push(BlockArg::Value(val));
+                    match self.fat_operand_kind(&param_ty) {
+                        FatOperandKind::Str => {
+                            let (ptr_val, len_val) = self.translate_str_operand(arg);
+                            true_clif_args.push(BlockArg::Value(ptr_val));
+                            true_clif_args.push(BlockArg::Value(len_val));
+                        }
+                        FatOperandKind::Slice => {
+                            let (data, len) = self.translate_slice_operand(arg);
+                            true_clif_args.push(BlockArg::Value(data));
+                            true_clif_args.push(BlockArg::Value(len));
+                        }
+                        FatOperandKind::None => {
+                            if let ClifType::Concrete(ty) = clif_type(&param_ty, self.ptr_type) {
+                                let val = self.translate_operand(arg, Some(ty));
+                                true_clif_args.push(BlockArg::Value(val));
+                            }
+                        }
                     }
                 }
 
@@ -110,17 +123,23 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 let mut false_clif_args = Vec::new();
                 for (j, arg) in false_args.iter().enumerate() {
                     let param_ty = self.resolve_ty(false_params[j].ty);
-                    if matches!(&param_ty, ArType::Primitive(Primitive::Str)) {
-                        let (ptr_val, len_val) = self.translate_str_operand(arg);
-                        false_clif_args.push(BlockArg::Value(ptr_val));
-                        false_clif_args.push(BlockArg::Value(len_val));
-                    } else if matches!(&param_ty, ArType::Slice(_)) {
-                        let (data, len) = self.translate_slice_operand(arg);
-                        false_clif_args.push(BlockArg::Value(data));
-                        false_clif_args.push(BlockArg::Value(len));
-                    } else if let ClifType::Concrete(ty) = clif_type(&param_ty, self.ptr_type) {
-                        let val = self.translate_operand(arg, Some(ty));
-                        false_clif_args.push(BlockArg::Value(val));
+                    match self.fat_operand_kind(&param_ty) {
+                        FatOperandKind::Str => {
+                            let (ptr_val, len_val) = self.translate_str_operand(arg);
+                            false_clif_args.push(BlockArg::Value(ptr_val));
+                            false_clif_args.push(BlockArg::Value(len_val));
+                        }
+                        FatOperandKind::Slice => {
+                            let (data, len) = self.translate_slice_operand(arg);
+                            false_clif_args.push(BlockArg::Value(data));
+                            false_clif_args.push(BlockArg::Value(len));
+                        }
+                        FatOperandKind::None => {
+                            if let ClifType::Concrete(ty) = clif_type(&param_ty, self.ptr_type) {
+                                let val = self.translate_operand(arg, Some(ty));
+                                false_clif_args.push(BlockArg::Value(val));
+                            }
+                        }
                     }
                 }
 
@@ -170,32 +189,45 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 let mut clif_args = Vec::new();
                 for (param, arg) in target_params.iter().zip(args.iter()) {
                     let param_ty = self.resolve_ty(param.ty);
-                    if matches!(&param_ty, ArType::Primitive(Primitive::Str)) {
-                        let (ptr_val, len_val) = self.translate_str_operand(arg);
-                        clif_args.push(BlockArg::Value(ptr_val));
-                        clif_args.push(BlockArg::Value(len_val));
-                    } else if matches!(&param_ty, ArType::Slice(_)) {
-                        let (data, len) = self.translate_slice_operand(arg);
-                        clif_args.push(BlockArg::Value(data));
-                        clif_args.push(BlockArg::Value(len));
-                    } else if let ClifType::Concrete(ty) = clif_type(&param_ty, self.ptr_type) {
-                        let val = self.translate_operand(arg, Some(ty));
-                        clif_args.push(BlockArg::Value(val));
+                    match self.fat_operand_kind(&param_ty) {
+                        FatOperandKind::Str => {
+                            let (ptr_val, len_val) = self.translate_str_operand(arg);
+                            clif_args.push(BlockArg::Value(ptr_val));
+                            clif_args.push(BlockArg::Value(len_val));
+                        }
+                        FatOperandKind::Slice => {
+                            let (data, len) = self.translate_slice_operand(arg);
+                            clif_args.push(BlockArg::Value(data));
+                            clif_args.push(BlockArg::Value(len));
+                        }
+                        FatOperandKind::None => {
+                            if let ClifType::Concrete(ty) = clif_type(&param_ty, self.ptr_type) {
+                                let val = self.translate_operand(arg, Some(ty));
+                                clif_args.push(BlockArg::Value(val));
+                            }
+                        }
                     }
                 }
                 // Extra AMIR params without args: poison (should not happen after A3.5).
                 for param in target_params.iter().skip(args.len()) {
                     let param_ty = self.resolve_ty(param.ty);
-                    if matches!(
-                        &param_ty,
-                        ArType::Primitive(Primitive::Str) | ArType::Slice(_)
-                    ) {
-                        let p = self.builder.ins().iconst(self.ptr_type, 0);
-                        clif_args.push(BlockArg::Value(p));
-                        clif_args.push(BlockArg::Value(p));
-                    } else if let ClifType::Concrete(ty) = clif_type(&param_ty, self.ptr_type) {
-                        let p = self.builder.ins().iconst(ty, 0);
-                        clif_args.push(BlockArg::Value(p));
+                    match self.fat_operand_kind(&param_ty) {
+                        FatOperandKind::Str => {
+                            let p = self.builder.ins().iconst(self.ptr_type, 0);
+                            clif_args.push(BlockArg::Value(p));
+                            clif_args.push(BlockArg::Value(p));
+                        }
+                        FatOperandKind::Slice => {
+                            let p = self.builder.ins().iconst(self.ptr_type, 0);
+                            clif_args.push(BlockArg::Value(p));
+                            clif_args.push(BlockArg::Value(p));
+                        }
+                        FatOperandKind::None => {
+                            if let ClifType::Concrete(ty) = clif_type(&param_ty, self.ptr_type) {
+                                let p = self.builder.ins().iconst(ty, 0);
+                                clif_args.push(BlockArg::Value(p));
+                            }
+                        }
                     }
                 }
                 let clif_target = self.block_map[resume];

@@ -40,20 +40,21 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "arandu_backend_c"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 dependencies = [
  "arandu_backend_cranelift",
  "arandu_base",
  "arandu_codegen",
  "arandu_middle",
  "arandu_parser",
+ "arandu_runtime",
  "arandu_semantics",
  "rustc-hash 2.1.3",
 ]
 
 [[package]]
 name = "arandu_backend_cranelift"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 dependencies = [
  "arandu_base",
  "arandu_codegen",
@@ -73,7 +74,7 @@ dependencies = [
 
 [[package]]
 name = "arandu_base"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 dependencies = [
  "rustc-hash 2.1.3",
  "tracing",
@@ -82,7 +83,7 @@ dependencies = [
 
 [[package]]
 name = "arandu_cli"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 dependencies = [
  "arandu_backend_c",
  "arandu_backend_cranelift",
@@ -112,7 +113,7 @@ dependencies = [
 
 [[package]]
 name = "arandu_codegen"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 dependencies = [
  "arandu_middle",
  "serde",
@@ -121,7 +122,7 @@ dependencies = [
 
 [[package]]
 name = "arandu_diagnostics"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 dependencies = [
  "arandu_base",
  "miette",
@@ -129,7 +130,7 @@ dependencies = [
 
 [[package]]
 name = "arandu_doc"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 dependencies = [
  "arandu_middle",
  "serde",
@@ -138,14 +139,14 @@ dependencies = [
 
 [[package]]
 name = "arandu_fmt"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 dependencies = [
  "arandu_parser",
 ]
 
 [[package]]
 name = "arandu_fuzz_support"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 dependencies = [
  "arandu_lexer",
  "arandu_parser",
@@ -155,7 +156,7 @@ dependencies = [
 
 [[package]]
 name = "arandu_lexer"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 dependencies = [
  "arandu_base",
  "arandu_test_support",
@@ -164,7 +165,7 @@ dependencies = [
 
 [[package]]
 name = "arandu_lsp"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 dependencies = [
  "arandu_base",
  "arandu_cli",
@@ -183,7 +184,7 @@ dependencies = [
 
 [[package]]
 name = "arandu_middle"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 dependencies = [
  "arandu_base",
  "arandu_diagnostics",
@@ -199,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "arandu_mir"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 dependencies = [
  "arandu_lexer",
  "arandu_middle",
@@ -213,7 +214,7 @@ dependencies = [
 
 [[package]]
 name = "arandu_parser"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 dependencies = [
  "arandu_base",
  "arandu_diagnostics",
@@ -227,7 +228,7 @@ dependencies = [
 
 [[package]]
 name = "arandu_query"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 dependencies = [
  "arandu_base",
  "arandu_diagnostics",
@@ -252,7 +253,7 @@ dependencies = [
 
 [[package]]
 name = "arandu_resolve"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 dependencies = [
  "arandu_lexer",
  "arandu_middle",
@@ -266,7 +267,7 @@ dependencies = [
 
 [[package]]
 name = "arandu_runtime"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 dependencies = [
  "arandu_codegen",
  "blake3",
@@ -277,7 +278,7 @@ dependencies = [
 
 [[package]]
 name = "arandu_semantics"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 dependencies = [
  "arandu_base",
  "arandu_codegen",
@@ -296,7 +297,7 @@ dependencies = [
 
 [[package]]
 name = "arandu_test_support"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 dependencies = [
  "arandu_base",
  "arandu_diagnostics",
@@ -304,7 +305,7 @@ dependencies = [
 
 [[package]]
 name = "arandu_typeck"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 dependencies = [
  "arandu_base",
  "arandu_lexer",
@@ -2069,7 +2070,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 dependencies = [
  "arandu_diagnostics",
  "arandu_fuzz_support",

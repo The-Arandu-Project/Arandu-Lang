@@ -34,7 +34,7 @@ Func main() -> void
 
   bb0:
     _1 = call fn@greet("Bruno")
-    s0 = move _1
+    s0 = _1
     _2 = call fn@dollarName("Ana")
-    s1 = move _2
+    s1 = _2
     return

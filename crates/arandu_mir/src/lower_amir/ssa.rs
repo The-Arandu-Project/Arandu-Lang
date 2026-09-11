@@ -101,7 +101,11 @@ impl LowerCtx<'_> {
         let ty = self.resolve_ty(ty_id);
         let is_copy = self.tc.type_info.is_copy(ty_id);
         let is_nullable = matches!(ty, ArType::Nullable(_));
-        let is_mem = super::is_memory_type(&ty);
+        let is_mem = super::is_memory_type(&ty)
+            // F2.0: an address-taken local (`&`/`&mut`, W3.3 out-params) must be
+            // re-loaded from its stack home after any call that could have
+            // written through the borrow — never redirected to the SSA value.
+            || self.locals[local.as_usize()].is_memory;
         let temp = self.next_temp_id();
         let span = if Self::span_is_usable(self.current_span) {
             self.current_span

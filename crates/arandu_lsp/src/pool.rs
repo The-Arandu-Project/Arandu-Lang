@@ -162,7 +162,9 @@ impl WorkerPool {
         }
         drop(state);
         if let Some(job) = queued {
-            let _ = catch_unwind(AssertUnwindSafe(|| (job.run)(token)));
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| (job.run)(token))) {
+                crate::logging::log_panic("synchronously cancelled job", &payload);
+            }
         }
         true
     }
@@ -193,15 +195,22 @@ fn worker_loop(shared: &Shared) {
             if state.shutdown && state.interactive.is_empty() && state.background.is_empty() {
                 return;
             }
-            state
+            let Some(job) = state
                 .interactive
                 .pop_front()
                 .or_else(|| state.background.pop_front())
-                .expect("worker woke with a queued job")
+            else {
+                // The lock and predicate above normally guarantee a job. Keep
+                // this defensive branch safe if the queue policy evolves.
+                continue;
+            };
+            job
         };
         let token = job.cancellation.clone();
         let key = job.key.clone();
-        let _ = catch_unwind(AssertUnwindSafe(|| (job.run)(token.clone())));
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| (job.run)(token.clone()))) {
+            crate::logging::log_panic("worker job", &payload);
+        }
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
         remove_active_token(&mut state, key.as_ref(), &token);
     }

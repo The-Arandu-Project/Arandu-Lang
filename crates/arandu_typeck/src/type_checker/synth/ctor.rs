@@ -15,6 +15,76 @@ fn type_path_member(pool: &AstPool, callee: ExprId) -> Option<(&TypeName, &str)>
     }
 }
 
+/// Reject an implicit exclusive borrow of an immutable value receiver.
+///
+/// A binding whose value is already `mut ref T` does not need to be mutable:
+/// mutability belongs to the reference. This check only covers the auto-ref
+/// conversion from a bare `T` to a method receiver declared as `mut ref T`.
+pub(crate) fn validate_exclusive_receiver_autoref(
+    checker: &mut TypeChecker<'_>,
+    base: ExprId,
+    formal: TypeId,
+    bare_actual: TypeId,
+) {
+    let ArType::RefMut(inner) = checker.resolve(formal) else {
+        return;
+    };
+    if !checker.unify_ids(inner, bare_actual) {
+        return;
+    }
+
+    let Some(symbol_id) = receiver_root_symbol(checker, base) else {
+        return;
+    };
+    if checker
+        .decl_type_id(symbol_id)
+        .is_some_and(|ty| matches!(checker.resolve(ty), ArType::RefMut(_)))
+    {
+        return;
+    }
+    let symbol = checker.symbols.get(symbol_id);
+    if !matches!(
+        symbol.kind,
+        crate::SymbolKind::Local | crate::SymbolKind::Param
+    ) || checker.resolved.mutable_symbols.contains(&symbol_id)
+    {
+        return;
+    }
+
+    let name = &symbol.name;
+    checker.diagnostics.push(
+        crate::Diagnostic::error(
+            crate::DiagCode::T026CannotAssignImmutable,
+            format!("cannot mutably borrow immutable variable '{name}'"),
+            checker.pool.expr_span(base),
+        )
+        .with_label(
+            checker.pool.expr_span(base),
+            "exclusive method receiver is required here",
+        )
+        .with_label(symbol.span, "variable declared here as immutable")
+        .with_hint_replacement(crate::Hint {
+            message: format!("consider declaring the variable as mutable: `mut {name} = ...;`"),
+            replacement: Some(crate::CodeReplacement {
+                span: symbol.span,
+                new_text: format!("mut {name}"),
+            }),
+        }),
+    );
+}
+
+fn receiver_root_symbol(checker: &TypeChecker<'_>, expr: ExprId) -> Option<SymbolId> {
+    match checker.pool.expr(expr) {
+        ExprKind::Path { .. } => checker.resolved.expr_symbol(expr),
+        ExprKind::Field { base, .. }
+        | ExprKind::SafeField { base, .. }
+        | ExprKind::Index { base, .. }
+        | ExprKind::SafeIndex { base, .. }
+        | ExprKind::Group { expr: base } => receiver_root_symbol(checker, *base),
+        _ => None,
+    }
+}
+
 pub(crate) fn synth_result_ctor(
     checker: &mut TypeChecker<'_>,
     callee: ExprId,
@@ -778,6 +848,8 @@ pub(crate) fn synth_method_call(
                 arg_index: 0,
             },
         );
+    } else {
+        validate_exclusive_receiver_autoref(checker, base, receiver_ty_id, actual_base_ty_id);
     }
 
     let mut explicit_params = params[1..].to_vec();
@@ -811,6 +883,7 @@ pub(crate) fn synth_method_call(
             ret,
             &arg_tys,
             None,
+            call_span,
         ) {
             let mut new_params = Vec::with_capacity(ip.len() + 1);
             new_params.push(params[0]);

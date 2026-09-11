@@ -143,13 +143,19 @@ fn parse_pattern_atom(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>) -> Option<Pat
         }));
     }
 
-    // Bind
-    if matches!(start_tok.kind, TokenKind::IdentValue) {
-        let name = SmolStr::new(ctx.text(start_tok)?);
+    // Bind (`mut name` marks the binding mutable, not the matched value).
+    let mutable = cur.eat(TokenKind::KwMut);
+    if mutable || matches!(start_tok.kind, TokenKind::IdentValue) {
+        let name_tok = if mutable { cur.peek()? } else { start_tok };
+        if !matches!(name_tok.kind, TokenKind::IdentValue) {
+            return None;
+        }
+        let name = SmolStr::new(ctx.text(name_tok)?);
         cur.bump();
         return Some(ctx.pool.alloc_pattern(Pattern::Bind {
-            span: ctx.token_span(start_tok),
+            span: ctx.span(start, name_tok.start + name_tok.len),
             name,
+            mutable,
         }));
     }
 

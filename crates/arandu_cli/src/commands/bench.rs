@@ -9,7 +9,7 @@ use crate::cli_error::{CliFailure, CliResult, CliSuccess};
 use crate::commands::test::{
     DiscoveryCase, DiscoveryReport, discovery_path, discovery_position, project_test_sources,
 };
-use crate::pipeline::{ensure_host_jit_layout, open_entry_file, pipeline_lower};
+use crate::pipeline::{ensure_host_jit_layout, pipeline_lower};
 use crate::project::{self, ProjectFlags};
 use crate::test_runner;
 
@@ -140,7 +140,7 @@ pub fn cmd_project_bench(
                 .unwrap_or(runner.config.samples),
         };
         arandu_runtime::testing_runtime::init_benchmark_context(exact, sequence, config.clone());
-        let execution = run_exact_benchmark(&ctx, exact, data_layout);
+        let execution = run_exact_benchmark(&db, &ctx, exact, data_layout);
         let mut event =
             arandu_runtime::testing_runtime::finish_benchmark_context().unwrap_or_else(|| {
                 arandu_codegen::testing::BenchmarkEventV1 {
@@ -183,6 +183,7 @@ pub fn cmd_project_bench(
 }
 
 pub fn run_exact_benchmark(
+    db: &arandu_query::DatabaseImpl,
     ctx: &project::ProjectContext,
     exact: &str,
     data_layout: arandu_middle::layout::DataLayout,
@@ -196,13 +197,15 @@ pub fn run_exact_benchmark(
         if exact != target {
             continue;
         }
-        let mut db = arandu_query::DatabaseImpl::new();
-        db.set_target_config(data_layout);
-        db.set_stdlib_root(ctx.stdlib.path.clone());
-        crate::pipeline::register_stdlib_sources(&mut db, &ctx.stdlib.path);
-        let (file, filepath) =
-            open_entry_file(&db, &mut arandu_base::SourceRegistry::default(), &path);
-        let artifacts = pipeline_lower(&db, file, &filepath);
+        let filepath = path.to_string_lossy().into_owned();
+        let file = db.source_file_by_path(&filepath).ok_or_else(|| {
+            CliFailure::operational(
+                "run benchmark",
+                Some(path.clone()),
+                "benchmark source was not registered in the project database",
+            )
+        })?;
+        let artifacts = pipeline_lower(db, file, &filepath);
         ensure_host_jit_layout(data_layout)?;
         let backend = arandu_backend_cranelift::CraneliftBackend::try_new()
             .map_err(|diagnostic| CliFailure::diagnostics([diagnostic], Some(path.clone())))?;
@@ -213,10 +216,14 @@ pub fn run_exact_benchmark(
             artifacts.type_check.type_info.as_ref(),
         )
         .map_err(|diagnostic| CliFailure::diagnostics([diagnostic], Some(path.clone())))?;
+        let host_name = artifacts.amir.funcs.iter().find_map(|func_def| {
+            let symbol = artifacts.type_check.symbols.get(func_def.symbol);
+            (symbol.name == function).then(|| artifacts.type_check.symbols.host_func_name(symbol))
+        });
         unsafe {
-            if let Some(benchmark_fn) =
-                arandu_semantics::CompiledCode::get_fn::<unsafe fn(*mut i64)>(&output, function)
-            {
+            if let Some(benchmark_fn) = host_name.and_then(|name| {
+                arandu_semantics::CompiledCode::get_fn::<unsafe fn(*mut i64)>(&output, name)
+            }) {
                 let mut handle = 1_i64;
                 benchmark_fn(&raw mut handle);
                 return Ok(CliSuccess::Done);

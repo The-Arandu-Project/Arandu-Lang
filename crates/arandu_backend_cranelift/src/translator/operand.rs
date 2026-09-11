@@ -1,11 +1,57 @@
 use arandu_semantics::amir::{AmirConstant, AmirOperand};
+use arandu_semantics::passes::type_checker::types::{ArType, Primitive};
 use cranelift_codegen::ir::{InstBuilder, Type, Value};
 use cranelift_module::Module;
 
 use super::FunctionTranslator;
 
+/// Whether an AMIR type is carried as a fat pointer `{ data, len }`, either
+/// directly (str / slice) or behind a reference/pointer to such a descriptor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FatOperandKind {
+    None,
+    Str,
+    Slice,
+}
+
 impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
+    /// Classifies an AMIR type as a fat-pointer ABI operand (str / slice).
+    pub(super) fn fat_operand_kind(&self, ty: &ArType) -> FatOperandKind {
+        match ty {
+            ArType::Primitive(Primitive::Str) => FatOperandKind::Str,
+            ArType::Slice(_) => FatOperandKind::Slice,
+            _ => FatOperandKind::None,
+        }
+    }
+
+    /// Loads the `{ data, len }` pair from behind a reference/pointer to a
+    /// str or slice descriptor. The String object layout (`data` at 0, `len`
+    /// at pointer width) matches the fat descriptor layout, so a `ref str`
+    /// view can be passed directly where a `str` (or `[]T`) is expected.
+    pub(super) fn translate_fat_ref_operand(&mut self, operand: &AmirOperand) -> (Value, Value) {
+        if self.error.is_some() {
+            return (self.poison_i32(), self.poison_i32());
+        }
+        let base = self.translate_operand(operand, Some(self.ptr_type));
+        let flags = cranelift_codegen::ir::MemFlagsData::new();
+        let data = self.builder.ins().load(self.ptr_type, flags, base, 0);
+        let len = self
+            .builder
+            .ins()
+            .load(self.ptr_type, flags, base, self.ptr_type.bytes() as i32);
+        (data, len)
+    }
+
     pub(super) fn translate_slice_operand(&mut self, operand: &AmirOperand) -> (Value, Value) {
+        let op_ty = self.get_operand_ar_type(operand);
+        if let ArType::Ref(inner) | ArType::RefMut(inner) | ArType::Ptr(inner) = &op_ty
+            && matches!(
+                self.resolve_ty(*inner),
+                ArType::Primitive(Primitive::Str) | ArType::Slice(_)
+            )
+        {
+            return self.translate_fat_ref_operand(operand);
+        }
         let descriptor = self.translate_operand(operand, Some(self.ptr_type));
         let flags = cranelift_codegen::ir::MemFlagsData::new();
         let data = self.builder.ins().load(self.ptr_type, flags, descriptor, 0);
@@ -30,6 +76,26 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                     let len_val = self.builder.use_var(var_len);
                     (ptr_val, len_val)
                 } else if let Some(&var) = self.temp_map.get(temp_id) {
+                    let op_ty = self.get_operand_ar_type(operand);
+                    if let ArType::Ref(inner) | ArType::RefMut(inner) | ArType::Ptr(inner) = &op_ty
+                        && matches!(
+                            self.resolve_ty(*inner),
+                            ArType::Primitive(Primitive::Str) | ArType::Slice(_)
+                        )
+                    {
+                        // `ref str` view: the var is a pointer to the
+                        // `{ data, len }` descriptor (e.g. a String object).
+                        let ptr_val = self.builder.use_var(var);
+                        let flags = cranelift_codegen::ir::MemFlagsData::new();
+                        let data = self.builder.ins().load(self.ptr_type, flags, ptr_val, 0);
+                        let len = self.builder.ins().load(
+                            self.ptr_type,
+                            flags,
+                            ptr_val,
+                            self.ptr_type.bytes() as i32,
+                        );
+                        return (data, len);
+                    }
                     let ptr_val = self.builder.use_var(var);
                     let len_val = self.builder.ins().iconst(self.ptr_type, 0);
                     (ptr_val, len_val)
@@ -211,7 +277,8 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
             },
             AmirOperand::FunctionRef(sym_id) => {
                 let sym = self.symbol_table.get(*sym_id);
-                let func_id = match self.func_ids.get(sym.name.as_str()) {
+                let host_name = self.symbol_table.host_func_name(sym);
+                let func_id = match self.func_ids.get(host_name) {
                     Some(func_id) => *func_id,
                     None => {
                         self.record_ice(

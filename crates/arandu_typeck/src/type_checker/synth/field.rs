@@ -123,10 +123,14 @@ pub(crate) fn resolve_field(
         if let Some((struct_id, args)) = struct_info_opt {
             let arg_ids: Vec<TypeId> = checker.type_info.type_interner.type_args(args);
             let resolved_args: Vec<ArType> = arg_ids.iter().map(|&a| checker.resolve(a)).collect();
-            let field_from_struct = if let Some(fields_map) =
-                super::super::types::struct_fields_instantiated(checker, struct_id, &resolved_args)
-            {
-                fields_map.get(field).cloned()
+            let field_from_struct = if let Some(field_ty) =
+                super::super::types::struct_field_instantiated(
+                    checker,
+                    struct_id,
+                    &resolved_args,
+                    field,
+                ) {
+                Some(field_ty)
             } else {
                 checker
                     .type_info

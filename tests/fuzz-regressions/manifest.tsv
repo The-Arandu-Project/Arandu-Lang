@@ -1,4 +1,6 @@
 # path<TAB>targets<TAB>origin<TAB>covered bug or risk
+module-item-split.seed	module-graph	differential:rc5	adding an import during an item edit hid a function from incremental AST lowering
+incremental-edits.seed	incremental	manual:rc5	incremental diagnostics disagreeing with cold analysis after dependency and syntax edits
 truncated-utf8.seed	lex,syntax,pipeline	manual:S2-D	truncated four-byte UTF-8 sequence
 open-string.seed	lex,syntax,pipeline	manual:S2-D	unterminated string recovery
 open-comment.seed	lex,syntax,pipeline	manual:S2-D	unterminated nested block comment recovery

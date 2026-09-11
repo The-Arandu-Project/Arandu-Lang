@@ -227,19 +227,19 @@ fn move_source(with_live_borrow: bool) -> String {
         ""
     };
     let use_borrow = if with_live_borrow {
-        "let observed = (*borrowed).value\n    return result"
+        "let observed = (*borrowed).handle\n    return result"
     } else {
         "return result"
     };
     format!(
-        r#"struct Resource {{ value: str }}
+        r#"struct Resource {{ handle: ptr[u8] }}
 
 func consume(value: Resource): int {{
     return 42
 }}
 
 func main(): int {{
-    let owner = Resource {{ value: "owned" }}
+    let owner = Resource {{ handle: nil }}
     {borrow}
     let result = consume(owner)
     {use_borrow}

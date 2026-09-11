@@ -91,13 +91,25 @@ impl CliFailure {
                     .as_deref()
                     .unwrap_or_else(|| std::path::Path::new(""));
                 let source = std::fs::read_to_string(path).unwrap_or_default();
-                let named_source = miette::NamedSource::new(path.to_string_lossy(), source);
                 for diagnostic in diagnostics {
                     let mut diag = diagnostic.clone();
                     if diag.is_ice() {
                         attach_ice_report_metadata(&mut diag, source_path.as_deref());
                     }
-                    let report = miette::Report::new(diag).with_source_code(named_source.clone());
+                    let source_len = source.len() as u32;
+                    if diag.span.end > source_len || diag.span.start > source_len {
+                        diag.span.start = diag.span.start.min(source_len);
+                        diag.span.end = diag.span.end.min(source_len);
+                    }
+                    for label in &mut diag.labels {
+                        if label.span.end > source_len || label.span.start > source_len {
+                            label.span.start = label.span.start.min(source_len);
+                            label.span.end = label.span.end.min(source_len);
+                        }
+                    }
+                    let named_source =
+                        miette::NamedSource::new(path.to_string_lossy(), source.clone());
+                    let report = miette::Report::new(diag).with_source_code(named_source);
                     eprintln!("{report:?}");
                 }
             }

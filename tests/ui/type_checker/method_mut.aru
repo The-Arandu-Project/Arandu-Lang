@@ -7,6 +7,6 @@ func Counter.bump(mut self) {
 }
 
 func main() {
-    let c: Counter = Counter { value: 0 }
+    let mut c: Counter = Counter { value: 0 }
     c.bump()
 }

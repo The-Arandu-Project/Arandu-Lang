@@ -31,10 +31,11 @@ public struct SyncExecutor {
     flags: int
 }
 
-/// Opaque join handle (host queue id). Payload type is recovered at `join<T>`.
+/// Join handle carrying its coroutine result type at compile time.
+/// `T` adds no runtime field; the host queue ID keeps its existing layout.
 ///
 /// POD auto-copy (`id: int`): pass/reuse by value without move consumption.
-public struct TaskHandle {
+public struct TaskHandle<T> {
     id: int
 }
 
@@ -54,22 +55,22 @@ public func blockOn<T>(ex: ref SyncExecutor, job: Coroutine<T>): T {
 }
 
 /// Spawn `job`; join with `join<T>`.
-public func spawn<T>(ex: ref SyncExecutor, job: Coroutine<T>): TaskHandle {
+public func spawn<T>(ex: ref SyncExecutor, job: Coroutine<T>): TaskHandle<T> {
     unsafe {
         let id = ar_rt_spawn_i64(job as ptr[u8])
-        return TaskHandle { id: id }
+        return TaskHandle<T> { id: id }
     }
 }
 
 /// Join handle from `spawn`; returns payload as `T`.
-public func join<T>(ex: ref SyncExecutor, handle: TaskHandle): T {
+public func join<T>(ex: ref SyncExecutor, handle: TaskHandle<T>): T {
     unsafe {
         let v = ar_rt_join_i64(handle.id)
         return v as T
     }
 }
 
-public func cancel(ex: ref SyncExecutor, handle: TaskHandle): void {
+public func cancel<T>(ex: ref SyncExecutor, handle: TaskHandle<T>): void {
     unsafe {
         ar_rt_cancel_i64(handle.id)
     }

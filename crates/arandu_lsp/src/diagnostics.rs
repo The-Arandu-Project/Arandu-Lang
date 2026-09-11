@@ -58,7 +58,8 @@ pub(crate) fn spawn_diagnostics(
                         diags,
                     });
                 }
-                Err(_) => {
+                Err(payload) => {
+                    crate::logging::log_panic("diagnostics", &payload);
                     let _ = tx.send(crate::dispatcher::JobResult::Failed { id: None, revision });
                 }
             }

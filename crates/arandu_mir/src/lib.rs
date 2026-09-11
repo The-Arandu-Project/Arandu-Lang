@@ -9,6 +9,7 @@ pub mod drop_elaborate;
 pub mod escape_analysis;
 pub mod gen_promote;
 pub(crate) mod gvn;
+pub mod inlining;
 pub mod liveness;
 pub mod lower_amir;
 pub mod move_checker;
@@ -21,6 +22,7 @@ pub(crate) mod sroa;
 pub mod suspend_check;
 
 pub use borrow_check::check_borrows;
+pub use inlining::inline_leaf_functions;
 pub use lower_amir::{lower_to_amir, lower_to_amir_with_interfaces};
 pub use move_checker::check_moves;
 pub use optimize::{

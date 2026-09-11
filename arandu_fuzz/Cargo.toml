@@ -1,11 +1,23 @@
 [package]
 name = "arandu_fuzz"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 edition = "2024"
 publish = false
 
 [package.metadata]
 cargo-fuzz = true
+
+[[bin]]
+name = "fuzz_module_graph"
+path = "fuzz_targets/fuzz_module_graph.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_incremental"
+path = "fuzz_targets/fuzz_incremental.rs"
+test = false
+doc = false
 
 [dependencies]
 libfuzzer-sys = "0.4.13"

@@ -248,6 +248,25 @@ static ArStr ar_path_join(ArStr a, ArStr b) {{
     buf[total] = 0;
     return ar_str_pack(buf, total);
 }}
+static bool ar_path_join_owned(ArStr a, ArStr b, uint8_t **out_buf, {len_c_ty} *out_len, {len_c_ty} *out_cap) {{
+    if (!out_buf || !out_len || !out_cap || a.len < 0 || b.len < 0 ||
+        (a.len > 0 && !a.ptr) || (b.len > 0 && !b.ptr)) return false;
+    *out_buf = NULL; *out_len = 0; *out_cap = 0;
+    bool absolute = b.len > 0 && b.ptr[0] == '/';
+    {len_c_ty} al = absolute ? 0 : a.len;
+    bool need_sep = al > 0 && b.len > 0 && a.ptr[al - 1] != '/';
+    if (al > INT64_MAX - b.len - (need_sep ? 1 : 0)) return false;
+    {len_c_ty} total = al + b.len + (need_sep ? 1 : 0);
+    if (total == 0) return true;
+    uint8_t *buf = (uint8_t*)ar_vec_malloc(({len_c_ty})total);
+    if (!buf) return false;
+    {len_c_ty} off = 0;
+    if (al > 0) {{ memcpy(buf, a.ptr, (size_t)al); off = al; }}
+    if (need_sep) buf[off++] = '/';
+    if (b.len > 0) memcpy(buf + off, b.ptr, (size_t)b.len);
+    *out_buf = buf; *out_len = total; *out_cap = total;
+    return true;
+}}
 static ArStr ar_path_file_name(ArStr p) {{
     if (p.len <= 0 || !p.ptr) return ar_str_pack((const uint8_t*)"", 0);
     {len_c_ty} i = p.len;
@@ -400,18 +419,479 @@ static inline void* ar_co_await_ptr(uint8_t* aw) {{
         );
     }
 
+    /// SL_R.0 cooperative task table mirror (JIT `ar_rt_*`) for the C backend.
+    ///
+    /// Mirrors `arandu_runtime::rt_runtime`: a growable table of slots with
+    /// Pending/Running/Completed states. A Pending blob is owned by the row;
+    /// a join claims it, drives it, releases it, then caches the result. A
+    /// cancel releases a Pending blob or marks a Running row for retirement.
+    /// Cooperative only: the joining thread drives the blob; standalone C has
+    /// no OS-worker scheduling at this surface.
+    pub(super) fn emit_task_runtime(&mut self) {
+        let _ = writeln!(
+            &mut self.output,
+            r#"/* SL_R.0 cooperative task table (mirrors JIT ar_rt_*). */
+typedef struct {{
+    int32_t state;          /* 0 EMPTY, 1 PENDING, 2 RUNNING, 3 COMPLETED */
+    int32_t cancel_requested;
+    uint8_t *blob;          /* owned while PENDING; RUNNING stores none */
+    int64_t result;         /* COMPLETED cache */
+}} ar_rt_slot;
+static ar_rt_slot *ar_rt_slots = NULL;
+static uint64_t ar_rt_capacity = 0;
+static uint64_t ar_rt_len = 0;
+
+static int64_t ar_rt_spawn_i64(uint8_t *state) {{
+    if (!state) abort();
+    uint64_t index = ar_rt_capacity;
+    for (uint64_t i = 0; i < ar_rt_len; i++) {{
+        if (ar_rt_slots[i].state == 0) {{ index = i; break; }}
+    }}
+    if (index == ar_rt_capacity) {{
+        if (ar_rt_len == ar_rt_capacity) {{
+            uint64_t new_cap = ar_rt_capacity == 0 ? 8 : ar_rt_capacity * 2;
+            if (new_cap > (uint64_t)INT64_MAX) abort();
+            ar_rt_slot *next = (ar_rt_slot*)realloc(
+                ar_rt_slots, (size_t)(new_cap * sizeof(ar_rt_slot)));
+            if (!next) abort();
+            memset(next + ar_rt_capacity, 0,
+                (size_t)((new_cap - ar_rt_capacity) * sizeof(ar_rt_slot)));
+            ar_rt_slots = next;
+            ar_rt_capacity = new_cap;
+        }}
+        index = ar_rt_len++;
+    }}
+    ar_rt_slots[index].state = 1;
+    ar_rt_slots[index].cancel_requested = 0;
+    ar_rt_slots[index].blob = state;
+    return (int64_t)index;
+}}
+
+static int64_t ar_rt_join_i64(int64_t handle) {{
+    if (handle < 0 || (uint64_t)handle >= ar_rt_len) abort();
+    ar_rt_slot *slot = &ar_rt_slots[(uint64_t)handle];
+    if (slot->state == 3) return slot->result;
+    if (slot->state != 1) abort(); /* RUNNING = concurrent join; EMPTY = invalid */
+    uint8_t *blob = slot->blob;
+    slot->state = 2;
+    slot->cancel_requested = 0;
+    int64_t result = ar_co_block_on_i64(blob);
+    if (*(uint32_t*)(blob + 4) != 0x4152434fu) abort(); /* fail-closed magic */
+    free(blob);
+    if (slot->cancel_requested) {{
+        slot->state = 0;
+        slot->blob = NULL;
+    }} else {{
+        slot->state = 3;
+        slot->result = result;
+    }}
+    return result;
+}}
+
+static void ar_rt_cancel_i64(int64_t handle) {{
+    if (handle < 0 || (uint64_t)handle >= ar_rt_len) return;
+    ar_rt_slot *slot = &ar_rt_slots[(uint64_t)handle];
+    if (slot->state == 1) {{
+        uint8_t *blob = slot->blob;
+        slot->state = 0;
+        slot->blob = NULL;
+        if (*(uint32_t*)(blob + 4) != 0x4152434fu) abort(); /* fail-closed magic */
+        free(blob);
+    }} else if (slot->state == 2) {{
+        slot->cancel_requested = 1;
+    }} else if (slot->state == 3) {{
+        slot->state = 0; /* cached row is retired by cancel (JIT slot.take) */
+    }} /* EMPTY: no-op */
+}}
+
+static int64_t ar_rt_block_on_i64(uint8_t *state) {{
+    return ar_co_block_on_i64(state);
+}}
+
+static int32_t ar_rt_parallel_fold_run(
+    uint64_t num_chunks,
+    uint8_t **contexts,
+    int32_t (*thunk)(uint8_t*, uint8_t*),
+    uint8_t **results,
+    uint64_t workers,
+    int64_t *stop_flag
+) {{
+    if (num_chunks == 0) return 0;
+    for (uint64_t i = 0; i < num_chunks; i++) {{
+        if (stop_flag && *stop_flag != 0) return 2;
+        int32_t code = thunk(contexts[i], results[i]);
+        if (code != 0) {{
+            if (stop_flag) *stop_flag = 1;
+            return code;
+        }}
+    }}
+    return 0;
+}}"#
+        );
+    }
+
+    /// Host filesystem helpers for `std.fs` (mirrors JIT `ar_fs_*`).
+    pub(super) fn emit_fs_runtime(&mut self, uint_c_ty: &str, int_c_ty: &str) {
+        let _ = writeln!(
+            &mut self.output,
+            r#"/* std.fs host helpers (mirrors JIT ar_fs_* runtime). */
+static inline char *ar_str_to_c_path(ArStr s, char *stack_buf, size_t stack_sz) {{
+    if (s.len < 0 || (!s.ptr && s.len > 0)) return NULL;
+    size_t len = (size_t)s.len;
+    if (len + 1 <= stack_sz) {{
+        if (len > 0 && s.ptr) memcpy(stack_buf, s.ptr, len);
+        stack_buf[len] = '\0';
+        return stack_buf;
+    }}
+    char *heap = (char *)malloc(len + 1);
+    if (!heap) return NULL;
+    if (len > 0 && s.ptr) memcpy(heap, s.ptr, len);
+    heap[len] = '\0';
+    return heap;
+}}
+
+static inline {int_c_ty} ar_map_errno(int err) {{
+    switch (err) {{
+        case 0: return 0;
+        case ENOENT: return 1; /* NotFound */
+        case EACCES:
+        case EPERM: return 2; /* PermissionDenied */
+        case EEXIST: return 3; /* AlreadyExists */
+#ifdef EAGAIN
+        case EAGAIN: return 4; /* WouldBlock */
+#endif
+#if defined(EWOULDBLOCK) && (!defined(EAGAIN) || EAGAIN != EWOULDBLOCK)
+        case EWOULDBLOCK: return 4; /* WouldBlock */
+#endif
+        case EINVAL: return 5; /* InvalidInput */
+#ifdef EISDIR
+        case EISDIR: return 6; /* IsADirectory */
+#endif
+#ifdef ENOTDIR
+        case ENOTDIR: return 7; /* NotADirectory */
+#endif
+        default: return 8; /* Other */
+    }}
+}}
+
+static bool exists(ArStr path) {{
+    if (path.len <= 0 || !path.ptr) return false;
+    char stack_buf[1024];
+    char *c_path = ar_str_to_c_path(path, stack_buf, sizeof(stack_buf));
+    if (!c_path) return false;
+    struct stat st;
+    int res = stat(c_path, &st);
+    if (c_path != stack_buf) free(c_path);
+    return res == 0;
+}}
+
+static {int_c_ty} ar_fs_open(ArStr path, {int_c_ty} flags, {int_c_ty} mode) {{
+    (void)path; (void)flags; (void)mode;
+    return -1;
+}}
+
+static {int_c_ty} ar_fs_read({int_c_ty} fd, uint8_t *buf, {uint_c_ty} count) {{
+    (void)fd; (void)buf; (void)count;
+    return -1;
+}}
+
+static {int_c_ty} ar_fs_write({int_c_ty} fd, const uint8_t *buf, {uint_c_ty} count) {{
+    (void)fd; (void)buf; (void)count;
+    return -1;
+}}
+
+static {int_c_ty} ar_fs_close({int_c_ty} fd) {{
+    (void)fd;
+    return 0;
+}}
+
+static void ar_fs_read_all(ArStr path, uint8_t **out_buf, {uint_c_ty} *out_len, {uint_c_ty} *out_cap, {int_c_ty} *err) {{
+    if (!out_buf || !out_len || !out_cap || !err) return;
+    if (path.len < 0 || (path.len > 0 && !path.ptr)) {{
+        *out_buf = NULL; *out_len = 0; *out_cap = 0; *err = 5;
+        return;
+    }}
+    char stack_buf[1024];
+    char *c_path = ar_str_to_c_path(path, stack_buf, sizeof(stack_buf));
+    if (!c_path) {{
+        *out_buf = NULL; *out_len = 0; *out_cap = 0; *err = 8;
+        return;
+    }}
+    struct stat st;
+    if (stat(c_path, &st) != 0) {{
+        int e = errno;
+        if (c_path != stack_buf) free(c_path);
+        *out_buf = NULL; *out_len = 0; *out_cap = 0; *err = ar_map_errno(e);
+        return;
+    }}
+    if (S_ISDIR(st.st_mode)) {{
+        if (c_path != stack_buf) free(c_path);
+        *out_buf = NULL; *out_len = 0; *out_cap = 0; *err = 6;
+        return;
+    }}
+    FILE *f = fopen(c_path, "rb");
+    if (!f) {{
+        int e = errno;
+        if (c_path != stack_buf) free(c_path);
+        *out_buf = NULL; *out_len = 0; *out_cap = 0; *err = ar_map_errno(e);
+        return;
+    }}
+    if (c_path != stack_buf) free(c_path);
+    size_t initial_cap = (st.st_size > 0 && (uint64_t)st.st_size <= 268435456ULL) ? (size_t)st.st_size : 0;
+    if (initial_cap == 0) {{
+        size_t cap = 1024;
+        size_t len = 0;
+        uint8_t *buf = (uint8_t *)ar_vec_malloc(({uint_c_ty})cap);
+        if (!buf) {{ fclose(f); *out_buf = NULL; *out_len = 0; *out_cap = 0; *err = 8; return; }}
+        for (;;) {{
+            if (len == cap) {{
+                size_t new_cap = cap * 2;
+                if (new_cap > 268435456ULL) {{ ar_vec_buf_free(buf, ({uint_c_ty})cap); fclose(f); *out_buf = NULL; *out_len = 0; *out_cap = 0; *err = 8; return; }}
+                uint8_t *next = (uint8_t *)ar_vec_realloc(buf, ({uint_c_ty})cap, ({uint_c_ty})new_cap);
+                if (!next) {{ ar_vec_buf_free(buf, ({uint_c_ty})cap); fclose(f); *out_buf = NULL; *out_len = 0; *out_cap = 0; *err = 8; return; }}
+                buf = next;
+                cap = new_cap;
+            }}
+            size_t n = fread(buf + len, 1, cap - len, f);
+            if (n == 0) break;
+            len += n;
+        }}
+        fclose(f);
+        if (len == 0) {{
+            ar_vec_buf_free(buf, ({uint_c_ty})cap);
+            *out_buf = NULL; *out_len = 0; *out_cap = 0; *err = 0;
+            return;
+        }}
+        uint8_t *shrunk = (uint8_t *)ar_vec_realloc(buf, ({uint_c_ty})cap, ({uint_c_ty})len);
+        *out_buf = shrunk ? shrunk : buf;
+        *out_len = ({uint_c_ty})len;
+        *out_cap = shrunk ? ({uint_c_ty})len : ({uint_c_ty})cap;
+        *err = 0;
+        return;
+    }}
+    uint8_t *buf = (uint8_t *)ar_vec_malloc(({uint_c_ty})initial_cap);
+    if (!buf) {{
+        fclose(f);
+        *out_buf = NULL; *out_len = 0; *out_cap = 0; *err = 8;
+        return;
+    }}
+    size_t read_bytes = fread(buf, 1, initial_cap, f);
+    fclose(f);
+    *out_buf = buf;
+    *out_len = ({uint_c_ty})read_bytes;
+    *out_cap = ({uint_c_ty})initial_cap;
+    *err = 0;
+}}
+
+typedef struct {{
+    char *name;
+    size_t len;
+    uint8_t is_dir;
+}} ArHostDirEntry;
+
+static void ar_fs_readdir(ArStr path, uint8_t **out_buf, {uint_c_ty} *out_count, {uint_c_ty} *out_cap, {int_c_ty} *err) {{
+    if (!out_buf || !out_count || !out_cap || !err) return;
+    if (path.len < 0 || (path.len > 0 && !path.ptr)) {{
+        *out_buf = NULL; *out_count = 0; *out_cap = 0; *err = 5;
+        return;
+    }}
+    char stack_buf[1024];
+    char *c_path = ar_str_to_c_path(path, stack_buf, sizeof(stack_buf));
+    if (!c_path) {{
+        *out_buf = NULL; *out_count = 0; *out_cap = 0; *err = 8;
+        return;
+    }}
+#if !defined(_WIN32) || defined(__MINGW32__)
+    DIR *d = opendir(c_path);
+    if (!d) {{
+        int e = errno;
+        if (c_path != stack_buf) free(c_path);
+        *out_buf = NULL; *out_count = 0; *out_cap = 0; *err = ar_map_errno(e);
+        return;
+    }}
+    size_t entries_cap = 16;
+    size_t count = 0;
+    ArHostDirEntry *entries = (ArHostDirEntry *)malloc(entries_cap * sizeof(ArHostDirEntry));
+    if (!entries) {{
+        closedir(d);
+        if (c_path != stack_buf) free(c_path);
+        *out_buf = NULL; *out_count = 0; *out_cap = 0; *err = 8;
+        return;
+    }}
+    size_t names_total_len = 0;
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL) {{
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+        size_t nlen = strlen(ent->d_name);
+        uint8_t is_dir = 0;
+#ifdef DT_DIR
+        if (ent->d_type == DT_DIR) is_dir = 1;
+        else if (ent->d_type == DT_UNKNOWN) {{
+            char sub_path[4096];
+            snprintf(sub_path, sizeof(sub_path), "%s/%s", c_path, ent->d_name);
+            struct stat st;
+            if (stat(sub_path, &st) == 0 && S_ISDIR(st.st_mode)) is_dir = 1;
+        }}
+#else
+        char sub_path[4096];
+        snprintf(sub_path, sizeof(sub_path), "%s/%s", c_path, ent->d_name);
+        struct stat st;
+        if (stat(sub_path, &st) == 0 && S_ISDIR(st.st_mode)) is_dir = 1;
+#endif
+        if (count == entries_cap) {{
+            size_t new_cap = entries_cap * 2;
+            ArHostDirEntry *next = (ArHostDirEntry *)realloc(entries, new_cap * sizeof(ArHostDirEntry));
+            if (!next) {{
+                for (size_t j = 0; j < count; j++) free(entries[j].name);
+                free(entries);
+                closedir(d);
+                if (c_path != stack_buf) free(c_path);
+                *out_buf = NULL; *out_count = 0; *out_cap = 0; *err = 8;
+                return;
+            }}
+            entries = next;
+            entries_cap = new_cap;
+        }}
+        char *copy = (char *)malloc(nlen + 1);
+        if (!copy) {{
+            for (size_t j = 0; j < count; j++) free(entries[j].name);
+            free(entries);
+            closedir(d);
+            if (c_path != stack_buf) free(c_path);
+            *out_buf = NULL; *out_count = 0; *out_cap = 0; *err = 8;
+            return;
+        }}
+        memcpy(copy, ent->d_name, nlen);
+        copy[nlen] = '\0';
+        entries[count].name = copy;
+        entries[count].len = nlen;
+        entries[count].is_dir = is_dir;
+        count++;
+        names_total_len += nlen;
+    }}
+    closedir(d);
+    if (c_path != stack_buf) free(c_path);
+
+    if (count == 0) {{
+        free(entries);
+        *out_buf = NULL; *out_count = 0; *out_cap = 0; *err = 0;
+        return;
+    }}
+
+    size_t blob_len = 8 + count * 16 + names_total_len;
+    uint8_t *blob = (uint8_t *)ar_vec_malloc(({uint_c_ty})blob_len);
+    if (!blob) {{
+        for (size_t j = 0; j < count; j++) free(entries[j].name);
+        free(entries);
+        *out_buf = NULL; *out_count = 0; *out_cap = 0; *err = 8;
+        return;
+    }}
+    *(uint32_t *)blob = (uint32_t)count;
+    *(uint32_t *)(blob + 4) = (uint32_t)blob_len;
+    size_t names_base = 8 + count * 16;
+    size_t cursor = names_base;
+    for (size_t i = 0; i < count; i++) {{
+        size_t base = 8 + i * 16;
+        size_t off = cursor - names_base;
+        *(uint32_t *)(blob + base) = (uint32_t)off;
+        *(uint32_t *)(blob + base + 4) = (uint32_t)entries[i].len;
+        blob[base + 8] = entries[i].is_dir;
+        memset(blob + base + 9, 0, 7);
+        if (entries[i].len > 0) {{
+            memcpy(blob + cursor, entries[i].name, entries[i].len);
+            cursor += entries[i].len;
+        }}
+        free(entries[i].name);
+    }}
+    free(entries);
+    *out_buf = blob;
+    *out_count = ({uint_c_ty})count;
+    *out_cap = ({uint_c_ty})blob_len;
+    *err = 0;
+#else
+    if (c_path != stack_buf) free(c_path);
+    *out_buf = NULL; *out_count = 0; *out_cap = 0; *err = 8;
+#endif
+}}"#
+        );
+    }
+
+    /// Host environment helpers for `std.env` (mirrors JIT `ar_env_*`).
+    pub(super) fn emit_env_runtime(&mut self, int_c_ty: &str) {
+        let _ = writeln!(
+            &mut self.output,
+            r#"/* std.env host helpers (mirrors JIT ar_env_* runtime). */
+static int ar_env_c_argc = 0;
+static char **ar_env_c_argv = NULL;
+
+#if defined(_WIN32)
+static void ar_init_env_args_if_needed(void) {{
+    if (!ar_env_c_argv) {{
+        ar_env_c_argc = __argc;
+        ar_env_c_argv = __argv;
+    }}
+}}
+#elif defined(__GNUC__) || defined(__clang__)
+__attribute__((constructor)) static void ar_capture_env_args(int argc, char **argv) {{
+    ar_env_c_argc = argc;
+    ar_env_c_argv = argv;
+}}
+#endif
+
+static {int_c_ty} ar_env_args_len(void) {{
+#if defined(_WIN32)
+    ar_init_env_args_if_needed();
+#endif
+    return ({int_c_ty})ar_env_c_argc;
+}}
+
+static ArStr ar_env_arg({int_c_ty} index) {{
+#if defined(_WIN32)
+    ar_init_env_args_if_needed();
+#endif
+    if (index < 0 || index >= ({int_c_ty})ar_env_c_argc || !ar_env_c_argv) {{
+        return ar_str_pack((const uint8_t*)"", 0);
+    }}
+    const char *s = ar_env_c_argv[index];
+    size_t len = s ? strlen(s) : 0;
+    return ar_str_pack((const uint8_t*)s, ({int_c_ty})len);
+}}
+
+static {int_c_ty} ar_env_var_is_set(ArStr name) {{
+    if (name.len <= 0 || !name.ptr) return 0;
+    char stack_buf[256];
+    char *c_name = ar_str_to_c_path(name, stack_buf, sizeof(stack_buf));
+    if (!c_name) return 0;
+    char *val = getenv(c_name);
+    if (c_name != stack_buf) free(c_name);
+    return val != NULL ? 1 : 0;
+}}"#
+        );
+    }
+
     pub(super) fn emit_headers(&mut self, needs_str: bool) {
         let _ = writeln!(&mut self.output, "#include <stdint.h>");
         let _ = writeln!(&mut self.output, "#include <stdbool.h>");
         let _ = writeln!(&mut self.output, "#include <stdlib.h>");
         let _ = writeln!(&mut self.output, "#include <string.h>");
+        let _ = writeln!(&mut self.output, "#include <stdio.h>");
+        let _ = writeln!(&mut self.output, "#include <errno.h>");
+        let _ = writeln!(&mut self.output, "#include <sys/types.h>");
+        let _ = writeln!(&mut self.output, "#include <sys/stat.h>");
+        let _ = writeln!(
+            &mut self.output,
+            "#ifndef S_ISDIR\n#define S_ISDIR(mode) (((mode) & S_IFMT) == S_IFDIR)\n#endif"
+        );
+        let _ = writeln!(
+            &mut self.output,
+            "#if !defined(_WIN32) || defined(__MINGW32__)\n#include <dirent.h>\n#endif"
+        );
         let _ = writeln!(
             &mut self.output,
             "#if defined(__GNUC__) || defined(__clang__)\n#define AR_MAY_ALIAS __attribute__((__may_alias__))\n#else\n#define AR_MAY_ALIAS\n#endif"
         );
         if needs_str {
             let _ = writeln!(&mut self.output, "#include <stdarg.h>");
-            let _ = writeln!(&mut self.output, "#include <stdio.h>");
             let _ = writeln!(&mut self.output, "#include <math.h>");
         }
         let _ = writeln!(&mut self.output, "#ifndef AR_UNREACHABLE");
@@ -447,22 +927,7 @@ static inline void* ar_co_await_ptr(uint8_t* aw) {{
             "typedef struct {{ const uint8_t *ptr; {len_c_ty} len; }} ArStr;"
         );
         self.emitted_types.insert("ArStr".to_string());
-        // F2.3.runtime: process-lifetime gen arena (i64 payload MVP; mirrors JIT host).
-        self.emit_gen_arena_runtime();
-        // Pure-buffer host used by std.alloc.vec / gen_arena product surface.
-        let uint_c_ty = if self.layout.pointer_width() == 4 {
-            "uint32_t"
-        } else {
-            "uint64_t"
-        };
-        self.emit_vec_buf_runtime(uint_c_ty);
-        // A3.6: poll / block_on for coroutine state blobs (disc@0, payload@8).
-        self.emit_co_poll_runtime();
-        let _ = writeln!(&mut self.output);
-        if !needs_str {
-            return;
-        }
-        // Runtime helpers for fat-pointer strings (string interpolation).
+        // Runtime helpers for fat-pointer strings (string interpolation & hosts).
         let _ = writeln!(
             &mut self.output,
             "static inline void ar_str_unpack(ArStr s, const uint8_t **ptr, {len_c_ty} *len) {{"
@@ -479,6 +944,26 @@ static inline void* ar_co_await_ptr(uint8_t* aw) {{
             "    return (ArStr){{ .ptr = ptr, .len = len }};"
         );
         let _ = writeln!(&mut self.output, "}}");
+        // F2.3.runtime: process-lifetime gen arena (i64 payload MVP; mirrors JIT host).
+        self.emit_gen_arena_runtime();
+        // Pure-buffer host used by std.alloc.vec / gen_arena product surface.
+        let uint_c_ty = if self.layout.pointer_width() == 4 {
+            "uint32_t"
+        } else {
+            "uint64_t"
+        };
+        self.emit_vec_buf_runtime(uint_c_ty);
+        // A3.6: poll / block_on for coroutine state blobs (disc@0, payload@8).
+        self.emit_co_poll_runtime();
+        // SL_R.0: cooperative task table mirror (SyncExecutor host surface).
+        self.emit_task_runtime();
+        // std.fs / std.env runtime hosts.
+        self.emit_fs_runtime(uint_c_ty, len_c_ty);
+        self.emit_env_runtime(len_c_ty);
+        let _ = writeln!(&mut self.output);
+        if !needs_str {
+            return;
+        }
         // PROMOTE-L4 path hosts (need ArStr + ar_str_pack).
         self.emit_path_runtime(len_c_ty);
         let _ = writeln!(

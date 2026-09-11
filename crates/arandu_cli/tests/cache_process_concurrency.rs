@@ -3,7 +3,9 @@
 
 use std::fs;
 use std::process::{Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+
+#[allow(dead_code)]
+mod common;
 
 use arandu_package::cache::{CachePublish, CacheScanLimits, CacheStore};
 use arandu_query::{CacheDigest, CacheLayout};
@@ -84,11 +86,5 @@ fn independent_publishers_recover_from_interrupted_staging() {
 }
 
 fn temp_dir(prefix: &str) -> std::path::PathBuf {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let path = std::env::temp_dir().join(format!("{prefix}-{}-{nonce}", std::process::id()));
-    fs::create_dir_all(&path).unwrap();
-    path
+    common::temp_dir(prefix).expect("reserve fresh temporary directory")
 }

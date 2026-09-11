@@ -680,6 +680,22 @@ pub fn file_ide_diagnostics(
                 }
             }
         }
+    } else {
+        // Parse failed: never show an empty Problems panel. Surface the full
+        // recovering-parse diagnostics (lex + syntax) instead of nothing.
+        let parse_diags = crate::passes::parse_diagnostics(db, file);
+        for d in parse_diags.iter() {
+            let diag = IdeDiagnostic::from_diag(d, None, None);
+            let key = (
+                diag.start,
+                diag.end,
+                diag.code.clone(),
+                diag.message.clone(),
+            );
+            if covered.insert(key) {
+                out.push(diag);
+            }
+        }
     }
 
     // Signature / resolve diags (imports, duplicate types, …).

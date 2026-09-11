@@ -138,6 +138,14 @@ impedem o LSP de publicar resultados de buffers/revisões obsoletos.
     enquanto mudar a dependência formal invalida seus corpos. O diagnóstico por
     item usa esse mesmo summary; O002/O003/O006/O010 mantêm labels e notes no
     wire, e uma revisão posterior nunca publica o resultado ownership stale.
+22. Descoberta inicial só registra arquivos quando não há respostas interativas
+    admitidas aguardando entrega. O acompanhamento por `RequestId` é limitado a
+    64 entradas e termina também em erro/cancelamento; não depende do instante
+    em que o worker retira o job da fila. O canal de descoberta mantém seu limite
+    de oito eventos. Reloads de pacote aguardam no máximo em um slot coalescido.
+    O loop continua recebendo protocolo, resultados e debounce, e a checagem de
+    revisão rejeita resultados invalidados por edições reais. Tráfego interativo
+    contínuo pode adiar a descoberta até haver uma janela sem respostas pendentes.
 
 ### F4 / P3 — delta on-type
 

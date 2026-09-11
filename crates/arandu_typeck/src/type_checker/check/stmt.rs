@@ -549,7 +549,17 @@ fn check_loop_control_stmt(checker: &mut TypeChecker<'_>, stmt: &Stmt, span: ara
         let msg = match stmt {
             Stmt::Break { .. } => "`break` is only allowed inside a loop",
             Stmt::Continue { .. } => "`continue` is only allowed inside a loop",
-            _ => unreachable!(),
+            // Defensive invariant: only Break/Continue reach this path. A new
+            // loop-control statement added upstream must surface as a reportable
+            // ICE instead of panicking the compiler out of the host process.
+            _ => {
+                checker.diagnostics.push(crate::Diagnostic::ice(
+                    crate::DiagCode::ICET001,
+                    "loop-control checker reached an unexpected statement kind",
+                    span,
+                ));
+                return;
+            }
         };
         checker.diagnostics.push(crate::Diagnostic::error(
             crate::DiagCode::N011BreakContinueOutsideLoop,

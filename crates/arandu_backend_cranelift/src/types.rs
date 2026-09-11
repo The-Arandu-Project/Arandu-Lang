@@ -78,7 +78,7 @@ pub fn clif_type_with_float(ty: &ArType, ptr_type: Type, float_type: Type) -> Cl
             Primitive::Char => ClifType::Concrete(I32),
             Primitive::Str => {
                 // Single-slot fallback (ptr only). ABI/multi-value uses `clif_types` →
-                // `[ptr, I64]` matching LayoutEngine fat pointer (RC-STR-ABI).
+                // `[ptr_type, ptr_type]` matching LayoutEngine fat pointer (RC-STR-ABI).
                 ClifType::Concrete(ptr_type)
             }
             Primitive::Any => ClifType::Concrete(ptr_type),

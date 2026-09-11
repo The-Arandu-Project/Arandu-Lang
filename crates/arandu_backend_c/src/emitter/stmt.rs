@@ -273,10 +273,6 @@ impl<'a> CEmitter<'a> {
                                 | ArType::Nullable(inner) => self.interner.resolve(*inner),
                                 other => other.clone(),
                             };
-                            let struct_id = match &struct_ty {
-                                ArType::Named(id, _) => *id,
-                                _ => arandu_middle::SymbolId::DUMMY,
-                            };
                             let field_name = self
                                 .symbols
                                 .get(*field_sym)
@@ -284,18 +280,16 @@ impl<'a> CEmitter<'a> {
                                 .rsplit('.')
                                 .next()
                                 .unwrap_or("");
-                            if let Some(fields) = self.provider.get_struct_fields(struct_id)
-                                && let Some(f) = fields.get(field_name)
-                            {
-                                current_ty = self.interner.resolve(f.ty);
-                            }
+                            current_ty = self.instantiated_field_ty(&struct_ty, field_name);
                         }
                         arandu_middle::amir::AmirProjection::Index(_) => {}
                     }
                 }
                 let ty_id = self.interner.intern(current_ty.clone());
                 if let Some((_, destructor)) = self.gen_drop_glue(ty_id, &current_ty) {
-                    let destructor = super::sanitize_c_ident(&self.symbols.get(destructor).name);
+                    let destructor_symbol = self.symbols.get(destructor);
+                    let destructor =
+                        super::sanitize_c_ident(self.symbols.host_func_name(destructor_symbol));
                     let value = self.format_place(place, func);
                     let _ = writeln!(&mut self.output, "    {destructor}({value});");
                 }

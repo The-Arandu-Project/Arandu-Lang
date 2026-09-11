@@ -25,6 +25,7 @@ pub enum Pattern {
     Bind {
         span: Span,
         name: SmolStr,
+        mutable: bool,
     },
     Literal {
         span: Span,

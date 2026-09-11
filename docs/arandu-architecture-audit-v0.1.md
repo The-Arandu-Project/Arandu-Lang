@@ -1,6 +1,132 @@
 # Auditoria de Arquitetura e Performance v0.1
 
-**Status:** auditoria estática concluída; guardrails implementados
+**Status:** auditoria estática inicial concluída; estabilização rc.5 em andamento
+
+## Evidência da rodada rc.5
+
+Esta rodada parte de `bca57ea` na branch `prep/rc5`. O flush da CLI já está
+integrado nesse baseline e sua validação Windows foi informada pelo mantenedor.
+As correções abaixo pertencem aos owners existentes, sem novas dependências,
+mudanças de IDs, interners, allocator ou fusão de queries.
+
+| Área | Causa demonstrada | Correção e regressão |
+| --- | --- | --- |
+| AMIR / SimplifyCFG | caminhada de Goto sem limite entra em ciclo; regressão excedeu timeout de 3 s | limite pelo número de blocos, preservando a aresta original em ciclos; cobre self-loop, ciclo de dois blocos e prefixo |
+| AMIR / SimplifyCFG | sweep renumera blocos, mas omite `Suspend.resume`; a retomada é perdida | remapeia resume e preserva argumentos/parâmetros; match exaustivo força revisão ao adicionar terminadores |
+| Contratos / middle | validador fatia parâmetros antes de validar a faixa | pré-validação de todas as faixas emite ICEGEN002, inclusive para alvo posterior e faixa extrema |
+| Liveness | domínio vazio ainda percorre CFG; 1.100 blocos excediam guard de 1.000 visitas | solução vazia imediata para locals/temps vazios, preservando os guards do domínio não vazio |
+| CFG / RPO | DFS recursivo aborta com 16.384 blocos em thread de 128 KiB | frames iterativos preservam ordem DFS, ciclos e exclusão de blocos inalcançáveis |
+| Runtime Linux | polling sem timer pula epoll mesmo com sockets registrados | dispatch de readiness independente de timer; teste de wake e rearm one-shot |
+| Infra de testes | testes TCP retornavam sucesso sem exercitar sockets quando portas fixas estavam ocupadas | portas efêmeras com falha explícita de setup |
+| Infra CLI | suíte falhou ao publicar `product_gold` em diretório ocupado; helpers reutilizavam diretórios nomeados apenas por relógio (ou PID + relógio) | dez helpers passam a reserva atômica com PID + sequência e retry de colisão; regressão exercita 32 criações paralelas; SL_T.5 passa após a correção |
+| Infra incremental | corpus de performance usava sintaxe inválida e substituía FileId em vez de editar o input | corpus Arandu válido de 50 módulos, parsing/typeck obrigatórios, `set_text`, zero execução em cache e cutoff comprovado por contagem de queries |
+| Runtime / tarefas | cancelamento podia liberar o blob durante join; a guarda proposta também impedia aposentar slots concluídos | estados Pending/Running/Completed transferem ownership ao join; cancel em execução solicita aposentadoria; canais substituem sleep e testes verificam reutilização do slot |
+| Parser / IDE | recuperação pulava tokens sem atualizar a supressão; falha de parse podia deixar Problems vazio | contar avanço de recuperação e publicar todos os erros por accumulator privado da query parse, sem repetir o lowering CST→AST |
+| LSP | panics capturados não tinham contexto no log e URIs inválidas recebiam uma identidade fictícia | logging compartilhado em stderr, sem clone do payload; símbolos sem URI válida não são publicados; regressão stdio verifica respostas e revisão final |
+| C / Cranelift | casos manuais podiam concordar no mesmo resultado incorreto | corpus determinístico gera 64 funções com aritmética, branches e chamadas; C e Cranelift precisam coincidir com um oráculo independente |
+| Runtime de strings | helpers `ToStr` e concatenação alocam buffers sem drop glue no fat `str` | ASan/LSan encontrou quatro leaks e 20 bytes no caso reduzido; correção depende do contrato de ownership BC.1a, sem `free` local inseguro |
+
+A falha local anterior de `run_tcp_async_wait_wake` foi isolada: criar um
+socket na sandbox retorna `Operation not permitted`; o mesmo teste passa
+fora dela. Essa evidência não justifica uma alteração semântica no TCP.
+
+A campanha diferencial C/Cranelift adicionou um corpus reproduzível de 64
+funções. Os operandos vêm de um PRNG com seed fixa e limites que evitam overflow
+e divisão por zero; o teste calcula o valor esperado em Rust e exige o mesmo
+retorno nos dois backends. Isso cobre soma, subtração, multiplicação, divisão,
+comparações, branches e chamadas em uma unidade compilada, sem dependência nova.
+
+Com `ARANDU_C_SANITIZERS=1`, os 30 casos sem strings passaram e quatro casos com
+`ToStr`/interpolação falharam somente no LeakSanitizer. O caso reduzido aloca
+20 bytes em quatro buffers: duas conversões e duas concatenações. O código
+declara explicitamente “process-lifetime leak”, mas o contrato público diz que
+o chamador possui o buffer sem representar esse ownership na AMIR. Inserir
+`free` no helper seria incorreto porque o fat `str` ainda pode escapar ou ser
+usado por uma concatenação. O fechamento exige distinguir views estáticas de
+buffers owned e elaborar seu drop nos dois backends; permanece em BC.1a.
+
+Foram removidas cópias redundantes no DCE (listas de IDs já representadas por
+faixas densas) e no GVN (cópias dos statements, listas intermediárias de IDs
+e uma tabela de definição escrita mas nunca lida). A análise empresta dados;
+a mutação continua posterior à coleta de decisões. Não se declara ganho de
+latência de compilação a partir dessa remoção. As cópias necessárias para
+materializar resultados emprestados das queries de descoberta foram mantidas.
+
+O type checker passou a emprestar `ExprKind` pelo `&AstPool` já existente,
+sem alterar assinaturas nem copiar o nó. `module_signatures` copia somente
+as tabelas mutáveis que consome, sem clonar a documentação descartada. A seed
+de `resolve` ainda exige cópia porque o resolver a modifica: o comentário
+enganoso de `Arc::unwrap_or_clone` foi removido, sem eliminar o sharing Salsa.
+Hashes de diagnósticos e enums usam códigos/discriminantes explícitos,
+preservando determinismo e evitando formatação Debug temporária.
+
+### Revisão das propostas antes dos commits
+
+Foram rejeitadas substituições de abort por sucesso/zero para referências
+geracionais e blobs inválidos: zero pode ser payload válido e esconder
+violação do contrato unsafe. Também foi rejeitado um limite arbitrário de
+leitura de string: sem comprimento válido ele não protege o ponteiro e pode
+truncar entradas válidas. Os contratos anteriores dessas ABIs foram preservados.
+
+A proposta de canal de resultados LSP limitado foi retirada: bloquear send
+enquanto o worker ainda detém snapshot pode impedir a escrita Salsa; usar
+try_send descartando rejeições/cancelamentos perde respostas de requests.
+A fila de jobs continua limitada/coalescida. O canal de resultados permanece
+sem limite até existir desenho que descarte snapshots antes da publicação,
+preserve todas as respostas de requests e tenha prova de saturação/shutdown.
+O teste stdio intercalado é evidência de respostas/revisões, não de saturação.
+
+O corpus corrigido também expõe custo real: em uma execução Linux/dev,
+50 módulos válidos levaram aproximadamente 5,46 s a frio, 37 µs em cache e
+2,87 s para validar importadores após editar a dependência. Nenhum corpo de
+importador foi rechecado, mas a latência de validação ainda exige perfil.
+Esses tempos são observações de uma execução, não budgets nem comparação
+antes/depois: o corpus anterior era inválido.
+
+O probe `borrow_interface_workload_measurement` usa 64 funções válidas que
+retornam empréstimos. Em Linux/debug, uma execução isolada observou 72,22 ms
+a frio, 22,84 µs em cache e 43,16 ms após editar um literal sem deslocar spans;
+pico de RSS do processo: 16.716 KiB. Apenas um `item_body_typeck` executou;
+`lower_amir` e `borrow_interfaces` executaram uma vez cada. O summary manteve
+seu conteúdo. Logo, existe cutoff; o custo restante está no cálculo do resumo.
+Um probe anterior que inseria texto e deslocava spans reexecutou 64 corpos,
+mostrando que as duas classes de edição precisam ser medidas separadamente.
+Não se mediram alocações completas nem perfil release nesta rodada, portanto
+esses números não autorizam reestruturar o pipeline por uma promessa de ganho.
+
+O RPO iterativo elimina dependência da profundidade do CFG na pilha nativa,
+ao custo de um vetor auxiliar de frames proporcional à profundidade visitada.
+No microbenchmark reproduzível `rpo_cfg_workload_measurement`, em Linux/dev,
+medianas de sete amostras de 2.000 travessias de 256 blocos foram 29,52 →
+48,96 ms (cadeia) e 34,98 → 66,90 ms (ramificações). É uma correção de
+robustez com custo observado, não ganho de velocidade. Esses números sem
+otimização não estabelecem impacto no compilador release.
+
+### Limites desta evidência
+
+Validação local Linux desta rodada: `cargo fmt --all -- --check`,
+`cargo check --workspace --locked`, Clippy com todos os targets/features e
+`-D warnings`, `cargo test --workspace --locked` (1.609 passaram, zero falhas,
+seis ignorados), `check-diag-docs` (88 códigos) e rustdoc com `-D warnings`,
+executados nessa ordem. Também passaram `check-architecture`,
+`check-line-endings` e `check-diag-determinism.sh arandu_typeck 8`.
+A suíte inclui `architecture_invariants`, `salsa_imports`, `item_body_cutoff`,
+`ide_diag_delta`, `block_delta` e `run_tcp_async_wait_wake`.
+Os probes RPO e borrow ignorados foram executados separadamente. Miri não
+foi executado: a toolchain instalada não inclui esse componente. Os casos condicionados
+a Windows/macOS continuam dependendo de execução nativa; esta validação
+não promove esses alvos nem cobre os demais probes ignorados.
+
+A revisão também inspecionou fronteiras CST/AST/query, layout dos backends,
+fila de workers LSP e workflows. Isso não equivale à leitura exaustiva de cada
+linha nem prova ausência de bugs. Merges de CFG
+reconstroem a tabela inteira; O2 continua experimental. Paridade de registro
+de sockets em macOS/Windows exige backend próprio e testes nativos. A fila de
+resultados LSP merece análise de pressão separada da fila limitada de jobs.
+Esses pontos não foram apresentados como regressões reproduzidas nesta rodada.
+
+As extrações CLI/LSP/runner já integradas estão descritas abaixo como estado
+implementado. A fila de estabilização permanece somente no roadmap mestre.
 
 ## Visão Geral e Contexto
 
@@ -37,19 +163,17 @@ explícita: somente o sink de self-profile grava o arquivo solicitado pela CLI.
 
 ### Tamanho e coesão
 
-Os maiores arquivos de produção observados foram `arandu_cli/src/main.rs`
-(~2,1 mil linhas), `arandu_lsp/src/ide.rs` (~1,8 mil),
-`arandu_cli/src/test_runner.rs` (~1,55 mil após a extração), o JIT Cranelift (~1,6 mil), cache da
-CLI (~1,4 mil) e manifest/query (~1,3 mil). Tamanho isolado não é defeito:
-emitters, pretty-printers e tabelas de diagnóstico podem ser longos e coesos.
+O retrato inicial dos arquivos monolíticos ficou desatualizado após as
+extrações. No baseline desta rodada, `arandu_cli/src/main.rs` tem 23 linhas
+e delega para `commands::run` e `pipeline::finish`. Parsing/despacho de
+lifecycle vive em `commands/project.rs`; implementação em `project/`.
 
-Os pontos de separação confirmados são por responsabilidade, não por quota de
-linhas. `main.rs` mistura parsing de argumentos, pipeline e comandos de
-projeto; `test_runner.rs` ainda mistura coordenação de processos, protocolo,
-baseline e reporters JSON/humano, enquanto estatística e JUnit agora vivem em
-submódulos puros; `ide.rs` agrega várias capacidades LSP. A
-próxima alteração funcional em cada superfície deve extrair o respectivo
-domínio com testes inalterados, sem uma reescrita transversal nesta auditoria.
+O runner usa `test_runner/` com `process`, `ipc`, `benchmark`, `baseline`,
+`reporters`, `statistics` e `types`; o protocolo compartilhado continua em
+`arandu_codegen`. O LSP usa `ide/` por capacidade, com `types` e
+`presentation` compartilhados. Essas extrações estão implementadas, não são
+pendências para a próxima mudança funcional. Novas separações devem resolver
+acoplamento demonstrado; tamanho isolado não justifica outra refatoração.
 
 ### Heap, clones e strings
 
@@ -75,32 +199,89 @@ materializado em `.gitattributes`, `.editorconfig`, xtask e CI.
 
 ## PONTOS DE MELHORIA (O que não está no roadmap)
 
-- Extrair parsing/despacho de project lifecycle de `arandu_cli/src/main.rs`
-  quando a superfície receber a próxima mudança.
-- Continuar separando processo/IPC, benchmark/baseline e reporters JSON/humano
-  de `arandu_cli/src/test_runner.rs`; estatística e JUnit já foram extraídos e
-  o protocolo permanece em `arandu_codegen`.
-- Separar capacidades de apresentação em `arandu_lsp/src/ide.rs` por DTO
-  compartilhado, sem duplicar type presentation ou criar novas queries.
-- Renomear ou extrair futuramente a library `arandu_package`, hoje publicada
-  pelo package Cargo `arandu_cli`, para que dependências do LSP não pareçam uma
-  dependência do binário completo.
-- Tornar o guardrail arquitetural menos lexical no futuro. O check atual é
-  deliberadamente simples e pode evoluir para inspeção do grafo Cargo/AST.
-- Medir parsing, edição incremental, typeck por item, build noop, LSP latency e
-  compilação de projetos grandes antes de qualquer campanha de otimização.
+### Decisões de estabilização rc.5
+
+| Tema | Decisão e critério |
+| --- | --- |
+| Modularização CLI/runner/LSP | Preservar as extrações existentes e seus testes; remover da lista de pendências o trabalho já implementado. |
+| Cobertura macOS | Adicionar `macos-portability` com `cargo test --workspace --locked` nativo, selecionado pelo mesmo escopo de produto que Linux/Windows e exigido pelo S0. Uma execução verde ainda precisa ser obtida no PR. |
+| Contrato do gate | Falha, cancelamento ou skip inesperado do macOS bloqueiam S0; alteração sem código aceita somente skip intencional. SDK empacotado permanece uma evidência separada. |
+| Nome `arandu_package` | Manter o alias de library nesta candidata. Extrair um package Cargo só se houver benefício demonstrado de dependências/build ou fronteira funcional; mudança cosmética não estabiliza execução. |
+| Guardrail arquitetural | Preservar a checagem atual. Evolução para grafo Cargo/AST exige casos concretos de falso positivo/negativo e regressões, sem remover a proteção existente. |
+| Heap e latência | Usar corpus válido e preservar cutoff. Alteração estrutural exige medição antes/depois de tempo, recomputações, RSS e alocações; o microbenchmark debug do RPO não demonstra custo release. |
+
+O ganho desta decisão é cobertura obrigatória de uma plataforma anteriormente
+representada principalmente pelo SDK. O custo é um job macOS por mudança de
+produto, executado em paralelo. Não há promessa de paridade do reactor de
+sockets: testes devem verificar o contrato suportado e a rejeição explícita
+das operações ainda indisponíveis.
 
 ## Futuro e Próximos Passos
 
-1. Fechar o soak do harness SL_T e manter sua matriz Gold.
-2. Definir um corpus de performance estável antes da primeira campanha de
-   heap/latência; capturar tempo, recomputação Salsa, pico de RSS e alocações.
-3. Fazer as extrações modulares acima junto da próxima mudança do domínio,
-   limitando cada PR a uma responsabilidade e preservando testes Gold.
-4. Manter o master roadmap como única fila e consolidar todo plano temporário
-   assim que a campanha correspondente terminar.
+A ordem e os critérios de fechamento pertencem à
+[fila do roadmap mestre](arandu-compiler-roadmap-v0.1.md#fila-de-execução).
+Soak do SL_T, perfil do corpus representativo e resultados nativos permanecem
+evidências necessárias; esta seção não mantém outra fila de implementação.
 
 ### Validação de mercado
+
+O alvo `fuzz_module_graph` amplia o oracle incremental para remoção, recriação,
+renomeação, imports ausentes, assinaturas e ciclos de três módulos. A suíte
+limitada executa 100 pares com restauração e 32 sequências de 24 operações:
+1.268 edições. O writer atualiza `DirectoryListing`; a DB fria recebe apenas o
+estado final de cada passo. A comparação normaliza identidades de arquivos por
+caminho, preservando spans, ordem, mensagens, labels e replacements. O sentinel
+sem fonte usado pela recuperação de ciclos permanece distinto dos arquivos.
+
+A sequência reduzida `03 08` encontrou uma função ausente na AST incremental.
+Adicionar um import e alterar o corpo dentro do intervalo do item antigo
+produzia um único nó CST contendo dois itens. O teste posterior de quantidade
+de nós não detectava isso, pois a substituição já forçava um único nó. O reparse
+agora verifica a quantidade de itens nos tokens novos, equilíbrio de chaves e
+erros lexicais antes da substituição; mudanças de fronteira usam parse completo.
+Edições locais válidas mantêm o reuso dos irmãos, coberto pelo teste de identidade
+green existente. A regressão compara CST e tokens com parse frio, incluindo
+import novo, chave removida e comentário não terminado. A seed reduzida é
+reexecutada pelo runner isolado, além da matriz de fuzzing existente.
+
+O alvo `fuzz_incremental` complementa fuzzing de crashes com um oracle
+diferencial: após cada edição, compara o conteúdo completo dos diagnósticos
+IDE de dois módulos em uma DB aquecida e uma DB nova. A ordem de registro
+permanece igual para preservar a correspondência dos IDs; a ordem de demanda
+alterna. O gerador cobre corpo e assinatura exportada, renomeação de símbolo,
+recuperação sintática, símbolo ausente, Unicode, função irmã e restauração.
+Cada entrada executa no máximo 24 edições, sem snapshots retidos na mutação.
+
+A suíte comum executa todos os 100 pares de operações seguidos de restauração
+e uma sequência de 15 edições: 415 edições e 830 comparações. O mesmo código
+atende libFuzzer e o replay isolado de `check-fuzz-regressions`. A seed inicial
+é preventiva, não representa um bug encontrado. A campanha longa usa o
+workflow de fuzzing existente; uma falha deve ser reproduzida e reduzida antes
+de virar regressão e correção da causa raiz.
+
+Esse oracle encontra desacordo incremental, não prova que ambas as análises
+estão semanticamente corretas. Ainda não cobre alteração do grafo de arquivos,
+execução dos backends nem todas as capacidades LSP. A fila de expansão segue
+no roadmap único. A abordagem adapta a comparação independente do
+[Csmith](https://github.com/csmith-project/csmith) e a redução de casos do
+[guia de fuzzing do rustc](https://rustc-dev-guide.rust-lang.org/fuzzing.html).
+
+Na validação Linux desta campanha, a primeira execução do workspace falhou em
+`stdio_open_document_stays_interactive_during_discovery`: completion recebeu
+ContentModified (-32801). A repetição completa e 30 execuções isoladas passaram.
+A investigação seguinte reproduziu a ordenação incorreta com canais: enquanto
+o worker aguarda liberação, a descoberta já está pronta e o seletor antigo a
+consome. O registro pode avançar a revisão antes da entrega do resultado.
+
+O dispatcher agora mantém até 64 identidades de requests admitidos até a
+entrega terminal. Nesse intervalo, deixa a descoberta no canal limitado
+existente e mantém protocolo, resultados e debounce ativos. Reloads de pacote
+também aguardam, em um único slot que conserva o plano concluído mais recente.
+Sucesso, erro, panic capturado e cancelamento liberam a barreira; rejeições por
+saturação não entram nela. O teste de ordenação falhou antes da correção e
+passou depois, sem sleeps. A checagem de revisão permanece: uma edição real
+ainda causa ContentModified para resultado obsoleto. Não houve relaxamento do
+teste stdio. O marco correspondente é DX.6a do roadmap.
 
 O modelo segue o red-green incremental do rustc: pureza, fingerprints estáveis
 e projeções pequenas evitam propagação falsa. O rust-analyzer confirma a

@@ -32,7 +32,16 @@ pub fn optimize_amir_checked_with_level(
     {
         return Err(issue);
     }
-    optimize_amir_with_level(program, level)?;
+    if level != OptLevel::O0 {
+        crate::inlining::inline_leaf_functions(program);
+        if let Some(issue) = crate::amir_validate::validate_amir_program(program, symbols, interner)
+            .into_iter()
+            .next()
+        {
+            return Err(issue);
+        }
+    }
+    PassManager::for_level(level).run_program_checked(program, symbols, interner)?;
     if let Some(issue) = crate::amir_validate::validate_amir_program(program, symbols, interner)
         .into_iter()
         .next()
@@ -57,6 +66,9 @@ pub fn optimize_amir_with_level(
     program: &mut AmirProgram,
     level: OptLevel,
 ) -> Result<(), Diagnostic> {
+    if level != OptLevel::O0 {
+        crate::inlining::inline_leaf_functions(program);
+    }
     PassManager::for_level(level).run_program(program)?;
     Ok(())
 }

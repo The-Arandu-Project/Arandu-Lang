@@ -747,3 +747,90 @@ fn test_target_32bit_mixed_alignment_evidence() {
     assert_eq!(layout_i686.align, 4);
     assert_eq!(layout_i686.field_offsets, vec![0, 4, 12]);
 }
+
+#[test]
+fn test_enum_layouts_32bit_and_64bit() {
+    let interner = TypeInterner::new();
+    let enum_sym = SymbolId::new(0, 200);
+
+    let i32_tid = interner.intern(ArType::Primitive(Primitive::I32));
+    let i64_tid = interner.intern(ArType::Primitive(Primitive::I64));
+
+    // Enum with 2 variants:
+    // Variant 0: None (unit)
+    // Variant 1: Some(i32)
+    let variants_i32 = vec![
+        EnumPayloadShape { payload_ty: None },
+        EnumPayloadShape {
+            payload_ty: Some(i32_tid),
+        },
+    ];
+
+    let mut enum_map = FxHashMap::<SymbolId, Vec<EnumPayloadShape>>::default();
+    enum_map.insert(enum_sym, variants_i32);
+
+    let provider = StructMockProvider {
+        fields: FxHashMap::default(),
+        generic_params: FxHashMap::default(),
+        enum_variants: enum_map,
+    };
+
+    let enum_ty = ArType::Named(enum_sym, IndexRange::empty());
+    let enum_id = interner.intern(enum_ty);
+
+    // 64-bit target: tag_size=8, payload i32 (size 4, align 4)
+    // max_align = max(4, 8) = 8.
+    // payload_end = checked_add(8, 4) = 12.
+    // align_up(12, 8) = 16.
+    let engine_64 = LayoutEngine::new(8);
+    let layout_64 = engine_64.layout_of(enum_id, &interner, &provider);
+    assert_eq!(layout_64.size, 16);
+    assert_eq!(layout_64.align, 8);
+    assert_eq!(layout_64.field_offsets, vec![0, 8]);
+
+    // 32-bit generic target: tag_size=4, payload i32 (size 4, align 4)
+    // max_align = max(4, 4) = 4.
+    // payload_end = checked_add(4, 4) = 8.
+    // align_up(8, 4) = 8.
+    let engine_32 = LayoutEngine::new(4);
+    let layout_32 = engine_32.layout_of(enum_id, &interner, &provider);
+    assert_eq!(layout_32.size, 8);
+    assert_eq!(layout_32.align, 4);
+    assert_eq!(layout_32.field_offsets, vec![0, 4]);
+
+    // Now test with i64 payload:
+    let enum_sym_i64 = SymbolId::new(0, 201);
+    let variants_i64 = vec![
+        EnumPayloadShape { payload_ty: None },
+        EnumPayloadShape {
+            payload_ty: Some(i64_tid),
+        },
+    ];
+    let mut enum_map_i64 = FxHashMap::<SymbolId, Vec<EnumPayloadShape>>::default();
+    enum_map_i64.insert(enum_sym_i64, variants_i64);
+    let provider_i64 = StructMockProvider {
+        fields: FxHashMap::default(),
+        generic_params: FxHashMap::default(),
+        enum_variants: enum_map_i64,
+    };
+    let enum_id_i64 = interner.intern(ArType::Named(enum_sym_i64, IndexRange::empty()));
+
+    // 32-bit i686 SysV target: tag_size=4, payload i64 (size 8, align 4 on i686!)
+    // max_align = max(4, 4) = 4.
+    // payload_end = checked_add(4, 8) = 12.
+    // align_up(12, 4) = 12.
+    let engine_i686 = LayoutEngine::from_data_layout(DataLayout::i686_sysv());
+    let layout_i686 = engine_i686.layout_of(enum_id_i64, &interner, &provider_i64);
+    assert_eq!(layout_i686.size, 12);
+    assert_eq!(layout_i686.align, 4);
+    assert_eq!(layout_i686.field_offsets, vec![0, 4]);
+
+    // 32-bit standard ILP32 (DataLayout::ptr_width(4)): i64 has natural align 8
+    // max_align = max(8, 4) = 8.
+    // payload_end = checked_add(4, 8) = 12.
+    // align_up(12, 8) = 16.
+    let layout_ilp32 = engine_32.layout_of(enum_id_i64, &interner, &provider_i64);
+    assert_eq!(layout_ilp32.size, 16);
+    assert_eq!(layout_ilp32.align, 8);
+    assert_eq!(layout_ilp32.field_offsets, vec![0, 4]);
+}

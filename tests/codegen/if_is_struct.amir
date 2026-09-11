@@ -19,7 +19,7 @@ Func testStructPattern(user: User) -> int
     s0 = _1
     _2 = s0
     _3 = _2.0
-    s2 = move _3
+    s2 = _3
     _4 = and true, true
     _5 = _2.1
     _6 = eq _5, 25

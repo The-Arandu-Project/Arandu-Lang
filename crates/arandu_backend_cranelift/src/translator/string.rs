@@ -29,7 +29,22 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
             }
             AmirRvalue::Load(place) => {
                 if place.projections.is_empty() {
-                    if let Some(&(var_ptr, var_len)) = self.str_local_map.get(&place.local) {
+                    if let Some(&slot) = self.local_stack_slots.get(&place.local) {
+                        let addr = self.builder.ins().stack_addr(self.ptr_type, slot, 0);
+                        let loaded_ptr = self.builder.ins().load(
+                            self.ptr_type,
+                            cranelift_codegen::ir::MemFlagsData::new(),
+                            addr,
+                            0,
+                        );
+                        let loaded_len = self.builder.ins().load(
+                            self.ptr_type,
+                            cranelift_codegen::ir::MemFlagsData::new(),
+                            addr,
+                            self.ptr_type.bytes() as i32,
+                        );
+                        (loaded_ptr, loaded_len)
+                    } else if let Some(&(var_ptr, var_len)) = self.str_local_map.get(&place.local) {
                         (self.builder.use_var(var_ptr), self.builder.use_var(var_len))
                     } else {
                         self.record_ice(

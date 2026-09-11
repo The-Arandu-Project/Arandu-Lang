@@ -25,7 +25,7 @@ pub(crate) fn lower_pattern(
     let pat = pool.pattern(pattern);
     match pat {
         Pattern::Wildcard { span } => Ok(HirPattern::Wildcard { span: *span }),
-        Pattern::Bind { span, name } => {
+        Pattern::Bind { span, name, .. } => {
             let symbol = require_def_symbol(&type_check.resolved, *span)?;
             Ok(HirPattern::Bind {
                 span: *span,

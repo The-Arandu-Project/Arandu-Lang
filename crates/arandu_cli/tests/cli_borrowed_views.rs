@@ -193,6 +193,154 @@ func main(): int {
 }
 
 #[test]
+fn method_autoref_rejects_an_immutable_value_receiver() {
+    let output = check(
+        r#"module tests.borrowed_views.immutable_method_receiver
+import std.alloc.string as strings
+
+func main(): int {
+    let text = strings.new()
+    text.pushScalar('a')
+    return 0
+}
+"#,
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "immutable receiver was mutably borrowed"
+    );
+    assert!(
+        stderr.contains("T026") && stderr.contains("cannot mutably borrow"),
+        "expected exclusive receiver diagnostic, got: {stderr}"
+    );
+}
+
+#[test]
+fn generic_method_autoref_rejects_an_immutable_value_receiver() {
+    let output = check(
+        r#"module tests.borrowed_views.immutable_generic_method_receiver
+import std.alloc.vec as vec
+
+func main(): int {
+    let values = vec.new<int>()
+    values.push<int>(1)
+    return 0
+}
+"#,
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "immutable generic receiver was mutably borrowed"
+    );
+    assert!(
+        stderr.contains("T026") && stderr.contains("cannot mutably borrow"),
+        "expected exclusive receiver diagnostic, got: {stderr}"
+    );
+}
+
+#[test]
+fn method_autoref_accepts_a_mutable_value_receiver() {
+    let output = check(
+        r#"module tests.borrowed_views.mutable_method_receiver
+import std.alloc.string as strings
+
+func main(): int {
+    let mut text = strings.new()
+    text.pushScalar('a')
+    return 0
+}
+"#,
+    );
+    assert!(
+        output.status.success(),
+        "mutable receiver was rejected: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn method_receiver_accepts_an_immutable_exclusive_reference_binding() {
+    let output = check(
+        r#"module tests.borrowed_views.exclusive_reference_receiver
+import std.alloc.string as strings
+
+func main(): int {
+    let mut text = strings.new()
+    let alias = &mut text
+    alias.pushScalar('a')
+    return 0
+}
+"#,
+    );
+    assert!(
+        output.status.success(),
+        "exclusive reference receiver was rejected: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn owned_path_join_runs_and_destroys_its_buffer() {
+    let output = invoke(
+        "run",
+        r#"module tests.borrowed_views.owned_path_join
+import std.path as path
+import std.alloc.string as strings
+
+func main(): int {
+    let joined: strings.String = path.joinOwned("/tmp", "owned")
+    let s: str = *joined.asStr()
+    if path.fileName(s) != "owned" {
+        return 1
+    }
+    joined.destroy()
+    return 0
+}
+"#,
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "owned path join failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn directory_name_view_blocks_listing_destruction() {
+    let output = check(
+        r#"module tests.borrowed_views.directory
+import io
+import std.fs as fs
+
+@Effects(FileRead, Foreign)
+func main(): int {
+    match fs.readDir(".") {
+        Ok(mut listing) => {
+            let name = listing.nameStr(0)
+            listing.destroy()
+            io.println(*name)
+        }
+        Err(_) => {}
+    }
+    return 0
+}
+"#,
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "dangling directory name view passed"
+    );
+    assert!(
+        stderr.contains("O002") || stderr.contains("O003"),
+        "expected ownership conflict, got: {stderr}"
+    );
+}
+
+#[test]
 fn jit_appends_utf8_and_reads_string_view() {
     let output = invoke(
         "run",

@@ -1,0 +1,27 @@
+import io
+
+struct Resource { id: int, first: int, second: int }
+
+@Destructor
+func Resource.close(own self): void { io.println(self.id) }
+
+struct Envelope<T> { value: T }
+
+func produce(amount: int): Envelope<Resource> {
+    return Envelope<Resource> {
+        value: Resource { id: amount, first: 21, second: 22 },
+    }
+}
+
+func consume(result: own Envelope<Resource>): void {
+    if result.value.id != 20 { io.println(91) }
+    if result.value.first != 21 { io.println(92) }
+    if result.value.second != 22 { io.println(93) }
+    io.println(30)
+}
+
+func main(): int {
+    let result = produce(20)
+    consume(result)
+    return 0
+}

@@ -870,15 +870,7 @@ func main(): int {
 }
 
 fn tempfile_dir(prefix: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "{prefix}_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    fs::create_dir_all(&dir).unwrap();
-    dir
+    common::temp_dir(prefix).expect("reserve fresh temporary directory")
 }
 
 fn files_named(root: &std::path::Path, name: &str) -> Vec<std::path::PathBuf> {

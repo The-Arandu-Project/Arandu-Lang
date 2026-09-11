@@ -115,11 +115,17 @@ impl<'a, 'b, M: Module> FunctionTranslator<'a, 'b, M> {
     /// Scalars that normally live in registers need a stack home when
     /// address-taken (`is_memory` from F2.0 `&`/`&mut` lower).
     ///
-    /// Pointer-valued / aggregate locals already hold an address in SSA.
+    /// Pointer/reference locals are scalar **cells**: when address-taken for an
+    /// out-param or `&x` the borrowed address is the cell itself, so `Ptr`,
+    /// `Ref` and `RefMut` locals also need a home (`is_memory` is only set when
+    /// a real cell address is wanted, never for BC.4a `Deref` borrows).
+    /// Aggregate locals keep their object address in SSA (identity borrow), so
+    /// they need no cell. `Str` has its own dedicated two-slot home.
     pub(crate) fn needs_scalar_stack_home(ty: &ArType) -> bool {
         match ty {
             ArType::Primitive(Primitive::Str) => false,
             ArType::Primitive(_) | ArType::IntLiteral | ArType::FloatLiteral => true,
+            ArType::Ptr(_) => true,
             _ => false,
         }
     }
@@ -303,6 +309,19 @@ impl<'a, 'b, M: Module> FunctionTranslator<'a, 'b, M> {
                 let var_ptr = self.builder.declare_var(self.ptr_type);
                 let var_len = self.builder.declare_var(self.ptr_type);
                 self.str_local_map.insert(local.id, (var_ptr, var_len));
+                if local.is_memory {
+                    let size = 2 * self.ptr_type.bytes();
+                    let align_shift = self.ptr_type.bytes().trailing_zeros() as u8;
+                    let slot = self.builder.create_sized_stack_slot(
+                        cranelift_codegen::ir::StackSlotData {
+                            kind: cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                            size,
+                            align_shift,
+                            key: None,
+                        },
+                    );
+                    self.local_stack_slots.insert(local.id, slot);
+                }
             } else if let ClifType::Concrete(clif_ty) = clif_type(&lty, self.ptr_type) {
                 let var = self.builder.declare_var(clif_ty);
                 self.local_map.insert(local.id, var);
@@ -375,6 +394,21 @@ impl<'a, 'b, M: Module> AmirVisitor for FunctionTranslator<'a, 'b, M> {
                     let zero_len = self.builder.ins().iconst(self.ptr_type, 0);
                     self.builder.def_var(var_ptr, zero_ptr);
                     self.builder.def_var(var_len, zero_len);
+                    if let Some(&slot) = self.local_stack_slots.get(&local.id) {
+                        let addr = self.builder.ins().stack_addr(self.ptr_type, slot, 0);
+                        self.builder.ins().store(
+                            cranelift_codegen::ir::MemFlagsData::new(),
+                            zero_ptr,
+                            addr,
+                            0,
+                        );
+                        self.builder.ins().store(
+                            cranelift_codegen::ir::MemFlagsData::new(),
+                            zero_len,
+                            addr,
+                            self.ptr_type.bytes() as i32,
+                        );
+                    }
                 } else if let Some(&var) = self.local_map.get(&local.id) {
                     let Some(clif_ty) = clif_type(&lty, self.ptr_type).concrete() else {
                         continue;

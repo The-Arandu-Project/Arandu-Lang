@@ -42,7 +42,44 @@ struct ReactorSlot {
 static REACTORS: Mutex<Vec<Option<ReactorSlot>>> = Mutex::new(Vec::new());
 
 fn lock_reactors() -> std::sync::MutexGuard<'static, Vec<Option<ReactorSlot>>> {
-    REACTORS.lock().unwrap_or_else(|e| e.into_inner())
+    lock_reactor_table(&REACTORS)
+}
+
+fn lock_reactor_table(
+    table: &Mutex<Vec<Option<ReactorSlot>>>,
+) -> std::sync::MutexGuard<'_, Vec<Option<ReactorSlot>>> {
+    match table.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            // A panic while holding the registry lock means the interrupted
+            // mutation cannot be proven complete. Invalidate every opaque id
+            // and release owned OS resources instead of exposing partial state.
+            let mut guard = poisoned.into_inner();
+            for slot in guard.drain(..).flatten() {
+                close_reactor_slot(slot);
+            }
+            table.clear_poison();
+            guard
+        }
+    }
+}
+
+fn close_reactor_slot(slot: ReactorSlot) {
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(timer_fd) = slot.timer_fd {
+            unsafe {
+                let _ = libc::close(timer_fd);
+            }
+        }
+        unsafe {
+            let _ = libc::close(slot.epoll_fd);
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = slot;
+    }
 }
 
 fn probe_backend() -> i64 {
@@ -141,21 +178,7 @@ pub unsafe extern "C" fn ar_rt_reactor_destroy(id: ReactorId) {
     let Some(slot) = guard.get_mut(id as usize).and_then(|s| s.take()) else {
         return;
     };
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(tfd) = slot.timer_fd {
-            unsafe {
-                let _ = libc::close(tfd);
-            }
-        }
-        unsafe {
-            let _ = libc::close(slot.epoll_fd);
-        }
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = slot;
-    }
+    close_reactor_slot(slot);
 }
 
 /// Sleeps for `ms` milliseconds using the reactor.
@@ -291,15 +314,22 @@ pub unsafe extern "C" fn ar_rt_reactor_poll_ms(id: ReactorId, timeout_ms: i64) -
 
     #[cfg(target_os = "linux")]
     {
-        let (epfd, tfd_opt, deadline) = {
+        let (epfd, tfd_opt, deadline, has_sockets) = {
             let guard = lock_reactors();
             let Some(slot) = guard.get(id as usize).and_then(|s| s.as_ref()) else {
                 return -1;
             };
-            (slot.epoll_fd, slot.timer_fd, slot.deadline)
+            (
+                slot.epoll_fd,
+                slot.timer_fd,
+                slot.deadline,
+                !slot.sockets.is_empty(),
+            )
         };
 
-        if tfd_opt.is_none() {
+        // Socket readiness is independent of timer registration. Only use
+        // the sleep-only fallback when epoll has no registered I/O sources.
+        if tfd_opt.is_none() && !has_sockets {
             if let Some(dl) = deadline {
                 let now = Instant::now();
                 if now >= dl {
@@ -508,6 +538,86 @@ pub unsafe extern "C" fn ar_rt_reactor_register_socket(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn poisoned_registry_is_quarantined_before_reuse() {
+        let table = std::sync::Arc::new(Mutex::new(vec![None]));
+        let poison_target = std::sync::Arc::clone(&table);
+        let _ = std::thread::spawn(move || {
+            let mut guard = poison_target.lock().expect("fresh registry lock");
+            guard.push(None);
+            panic!("interrupt registry mutation");
+        })
+        .join();
+
+        assert!(table.is_poisoned());
+        let guard = lock_reactor_table(&table);
+        assert!(guard.is_empty(), "partial registry state must be discarded");
+        drop(guard);
+        assert!(!table.is_poisoned(), "recovered registry must be reusable");
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn portable_reactor_explicitly_rejects_socket_registration() {
+        let (listener, client, server) = crate::socket_runtime::tests::connected_pair();
+        // SAFETY: this test owns the socket/reactor/waker handles and destroys
+        // them only after all operations using them have completed.
+        unsafe {
+            let reactor = ar_rt_reactor_create();
+            let waker = crate::waker_runtime::ar_rt_waker_create();
+            assert!(reactor >= 0);
+            assert_eq!(ar_rt_reactor_backend(), BACKEND_PORTABLE);
+            assert_eq!(ar_rt_reactor_register_socket(reactor, server, 1, waker), -1);
+            ar_rt_reactor_destroy(reactor);
+            crate::waker_runtime::ar_rt_waker_destroy(waker);
+            crate::socket_runtime::ar_rt_tcp_close(client);
+            crate::socket_runtime::ar_rt_tcp_close(server);
+            crate::socket_runtime::ar_rt_tcp_close(listener);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn socket_readiness_wakes_without_an_armed_timer_and_can_be_rearmed() {
+        use crate::socket_runtime::{
+            WAIT_READ, ar_rt_tcp_close, ar_rt_tcp_write, tests::connected_pair,
+        };
+        use crate::waker_runtime::{ar_rt_waker_create, ar_rt_waker_destroy, ar_rt_waker_wait};
+        let (listener, client, server) = connected_pair();
+        // SAFETY: all handles remain owned and live until cleanup; the byte
+        // passed to write is valid for its stated length for the entire call.
+        unsafe {
+            let reactor = ar_rt_reactor_create();
+            assert!(reactor >= 0);
+            let waker = ar_rt_waker_create();
+            assert_eq!(
+                ar_rt_reactor_register_socket(reactor, server, WAIT_READ, waker),
+                0
+            );
+            assert_eq!(ar_rt_tcp_write(client, b"x".as_ptr(), 1), 1);
+            assert!(ar_rt_reactor_poll_ms(reactor, 100) >= 0);
+            assert_eq!(
+                ar_rt_waker_wait(waker, 0),
+                1,
+                "readiness must not depend on a timer"
+            );
+            // EPOLLONESHOT suppresses another notification until rearmed.
+            assert!(ar_rt_reactor_poll_ms(reactor, 0) >= 0);
+            assert_eq!(ar_rt_waker_wait(waker, 0), 0);
+            assert_eq!(
+                ar_rt_reactor_register_socket(reactor, server, WAIT_READ, waker),
+                0
+            );
+            assert!(ar_rt_reactor_poll_ms(reactor, 100) >= 0);
+            assert_eq!(ar_rt_waker_wait(waker, 0), 1);
+            ar_rt_reactor_destroy(reactor);
+            ar_rt_waker_destroy(waker);
+            ar_rt_tcp_close(client);
+            ar_rt_tcp_close(server);
+            ar_rt_tcp_close(listener);
+        }
+    }
 
     #[test]
     fn create_sleep_destroy() {

@@ -21,7 +21,7 @@ pub fn check_pattern(checker: &mut TypeChecker<'_>, pattern: PatternId, value_ty
     };
     match pat {
         Pattern::Wildcard { .. } => {}
-        Pattern::Bind { span, name: _ } => {
+        Pattern::Bind { span, .. } => {
             let key = crate::NodeKey::from(*span);
             if let Some(symbol_id) = checker.resolved.definitions.get(&key) {
                 checker.ctx.bind(*symbol_id, value_ty);

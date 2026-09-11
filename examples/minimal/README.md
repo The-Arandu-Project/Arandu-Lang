@@ -42,6 +42,7 @@ arandu_cli run   <file>   # exit code documented in CLI tests
 | `m22_iface_param.aru` | 42 | interface method via type param |
 | `m23_match_result.aru` | 13 | bare Ok/Err on call scrutinee (no trailing-block swallow) |
 | `m24_expect_or_abort.aru` | 13 | `Result.expectOrAbort` after `import std.core.result` |
+| `m25_fs_env.aru` | 0 | std.fs readToString/readDir/fileExists + std.env.arg |
 
 ## Default template (installer)
 

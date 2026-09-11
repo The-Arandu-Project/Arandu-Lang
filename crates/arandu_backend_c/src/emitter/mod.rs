@@ -9,7 +9,7 @@ use std::fmt::Write;
 
 use arandu_middle::amir::{AmirFunc, AmirProgram};
 use arandu_middle::layout::{LayoutEngine, StructLayoutProvider};
-use arandu_middle::types::{ArType, TypeInterner, build_subst_ids, substitute_type};
+use arandu_middle::types::{ArType, TypeInterner};
 use arandu_middle::{DiagCode, Diagnostic, Span};
 use arandu_semantics::SymbolTable;
 
@@ -21,6 +21,20 @@ pub mod runtime;
 pub mod stmt;
 
 pub(super) fn sanitize_c_ident(name: &str) -> String {
+    match name {
+        "stdin" => return "ar_stdin".to_string(),
+        "stdout" => return "ar_stdout".to_string(),
+        "stderr" => return "ar_stderr".to_string(),
+        "write" => return "ar_write".to_string(),
+        "read" => return "ar_read".to_string(),
+        "close" => return "ar_close".to_string(),
+        "open" => return "ar_open".to_string(),
+        "remove" => return "ar_remove".to_string(),
+        "rename" => return "ar_rename".to_string(),
+        "abort" => return "ar_abort".to_string(),
+        "exit" => return "ar_exit".to_string(),
+        _ => {}
+    }
     let mut out = String::with_capacity(name.len() + 4);
     for c in name.chars() {
         if c.is_ascii_alphanumeric() {
@@ -99,28 +113,13 @@ impl<'a> CEmitter<'a> {
     /// field (`T*`) for `Vec<int>` produces a translation unit whose temporary
     /// declarations and field accesses disagree.
     pub(super) fn instantiated_field_ty(&self, named_ty: &ArType, field_name: &str) -> ArType {
-        let ArType::Named(struct_id, generic_args) = named_ty else {
-            return ArType::Error;
-        };
-        let Some(field_ty) = self
-            .provider
-            .get_struct_fields(*struct_id)
-            .and_then(|fields| fields.get(field_name))
-            .map(|f| f.ty)
-        else {
-            return ArType::Error;
-        };
-        let field_ty = self.interner.resolve(field_ty);
-        if generic_args.is_empty() {
-            return field_ty;
-        }
-        let generic_args_vec = self.interner.type_args(*generic_args);
-        let substitution = build_subst_ids(
-            self.symbols.type_params_of(*struct_id),
-            &generic_args_vec,
+        arandu_middle::layout::instantiated_field_type(
+            named_ty,
+            field_name,
             self.interner,
-        );
-        substitute_type(&field_ty, &substitution, self.interner)
+            self.provider,
+        )
+        .map_or(ArType::Error, |id| self.interner.resolve(id))
     }
 
     pub(super) fn record_codegen_ice(&mut self, func: &AmirFunc, message: impl Into<String>) {
@@ -191,6 +190,7 @@ impl<'a> CEmitter<'a> {
                 "ar_path_is_absolute"
                     | "ar_path_is_empty"
                     | "ar_path_join"
+                    | "ar_path_join_owned"
                     | "ar_path_file_name"
                     | "ar_vec_malloc"
                     | "ar_vec_buf_free"
@@ -203,6 +203,21 @@ impl<'a> CEmitter<'a> {
                     | "ar_str_find"
                     | "ar_str_split_last"
                     | "ar_string_push_str"
+                    | "exists"
+                    | "ar_fs_open"
+                    | "ar_fs_read"
+                    | "ar_fs_write"
+                    | "ar_fs_close"
+                    | "ar_fs_read_all"
+                    | "ar_fs_readdir"
+                    | "ar_env_args_len"
+                    | "ar_env_arg"
+                    | "ar_env_var_is_set"
+                    | "ar_rt_block_on_i64"
+                    | "ar_rt_spawn_i64"
+                    | "ar_rt_join_i64"
+                    | "ar_rt_cancel_i64"
+                    | "ar_rt_parallel_fold_run"
             ) {
                 continue;
             }

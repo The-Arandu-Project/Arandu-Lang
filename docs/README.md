@@ -27,6 +27,7 @@ dívidas e futuro são classificados, e o plano paralelo é removido.
 - [GenRef Gold](arandu-genref-gold-rfc-v0.1.md) — RFC aceita e implementada.
 - [Testes e benchmarks](arandu-testing-benchmark-harness-v0.1.md) — contrato
   consolidado; roadmaps SL_T.3–SL_T.6 removidos após implementação.
+- [Paralelismo estruturado](arandu-structured-parallelism-v0.1.md) — contrato de concorrência estruturada, worker pool, inlining AMIR e benchmarks.
 - [Nomes de anotações](arandu-attribute-naming-v0.1.md) — decisão PascalCase e migração.
 - [Contrato de ferramentas e scripts](tooling-scripts-contract.md) — dono e plataforma de cada automação.
 - [Auditoria de arquitetura e performance](arandu-architecture-audit-v0.1.md) — achados, guardrails e dívida classificada.
@@ -40,7 +41,7 @@ dívidas e futuro são classificados, e o plano paralelo é removido.
 | IR e execução | [AHIR](arandu-ahir-v0.1.md), [AMIR](arandu-amir-v0.1.md), [IR/SSA](arandu-ir-architecture-v0.1.md), [backends](arandu-backend-contract-v0.1.md) |
 | ABI e memória | [modelo semântico de memória](arandu-semantic-memory-model-v0.1.md), [ABI/layout](arandu-abi-layout-v0.1.md), [JIT/memória](arandu-jit-memory-v0.1.md), [stdlib](arandu-stdlib-architecture-v0.1.md) |
 | Incrementalidade e IDE | [Salsa/LSP](arandu-salsa-lsp-architecture-v0.1.md), [LSP/editor](arandu-lsp-capabilities-v0.1.md), [CLI/LSP](arandu-cli-lsp-contract-v0.1.md) |
-| Runtime e distribuição | [async runtime](arandu-async-runtime-design-v0.1.md), [instrumentação](arandu-compiler-instrumentation-v0.1.md), [distribuição](arandu-distribution-contract-v0.1.md) |
+| Runtime e distribuição | [async runtime](arandu-async-runtime-design-v0.1.md), [paralelismo estruturado](arandu-structured-parallelism-v0.1.md), [instrumentação](arandu-compiler-instrumentation-v0.1.md), [distribuição](arandu-distribution-contract-v0.1.md) |
 
 ## Diagnósticos e releases
 

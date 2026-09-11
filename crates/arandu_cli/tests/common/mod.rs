@@ -2,6 +2,28 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+/// Atomically reserve a fresh directory. Clock resolution is not an identity:
+/// parallel tests can observe the same timestamp on any platform.
+#[allow(dead_code)] // This module is shared by integration binaries with different helpers.
+pub fn temp_dir(prefix: &str) -> std::io::Result<PathBuf> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    for _ in 0..1024 {
+        let sequence = NEXT.fetch_add(1, Ordering::Relaxed);
+        let directory =
+            std::env::temp_dir().join(format!("{prefix}-{}-{sequence}", std::process::id()));
+        match fs::create_dir(&directory) {
+            Ok(()) => return Ok(directory),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "could not reserve a fresh temporary directory after 1024 attempts",
+    ))
+}
+
 pub fn cli_command() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_arandu_cli"));
     command.env("ARANDU_RUNTIME_LIB", runtime_library());

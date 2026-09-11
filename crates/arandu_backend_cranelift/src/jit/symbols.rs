@@ -174,6 +174,23 @@ pub(crate) fn declare_runtime_imports<M: Module>(
         .map_err(|err| codegen_ice(format!("failed to declare ar_rt_cancel_i64: {err:?}")))?;
     insert_sym(func_ids, "ar_rt_cancel_i64", cancel_id);
 
+    let mut par_fold_sig = Signature::new(default_call_conv);
+    par_fold_sig.params.push(AbiParam::new(I64));
+    par_fold_sig.params.push(AbiParam::new(ptr_type));
+    par_fold_sig.params.push(AbiParam::new(ptr_type));
+    par_fold_sig.params.push(AbiParam::new(ptr_type));
+    par_fold_sig.params.push(AbiParam::new(I64));
+    par_fold_sig.params.push(AbiParam::new(ptr_type));
+    par_fold_sig.returns.push(AbiParam::new(I32));
+    let par_fold_id = module
+        .declare_function("ar_rt_parallel_fold_run", Linkage::Import, &par_fold_sig)
+        .map_err(|err| {
+            codegen_ice(format!(
+                "failed to declare ar_rt_parallel_fold_run: {err:?}"
+            ))
+        })?;
+    insert_sym(func_ids, "ar_rt_parallel_fold_run", par_fold_id);
+
     let mut path_sig = Signature::new(default_call_conv);
     path_sig.params.push(AbiParam::new(ptr_type));
     path_sig.params.push(AbiParam::new(ptr_type));
@@ -206,6 +223,20 @@ pub(crate) fn declare_runtime_imports<M: Module>(
             .declare_function("ar_path_join", Linkage::Import, &join_sig)
             .map_err(|err| codegen_ice(format!("failed to declare ar_path_join: {err:?}")))?;
         insert_sym(func_ids, "ar_path_join", id);
+
+        let mut owned_join_sig = Signature::new(default_call_conv);
+        for _ in 0..2 {
+            owned_join_sig.params.push(AbiParam::new(ptr_type));
+            owned_join_sig.params.push(AbiParam::new(ptr_type));
+        }
+        for _ in 0..3 {
+            owned_join_sig.params.push(AbiParam::new(ptr_type));
+        }
+        owned_join_sig.returns.push(AbiParam::new(I8));
+        let id = module
+            .declare_function("ar_path_join_owned", Linkage::Import, &owned_join_sig)
+            .map_err(|err| codegen_ice(format!("failed to declare ar_path_join_owned: {err:?}")))?;
+        insert_sym(func_ids, "ar_path_join_owned", id);
 
         let mut file_sig = Signature::new(default_call_conv);
         #[cfg(windows)]
@@ -276,6 +307,23 @@ pub(crate) fn declare_runtime_imports<M: Module>(
                 .map_err(|err| codegen_ice(format!("failed to declare {name}: {err:?}")))?;
             insert_sym(func_ids, name, id);
         }
+    }
+
+    // `ar_env_arg(i64) -> str`: fat-string return needs SystemV even on Windows
+    // (matches the `extern "sysv64"` host in os_runtime, like ar_path_join).
+    {
+        let mut arg_sig = Signature::new(default_call_conv);
+        #[cfg(windows)]
+        {
+            arg_sig.call_conv = CallConv::SystemV;
+        }
+        arg_sig.params.push(AbiParam::new(ptr_type));
+        arg_sig.returns.push(AbiParam::new(ptr_type));
+        arg_sig.returns.push(AbiParam::new(ptr_type));
+        let id = module
+            .declare_function("ar_env_arg", Linkage::Import, &arg_sig)
+            .map_err(|err| codegen_ice(format!("failed to declare ar_env_arg: {err:?}")))?;
+        insert_sym(func_ids, "ar_env_arg", id);
     }
 
     // Vec host

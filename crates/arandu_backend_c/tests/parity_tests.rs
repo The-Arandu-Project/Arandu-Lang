@@ -6,9 +6,11 @@ use arandu_middle::amir::{AmirConstant, AmirOperand, AmirProgram, AmirRvalue, Am
 use arandu_middle::layout::DataLayout;
 use arandu_middle::ops::BinaryOp;
 use arandu_semantics::{
-    CodegenBackend, TypeCheckResult, lower_to_amir, lower_to_hir, resolve_for_test, type_check,
+    CodegenBackend, OptLevel, TypeCheckResult, lower_to_amir, lower_to_hir,
+    optimize_amir_checked_with_level, resolve_for_test, type_check,
 };
 use std::env;
+use std::fmt::Write as _;
 use std::fs;
 use std::process::Command;
 
@@ -118,6 +120,7 @@ func main(): int {
     let resource = Resource { handle: nil }
     return 0
 }
+
 "#,
     );
 }
@@ -220,11 +223,13 @@ fn assert_backend_rejection_parity(
     assert!(c_error.message.contains(expected_marker));
 }
 
-fn test_execution_parity(name: &str, src: &str) {
-    let (amir, tc) = compile_src(src);
+fn execute_c(name: &str, amir: &AmirProgram, tc: &TypeCheckResult) -> i32 {
+    execute_c_output(name, amir, tc).0
+}
 
+fn execute_c_output(name: &str, amir: &AmirProgram, tc: &TypeCheckResult) -> (i32, String) {
     // 1. Generate C (no debug dumps — keep tests pure / CI-friendly).
-    let mut c_code = emit_c(&amir, &tc);
+    let mut c_code = emit_c(amir, tc);
 
     // CEmitter emits `int32_t main(void)`. We rename it to `arandu_main` via a preprocessor
     // macro so we can wrap it in a standard C `main` that captures and prints the return
@@ -257,7 +262,7 @@ int main() {
         .arg("-o")
         .arg(&exe_file)
         .arg("-lm")
-        .status()
+        .output()
         .unwrap_or_else(|_| {
             panic!(
                 "failed to invoke C compiler '{}'. Parity tests require a C compiler in PATH.",
@@ -266,16 +271,21 @@ int main() {
         });
 
     assert!(
-        compile_status.success(),
-        "C compilation failed for {}",
-        name
+        compile_status.status.success(),
+        "C compilation failed for {name}: {}",
+        String::from_utf8_lossy(&compile_status.stderr)
     );
 
     let output = Command::new(&exe_file)
         .output()
         .expect("failed to run compiled executable");
 
-    assert!(output.status.success(), "C program crashed for {}", name);
+    assert!(
+        output.status.success(),
+        "C program crashed for {name}: status={}, stderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     // Last line is the harness exit code (`printf("%d\n", res)`). Earlier lines
     // may be `io.println` output (ToStr product path).
@@ -290,6 +300,13 @@ int main() {
         .parse()
         .unwrap_or_else(|_| panic!("failed to parse C exit line as integer: {stdout:?}"));
 
+    (actual_result, stdout)
+}
+
+fn test_execution_result(name: &str, src: &str) -> (i32, i32) {
+    let (amir, tc) = compile_src(src);
+    let actual_result = execute_c(name, &amir, &tc);
+
     // 2. Run via Cranelift
     let expected = execute_cranelift(&amir, &tc);
 
@@ -298,6 +315,199 @@ int main() {
         "Execution mismatch for {}! Cranelift={}, C={}",
         name, expected, actual_result
     );
+    (expected, actual_result)
+}
+
+fn generated_integer_fixture() -> (String, i32) {
+    const CASES: i64 = 64;
+    let mut source = String::new();
+    let mut expected = 0i64;
+    let mut state = 0x6a09_e667_f3bc_c909u64;
+
+    for index in 0..CASES {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let a = i64::from(state.to_le_bytes()[1] % 31) - 15;
+        let b = i64::from(state.to_le_bytes()[3] % 19) - 9;
+        let c = i64::from(state.to_le_bytes()[5] % 23) - 11;
+        let divisor = i64::from(state.to_le_bytes()[7] % 7) + 1;
+        let value = ((a * b) + c) / divisor;
+        let threshold = i64::from(state.to_le_bytes()[0] % 11) - 5;
+        let selected = if value >= threshold {
+            value + index
+        } else {
+            threshold - value
+        };
+        expected += selected;
+        source.push_str(&format!(
+            "func generated{index}(): int {{\n\
+             let a: int = {a}\n\
+             let b: int = {b}\n\
+             let c: int = {c}\n\
+             let value: int = ((a * b) + c) / {divisor}\n\
+             if value >= {threshold} {{ return value + {index} }}\n\
+             return {threshold} - value\n\
+             }}\n"
+        ));
+    }
+    source.push_str("func main(): int {\n    return ");
+    for index in 0..CASES {
+        if index != 0 {
+            source.push_str(" + ");
+        }
+        source.push_str(&format!("generated{index}()"));
+    }
+    source.push_str("\n}\n");
+
+    (
+        source,
+        i32::try_from(expected).expect("bounded oracle result"),
+    )
+}
+
+#[derive(Clone, Copy, Debug)]
+enum IntegerOp {
+    Add,
+    Subtract,
+    Multiply,
+    Xor,
+}
+
+struct IntegerProgram<const N: usize> {
+    operations: [IntegerOp; N],
+    operands: [i64; N],
+    initial: i64,
+    threshold: i64,
+    branch_delta: i64,
+    loop_delta: i64,
+    loop_count: i64,
+}
+
+impl<const N: usize> IntegerProgram<N> {
+    fn from_seed(seed: u64) -> Self {
+        let mut state = seed;
+        let mut next = || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            state.to_le_bytes()[4]
+        };
+        let operations = std::array::from_fn(|_| match next() % 4 {
+            0 => IntegerOp::Add,
+            1 => IntegerOp::Subtract,
+            2 => IntegerOp::Multiply,
+            _ => IntegerOp::Xor,
+        });
+        let operands = std::array::from_fn(|index| match operations[index] {
+            IntegerOp::Multiply => i64::from(next() % 5) - 2,
+            IntegerOp::Xor => i64::from(next() % 32),
+            IntegerOp::Add | IntegerOp::Subtract => i64::from(next() % 17) - 8,
+        });
+        Self {
+            operations,
+            operands,
+            initial: i64::from(next() % 41) - 20,
+            threshold: i64::from(next() % 31) - 15,
+            branch_delta: i64::from(next() % 13) - 6,
+            loop_delta: i64::from(next() % 7) - 3,
+            loop_count: i64::from(next() % 4),
+        }
+    }
+
+    fn evaluate(&self) -> i32 {
+        let mut value = self.initial;
+        for (&operation, &operand) in self.operations.iter().zip(&self.operands) {
+            value = match operation {
+                IntegerOp::Add => value + operand,
+                IntegerOp::Subtract => value - operand,
+                IntegerOp::Multiply => value * operand,
+                IntegerOp::Xor => value ^ operand,
+            };
+        }
+        if value >= self.threshold {
+            value += self.branch_delta;
+        } else {
+            value -= self.branch_delta;
+        }
+        value += self.loop_delta * self.loop_count;
+        i32::try_from(value).expect("bounded structural integer oracle")
+    }
+
+    fn emit_source(&self) -> String {
+        let mut source = String::with_capacity(768);
+        self.emit_function(&mut source, "main");
+        source
+    }
+
+    fn emit_function(&self, source: &mut String, name: &str) {
+        writeln!(source, "func {name}(): int {{").unwrap();
+        writeln!(source, "    let mut value: int = {}", self.initial).unwrap();
+        for (&operation, &operand) in self.operations.iter().zip(&self.operands) {
+            let operator = match operation {
+                IntegerOp::Add => '+',
+                IntegerOp::Subtract => '-',
+                IntegerOp::Multiply => '*',
+                IntegerOp::Xor => '^',
+            };
+            writeln!(source, "    set value = value {operator} ({operand})").unwrap();
+        }
+        writeln!(source, "    if value >= {} {{", self.threshold).unwrap();
+        writeln!(
+            source,
+            "        set value = value + ({})",
+            self.branch_delta
+        )
+        .unwrap();
+        writeln!(source, "    }} else {{").unwrap();
+        writeln!(
+            source,
+            "        set value = value - ({})",
+            self.branch_delta
+        )
+        .unwrap();
+        writeln!(source, "    }}").unwrap();
+        writeln!(source, "    let mut index: int = 0").unwrap();
+        writeln!(source, "    while index < {} {{", self.loop_count).unwrap();
+        writeln!(source, "        set value = value + ({})", self.loop_delta).unwrap();
+        writeln!(source, "        set index = index + 1").unwrap();
+        writeln!(source, "    }}").unwrap();
+        writeln!(source, "    return value").unwrap();
+        writeln!(source, "}}").unwrap();
+    }
+}
+
+const STRUCTURAL_INTEGER_SEEDS: [u64; 8] = [
+    0,
+    1,
+    0x243f_6a88_85a3_08d3,
+    0x1319_8a2e_0370_7344,
+    0xa409_3822_299f_31d0,
+    0x082e_fa98_ec4e_6c89,
+    u64::MAX - 1,
+    u64::MAX,
+];
+
+fn structural_integer_suite() -> String {
+    let mut source = String::with_capacity(STRUCTURAL_INTEGER_SEEDS.len() * 768);
+    let mut expected = [0i32; STRUCTURAL_INTEGER_SEEDS.len()];
+    for (index, seed) in STRUCTURAL_INTEGER_SEEDS.into_iter().enumerate() {
+        let program = IntegerProgram::<12>::from_seed(seed);
+        program.emit_function(&mut source, &format!("generated{index}"));
+        expected[index] = program.evaluate();
+    }
+    writeln!(source, "func main(): int {{").unwrap();
+    for (index, expected) in expected.into_iter().enumerate() {
+        writeln!(
+            source,
+            "    if generated{index}() != {expected} {{ return {} }}",
+            index + 1
+        )
+        .unwrap();
+    }
+    writeln!(source, "    return 0").unwrap();
+    writeln!(source, "}}").unwrap();
+    source
+}
+
+fn test_execution_parity(name: &str, src: &str) {
+    let _ = test_execution_result(name, src);
 }
 
 #[test]
@@ -455,6 +665,86 @@ fn parity_index_addressing_combined_with_shift() {
         }
         "#,
     );
+}
+
+#[test]
+fn generated_integer_programs_match_independent_oracle() {
+    let (source, expected) = generated_integer_fixture();
+    let (jit, c) = test_execution_result("generated_integer_oracle", &source);
+    assert_eq!(
+        jit, expected,
+        "Cranelift disagreed with the independent oracle"
+    );
+    assert_eq!(c, expected, "C disagreed with the independent oracle");
+}
+
+#[test]
+fn optimization_levels_preserve_the_generated_integer_oracle() {
+    let (source, expected) = generated_integer_fixture();
+
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let (mut amir, tc) = compile_src(&source);
+        optimize_amir_checked_with_level(
+            &mut amir,
+            tc.symbols.as_ref(),
+            &tc.type_info.type_interner,
+            level,
+        )
+        .unwrap_or_else(|error| panic!("{level:?} optimization rejected valid AMIR: {error:?}"));
+
+        let jit = execute_cranelift(&amir, &tc);
+        let c = execute_c(&format!("generated_integer_{level:?}"), &amir, &tc);
+        assert_eq!(jit, expected, "{level:?} Cranelift result changed");
+        assert_eq!(c, expected, "{level:?} C result changed");
+    }
+}
+
+#[test]
+fn structural_integer_programs_agree_across_optimization_levels() {
+    for seed in STRUCTURAL_INTEGER_SEEDS {
+        let program = IntegerProgram::<12>::from_seed(seed);
+        let source = program.emit_source();
+        let expected = program.evaluate();
+
+        for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+            let (mut amir, tc) = compile_src(&source);
+            optimize_amir_checked_with_level(
+                &mut amir,
+                tc.symbols.as_ref(),
+                &tc.type_info.type_interner,
+                level,
+            )
+            .unwrap_or_else(|error| {
+                panic!("seed {seed:#018x} {level:?} rejected valid AMIR: {error:?}\n{source}")
+            });
+            let actual = execute_cranelift(&amir, &tc);
+            assert_eq!(
+                actual, expected,
+                "seed {seed:#018x} changed under {level:?}\n{source}"
+            );
+        }
+    }
+}
+
+#[test]
+fn structural_integer_suite_agrees_between_backends_and_opt_levels() {
+    let source = structural_integer_suite();
+
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let (mut amir, tc) = compile_src(&source);
+        optimize_amir_checked_with_level(
+            &mut amir,
+            tc.symbols.as_ref(),
+            &tc.type_info.type_interner,
+            level,
+        )
+        .unwrap_or_else(|error| panic!("{level:?} rejected structural suite: {error:?}"));
+
+        let jit = execute_cranelift(&amir, &tc);
+        let c = execute_c(&format!("structural_integer_{level:?}"), &amir, &tc);
+        assert_eq!(jit, 0, "{level:?} Cranelift failed generated case {jit}");
+        assert_eq!(c, 0, "{level:?} C failed generated case {c}");
+    }
 }
 
 #[test]
@@ -845,4 +1135,618 @@ fn parity_mixed_alignment_packing() {
     }
     "#;
     test_execution_parity("mixed_alignment_packing", src);
+}
+
+#[test]
+fn coroutine_value_uses_pointer_abi_in_both_backends() {
+    let result = test_execution_result(
+        "coroutine_pointer_abi",
+        r#"
+extern "C" { func ar_co_block_on_i64(state: ptr[u8]): int }
+async func answer(): int { return 42 }
+func main(): int {
+    let job = answer()
+    return unsafe { ar_co_block_on_i64(job as ptr[u8]) }
+}
+"#,
+    );
+    assert_eq!(result, (42, 42));
+}
+
+#[test]
+fn cooperative_task_table_matches_in_both_backends() {
+    let result = test_execution_result(
+        "rt_task_table",
+        r#"
+extern "C" {
+    func ar_rt_spawn_i64(state: ptr[u8]): int
+    func ar_rt_join_i64(handle: int): int
+    func ar_rt_cancel_i64(handle: int): void
+}
+async func answer(): int { return 42 }
+func main(): int {
+    let job = answer()
+    let handle = unsafe { ar_rt_spawn_i64(job as ptr[u8]) }
+    return unsafe { ar_rt_join_i64(handle) }
+}
+"#,
+    );
+    assert_eq!(result, (42, 42));
+}
+
+#[test]
+fn cooperative_cancel_before_join_recovers_slot_in_c() {
+    let result = test_execution_result(
+        "rt_task_cancel",
+        r#"
+extern "C" {
+    func ar_rt_spawn_i64(state: ptr[u8]): int
+    func ar_rt_join_i64(handle: int): int
+    func ar_rt_cancel_i64(handle: int): void
+}
+async func answer(): int { return 42 }
+func main(): int {
+    let job = answer()
+    let handle = unsafe { ar_rt_spawn_i64(job as ptr[u8]) }
+    unsafe { ar_rt_cancel_i64(handle) }
+    let job2 = answer()
+    let handle2 = unsafe { ar_rt_spawn_i64(job2 as ptr[u8]) }
+    if handle2 != handle {
+        return 1
+    }
+    return unsafe { ar_rt_join_i64(handle2) }
+}
+"#,
+    );
+    assert_eq!(result, (42, 42));
+}
+
+#[test]
+fn cooperative_cached_join_reuses_result_without_polling() {
+    let result = test_execution_result(
+        "rt_task_cached",
+        r#"
+extern "C" {
+    func ar_rt_spawn_i64(state: ptr[u8]): int
+    func ar_rt_join_i64(handle: int): int
+    func ar_rt_cancel_i64(handle: int): void
+}
+async func answer(): int { return 42 }
+func main(): int {
+    let job = answer()
+    let handle = unsafe { ar_rt_spawn_i64(job as ptr[u8]) }
+    let first = unsafe { ar_rt_join_i64(handle) }
+    let cached = unsafe { ar_rt_join_i64(handle) }
+    if first != 42 || cached != 42 {
+        return 1
+    }
+    unsafe { ar_rt_cancel_i64(handle) }
+    return 0
+}
+"#,
+    );
+    assert_eq!(result, (0, 0));
+}
+
+#[test]
+fn owned_job_lifecycle_preserves_fields_and_cleanup_in_c() {
+    let source = include_str!("../../arandu_cli/tests/fixtures/owned_result_lifecycle.aru");
+    for optimized in [false, true] {
+        let (mut amir, tc) = compile_src(source);
+        if optimized {
+            optimize_amir_checked_with_level(
+                &mut amir,
+                tc.symbols.as_ref(),
+                &tc.type_info.type_interner,
+                OptLevel::O2,
+            )
+            .expect("valid owned job must optimize");
+        }
+        let name = if optimized {
+            "owned_job_opt"
+        } else {
+            "owned_job"
+        };
+        let (status, stdout) = execute_c_output(name, &amir, &tc);
+        assert_eq!(status, 0);
+        assert_eq!(
+            stdout.replace("\r\n", "\n"),
+            "30\n20\n0\n",
+            "optimized={optimized}"
+        );
+    }
+}
+
+/// SL_P Fase 4: a compiler-shaped job thunk written as an ordinary generic
+/// function. `dispatch` reads a `Job<R>` payload from `context`, runs it and
+/// writes the `R` result into `result` — the exact `WorkThunk` ABI
+/// (`(ptr, ptr) -> i32`). `main` feeds it blobs through the `alloc`/`free`
+/// builtins so the same source type-checks and lowers in both backends.
+const GENERIC_WORK_THUNK_SRC: &str = r#"
+module std.core.workthunk
+
+extern "arandu-intrinsic" {
+    func ptrRead<T>(p: ptr[T]) : T
+    func ptrWrite<T>(p: ptr[T], val: T) : void
+}
+
+interface Job<R> {
+    func run(shared self): R
+}
+
+struct Stats { code: int, comment: int, blank: int }
+struct CountJob { amount: int }
+
+func CountJob.run(shared self): Stats {
+    return Stats { code: self.amount, comment: 2, blank: 3 }
+}
+
+func dispatch<R, C: Job<R>>(context: ptr[C], result: ptr[R]): i32 {
+    let job = unsafe { ptrRead<C>(context) }
+    let out = job.run()
+    unsafe { ptrWrite<R>(result, out) }
+    return 0
+}
+
+func main(): int {
+    let job = CountJob { amount: 37 }
+    let c = alloc(8) as ptr[CountJob]
+    unsafe { ptrWrite<CountJob>(c, job) }
+    let r = alloc(24) as ptr[Stats]
+    let rc = dispatch<Stats, CountJob>(c, r)
+    let out = unsafe { ptrRead<Stats>(r) }
+    if rc != 0 { return 9 }
+    if out.code != 37 { return 1 }
+    if out.comment != 2 { return 2 }
+    if out.blank != 3 { return 3 }
+    unsafe { free(c) }
+    unsafe { free(r) }
+    return 0
+}
+"#;
+
+#[test]
+fn generic_work_thunk_runs_identically_in_c_and_cranelift() {
+    // Runs the real production pipeline (`monomorphize_program`) on both
+    // backends; `execute_c` wraps the emitted C with a C main and compares the
+    // exit code with the Cranelift-run Arandu `main`.
+    let (amir, tc) = compile_src_mono(GENERIC_WORK_THUNK_SRC);
+    let actual_result = execute_c("generic_work_thunk", &amir, &tc);
+    let expected = execute_cranelift(&amir, &tc);
+    assert_eq!(
+        expected, actual_result,
+        "Execution mismatch for generic_work_thunk! Cranelift={expected}, C={actual_result}"
+    );
+    assert_eq!(expected, 0);
+}
+
+/// Host-side mirror of the Arandu structs fed to/read from the thunk blobs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
+struct CountJobHost {
+    amount: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
+struct StatsHost {
+    code: i64,
+    comment: i64,
+    blank: i64,
+}
+
+/// Compile the generic thunk source and return the exact host name under which
+/// the monomorphized `dispatch<Stats, CountJob>` instance was registered.
+fn compile_generic_work_thunk() -> (AmirProgram, TypeCheckResult, String) {
+    let (amir, tc) = compile_src_mono(GENERIC_WORK_THUNK_SRC);
+    let instance_name = amir
+        .funcs
+        .iter()
+        .filter_map(|f| {
+            let name = tc.symbols.host_func_name(tc.symbols.get(f.symbol));
+            name.contains("_A$dispatch$I_").then(|| name.to_string())
+        })
+        .next()
+        .expect("monomorphized dispatch instance missing");
+    assert!(
+        instance_name.starts_with("std.core.workthunk.dispatch."),
+        "instance must be registered under its qualified host name, got {instance_name}"
+    );
+    (amir, tc, instance_name)
+}
+
+/// Same as [`compile_src`] but runs the monomorphization pass, matching the
+/// production pipeline: generic callees become real instanced functions
+/// (`_A$...`) instead of being inlined at the call site by AMIR lowering.
+fn compile_src_mono(src: &str) -> (AmirProgram, TypeCheckResult) {
+    let program = arandu_parser::parse(src).expect("parse failed");
+    let resolution = resolve_for_test(0, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
+    assert!(
+        tc.diagnostics.is_empty(),
+        "type check failed: {:?}",
+        tc.diagnostics
+    );
+
+    let mut hir = lower_to_hir(&mut tc, &program).expect("HIR lowering failed");
+    let _specialized =
+        arandu_semantics::monomorphize_program(&mut tc, &mut hir).expect("monomorphization failed");
+    let amir = lower_to_amir(&tc, &hir, 64).expect("AMIR lowering failed");
+    (amir, tc)
+}
+
+#[test]
+fn generic_work_thunk_is_host_callable_at_workthunk_abi() {
+    let (amir, tc, instance_name) = compile_generic_work_thunk();
+    let backend = CraneliftBackend::try_new().unwrap();
+    let compiled =
+        CodegenBackend::compile(backend, &amir, tc.symbols.as_ref(), tc.type_info.as_ref())
+            .expect("cranelift compile failed");
+
+    let via_main = unsafe {
+        let main_fn =
+            arandu_semantics::CompiledCode::get_fn::<unsafe fn() -> i32>(&compiled, "main")
+                .expect("main not found");
+        main_fn()
+    };
+    assert_eq!(via_main, 0);
+
+    let thunk: arandu_runtime::worker_runtime::WorkThunk = unsafe {
+        arandu_semantics::CompiledCode::get_fn(&compiled, &instance_name)
+            .expect("instance not exported under its host name")
+    };
+
+    let mut context = CountJobHost { amount: 37 };
+    let mut result = std::mem::MaybeUninit::<StatsHost>::uninit();
+    let status = unsafe {
+        thunk(
+            (&mut context as *mut CountJobHost).cast::<u8>(),
+            result.as_mut_ptr().cast::<u8>(),
+        )
+    };
+    assert_eq!(status, arandu_runtime::worker_runtime::WORK_COMPLETED);
+    let stats = unsafe { result.assume_init() };
+    assert_eq!(
+        stats,
+        StatsHost {
+            code: 37,
+            comment: 2,
+            blank: 3
+        }
+    );
+}
+
+#[test]
+fn generic_work_thunk_executes_inside_worker_pool_thread() {
+    let (amir, tc, instance_name) = compile_generic_work_thunk();
+    let backend = CraneliftBackend::try_new().unwrap();
+    let compiled =
+        CodegenBackend::compile(backend, &amir, tc.symbols.as_ref(), tc.type_info.as_ref())
+            .expect("cranelift compile failed");
+    let thunk: arandu_runtime::worker_runtime::WorkThunk = unsafe {
+        arandu_semantics::CompiledCode::get_fn(&compiled, &instance_name)
+            .expect("instance not exported under its host name")
+    };
+
+    let pool = arandu_runtime::worker_scheduler::WorkerPool::new(2, 4)
+        .expect("pool with two workers must spawn");
+    // SAFETY: `CountJobHost`/`StatsHost` mirror the Arandu layouts and the
+    // thunk obeys the `WorkThunk` lifecycle contract.
+    let task = unsafe {
+        arandu_runtime::worker_runtime::WorkerTask::try_new::<CountJobHost, StatsHost>(
+            CountJobHost { amount: 41 },
+            thunk,
+        )
+        .expect("static-sized payload must be encodable")
+    };
+    let pending = pool
+        .core()
+        .submit(task)
+        .expect("bounded admission must accept one task");
+    let result = pending.wait().expect("task must complete before shutdown");
+    let stats = result
+        .try_take::<StatsHost>()
+        .expect("typed result must extract");
+    assert_eq!(
+        stats,
+        StatsHost {
+            code: 41,
+            comment: 2,
+            blank: 3
+        }
+    );
+}
+
+const PARALLEL_FOLD_PARITY_SRC: &str = r#"
+module std.core.parallel_parity
+
+extern "arandu-intrinsic" {
+    func ptrRead<T>(p: ptr[T]) : T
+    func ptrWrite<T>(p: ptr[T], val: T) : void
+    func ptrOffset<T>(base: ptr[T], offset: i32) : ptr[T]
+    func sliceFromRaw(owner: ptr[int], data: ptr[int], len: uint): []int
+    func sliceLen<T>(source: []T): uint
+    func sliceSubslice<T>(source: []T, start: uint, len: uint): []T
+}
+
+interface ParallelJob<T, R> {
+    func run(self: ref Self, item: ref T, state: mut ref R): void
+}
+
+interface Combine<R> {
+    func combine(self: ref Self, dest: mut ref R, partial: ref R): void
+}
+
+struct Stats { code: int, comment: int, blank: int }
+
+struct LineCountJob {}
+struct StatsCombiner {}
+
+func LineCountJob.run(self: ref LineCountJob, item: ref int, state: mut ref Stats): void {
+    state.code = state.code + *item
+    state.comment = state.comment + 1
+    state.blank = state.blank + 2
+}
+
+func StatsCombiner.combine(self: ref StatsCombiner, dest: mut ref Stats, partial: ref Stats): void {
+    dest.code = dest.code + partial.code
+    dest.comment = dest.comment + partial.comment
+    dest.blank = dest.blank + partial.blank
+}
+
+struct ChunkContext {
+    subslice: []int,
+    seed: Stats,
+    job: LineCountJob,
+    stop_flag: ptr[int],
+}
+
+func dispatchChunk(context: ptr[ChunkContext], result: ptr[Stats]): i32 {
+    let ctx: ChunkContext = unsafe { ptrRead<ChunkContext>(context) }
+    let mut state = ctx.seed
+    let count = sliceLen<int>(ctx.subslice)
+    let mut i: uint = 0
+    let nullp: ptr[int] = nil
+    while i < count {
+        if ctx.stop_flag != nullp {
+            let flag_val: int = unsafe { ptrRead<int>(ctx.stop_flag) }
+            if flag_val != 0 {
+                return 2
+            }
+        }
+        ctx.job.run(ref ctx.subslice[i], mut ref state)
+        i = i + 1
+    }
+    unsafe { ptrWrite<Stats>(result, state) }
+    return 0
+}
+
+func foldSeq(data: []int, seed: Stats, job: LineCountJob): Stats {
+    let mut acc = Stats { code: seed.code, comment: seed.comment, blank: seed.blank }
+    let len = sliceLen<int>(data)
+    let mut i: uint = 0
+    while i < len {
+        job.run(ref data[i], mut ref acc)
+        i = i + 1
+    }
+    return acc
+}
+
+func parallelFoldSim(
+    data: []int,
+    seed: Stats,
+    job: LineCountJob,
+    combine: StatsCombiner,
+    workers: uint
+): Stats {
+    let total_len = sliceLen<int>(data)
+    if total_len == 0 {
+        return Stats { code: seed.code, comment: seed.comment, blank: seed.blank }
+    }
+    if total_len <= 4 || workers <= 1 {
+        return foldSeq(data, seed, job)
+    }
+    let mut chunk_count = workers
+    if chunk_count > total_len {
+        chunk_count = total_len
+    }
+    let base_chunk_size = total_len / chunk_count
+    let remainder = total_len % chunk_count
+
+    let mut acc = Stats { code: seed.code, comment: seed.comment, blank: seed.blank }
+    let mut offset: uint = 0
+    let mut c: uint = 0
+    while c < chunk_count {
+        let mut current_size = base_chunk_size
+        if c < remainder {
+            current_size = current_size + 1
+        }
+        if current_size > 0 {
+            let chunk_slice = sliceSubslice<int>(data, offset, current_size)
+            let chunk_seed = Stats { code: 0, comment: 0, blank: 0 }
+            let chunk_res = foldSeq(chunk_slice, chunk_seed, job)
+            combine.combine(mut ref acc, ref chunk_res)
+            offset = offset + current_size
+        }
+        c = c + 1
+    }
+    return acc
+}
+
+func main(): int {
+    let raw = alloc(64) as ptr[int]
+    let mut i: int = 0
+    while i < 8 {
+        let p = unsafe { ptrOffset<int>(raw, (i as i32)) }
+        let it = (i + 1) * 10
+        unsafe { ptrWrite<int>(p, it) }
+        i = i + 1
+    }
+    let items = unsafe { sliceFromRaw(raw, raw, 8 as uint) }
+
+    let seed = Stats { code: 0, comment: 0, blank: 0 }
+    let job = LineCountJob {}
+    let combiner = StatsCombiner {}
+
+    let seq = foldSeq(items, seed, job)
+    let par = parallelFoldSim(items, seed, job, combiner, 3 as uint)
+
+    // Bit-identical assertion: parallel reduction must equal sequential fold!
+    if seq.code != par.code { return 1 }
+    if seq.comment != par.comment { return 2 }
+    if seq.blank != par.blank { return 3 }
+
+    // Check specific calculated values:
+    // 8 items, sum of lines = 10+20+30+40+50+60+70+80 = 360
+    // comment = 8, blank = 16
+    if par.code != 360 { return 4 }
+    if par.comment != 8 { return 5 }
+    if par.blank != 16 { return 6 }
+
+    unsafe { free(raw) }
+
+    return 0
+}
+"#;
+
+#[test]
+fn parallel_fold_sim_runs_identically_in_c_and_cranelift() {
+    let (amir, tc) = compile_src_mono(PARALLEL_FOLD_PARITY_SRC);
+    let actual_result = execute_c("parallel_fold_parity", &amir, &tc);
+    let expected = execute_cranelift(&amir, &tc);
+    assert_eq!(
+        expected, actual_result,
+        "Execution mismatch for parallel_fold_parity! Cranelift={expected}, C={actual_result}"
+    );
+    assert_eq!(expected, 0);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
+struct SliceDescriptorHost {
+    ptr: *const i64,
+    len: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
+struct ChunkContextHost {
+    subslice: *const SliceDescriptorHost,
+    _pad0: u64,
+    seed: *mut StatsHost,
+    _pad1: [u64; 2],
+    stop_flag: *const i64,
+}
+
+unsafe impl Send for ChunkContextHost {}
+
+#[test]
+fn parallel_dispatch_chunk_executes_in_worker_pool_and_honors_cancellation() {
+    let (amir, tc) = compile_src_mono(PARALLEL_FOLD_PARITY_SRC);
+    let backend = CraneliftBackend::try_new().unwrap();
+    let compiled =
+        CodegenBackend::compile(backend, &amir, tc.symbols.as_ref(), tc.type_info.as_ref())
+            .expect("cranelift compile failed");
+
+    let instance_name = amir
+        .funcs
+        .iter()
+        .filter_map(|f| {
+            let name = tc.symbols.host_func_name(tc.symbols.get(f.symbol));
+            (name.contains("dispatchChunk") || name.ends_with(".dispatchChunk"))
+                .then(|| name.to_string())
+        })
+        .next()
+        .expect("dispatchChunk instance missing");
+
+    let thunk: arandu_runtime::worker_runtime::WorkThunk = unsafe {
+        arandu_semantics::CompiledCode::get_fn(&compiled, &instance_name)
+            .expect("dispatchChunk not exported under its host name")
+    };
+
+    let pool = arandu_runtime::worker_scheduler::WorkerPool::new(2, 4).unwrap();
+
+    let items: Vec<i64> = vec![10, 25, 15];
+    let desc = SliceDescriptorHost {
+        ptr: items.as_ptr(),
+        len: items.len() as u64,
+    };
+    let stop_flag: i64 = 0;
+    let mut stats = StatsHost {
+        code: 0,
+        comment: 0,
+        blank: 0,
+    };
+
+    let ctx = ChunkContextHost {
+        subslice: &desc,
+        _pad0: 0,
+        seed: &mut stats,
+        _pad1: [0; 2],
+        stop_flag: &stop_flag,
+    };
+
+    // 1. Successful execution across real OS worker thread
+    let task = unsafe {
+        arandu_runtime::worker_runtime::WorkerTask::try_new::<ChunkContextHost, StatsHost>(
+            ctx, thunk,
+        )
+    }
+    .unwrap();
+
+    let pending = pool.core().submit(task).unwrap();
+    let result = pending.wait().unwrap().try_take::<StatsHost>().unwrap();
+    assert_eq!(
+        result,
+        StatsHost {
+            code: 50,
+            comment: 3,
+            blank: 6
+        }
+    );
+
+    // 2. Cooperative cancellation via stop_flag (returns WORK_CANCELED = 2 -> WorkerError::Canceled)
+    let canceled_flag: i64 = 1;
+    let mut cancel_stats = StatsHost {
+        code: 0,
+        comment: 0,
+        blank: 0,
+    };
+    let cancel_ctx = ChunkContextHost {
+        subslice: &desc,
+        _pad0: 0,
+        seed: &mut cancel_stats,
+        _pad1: [0; 2],
+        stop_flag: &canceled_flag,
+    };
+    let cancel_task = unsafe {
+        arandu_runtime::worker_runtime::WorkerTask::try_new::<ChunkContextHost, StatsHost>(
+            cancel_ctx, thunk,
+        )
+    }
+    .unwrap();
+    let cancel_pending = pool.core().submit(cancel_task).unwrap();
+    assert_eq!(
+        cancel_pending.wait().unwrap_err(),
+        arandu_runtime::worker_runtime::WorkerError::Canceled
+    );
+
+    // 3. Pre-admission cancellation check (JDK-8311867)
+    let pre_cancel_token = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let pre_cancel_task = unsafe {
+        arandu_runtime::worker_runtime::WorkerTask::try_new::<ChunkContextHost, StatsHost>(
+            ctx, thunk,
+        )
+    }
+    .unwrap()
+    .with_cancel_token(pre_cancel_token);
+    let pre_pending = pool.core().submit(pre_cancel_task).unwrap();
+    assert_eq!(
+        pre_pending.wait().unwrap_err(),
+        arandu_runtime::worker_runtime::WorkerError::Canceled
+    );
 }

@@ -1,5 +1,10 @@
 module std.fs
 
+import std.io as io
+import std.core.mem as mem
+import std.core.intrinsics as intrinsics
+import std.alloc.string as strings
+
 /// Options for opening and creating files.
 public struct OpenOptions {
     read: bool
@@ -42,12 +47,173 @@ extern "C" {
     func ar_fs_read(fd: int, buf: ptr[u8], count: uint): int
     func ar_fs_write(fd: int, buf: ptr[u8], count: uint): int
     func ar_fs_close(fd: int): int
+    /// Reads the whole file; on success fills `outBuf`/`outLen`/`outCap`
+    /// (owned buffer, adopt via `strings.adoptOwned`). Any error zeroes the
+    /// out-params; `err` carries a portable `IoErrorKind` code.
+    func ar_fs_read_all(path: str, outBuf: mut ref ptr[u8], outLen: mut ref uint, outCap: mut ref uint, err: mut ref int): void
+    /// Reads a directory into one owned blob (see `readDir`/`DirListing`).
+    func ar_fs_readdir(path: str, outBuf: mut ref ptr[u8], outCount: mut ref uint, outCap: mut ref uint, err: mut ref int): void
+    /// Frees buffers returned by `ar_fs_read_all`/`ar_fs_readdir`.
+    func ar_vec_buf_free(p: ptr[u8], size: uint): void
 }
 
 /// Returns `true` if `path` exists on the host filesystem.
 public func fileExists(path: str): bool {
     unsafe {
         return exists(path)
+    }
+}
+
+/// Reads the entire contents of `path` into an owned `String` (no copy).
+///
+/// The host allocates the exact-size buffer; the returned `String` **adopts**
+/// it (`capacity == len`), so freeing happens exactly once via `destroy`.
+/// Binary-safe: no UTF-8 validation (like Rust `fs::read`, unlike
+/// `fs::read_to_string`). The host is foreign code, so calling this function
+/// requires the `FileRead` and `Foreign` effects.
+@Effects(FileRead, Foreign)
+public func readToString(path: str): Result<strings.String, io.IoError> {
+    let mut buf: ptr[u8] = nil
+    let mut len: uint = 0
+    let mut cap: uint = 0
+    let mut errCode: int = 0
+    unsafe {
+        ar_fs_read_all(path, buf, len, cap, errCode)
+    }
+    if errCode != 0 {
+        return Result.Err(io.errorFromPortable(errCode))
+    }
+    return Result.Ok(strings.adoptOwned(buf, cap, len))
+}
+
+/// A read-only snapshot of a directory listing in one contiguous allocation.
+///
+/// Names are **views** into the listing blob (`name(i) -> []u8`), never
+/// copies; `isDir(i)` uses the cheap type the OS provided during readdir (no
+/// per-entry stat). Ordering is the host filesystem order (unspecified, like
+/// POSIX `readdir`). Free the blob exactly once with `destroy`.
+public struct DirListing {
+    // Scratch fat descriptor used by `nameStr`; `strView` borrows these first
+    // two words from the listing, so the name cannot outlive its owner.
+    viewData: ptr[u8]
+    viewLen: uint
+    data: ptr[u8]
+    count: uint
+    capacity: uint
+}
+
+/// Reads the directory at `path` into an owned `DirListing` (one allocation).
+///
+/// Directory contents are not sorted; order matches the host filesystem.
+/// The host is foreign code, so calling this function requires the `FileRead`
+/// and `Foreign` effects.
+@Effects(FileRead, Foreign)
+public func readDir(path: str): Result<DirListing, io.IoError> {
+    let mut buf: ptr[u8] = nil
+    let mut count: uint = 0
+    let mut cap: uint = 0
+    let mut errCode: int = 0
+    unsafe {
+        ar_fs_readdir(path, buf, count, cap, errCode)
+    }
+    if errCode != 0 {
+        return Result.Err(io.errorFromPortable(errCode))
+    }
+    return Result.Ok(DirListing {
+        viewData: nil,
+        viewLen: 0,
+        data: buf,
+        count: count,
+        capacity: cap,
+    })
+}
+
+/// Reads the `u32` entry field at `byteOff` from the blob (little-endian).
+func readU32At(base: ptr[u8], byteOff: uint): u32 {
+    unsafe {
+        let p = mem.ptrOffset<u8>(base, byteOff as i32)
+        return mem.ptrRead<u32>(p as ptr[u32])
+    }
+}
+
+/// Returns the number of entries in the listing.
+public func DirListing.count(self: ref DirListing): uint {
+    return self.count
+}
+
+/// Returns `true` when the entry at `index` is a directory. Out-of-range
+/// indexes return `false`.
+public func DirListing.isDir(self: ref DirListing, index: uint): bool {
+    if index >= self.count {
+        return false
+    }
+    unsafe {
+        let p = mem.ptrOffset<u8>(self.data, (8 + index * 16 + 8) as i32)
+        return mem.ptrRead<u8>(p) != 0
+    }
+}
+
+/// Returns the name of the entry at `index` as a borrowed byte slice,
+/// or an empty slice when `index` is out of range.
+///
+/// The view borrows `self`; the bytes remain valid until `destroy`.
+public func DirListing.name(self: ref DirListing, index: uint): []u8 {
+    if index >= self.count {
+        unsafe {
+            return intrinsics.sliceFromRaw<DirListing, u8>(self, self.data, 0)
+        }
+    }
+    unsafe {
+        let entryOff: uint = 8 + index * 16
+        let nameOff = readU32At(self.data, entryOff) as uint
+        let nameLen = readU32At(self.data, entryOff + 4) as uint
+        let namesBase = mem.ptrOffset<u8>(self.data, (8 + self.count * 16) as i32)
+        let namePtr = mem.ptrOffset<u8>(namesBase, nameOff as i32)
+        return intrinsics.sliceFromRaw<DirListing, u8>(self, namePtr, nameLen)
+    }
+}
+
+/// Returns the name of the entry at `index` as a borrowed string view,
+/// or an empty string when `index` is out of range.
+///
+/// The view borrows `self`; the string remains valid until `destroy`.
+public func DirListing.nameStr(self: mut ref DirListing, index: uint): ref str {
+    if index >= self.count {
+        self.viewData = self.data
+        self.viewLen = 0
+        return intrinsics.strView<DirListing>(self)
+    }
+    unsafe {
+        let entryOff: uint = 8 + index * 16
+        let nameOff = readU32At(self.data, entryOff) as uint
+        let nameLen = readU32At(self.data, entryOff + 4) as uint
+        let namesBase = mem.ptrOffset<u8>(self.data, (8 + self.count * 16) as i32)
+        let namePtr = mem.ptrOffset<u8>(namesBase, nameOff as i32)
+        self.viewData = namePtr
+        self.viewLen = nameLen
+        return intrinsics.strView<DirListing>(self)
+    }
+}
+
+/// Frees the listing blob.
+@Destructor
+public func DirListing.destroy(self: own DirListing): void {
+    destroyListing(self)
+}
+
+/// Frees the listing blob (null- and zero-capacity safe).
+func destroyListing(l: mut ref DirListing): void {
+    let data = l.data
+    let capacity = l.capacity
+    l.viewData = nil
+    l.viewLen = 0
+    l.data = nil
+    l.capacity = 0
+    l.count = 0
+    if capacity > 0 {
+        unsafe {
+            ar_vec_buf_free(data, capacity)
+        }
     }
 }
 

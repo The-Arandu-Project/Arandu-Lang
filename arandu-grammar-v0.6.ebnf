@@ -338,7 +338,7 @@ pattern            = "_"
                    | tuple_pattern
                    | literal
                    | type_identifier [ "(" [ pattern_list ] ")" ]
-                   | value_identifier
+                   | [ "mut" ] value_identifier
                    ;
 
 pattern_list       = pattern { "," pattern } [ "," ] ;

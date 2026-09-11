@@ -319,11 +319,14 @@ fn parse_primary_post(ctx: &mut HandCtx<'_>, cur: &mut Cursor<'_>) -> Option<Exp
                     ExprKind::Generic { callee: left, args },
                     ctx.span(left_span.start, gt_start + gt_len),
                 );
-                // generic must be followed by call or trailing block
+                // generic must be followed by call, trailing block, or `as` cast
                 if cur.peek_kind() == Some(TokenKind::LParen) {
                     continue; // loop will handle call
                 }
                 if cur.peek_kind() == Some(TokenKind::LBrace) {
+                    continue;
+                }
+                if cur.peek_kind() == Some(TokenKind::KwAs) {
                     continue;
                 }
                 return None;
@@ -546,17 +549,23 @@ fn looks_like_generic_args(cur: &Cursor<'_>) -> bool {
             TokenKind::Gt => {
                 depth -= 1;
                 if depth == 0 {
-                    return cur
-                        .peek_at(i + 1)
-                        .is_some_and(|n| matches!(n.kind, TokenKind::LParen | TokenKind::LBrace));
+                    return cur.peek_at(i + 1).is_some_and(|n| {
+                        matches!(
+                            n.kind,
+                            TokenKind::LParen | TokenKind::LBrace | TokenKind::KwAs
+                        )
+                    });
                 }
             }
             TokenKind::ShiftRight => {
                 depth -= 2;
                 if depth == 0 {
-                    return cur
-                        .peek_at(i + 1)
-                        .is_some_and(|n| matches!(n.kind, TokenKind::LParen | TokenKind::LBrace));
+                    return cur.peek_at(i + 1).is_some_and(|n| {
+                        matches!(
+                            n.kind,
+                            TokenKind::LParen | TokenKind::LBrace | TokenKind::KwAs
+                        )
+                    });
                 }
             }
             TokenKind::Eof => return false,

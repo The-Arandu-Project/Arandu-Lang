@@ -257,6 +257,88 @@ fn import_module() {
     );
 }
 
+/// Regression: comma-separated single-line struct bodies must parse. The field
+/// loop in `parse_struct_decl` only skipped semicolons/newlines, so
+/// `public struct R { x: int, y: int }` failed with P001 and the whole module
+/// silently stopped exporting its members (pypor `counter.aru`/`walker.aru`).
+#[test]
+fn single_line_struct_fields_with_commas() {
+    let program = parse(
+        "module tests.struct_single_line\n\
+         public struct Stats { code: uint, comment: uint, blank: uint }\n\
+         public func zeroStats(): Stats { return Stats { code: 0, comment: 0, blank: 0 } }\n",
+    )
+    .expect("comma-separated single-line struct fields must parse");
+    let fields = match &program.pool.decl(program.decls[0]) {
+        arandu_parser::TopLevelDecl::Struct(struct_decl) => &struct_decl.fields,
+        other => panic!("expected struct, got {other:?}"),
+    };
+    let names: Vec<_> = fields.iter().map(|field| field.name.as_str()).collect();
+    assert_eq!(names, ["code", "comment", "blank"]);
+}
+
+#[test]
+fn while_comparison_does_not_swallow_into_generic() {
+    // Regression: `a < b` must stay a comparison, not open a phantom generic.
+    // `find_matching_gt` used to cross statement boundaries, so a `>` inside
+    // the loop body (or on a following statement) closed the generic and
+    // swallowed code (pypor src/counter.aru misparsed as `<Generic>`).
+    let dump = parse_to_string(
+        "module tests.generic_regression\n\
+         func f() {\n\
+         \x20   while a < b {\n\
+         \x20       x = c > (y)\n\
+         \x20   }\n\
+         }\n",
+    )
+    .expect("while condition comparison must parse");
+    assert!(
+        dump.contains("While @3:5-5:6 Condition @3:11-3:16 Binary @3:11-3:16(<, Path"),
+        "expected `<` comparison in the while condition, got:\n{dump}"
+    );
+    assert!(
+        !dump.contains("Generic @3"),
+        "`a < b` must not be parsed as a generic type argument list:\n{dump}"
+    );
+}
+
+#[test]
+fn following_statement_gt_does_not_cross_boundary() {
+    // A `>` in the following statement must not close a phantom generic
+    // opened by `<` on the previous line (another pypor pattern).
+    let dump = parse_to_string(
+        "module tests.generic_regression\n\
+         func f() {\n\
+         \x20   let low = a < b\n\
+         \x20   x = c > (y)\n\
+         }\n",
+    )
+    .expect("parser should keep statements separate");
+    assert!(
+        dump.contains("Binary @3:15-3:20(<, Path @3:15-3:16(a), Path @3:19-3:20(b))"),
+        "expected `<` binary on line 3:\n{dump}"
+    );
+    assert!(
+        !dump.contains("Generic @3"),
+        "`<` on line 3 must not open a generic:\n{dump}"
+    );
+}
+
+#[test]
+fn nested_generic_inside_group_keeps_each_delimiter_level() {
+    let dump = parse_to_string(
+        "func identity<T>(value: T): T { return value }\n\
+         func main() {\n\
+         \x20   let value = identity<(Box<Option<int>>)>(input)\n\
+         }\n",
+    )
+    .expect("nested generic arguments inside a grouped type must parse");
+    assert!(
+        dump.contains("Generic") && dump.contains("Box") && dump.contains("Option"),
+        "nested generic call lost its type arguments:\n{dump}"
+    );
+}
+
 /// T3.5: multi-segment unquoted module alias (`import std.core.mem as mem`).
 #[test]
 fn import_module_alias_path() {

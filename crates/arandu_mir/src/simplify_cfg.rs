@@ -99,7 +99,11 @@ fn thread_block(func: &mut AmirFunc, bid: BlockId) -> bool {
 }
 
 fn resolve_goto_chain(func: &AmirFunc, mut block: BlockId) -> BlockId {
-    loop {
+    let original = block;
+    // A terminating chain visits at most one block per CFG node. Beyond
+    // that bound a node was revisited: keep the original edge into the cycle.
+    // This also handles self-loops without allocating a visited set.
+    for _ in 0..func.blocks.len() {
         let b = func.block(block);
         if !b.statements.is_empty() || !func.block_params(b.params).is_empty() {
             return block;
@@ -114,6 +118,7 @@ fn resolve_goto_chain(func: &AmirFunc, mut block: BlockId) -> BlockId {
             _ => return block,
         }
     }
+    original
 }
 
 // ---------------------------------------------------------------------------
@@ -422,7 +427,19 @@ fn remap_terminator(term: AmirTerminator, map: &[Option<BlockId>]) -> AmirTermin
                 otherwise: new_otherwise,
             }
         }
-        other => other,
+        AmirTerminator::Suspend {
+            future,
+            resume,
+            args,
+        } => AmirTerminator::Suspend {
+            future,
+            resume: map[resume.as_usize()].unwrap_or(resume),
+            args,
+        },
+        // Keep this match exhaustive so every new control-flow variant must
+        // explicitly account for block renumbering.
+        AmirTerminator::Return => AmirTerminator::Return,
+        AmirTerminator::Unreachable => AmirTerminator::Unreachable,
     }
 }
 
@@ -489,6 +506,84 @@ mod tests {
     }
 
     // ── Jump threading ──
+
+    #[test]
+    fn empty_goto_cycles_terminate_and_preserve_divergence() {
+        // Include a prefix leading into a cycle, not only a cycle at entry.
+        for targets in [&[0][..], &[1, 0], &[1, 2, 1]] {
+            let blocks = targets
+                .iter()
+                .enumerate()
+                .map(|(id, &target)| AmirBasicBlock {
+                    id: bbid(id),
+                    statements: DenseRange::empty(),
+                    params: DenseRange::empty(),
+                    terminator: AmirTerminator::Goto {
+                        target: bbid(target),
+                        args: Vec::new(),
+                    },
+                })
+                .collect();
+            let mut func = make_func(blocks, AmirStmtTable::new());
+            let bump = bumpalo::Bump::new();
+            simplify_cfg(&mut func, &bump).unwrap();
+            assert!(!func.blocks.is_empty());
+            for block in &func.blocks {
+                let AmirTerminator::Goto { target, args } = &block.terminator else {
+                    panic!("simplification must preserve an infinite loop");
+                };
+                assert!(target.as_usize() < func.blocks.len());
+                assert!(args.is_empty());
+            }
+            assert!(
+                !simplify_cfg(&mut func, &bump).unwrap(),
+                "must reach a fixpoint"
+            );
+        }
+    }
+
+    #[test]
+    fn unreachable_sweep_remaps_suspend_resume_and_preserves_arguments() {
+        let mut st = AmirStmtTable::new();
+        let mut entry = block(0, vec![], &mut st);
+        entry.terminator = AmirTerminator::Suspend {
+            future: AmirOperand::Copy(TempId::from_usize(0)),
+            resume: bbid(2),
+            args: vec![AmirOperand::Copy(TempId::from_usize(1))],
+        };
+        let dead = block(1, vec![], &mut st);
+        let mut resume = block(2, vec![], &mut st);
+        resume.params = DenseRange::new(0, 1);
+        let mut func = make_func(vec![entry, dead, resume], st);
+        func.temps = vec![int_temp(0), int_temp(1), int_temp(2)];
+        func.block_params.push(crate::amir::BlockParam {
+            id: TempId::from_usize(2),
+            local: LocalId::from_usize(0),
+            ty: int_temp(2).ty,
+            from: None,
+            moved: false,
+        });
+        let bump = bumpalo::Bump::new();
+        assert!(simplify_cfg(&mut func, &bump).unwrap());
+        assert_eq!(func.blocks.len(), 2);
+        let AmirTerminator::Suspend {
+            future,
+            resume,
+            args,
+        } = &func.blocks[0].terminator
+        else {
+            panic!("suspend must survive unreachable removal");
+        };
+        assert_eq!(*future, AmirOperand::Copy(TempId::from_usize(0)));
+        assert_eq!(*resume, bbid(1));
+        assert_eq!(args, &[AmirOperand::Copy(TempId::from_usize(1))]);
+        assert_eq!(
+            func.block_params(func.blocks[1].params)[0].id,
+            TempId::from_usize(2)
+        );
+        assert_eq!(func.successors(bbid(0)), &[bbid(1)]);
+        assert!(!simplify_cfg(&mut func, &bump).unwrap());
+    }
 
     #[test]
     fn jump_thread_skips_empty_goto_chain() {

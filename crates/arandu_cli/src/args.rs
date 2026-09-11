@@ -13,6 +13,8 @@ pub struct CliInvocation {
     pub parallel: bool,
     pub genref_report: bool,
     pub args: Vec<String>,
+    /// Arguments following `--`, forwarded verbatim to an executed program.
+    pub program_args: Vec<String>,
     pub z_flags: Vec<String>,
     pub data_layout: DataLayout,
     pub project_flags: ProjectFlags,
@@ -24,11 +26,21 @@ pub fn parse_invocation(raw_args: impl IntoIterator<Item = String>) -> CliInvoca
     let mut parallel = false;
     let mut genref_report = false;
     let mut args = Vec::new();
+    let mut program_args = Vec::new();
     let mut z_flags: Vec<String> = Vec::new();
     let mut layout_flags: Vec<String> = Vec::new();
     let mut raw_project_flags: Vec<String> = Vec::new();
 
+    let mut after_separator = false;
     for arg in raw_args {
+        if after_separator {
+            program_args.push(arg);
+            continue;
+        }
+        if arg == "--" {
+            after_separator = true;
+            continue;
+        }
         match arg.as_str() {
             "--debug" => debug = true,
             "--opt" => opt = true,
@@ -67,6 +79,7 @@ pub fn parse_invocation(raw_args: impl IntoIterator<Item = String>) -> CliInvoca
         parallel,
         genref_report,
         args,
+        program_args,
         z_flags,
         data_layout,
         project_flags,

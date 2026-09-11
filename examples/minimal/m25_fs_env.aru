@@ -1,0 +1,73 @@
+module examples.minimal.m25_fs_env
+
+import std.env as env
+import std.fs as fs
+import std.alloc.string as strings
+
+@Effects(FileRead, Foreign)
+func main(): int {
+    if env.argsLen() < 1 {
+        return 1
+    }
+    let a0 = env.arg(0)
+    if a0 == "" {
+        return 2
+    }
+
+    if !fs.fileExists("Cargo.toml") {
+        return 3
+    }
+    if fs.fileExists("this_file_does_not_exist_xyz.tmp") {
+        return 4
+    }
+
+    let mut code1 = 0
+    match fs.readToString("Cargo.toml") {
+        Ok(content) => {
+            if content.len == 0 {
+                code1 = 5
+            }
+            content.destroy()
+        }
+        Err(_) => {
+            code1 = 6
+        }
+    }
+    if code1 != 0 {
+        return code1
+    }
+
+    let mut code2 = 0
+    match fs.readToString("missing_test_file_abc.tmp") {
+        Ok(c) => {
+            c.destroy()
+            code2 = 7
+        }
+        Err(e) => {
+            if e.os_code != 1 {
+                code2 = 8
+            }
+        }
+    }
+    if code2 != 0 {
+        return code2
+    }
+
+    let mut code3 = 0
+    match fs.readDir("crates") {
+        Ok(listing) => {
+            if listing.count() == 0 {
+                code3 = 9
+            }
+            listing.destroy()
+        }
+        Err(_) => {
+            code3 = 10
+        }
+    }
+    if code3 != 0 {
+        return code3
+    }
+
+    return 0
+}

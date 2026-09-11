@@ -6,7 +6,7 @@ use crate::types::TypeId;
 use arandu_lexer::Span;
 use smallvec::SmallVec;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AmirPlace {
     pub local: LocalId,
     pub projections: SmallVec<[AmirProjection; 2]>,

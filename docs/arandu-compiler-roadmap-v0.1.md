@@ -90,6 +90,22 @@ quando cumprir seu contrato atual.
 ### Fila de execução
 
 1. Concluir a campanha de auditoria, documentação, modularização e portabilidade.
+   A rodada rc.5 corrigiu ciclos/renumeração no SimplifyCFG, validação de
+   parâmetros densos, liveness de domínio vazio, pilha recursiva do RPO e dispatch Linux de sockets
+   sem timer; a evidência fica na [auditoria](./arandu-architecture-audit-v0.1.md).
+   Antes de encerrar: executar os novos casos nos runners nativos, perfilar
+   validação incremental do corpus válido de 50 módulos, aprofundar limites
+   de dataflow e pressão da fila de resultados LSP. Remoção de
+   cópias redundantes não promove O2 nem constitui benchmark de velocidade.
+   Decisão de fechamento: o S0 exige o workspace nativo em Linux, Windows e
+   macOS quando houver mudança de produto; publicar somente após resultado
+   verde do PR, mantendo o soak/SDK como evidência separada. As extrações
+   CLI/runner/IDE já existem. Renomear `arandu_package` e substituir guardrails
+   ou estruturas de memória exige benefício demonstrado, não contagem de linhas.
+   A revisão pré-commit corrigiu ownership join/cancel, empréstimo de ExprKind
+   e recuperação sintática no IDE sem duplicar lowering. O probe de 64 funções
+   comprova cutoff dos resumos de borrow; a granularidade de lower_amir e a
+   pressão do canal de resultados LSP continuam abertas com evidência na auditoria.
 2. Concluir o soak e promover [SL_T](./arandu-testing-benchmark-harness-v0.1.md) a `gold`.
 3. Entregar a `SL_S-Core`:
    fundação `core`/`alloc`, targets `bin`/`lib`, link multi-file, módulos,
@@ -136,7 +152,7 @@ contrato, benchmark ou prova de segurança que justifique o custo.
 | --- | --- | --- | --- |
 | Typed holes e sintaxe total | `planned` | LSP mantém tipos, completion e hover durante código incompleto; execução continua bloqueada enquanto houver holes | [Hazelnut Live](https://arxiv.org/abs/1805.00155), [Live Pattern Matching with Typed Holes](https://doi.org/10.1145/3586048) |
 | Effects + capabilities | `planned` | A2 evolui de rótulos de efeito para autoridade explícita sobre rede, filesystem, processos e FFI | [Effect Capabilities for Haskell](https://doi.org/10.1016/j.scico.2015.12.002), [Object-Capability Model](https://arxiv.org/abs/1907.07154) |
-| Teste diferencial/metamórfico | `planned` | SL_T compara C/Cranelift e transformações semanticamente equivalentes para encontrar bugs sem oracle manual | [Csmith](https://users.cs.utah.edu/~regehr/papers/pldi11-preprint.pdf), [Metamorphic Testing de compiladores](https://onlinelibrary.wiley.com/doi/10.1002/stvr.1812) |
+| Teste diferencial/metamórfico | `partial` | Fuzzing incremental compara diagnósticos após edições de texto e do grafo de módulos com uma DB nova; ampliar a comparação C/Cranelift e transformações semanticamente equivalentes no SL_T permanece pendente | [Csmith](https://users.cs.utah.edu/~regehr/papers/pldi11-preprint.pdf), [Metamorphic Testing de compiladores](https://onlinelibrary.wiley.com/doi/10.1002/stvr.1812) |
 | Equality saturation/e-graphs | `research` | Otimizações AMIR para expressões puras depois de benchmark de custo e limite de crescimento do e-graph | [egg](https://arxiv.org/abs/2004.03082) |
 | WebAssembly Component Model/WIT | `planned` | target WASM, plugins e compiler service com interfaces tipadas e ABI portável; substitui a ideia de usar Protobuf como ABI | [WIT](https://component-model.bytecodealliance.org/design/wit.html), [Component Model](https://component-model.bytecodealliance.org/design/component-model-concepts.html) |
 | Refinement types leves | `research` | Contratos opcionais para índices, paths, handles e estados de recursos sem introduzir tipos dependentes completos | [Refinement Types: A Tutorial](https://arxiv.org/abs/2010.07763) |
@@ -206,6 +222,9 @@ Fase 2 — A Construção da Infraestrutura & Execução (v0.2) · [FECHADA no c
 [ ] A12    Deterministic CTFE & Comptime Engine (AMIR VM, Salsa queries puras, fuel budget)
 [x] BC     Backend Cranelift (Dev/Debug com compilador em memória)
    ├─ [x] BC.1   Fat Pointer String JIT (tratar String como ptr + len na convenção de chamadas do Cranelift)
+   ├─ [ ] BC.1a  Fechar ownership de buffers produzidos por `ToStr`, interpolação
+   │              e helpers de path nos dois backends; hoje o fat `str` não carrega
+   │              drop glue e os buffers sobrevivem até o fim do processo.
    ├─ [x] BC.2   Implementar EnumPayload & Discriminant no Cranelift JIT (Garantia estática contra double-free depende de M2; atualmente mitigado via poison-check em debug)
    ├─ [x] BC.3   Implementar IndexAccess & Array/Tuple no Cranelift JIT (Garantia estática contra double-free depende de M2; atualmente mitigado via poison-check em debug)
    ├─ [x] BC.4a  Borrow/BorrowMut no Cranelift JIT
@@ -242,6 +261,10 @@ Fase 3 — OSSA Avançado, Semântica e OS Runtime (v0.3) · [PARCIAL; vários m
    └─ [x] DX.6   LSP gold — `arandu_lsp` com `lsp-server` + main síncrona + VFS debounce +
                  snapshot workers (`AnalysisHost`/`AnalysisSnapshot`); diagnostics + goto-def +
                  multi-file; `DocumentId` geracional; stale revision descarta jobs
+[x] DX.6a   Descoberta inicial e reload de pacote aguardam a entrega das respostas
+            interativas; controle limitado a 64 requests e um reload coalescido.
+            Regressões controladas cobrem ordenação, erro, cancelamento, saturação
+            e revisão stale sem relaxar `stdio_open_document_stays_interactive_during_discovery`.
 [x] PERF.5  Arc nos campos pesados de TypeCheckResult (pré-requisito para DX.6)
    │  Feito: symbols / resolved / type_info atrás de `Arc`; diagnostics por valor.
    │  Clone de `TypeCheckResult` é O(1) atomic refcount; `type_info_mut()` /
@@ -324,6 +347,14 @@ Fase 3 — OSSA Avançado, Semântica e OS Runtime (v0.3) · [PARCIAL; vários m
 [x] SL_S-Host   APIs de sistema: host path/rt helpers, filesystem e processos;
                 depende de A2 e de contratos nativos por plataforma
 [x] SL_R   Async Runtime: SL_R.0 typed spawn/join/block_on Coroutine + SyncExecutor; SL_R.2 EpollReactor (epoll+timerfd); SL_R.1/3 open
+[x] SL_P   [Processamento paralelo estruturado](./arandu-structured-parallelism-v0.1.md):
+           implementação das Fases 1–7 concluída; `WorkerPool` bounded,
+           WorkThunk ABI `(ptr[C], ptr[R]) -> i32`, operação pública `parallelFold`
+           em `std.core.parallel`, inlining automático no AMIR (`arandu_mir::inlining`),
+           e integração completa no Pypor com 100% de identidade de bits no
+           corpus do Kernel Linux (65.370 arquivos, 37.900.970 linhas em 1.826s;
+           20.76M linhas/s, 490.9% CPU, 71.2 MB MaxRSS). Promoção formal a Gold
+           condicionada à matriz de release Windows/macOS.
 [x] SL_T   [Testing & Benchmark Harness](./arandu-testing-benchmark-harness-v0.1.md):
            implementação, SDK/VSIX e matriz nativa concluídos; soak operacional
            permanece como único requisito para promoção formal a Gold
@@ -1349,6 +1380,8 @@ Analisador estático avançado de uso de memória e desempenho.
 | 2026-07 | Antigravity | **Evolução do Ecossistema (E1–E5)**: Documentadas as propostas de evolução de ferramentas integradas (REPL, Gerador de Docs, FFI Bindgen, Package Manager e Linter de Alocação). |
 | 2026-08 | Codex | **Linhas de pesquisa avaliadas**: typed holes, effects/capabilities, teste diferencial/metamórfico, e-graphs, WebAssembly Component Model/WIT, refinement types, prova formal OSSA/GenRef e incrementalidade orientada à demanda; somente as linhas com contrato e evidência futura poderão virar implementação. |
 | 2026-08 | Codex | **Roadmap de otimização AMIR consolidado**: estado honesto de O0/O1/O2, análises cooperativas, LoopInfo, semântica de places/alias/ModRef, dataflow, canonicalização, MemorySSA virtual, TCO/escape e gates de correção e benchmark. |
+| 2026-09 | Codex | **Fechamento de hipóteses rc.5 em tipos, runtime e genéricos**: a substituição estrutural ganhou regressão que prova inserção finita sem expansão recursiva de aliases; o reactor passou a descartar o registro inteiro e liberar recursos após poison, restaurando um estado conhecido antes de aceitar novos IDs; acessos a um único campo genérico deixaram de materializar o mapa completo da struct; e um teste de integração passou a provar que instanciações genéricas idênticas feitas por módulos distintos convergem para uma única definição AMIR. |
+| 2026-09 | Codex | **Ownership sensível a campos na rc.5**: `Loan` e o M1 passaram a preservar caminhos compactos de campos do `AmirPlace`. Campos com `SymbolId` distintos não produzem O003/O001 falsos; roots/prefixes continuam sobrepostos, e índices/dereferences permanecem conservadores. O join distingue campo movido em todos ou apenas alguns predecessores, store reinicializa o subpath exato e drop glue ignora só o campo transferido. Extração parcial de tipos com `@Destructor` explícito é rejeitada porque o destrutor exige o valor completo. Matrizes tipadas cobrem shared/exclusive, paths aninhados, moves, reinicialização e CFG linear/diamond. |
 
 ---
 

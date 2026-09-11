@@ -124,6 +124,10 @@ const GOLD: &[Gold] = &[
         exit: 13,
     },
     Gold {
+        path: "examples/minimal/m25_fs_env.aru",
+        exit: 0,
+    },
+    Gold {
         path: "examples/minimal/TEMPLATE_main.aru",
         exit: 0,
     },

@@ -1,7 +1,7 @@
 use arandu_parser::{
-    Attribute, ConstDecl, EnumDecl, EnumPayload, EnumVariant, FieldDecl, FuncDecl, FuncName,
-    FuncSignature, GenericParam, InterfaceDecl, Param, StructDecl, TopLevelDecl, TypeAliasDecl,
-    TypeName, WhereItem,
+    Attribute, ConstDecl, EnumDecl, EnumPayload, EnumVariant, ExprKind, FieldDecl, FuncDecl,
+    FuncName, FuncSignature, GenericParam, InterfaceDecl, Param, StructDecl, TopLevelDecl,
+    TypeAliasDecl, TypeName, WhereItem,
 };
 
 use crate::{ScopeId, SymbolKind};
@@ -279,10 +279,29 @@ impl<'a> Resolver<'a> {
             None => {}
         }
     }
+}
 
+fn is_effect_arg(expr: &ExprKind) -> bool {
+    if let ExprKind::Path { path } = expr
+        && path.len() == 1
+        && let Some(name) = path.first()
+    {
+        return arandu_middle::EffectFlags::from_name(name).is_some();
+    }
+    false
+}
+
+impl<'a> Resolver<'a> {
     pub(crate) fn resolve_attrs(&mut self, scope: ScopeId, attrs: &[Attribute]) {
         for attr in attrs {
             for arg in &attr.args {
+                // Annotation args are annotation payloads, not value
+                // expressions. Known effect names (`@Effects(FileRead)`) are
+                // resolved by typeck, so skip them here; this avoids spurious
+                // `N001` (undefined value) for legal annotations.
+                if is_effect_arg(self.pool.expr(*arg)) {
+                    continue;
+                }
                 self.resolve_expr(scope, *arg);
             }
         }

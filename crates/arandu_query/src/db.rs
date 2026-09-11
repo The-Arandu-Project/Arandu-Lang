@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -21,7 +21,7 @@ pub struct RegistryMetrics {
 #[derive(Default)]
 struct CstCache {
     /// Last successful tree per file (text must match before reuse).
-    by_file: HashMap<FileId, arandu_parser::SyntaxTree>,
+    by_file: FxHashMap<FileId, arandu_parser::SyntaxTree>,
 }
 
 pub use crate::stable_hash::StableHash;
@@ -105,8 +105,8 @@ pub use arandu_middle::db::TargetConfig;
 /// linear scan over `by_path.values()` to find a file by its numeric ID.
 #[derive(Clone)]
 struct FileRegistry {
-    by_path: HashMap<String, SourceFile>,
-    by_id: HashMap<FileId, SourceFile>,
+    by_path: FxHashMap<String, SourceFile>,
+    by_id: FxHashMap<FileId, SourceFile>,
     /// Monotonic id allocator (must not reuse after unregister — Salsa keeps old inputs).
     next_id: FileId,
 }
@@ -114,8 +114,8 @@ struct FileRegistry {
 impl Default for FileRegistry {
     fn default() -> Self {
         Self {
-            by_path: HashMap::new(),
-            by_id: HashMap::new(),
+            by_path: FxHashMap::default(),
+            by_id: FxHashMap::default(),
             next_id: 100,
         }
     }

@@ -29,6 +29,11 @@ pub struct DocInfo {
 }
 
 pub struct ServerState {
+    /// Admitted requests whose terminal result has not been delivered yet.
+    /// Worker completion alone must not release the discovery writer.
+    pub(crate) pending_requests: FxHashSet<lsp_server::RequestId>,
+    /// One coalesced background package update, applied after response delivery.
+    pub(crate) deferred_reload: Option<Result<Box<crate::workspace::WorkspaceProject>, String>>,
     pub host: AnalysisHost,
     pub docs: DocumentStore,
     pub vfs: Vfs,
@@ -58,6 +63,8 @@ impl ServerState {
     #[must_use]
     pub fn new() -> Self {
         Self {
+            pending_requests: FxHashSet::default(),
+            deferred_reload: None,
             host: AnalysisHost::new(),
             docs: DocumentStore::new(),
             vfs: Vfs::new(),

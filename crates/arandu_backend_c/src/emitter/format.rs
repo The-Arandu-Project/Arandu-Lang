@@ -19,7 +19,8 @@ impl<'a> CEmitter<'a> {
         match op {
             AmirOperand::Copy(t) | AmirOperand::Move(t) => format!("t{}", t.as_usize()),
             AmirOperand::FunctionRef(id) | AmirOperand::GlobalRef(id) => {
-                sanitize_c_ident(&self.symbols.get(*id).name)
+                let sym = self.symbols.get(*id);
+                sanitize_c_ident(self.symbols.host_func_name(sym))
             }
             AmirOperand::Constant(c) => match c {
                 AmirConstant::Pool(id) => match self.program.literal_pool.get(*id) {
@@ -112,6 +113,9 @@ impl<'a> CEmitter<'a> {
             ArType::Primitive(Primitive::Str) => Cow::Borrowed("ArStr"),
             ArType::Primitive(Primitive::Float) | ArType::FloatLiteral => Cow::Borrowed("double"),
             ArType::Void => Cow::Borrowed("void"),
+            // Coroutine values point to runtime state, independently of their
+            // result type. LayoutEngine also models them as one target pointer.
+            ArType::Coroutine(_) => Cow::Borrowed("void*"),
             ArType::Ptr(inner) | ArType::Ref(inner) | ArType::RefMut(inner) => Cow::Owned(format!(
                 "{}*",
                 self.format_type(&self.interner.resolve(*inner))

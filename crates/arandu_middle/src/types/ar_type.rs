@@ -338,7 +338,11 @@ impl ArType {
                 p.is_numeric()
                     || matches!(
                         p,
-                        Primitive::Bool | Primitive::Char | Primitive::Byte | Primitive::Any
+                        Primitive::Bool
+                            | Primitive::Char
+                            | Primitive::Byte
+                            | Primitive::Str
+                            | Primitive::Any
                     )
             }
             ArType::IntLiteral
@@ -565,8 +569,8 @@ mod tests {
     }
 
     #[test]
-    fn str_is_not_copy() {
-        assert!(!ArType::Primitive(Primitive::Str).is_copy_v01());
+    fn str_is_copy() {
+        assert!(ArType::Primitive(Primitive::Str).is_copy_v01());
     }
 
     #[test]

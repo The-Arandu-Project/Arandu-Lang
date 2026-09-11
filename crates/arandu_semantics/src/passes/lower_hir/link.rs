@@ -286,6 +286,31 @@ pub fn link_hir_module(
             dest_tc.symbols_mut().register_imported_symbol(sym.clone());
         }
     }
+    // Module membership remains available after whole-program linking for
+    // namespace lookup and diagnostics. Keys retain the source SymbolId,
+    // matching the imported symbols registered above.
+    for ((module, member), member_id) in &src_tc.symbols.module_members {
+        dest_tc
+            .symbols_mut()
+            .module_members
+            .insert((module.clone(), member.clone()), *member_id);
+    }
+    // Associated methods (type symbol → member) so method dispatch can resolve
+    // statically across modules (`self.total.add(...)` → `Stats.add`). Without
+    // this map the merged table degrades an `obj.field.method(...)` call to an
+    // indirect function call, which neither backend implements.
+    for ((ty, member), member_id) in &src_tc.symbols.associated_members {
+        dest_tc
+            .symbols_mut()
+            .associated_members
+            .insert((*ty, member.clone()), *member_id);
+    }
+    for (symbol, name) in &src_tc.symbols.host_function_names {
+        dest_tc
+            .symbols_mut()
+            .host_function_names
+            .insert(*symbol, name.clone());
+    }
     for (type_id, params) in &src_tc.symbols.type_params {
         dest_tc
             .symbols_mut()

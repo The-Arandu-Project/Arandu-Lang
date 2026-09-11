@@ -30,14 +30,26 @@ pub fn runtime_library() -> Result<PathBuf, CliFailure> {
     } else {
         "libarandu_runtime.a"
     };
-    let mut candidates = Vec::new();
     if let Some(explicit) = std::env::var_os("ARANDU_RUNTIME_LIB") {
-        candidates.push(PathBuf::from(explicit));
+        let explicit = PathBuf::from(explicit);
+        return if explicit.is_file() {
+            Ok(explicit)
+        } else {
+            Err(CliFailure::operational(
+                "locate Arandu AOT runtime",
+                Some(explicit),
+                "ARANDU_RUNTIME_LIB does not name a regular file",
+            ))
+        };
     }
+    let mut candidates = Vec::new();
     if let Ok(executable) = std::env::current_exe()
         && let Some(bin) = executable.parent()
     {
         // Cargo development layout: target/{debug,release}/arandu_cli.
+        if let Some(hashed) = hashed_development_runtime(bin, filename) {
+            candidates.push(hashed);
+        }
         candidates.push(bin.join(filename));
         // Installed SDK layout: bin/arandu + lib/<host>/runtime.
         if let Some(prefix) = bin.parent() {
@@ -69,6 +81,44 @@ pub fn runtime_library() -> Result<PathBuf, CliFailure> {
                 ),
             )
         })
+}
+
+/// Finds Cargo's hashed staticlib in a development profile directory.
+///
+/// Installed SDKs use the exact filename above. Cargo dependencies live under
+/// `target/<profile>/deps`; selecting the most recently built matching archive
+/// mirrors Cargo's incremental artifact choice and makes `cargo run -p
+/// arandu_cli -- build` usable without a separate runtime build command.
+fn hashed_development_runtime(profile_dir: &Path, filename: &str) -> Option<PathBuf> {
+    let (prefix, extension) = if cfg!(windows) {
+        ("arandu_runtime-", "lib")
+    } else {
+        ("libarandu_runtime-", "a")
+    };
+    let deps = profile_dir.join("deps");
+    let mut candidates = fs::read_dir(deps)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_stem()
+                .and_then(|stem| stem.to_str())
+                .is_some_and(|stem| stem.starts_with(prefix))
+                && path.extension().and_then(|ext| ext.to_str()) == Some(extension)
+                && path.file_name().and_then(|name| name.to_str()) != Some(filename)
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        let modified = |path: &Path| {
+            fs::metadata(path)
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+        };
+        modified(left)
+            .cmp(&modified(right))
+            .then_with(|| left.cmp(right))
+    });
+    candidates.pop()
 }
 
 /// Links a Cranelift object with the target-matched Arandu runtime.
@@ -256,14 +306,26 @@ fn run_system_linker(
     output: &Path,
 ) -> Result<(), LinkAttempt> {
     let mut command = Command::new(linker);
+    let (object_arg, work_dir) =
+        if let (Some(parent), Some(file_name)) = (object.parent(), object.file_name()) {
+            (PathBuf::from(file_name), Some(parent))
+        } else {
+            (object.to_path_buf(), None)
+        };
+    let output_arg = if let Some(dir) = work_dir {
+        command.current_dir(dir);
+        make_relative(output, dir)
+    } else {
+        output.to_path_buf()
+    };
     if cfg!(windows) {
         command
             .arg("/NOLOGO")
             .arg("/INCREMENTAL:NO")
             .arg("/Brepro")
             .arg("/SUBSYSTEM:CONSOLE")
-            .arg(format!("/OUT:{}", output.display()))
-            .arg(object)
+            .arg(format!("/OUT:{}", output_arg.display()))
+            .arg(&object_arg)
             .arg(runtime)
             .args([
                 "kernel32.lib",
@@ -274,7 +336,11 @@ fn run_system_linker(
                 "msvcrt.lib",
             ]);
     } else {
-        command.arg(object).arg(runtime).arg("-o").arg(output);
+        command
+            .arg(&object_arg)
+            .arg(runtime)
+            .arg("-o")
+            .arg(&output_arg);
         #[cfg(target_os = "linux")]
         command.args([
             "-Wl,--gc-sections",
@@ -290,7 +356,9 @@ fn run_system_linker(
         #[cfg(target_os = "macos")]
         command.args([
             "-Wl,-dead_strip",
-            "-Wl,-no_uuid",
+            "-Wl,-x",
+            "-Wl,-S",
+            "-Wl,-oso_prefix,.",
             "-framework",
             "Security",
             "-framework",
@@ -300,6 +368,10 @@ fn run_system_linker(
             "-lc",
             "-lm",
         ]);
+        #[cfg(target_os = "macos")]
+        command.env("ZERO_AR_DATE", "1");
+        #[cfg(target_os = "macos")]
+        command.env("LD_DETERMINISTIC_MODE", "YES");
     }
     match command.output() {
         Ok(result) if result.status.success() => Ok(()),
@@ -321,17 +393,36 @@ fn link_with_rustc(object: &Path, runtime: &Path, output: &Path) -> Result<(), C
             error.to_string(),
         )
     })?;
-    let result = Command::new("rustc")
+    let (object_arg, work_dir) =
+        if let (Some(parent), Some(file_name)) = (object.parent(), object.file_name()) {
+            (PathBuf::from(file_name), Some(parent))
+        } else {
+            (object.to_path_buf(), None)
+        };
+    let (stub_arg, output_arg) = if let Some(dir) = work_dir {
+        (make_relative(&stub, dir), make_relative(output, dir))
+    } else {
+        (stub.clone(), output.to_path_buf())
+    };
+    let mut command = Command::new("rustc");
+    if let Some(dir) = work_dir {
+        command.current_dir(dir);
+    }
+    command
         .args(["--crate-name", "arandu_link", "--edition", "2024"])
-        .arg(&stub)
+        .arg(&stub_arg)
         .arg("-o")
-        .arg(output)
+        .arg(&output_arg)
         .arg("-C")
-        .arg(format!("link-arg={}", object.display()))
+        .arg(format!("link-arg={}", object_arg.display()))
         .arg("-C")
         .arg(format!("link-arg={}", runtime.display()))
-        .args(rustc_reproducible_link_args())
-        .output();
+        .args(rustc_reproducible_link_args());
+    #[cfg(target_os = "macos")]
+    command.env("ZERO_AR_DATE", "1");
+    #[cfg(target_os = "macos")]
+    command.env("LD_DETERMINISTIC_MODE", "YES");
+    let result = command.output();
     let _ = fs::remove_file(&stub);
     match result {
         Ok(result) if result.status.success() => Ok(()),
@@ -350,10 +441,42 @@ fn rustc_reproducible_link_args() -> Vec<&'static str> {
     if cfg!(windows) {
         vec!["-C", "link-arg=/Brepro"]
     } else if cfg!(target_os = "macos") {
-        vec!["-C", "link-arg=-Wl,-no_uuid"]
+        vec![
+            "-C",
+            "link-arg=-Wl,-dead_strip",
+            "-C",
+            "link-arg=-Wl,-x",
+            "-C",
+            "link-arg=-Wl,-S",
+            "-C",
+            "link-arg=-Wl,-oso_prefix,.",
+        ]
     } else {
         vec!["-C", "link-arg=-Wl,--build-id=sha1"]
     }
+}
+
+fn make_relative(target: &Path, base: &Path) -> PathBuf {
+    let target_components: Vec<_> = target.components().collect();
+    let base_components: Vec<_> = base.components().collect();
+    let mut common = 0;
+    while common < target_components.len()
+        && common < base_components.len()
+        && target_components[common] == base_components[common]
+    {
+        common += 1;
+    }
+    if common == 0 {
+        return target.to_path_buf();
+    }
+    let mut result = PathBuf::new();
+    for _ in common..base_components.len() {
+        result.push("..");
+    }
+    for component in &target_components[common..] {
+        result.push(component.as_os_str());
+    }
+    result
 }
 
 fn format_output(linker: impl AsRef<std::ffi::OsStr>, output: &Output) -> String {

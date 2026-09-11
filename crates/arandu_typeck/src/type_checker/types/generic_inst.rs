@@ -196,13 +196,7 @@ pub fn struct_fields_instantiated(
         return None;
     }
     let span = checker.symbols.get(struct_id).span;
-    super::interfaces::check_instantiation_constraints(
-        checker,
-        struct_id,
-        &params,
-        &generic_args,
-        span,
-    );
+    super::interfaces::check_instantiation_constraints(checker, &params, &generic_args, span);
     let subst = build_subst(&params, &generic_args);
     let res: FxHashMap<String, ArType> = fields
         .iter()
@@ -213,6 +207,32 @@ pub fn struct_fields_instantiated(
         })
         .collect();
     Some(res)
+}
+
+/// Instantiate one named field without allocating a map for the entire struct.
+#[must_use]
+pub fn struct_field_instantiated(
+    checker: &mut TypeChecker<'_>,
+    struct_id: SymbolId,
+    generic_args: &[ArType],
+    field_name: &str,
+) -> Option<ArType> {
+    let fields = Arc::clone(checker.type_info.struct_fields.get(&struct_id)?);
+    let field_ty = fields.get(field_name)?.ty;
+    let params = Arc::clone(checker.type_info.generic_params.get(&struct_id)?);
+    let generic_args = expand_type_args_with_defaults(checker, struct_id, generic_args)?;
+    if params.len() != generic_args.len() {
+        return None;
+    }
+    let span = checker.symbols.get(struct_id).span;
+    super::interfaces::check_instantiation_constraints(checker, &params, &generic_args, span);
+    let subst = build_subst(&params, &generic_args);
+    let ty = checker.resolve(field_ty);
+    Some(instantiate_type(
+        &ty,
+        &subst,
+        &mut checker.type_info.type_interner,
+    ))
 }
 
 /// Instantiate a generic callee (`identity<int>`, `Result.Ok<int>`, …) to its value type.
@@ -362,13 +382,7 @@ pub fn synth_generic_instantiation(
     };
 
     let subst = build_subst(&param_symbols, &arg_tys);
-    super::interfaces::check_instantiation_constraints(
-        checker,
-        callee_symbol,
-        &param_symbols,
-        &arg_tys,
-        span,
-    );
+    super::interfaces::check_instantiation_constraints(checker, &param_symbols, &arg_tys, span);
     instantiate_type(&template, &subst, &mut checker.type_info.type_interner)
 }
 
@@ -444,6 +458,16 @@ pub fn expand_aliases(checker: &mut TypeChecker<'_>, ty: ArType) -> ArType {
 
 fn expand_aliases_rec(checker: &mut TypeChecker<'_>, ty: ArType, depth: usize) -> ArType {
     if depth > 64 {
+        let span = match &ty {
+            ArType::Named(symbol_id, _) => checker.symbols.try_get(*symbol_id).map(|s| s.span),
+            _ => None,
+        }
+        .unwrap_or_else(|| arandu_lexer::Span::new(0, 0, 0));
+        checker.diagnostics.push(crate::Diagnostic::error(
+            crate::DiagCode::T029RecursiveStructInfiniteSize,
+            "recursive type expansion exceeds recursion limit".to_string(),
+            span,
+        ));
         return ArType::Error;
     }
     match ty {
@@ -679,6 +703,15 @@ mod tests {
 
         let field_x_ty = fields.get("x").unwrap();
         assert_eq!(field_x_ty, &ArType::Primitive(Primitive::Int));
+        assert_eq!(
+            struct_field_instantiated(
+                &mut checker,
+                struct_id,
+                &[ArType::Primitive(Primitive::Int)],
+                "x",
+            ),
+            Some(ArType::Primitive(Primitive::Int))
+        );
     }
 
     #[test]

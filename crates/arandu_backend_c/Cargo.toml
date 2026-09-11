@@ -1,6 +1,6 @@
 [package]
 name = "arandu_backend_c"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 edition = "2024"
 license.workspace = true
 authors.workspace = true
@@ -16,6 +16,7 @@ rustc-hash = { workspace = true }
 arandu_parser = { path = "../arandu_parser" }
 arandu_semantics = { path = "../arandu_semantics" }
 arandu_backend_cranelift = { path = "../arandu_backend_cranelift" }
+arandu_runtime = { path = "../arandu_runtime" }
 
 [lints]
 workspace = true

@@ -215,6 +215,7 @@ fn run_typed_spawn_async_func() {
         r#"
 module tests.cli.typed_spawn
 import std.runtime.executor as rt
+import std.core.mem as mem
 
 async func answer(): int {
     return 42
@@ -223,7 +224,10 @@ async func answer(): int {
 func main(): int {
     let ex = rt.newSyncExecutor()
     let h = rt.spawn(ex, answer())
-    return rt.join(ex, h)
+    let result = rt.join(ex, h)
+    rt.cancel(ex, h)
+    if mem.sizeOf<rt.TaskHandle<int>>() != mem.sizeOf<int>() { return 1 }
+    return result
 }
 "#,
     )
@@ -428,6 +432,8 @@ fn run_supervisor_true() {
         std::env::var("WINDIR")
             .map(|windir| format!(r"{windir}\System32\whoami.exe"))
             .unwrap_or_else(|_| r"C:\Windows\System32\whoami.exe".to_string())
+    } else if std::path::Path::new("/usr/bin/true").is_file() {
+        "/usr/bin/true".to_string()
     } else {
         "/bin/true".to_string()
     }

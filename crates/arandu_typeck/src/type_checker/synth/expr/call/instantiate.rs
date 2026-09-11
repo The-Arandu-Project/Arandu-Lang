@@ -10,6 +10,7 @@ pub(crate) fn infer_and_instantiate_func(
     ret: TypeId,
     arg_tys: &[TypeId],
     expected_ret: Option<TypeId>,
+    call_span: arandu_lexer::Span,
 ) -> Option<(Vec<TypeId>, TypeId)> {
     if formals.len() != arg_tys.len() {
         return None;
@@ -36,6 +37,7 @@ pub(crate) fn infer_and_instantiate_func(
         }
         concrete.push(checker.resolve(tid));
     }
+    types::interfaces::check_instantiation_constraints(checker, type_params, &concrete, call_span);
     let subst = types::build_subst(type_params, &concrete);
     let new_params: Vec<TypeId> = formals
         .iter()

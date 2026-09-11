@@ -19,6 +19,7 @@ pub fn cmd_project_run(
     opt: bool,
     _debug: bool,
     data_layout: DataLayout,
+    program_args: &[String],
 ) -> CliResult {
     if flags.release {
         return Err(CliFailure::usage(
@@ -74,7 +75,14 @@ pub fn cmd_project_run(
         }
     };
 
-    execute_jit_main(&output, amir, type_check, ctx.entry_path, "run project")
+    execute_jit_main(
+        &output,
+        amir,
+        type_check,
+        ctx.entry_path,
+        program_args,
+        "run project",
+    )
 }
 
 fn execute_jit_main(
@@ -82,6 +90,7 @@ fn execute_jit_main(
     amir: &arandu_semantics::amir::AmirProgram,
     type_check: &arandu_semantics::TypeCheckResult,
     context_path: PathBuf,
+    program_args: &[String],
     action: &'static str,
 ) -> Result<CliSuccess, CliFailure> {
     use arandu_semantics::CompiledCode;
@@ -105,6 +114,17 @@ fn execute_jit_main(
             action,
             Some(context_path),
             "'main' function not found in compiled program",
+        ));
+    }
+
+    let mut argv = Vec::with_capacity(program_args.len() + 1);
+    argv.push(context_path.to_string_lossy().into_owned());
+    argv.extend_from_slice(program_args);
+    if arandu_runtime::os_runtime::install_program_args(argv.into_boxed_slice()).is_err() {
+        return Err(CliFailure::operational(
+            action,
+            Some(context_path),
+            "program arguments were already installed in this process",
         ));
     }
 
@@ -375,6 +395,7 @@ pub fn cmd_single_file_dispatch(
                     amir,
                     type_check,
                     PathBuf::from(&filepath),
+                    &inv.program_args,
                     "run program",
                 );
                 finish(result);

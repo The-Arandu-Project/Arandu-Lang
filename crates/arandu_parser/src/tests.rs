@@ -308,6 +308,25 @@ fn recovery_suppresses_cascade_but_not_distinct_errors() {
 }
 
 #[test]
+fn distinct_errors_near_each_other_are_not_suppressed() {
+    // Two genuinely distinct errors (`let 1` and `let 3`) separated only by a
+    // semicolon boundary. The recovery synchronizer advances over the broken
+    // region via `advance_raw`, which must still prime the suppression window so
+    // the second distinct error is reported rather than swallowed as a cascade.
+    let output = parse_recovering("module test\nfunc main() {\n    let 1 = 2; let 3 = 4;\n}\n");
+    assert_eq!(
+        output.diagnostics.len(),
+        2,
+        "Two distinct `let <number>` errors must both be reported: {:?}",
+        output
+            .diagnostics
+            .iter()
+            .map(|d| format!("{:?}", d.code))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 #[rustfmt::skip]
 fn recovery_does_not_leak_past_closing_brace() {
     let output = parse_recovering(&"module test

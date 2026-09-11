@@ -328,7 +328,7 @@ impl<'a, 'bump> InstantiationAnalyzer<'a, 'bump> {
     }
 }
 
-fn generic_callee_symbol(
+pub(crate) fn generic_callee_symbol(
     callee_id: HirExprId,
     hir: &HirProgram,
     tc: &TypeCheckResult,

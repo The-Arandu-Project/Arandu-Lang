@@ -53,6 +53,86 @@ fn missing_file_exits_with_code_1() {
 }
 
 #[test]
+fn run_forwards_only_arguments_after_separator_to_jit_program() {
+    let file = std::env::temp_dir().join("arandu_cli_program_args.aru");
+    fs::write(
+        &file,
+        r#"import io
+import std.env as env
+
+func main(): int {
+    io.println(env.argsLen())
+    io.println(env.arg(1))
+    return 0
+}
+"#,
+    )
+    .expect("fixture should be writable");
+
+    let path = file.to_string_lossy();
+    let output = run_cli(&["run", &path, "--", "program-sentinel"]);
+    let _ = fs::remove_file(&file);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "2\nprogram-sentinel"
+    );
+}
+
+#[test]
+fn logical_operators_short_circuit_rhs_effects_with_and_without_opt() {
+    let file = std::env::temp_dir().join("arandu_cli_short_circuit.aru");
+    fs::write(
+        &file,
+        r#"import io
+
+func observed(): bool {
+    io.println("rhs evaluated")
+    return true
+}
+
+func matchesMarker(value: u8): bool {
+    return value == 32 || value == 9 || value == 13
+}
+
+func main(): int {
+    let andValue = false && observed()
+    let orValue = true || observed()
+    if andValue || !orValue || matchesMarker(105) {
+        return 1
+    }
+    return 0
+}
+"#,
+    )
+    .expect("fixture should be writable");
+
+    let path = file.to_string_lossy();
+    for args in [
+        vec!["run", path.as_ref()],
+        vec!["run", "--opt", path.as_ref()],
+    ] {
+        let output = run_cli(&args);
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "short-circuited RHS produced output: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+    let _ = fs::remove_file(file);
+}
+
+#[test]
 fn lex_parse_and_check_valid_files_exit_successfully() {
     let dir = std::env::temp_dir();
     let file = dir.join("arandu_cli_smoke.aru");
@@ -558,6 +638,68 @@ fn emit_c_host_fib_main_contains_int_main() {
 }
 
 #[test]
+fn emit_c_host_m25_fs_env_compiles_and_runs() {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let fixture = std::path::Path::new(manifest_dir)
+        .join("../../examples/minimal/m25_fs_env.aru")
+        .canonicalize()
+        .expect("m25_fs_env.aru");
+    let path = fixture.to_string_lossy();
+    let output = run_cli(&["emit-c", &path, "--layout=host"]);
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let c_source = String::from_utf8_lossy(&output.stdout);
+    assert!(c_source.contains("ar_fs_read_all"));
+    assert!(c_source.contains("ar_fs_readdir"));
+    assert!(c_source.contains("ar_env_arg"));
+
+    if std::process::Command::new("gcc")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        let temp_dir = std::env::temp_dir();
+        let c_file = temp_dir.join("arandu_test_m25_fs_env.c");
+        let bin_name = if cfg!(windows) {
+            "arandu_test_m25_fs_env.exe"
+        } else {
+            "arandu_test_m25_fs_env"
+        };
+        let bin_file = temp_dir.join(bin_name);
+        fs::write(&c_file, c_source.as_bytes()).expect("write c file");
+        let compile_output = std::process::Command::new("gcc")
+            .arg(&c_file)
+            .arg("-o")
+            .arg(&bin_file)
+            .output()
+            .expect("invoke C compiler");
+        assert!(
+            compile_output.status.success(),
+            "C compilation of m25_fs_env failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&compile_output.stdout),
+            String::from_utf8_lossy(&compile_output.stderr)
+        );
+
+        let run_output = std::process::Command::new(&bin_file)
+            .current_dir(manifest_dir.to_owned() + "/../..")
+            .output()
+            .expect("run compiled m25_fs_env");
+        let _ = fs::remove_file(&c_file);
+        let _ = fs::remove_file(&bin_file);
+        assert!(
+            run_output.status.success(),
+            "compiled m25_fs_env exited with non-zero:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&run_output.stdout),
+            String::from_utf8_lossy(&run_output.stderr)
+        );
+    }
+}
+
+#[test]
 fn emit_c_i686_uses_int32_for_platform_int() {
     let dir = std::env::temp_dir();
     let file = dir.join("arandu_cli_emit_c_i686.aru");
@@ -914,7 +1056,7 @@ fn check_own_self_use_after_move_fails() {
     fs::write(
         &file,
         r#"struct Holder {
-    text: str
+    handle: ptr[u8]
 }
 
 func Holder.take(own self): int {
@@ -922,7 +1064,7 @@ func Holder.take(own self): int {
 }
 
 func main(): int {
-    let b = Holder { text: "moved" }
+    let b = Holder { handle: nil }
     let n = b.take()
     return n + b.take()
 }

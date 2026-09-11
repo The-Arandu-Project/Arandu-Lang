@@ -1,0 +1,36 @@
+import io
+
+struct Resource { id: int, first: int, second: int }
+
+@Destructor
+func Resource.close(own self): void { io.println(self.id) }
+
+struct Envelope<T> { value: T }
+
+interface Job<R> { func run(own self): R }
+
+struct CountJob { token: Resource, amount: int }
+
+func CountJob.run(own self): Envelope<Resource> {
+    return Envelope<Resource> {
+        value: Resource { id: self.amount, first: 21, second: 22 },
+    }
+}
+
+func execute<R, J: Job<R>>(job: own J): R { return job.run() }
+
+func consume(result: own Envelope<Resource>): void {
+    if result.value.id != 20 { io.println(91) }
+    if result.value.first != 21 { io.println(92) }
+    if result.value.second != 22 { io.println(93) }
+    io.println(30)
+}
+
+func main(): int {
+    let result = execute<Envelope<Resource>, CountJob>(CountJob {
+        token: Resource { id: 10, first: 11, second: 12 },
+        amount: 20,
+    })
+    consume(result)
+    return 0
+}

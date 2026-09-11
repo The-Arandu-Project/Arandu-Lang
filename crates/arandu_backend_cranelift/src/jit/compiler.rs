@@ -89,6 +89,7 @@ impl<M: Module> AranduModule<M> {
         // 1. Declare all functions first to support cross-calls
         for func in &program.funcs {
             let sym = symbols.get(func.symbol);
+            let host_name = symbols.host_func_name(sym);
             let param_types: Vec<_> = func
                 .params
                 .iter()
@@ -99,14 +100,14 @@ impl<M: Module> AranduModule<M> {
 
             let func_id = self
                 .module
-                .declare_function(&sym.name, Linkage::Export, &sig)
+                .declare_function(host_name, Linkage::Export, &sig)
                 .map_err(|err| {
                     codegen_ice(format!(
                         "failed to declare function '{}': {err:?}",
                         sym.name
                     ))
                 })?;
-            func_ids.insert(sym.name.to_string(), func_id);
+            func_ids.insert(host_name.to_string(), func_id);
 
             // Also find all NamespaceMember symbols that refer to this function (by matching name ending and span)
             // and map them to the same func_id!
@@ -231,7 +232,8 @@ impl<M: Module> AranduModule<M> {
         for func in &program.funcs {
             let mut builder_context = FunctionBuilderContext::new();
             let sym = symbols.get(func.symbol);
-            let func_id = func_ids[sym.name.as_str()];
+            let host_name = symbols.host_func_name(sym);
+            let func_id = func_ids[host_name];
 
             let param_types: Vec<_> = func
                 .params
@@ -266,10 +268,12 @@ impl<M: Module> AranduModule<M> {
         }
 
         for (name, (shim_id, destructor_symbol, signature)) in drop_shims {
-            let destructor_name = symbols.get(destructor_symbol).name.as_str();
+            let destructor = symbols.get(destructor_symbol);
+            let destructor_name = symbols.host_func_name(destructor);
             let Some(&destructor_id) = func_ids.get(destructor_name) else {
                 return Err(codegen_ice(format!(
-                    "drop shim '{name}' references unavailable destructor '{destructor_name}'"
+                    "drop shim '{name}' references unavailable destructor '{}'",
+                    destructor.name
                 )));
             };
             context.func.signature = signature;

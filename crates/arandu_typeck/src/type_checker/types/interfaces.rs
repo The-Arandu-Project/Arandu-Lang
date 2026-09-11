@@ -333,26 +333,59 @@ fn resolve_interface_constraint(
 /// After monomorphic instantiation, verify each type argument satisfies its constraints.
 pub(crate) fn check_instantiation_constraints(
     checker: &mut TypeChecker,
-    decl_symbol: SymbolId,
     param_symbols: &[SymbolId],
     arg_types: &[ArType],
     span: Span,
 ) {
+    // Bounds may reference another parameter of this declaration (J: Job<R>).
+    // Instantiate that obligation in the caller's type environment before
+    // comparing it with the caller's declared bounds. Build only when needed.
+    let mut substitution = None;
     for (param_sym, arg_ty) in param_symbols.iter().zip(arg_types) {
         let constraints = checker.type_info.param_constraints.get(param_sym).cloned();
         let Some(constraints) = constraints else {
             continue;
         };
         for bound in constraints.iter() {
-            if !type_satisfies_interface(checker, arg_ty, bound.iface_sym, &bound.type_args, span) {
-                let iface_name = checker
+            let bound_args: SmallVec<[TypeId; 2]> = if bound.type_args.is_empty() {
+                SmallVec::new()
+            } else {
+                let subst =
+                    substitution.get_or_insert_with(|| build_subst(param_symbols, arg_types));
+                bound
+                    .type_args
+                    .iter()
+                    .map(|&id| {
+                        arandu_middle::types::subst::substitute_type_id(
+                            id,
+                            subst,
+                            &checker.type_info.type_interner,
+                        )
+                    })
+                    .collect()
+            };
+            if !type_satisfies_interface(checker, arg_ty, bound.iface_sym, &bound_args, span) {
+                let mut iface_name = checker
                     .symbols
                     .try_get(bound.iface_sym)
                     .map(|s| s.name.to_string())
                     .unwrap_or_else(|| "Interface".to_string());
+                if !bound_args.is_empty() {
+                    iface_name.push('<');
+                    for (index, &argument) in bound_args.iter().enumerate() {
+                        if index != 0 {
+                            iface_name.push_str(", ");
+                        }
+                        iface_name.push_str(
+                            &checker
+                                .resolve(argument)
+                                .display(&checker.symbols, &checker.type_info.type_interner),
+                        );
+                    }
+                    iface_name.push('>');
+                }
                 let ty_display = arg_ty.display(&checker.symbols, &checker.type_info.type_interner);
-                let detail =
-                    missing_methods_note(checker, arg_ty, bound.iface_sym, &bound.type_args);
+                let detail = missing_methods_note(checker, arg_ty, bound.iface_sym, &bound_args);
                 // Put the method-level root cause in the primary message (notes are easy to miss).
                 let diag = crate::Diagnostic::error(
                     crate::DiagCode::T025InterfaceNotSatisfied,
@@ -366,7 +399,6 @@ pub(crate) fn check_instantiation_constraints(
             }
         }
     }
-    let _ = decl_symbol;
 }
 
 fn missing_methods_note(
@@ -375,6 +407,26 @@ fn missing_methods_note(
     iface_sym: SymbolId,
     bound_type_args: &[TypeId],
 ) -> String {
+    if let ArType::Named(id, _) = concrete
+        && checker
+            .symbols
+            .try_get(*id)
+            .is_some_and(|symbol| symbol.kind == SymbolKind::TypeParam)
+    {
+        return "type parameter does not declare the required instantiated interface bound"
+            .to_string();
+    }
+    if checker.symbols.try_get(iface_sym).is_some_and(|symbol| {
+        matches!(
+            symbol.lang_item,
+            Some(
+                arandu_middle::symbol_table::LangItem::Send
+                    | arandu_middle::symbol_table::LangItem::Sync
+            )
+        )
+    }) {
+        return "thread transfer/sharing is not proven for this storage: views, pointers, coroutine state and resources require additional contracts; structural analysis is bounded".to_string();
+    }
     let missing = missing_interface_methods(checker, concrete, iface_sym, bound_type_args);
     if missing.is_empty() {
         "required method signatures are incompatible".to_string()
@@ -401,9 +453,12 @@ pub(crate) fn type_satisfies_interface(
             .try_get(*id)
             .is_some_and(|s| s.kind == SymbolKind::TypeParam)
     {
-        // Satisfied iff this param lists `iface_sym` among its constraints.
+        // Interface identity alone is insufficient: Job<bool> does not prove
+        // Job<int>. Arguments are canonical IDs in the same type interner.
         if let Some(cs) = checker.type_info.param_constraints.get(id) {
-            return cs.iter().any(|b| b.iface_sym == iface_sym);
+            return cs
+                .iter()
+                .any(|b| b.iface_sym == iface_sym && b.type_args.as_slice() == bound_type_args);
         }
         return false;
     }
@@ -411,6 +466,17 @@ pub(crate) fn type_satisfies_interface(
     let Some(iface) = checker.type_info.interfaces.get(&iface_sym) else {
         return false;
     };
+    if let Some(
+        capability @ (arandu_middle::symbol_table::LangItem::Send
+        | arandu_middle::symbol_table::LangItem::Sync),
+    ) = checker
+        .symbols
+        .try_get(iface_sym)
+        .and_then(|symbol| symbol.lang_item)
+    {
+        return bound_type_args.is_empty()
+            && super::transfer::satisfies(checker, concrete, capability);
+    }
     let Some(type_id) = concrete_type_id(concrete) else {
         return false;
     };

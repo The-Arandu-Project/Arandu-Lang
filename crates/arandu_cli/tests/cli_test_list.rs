@@ -6,15 +6,7 @@ use std::fs;
 mod common;
 
 fn temporary_directory() -> std::path::PathBuf {
-    let directory = std::env::temp_dir().join(format!(
-        "arandu-test-list-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    fs::create_dir_all(&directory).unwrap();
-    directory
+    common::temp_dir("arandu-test-list").expect("reserve fresh temporary directory")
 }
 
 #[test]
@@ -128,6 +120,50 @@ fn test_list_uses_package_qualified_deterministic_ids() {
     assert_eq!(report["schema"], "arandu.test/v1");
     assert_eq!(report["seed"], 42);
     assert_eq!(report["cases"].as_array().map(Vec::len), Some(3));
+    let _ = fs::remove_dir_all(temporary);
+}
+
+#[test]
+fn test_child_reuses_project_database_for_source_imports() {
+    let temporary = temporary_directory();
+    let project = temporary.join("imported_test");
+    let created = common::cli_command()
+        .args(["new", "imported_test", "--vcs=none"])
+        .current_dir(&temporary)
+        .output()
+        .expect("create project");
+    assert!(
+        created.status.success(),
+        "new failed: {}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+    fs::write(
+        project.join("src/helper.aru"),
+        "module helper\n\npublic func answer(): int { return 42 }\n",
+    )
+    .unwrap();
+    fs::write(
+        project.join("tests/smoke.aru"),
+        "module imported_test_tests\n\nimport std.testing as testing\nimport self.helper as helper\n\n@Test\nfunc importsSourceModule(): void { testing.expectEqualInt(42, helper.answer(), \"source import\") }\n",
+    )
+    .unwrap();
+
+    let executed = common::cli_command()
+        .args([
+            "test",
+            project.to_str().unwrap(),
+            "--exact",
+            "imported_test::test::smoke::importsSourceModule",
+        ])
+        .output()
+        .expect("run imported test");
+    assert!(
+        executed.status.success(),
+        "imported test failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&executed.stdout),
+        String::from_utf8_lossy(&executed.stderr)
+    );
+
     let _ = fs::remove_dir_all(temporary);
 }
 

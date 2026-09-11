@@ -220,14 +220,100 @@ func main() {
 }
 
 #[test]
+fn partial_field_move_drops_only_the_remaining_field() {
+    let src = r#"
+struct ResourceA { handle: ptr[u8] }
+@Destructor
+func ResourceA.close(own self): void {}
+
+struct ResourceB { handle: ptr[u8] }
+@Destructor
+func ResourceB.close(own self): void {}
+
+struct Container { a: ResourceA b: ResourceB }
+func consume(own value: ResourceA): void {}
+
+func main() {
+    let c = Container {
+        a: ResourceA { handle: nil },
+        b: ResourceB { handle: nil },
+    }
+    consume(c.a)
+}
+"#;
+    let program = arandu_parser::parse(src).expect("parse");
+    let resolution = resolve_for_test(0, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
+    assert!(tc.diagnostics.is_empty(), "{:?}", tc.diagnostics);
+    let hir = lower_to_hir(&mut tc, &program).expect("HIR");
+    let amir = lower_to_amir(&tc, &hir, 64).expect("AMIR");
+
+    let main = amir
+        .funcs
+        .iter()
+        .find(|func| tc.symbols.get(func.symbol).name == "main")
+        .expect("main");
+    let destroys: Vec<_> = main
+        .blocks
+        .iter()
+        .flat_map(|block| main.block_stmts(block.id))
+        .filter_map(|stmt| match stmt {
+            AmirStmt::Destroy(place) => Some(place),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(destroys.len(), 1, "only the live sibling needs drop glue");
+    let AmirProjection::Field(field) = destroys[0].projections[0] else {
+        panic!("remaining drop must target a named field")
+    };
+    assert_eq!(tc.symbols.get(field).name, "b");
+}
+
+#[test]
+fn partial_move_from_explicit_destructor_type_is_rejected() {
+    let src = r#"
+struct Payload { handle: ptr[u8] }
+struct Resource { payload: Payload }
+@Destructor
+func Resource.close(own self): void {}
+func consume(own payload: Payload): void {}
+
+func main() {
+    let resource = Resource { payload: Payload { handle: nil } }
+    consume(resource.payload)
+}
+"#;
+    let program = arandu_parser::parse(src).expect("parse");
+    let resolution = resolve_for_test(0, &program);
+    let mut tc = type_check(
+        resolution,
+        &program,
+        arandu_semantics::TargetInfo { pointer_width: 64 },
+    );
+    assert!(tc.diagnostics.is_empty(), "{:?}", tc.diagnostics);
+    let hir = lower_to_hir(&mut tc, &program).expect("HIR");
+    let diagnostics = lower_to_amir(&tc, &hir, 64).expect_err("partial move must be rejected");
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == DiagCode::U001FeatureNotSupported),
+        "expected U001 for a partial move from a destructor type: {diagnostics:?}"
+    );
+}
+
+#[test]
 fn non_copy_local_use_after_move_fails_during_amir_analysis() {
     let src = r#"
 struct Boxed {
-    value: str
+    handle: ptr[u8]
 }
 
 func main() {
-    let a: Boxed = Boxed { value: "one" }
+    let a: Boxed = Boxed { handle: nil }
     let b: Boxed = a
     let c: Boxed = a
 }
@@ -279,11 +365,11 @@ func main() {
 fn branch_move_mismatch_reports_o007() {
     let src = r#"
 struct Boxed {
-    value: str
+    handle: ptr[u8]
 }
 
 func main(cond: bool) {
-    let a: Boxed = Boxed { value: "one" }
+    let a: Boxed = Boxed { handle: nil }
     if cond {
         let b: Boxed = a
     }
@@ -855,6 +941,51 @@ fn validate_amir_rejects_inconsistent_gen_payload_and_handle_types() {
 }
 
 #[test]
+fn validate_amir_rejects_invalid_block_parameter_ranges_before_following_edges() {
+    let interner = arandu_middle::types::TypeInterner::new();
+    // Cover a dangling empty range, a missing element, and a range whose end
+    // would overflow usize on 32-bit hosts. None may reach unchecked slicing.
+    for params in [
+        DenseRange::new(1, 0),
+        DenseRange::new(0, 1),
+        DenseRange {
+            start: u32::MAX,
+            len: u32::MAX,
+        },
+    ] {
+        let blocks = vec![
+            AmirBasicBlock {
+                id: BlockId::from_usize(0),
+                statements: DenseRange::empty(),
+                params: DenseRange::empty(),
+                terminator: AmirTerminator::Goto {
+                    target: BlockId::from_usize(1),
+                    args: Vec::new(),
+                },
+            },
+            AmirBasicBlock {
+                id: BlockId::from_usize(1),
+                statements: DenseRange::empty(),
+                params,
+                terminator: AmirTerminator::Return,
+            },
+        ];
+        let func = test_func(Vec::new(), Vec::new(), blocks, AmirStmtTable::new());
+        let issues = arandu_middle::amir_validate::validate_amir_func(
+            &func,
+            &validation_symbols(),
+            &interner,
+        );
+        assert!(
+            issues.iter().any(|issue| {
+                issue.code == DiagCode::ICEGEN002 && issue.message.contains("IR-RANGE")
+            }),
+            "invalid parameter range must produce an ICE: {issues:?}"
+        );
+    }
+}
+
+#[test]
 fn validate_amir_rejects_overlapping_and_out_of_bounds_statement_ranges() {
     let interner = arandu_middle::types::TypeInterner::new();
     let mut stmts = AmirStmtTable::new();
@@ -993,5 +1124,93 @@ func main(): int {
         use_sp.start >= x.span.start,
         "use_span {use_sp:?} should not start before decl {:?}",
         x.span
+    );
+}
+
+#[test]
+fn validate_amir_rejects_mismatched_suspend_edge_arguments() {
+    use arandu_semantics::passes::type_checker::types::Primitive;
+    let interner = arandu_middle::types::TypeInterner::new();
+    let int_ty = interner.intern(ArType::Primitive(Primitive::Int));
+    let bool_ty = interner.intern(ArType::Primitive(Primitive::Bool));
+
+    // Block 1 expects 1 parameter of type int_ty
+    let blocks = vec![
+        AmirBasicBlock {
+            id: BlockId::from_usize(0),
+            statements: DenseRange::empty(),
+            params: DenseRange::empty(),
+            // Suspend passes 0 arguments to bb1, which expects 1 parameter (SSA-EDGE violation)
+            terminator: AmirTerminator::Suspend {
+                future: AmirOperand::Constant(AmirConstant::Nil),
+                resume: BlockId::from_usize(1),
+                args: Vec::new(),
+            },
+        },
+        AmirBasicBlock {
+            id: BlockId::from_usize(1),
+            statements: DenseRange::empty(),
+            params: DenseRange::new(0, 1),
+            terminator: AmirTerminator::Return,
+        },
+    ];
+
+    let func = AmirFunc {
+        symbol: symbol(0),
+        return_type: int_ty,
+        receiver: None,
+        params: Vec::new(),
+        locals: Vec::new(),
+        temps: vec![AmirTemp {
+            id: temp(0),
+            ty: bool_ty,
+            is_copy: true,
+            is_nullable: false,
+            span: dummy_span(),
+        }],
+        cfg: arandu_semantics::cfg::compute_cfg_edges(&blocks),
+        blocks,
+        block_params: vec![BlockParam {
+            id: temp(0),
+            local: local(0),
+            ty: int_ty,
+            from: None,
+            moved: false,
+        }],
+        stmts: AmirStmtTable::new(),
+    };
+    let program = arandu_semantics::amir::AmirProgram {
+        funcs: vec![func],
+        literal_pool: AmirLiteralPool::default(),
+        extern_funcs: Default::default(),
+    };
+
+    let issues = validate_amir_program(&program, &validation_symbols(), &interner);
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.code == DiagCode::ICEGEN002 && issue.message.contains("SSA-EDGE")),
+        "expected SSA-EDGE validation error for mismatched Suspend arguments count: {issues:?}"
+    );
+
+    // Now test SSA-TYPE mismatch: pass 1 argument of type bool_ty when int_ty is expected
+    let mut func_type_mismatch = program.funcs[0].clone();
+    func_type_mismatch.blocks[0].terminator = AmirTerminator::Suspend {
+        future: AmirOperand::Constant(AmirConstant::Nil),
+        resume: BlockId::from_usize(1),
+        args: vec![AmirOperand::Copy(temp(0))], // temp(0) has type bool_ty
+    };
+    let program_type_mismatch = arandu_semantics::amir::AmirProgram {
+        funcs: vec![func_type_mismatch],
+        literal_pool: AmirLiteralPool::default(),
+        extern_funcs: Default::default(),
+    };
+    let issues_type =
+        validate_amir_program(&program_type_mismatch, &validation_symbols(), &interner);
+    assert!(
+        issues_type
+            .iter()
+            .any(|issue| issue.code == DiagCode::ICEGEN002 && issue.message.contains("SSA-TYPE")),
+        "expected SSA-TYPE validation error for incompatible Suspend argument type: {issues_type:?}"
     );
 }

@@ -10,26 +10,25 @@ pub fn reverse_post_order(func: &AmirFunc) -> Vec<BlockId> {
     let entry = BlockId::from_usize(0);
     let mut visited = vec![false; n];
     let mut post_order = Vec::with_capacity(n);
-    post_order_walk(entry, func, &mut visited, &mut post_order);
-    post_order.into_iter().rev().collect()
-}
-
-fn post_order_walk(
-    block_id: BlockId,
-    func: &AmirFunc,
-    visited: &mut [bool],
-    post_order: &mut Vec<BlockId>,
-) {
-    let idx = block_id.as_usize();
-    if idx >= visited.len() || visited[idx] {
-        return;
+    let mut stack = vec![(entry, 0usize)];
+    visited[0] = true;
+    // Keep each suspended DFS frame explicit: CFG depth must not consume the
+    // host thread's call stack. Advance successors in their original order.
+    while let Some((block, next_successor)) = stack.last_mut() {
+        if let Some(&successor) = func.successors(*block).get(*next_successor) {
+            *next_successor += 1;
+            let index = successor.as_usize();
+            if index < n && !visited[index] {
+                visited[index] = true;
+                stack.push((successor, 0));
+            }
+        } else {
+            post_order.push(*block);
+            stack.pop();
+        }
     }
-    visited[idx] = true;
-
-    for &succ in func.successors(block_id) {
-        post_order_walk(succ, func, visited, post_order);
-    }
-    post_order.push(block_id);
+    post_order.reverse();
+    post_order
 }
 
 #[cfg(test)]
@@ -151,5 +150,89 @@ mod tests {
         let rpo = reverse_post_order(&func);
         assert_eq!(rpo.len(), 3);
         assert!(rpo.contains(&BlockId::from_usize(2)));
+    }
+
+    #[test]
+    fn rpo_preserves_dfs_order_with_cross_edges_and_backedges() {
+        let func = make_func(vec![
+            make_block(0, &[1, 2]),
+            make_block(1, &[2, 3]),
+            make_block(2, &[1, 3]),
+            make_block(3, &[]),
+            make_block(4, &[]),
+        ]);
+        assert_eq!(
+            reverse_post_order(&func),
+            (0..4).map(BlockId::from_usize).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn rpo_deep_chain_does_not_depend_on_thread_stack_size() {
+        let count = 16_384;
+        let func = make_func(
+            (0..count)
+                .map(|id| {
+                    if id + 1 < count {
+                        make_block(id, &[id + 1])
+                    } else {
+                        make_block(id, &[])
+                    }
+                })
+                .collect(),
+        );
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(move || {
+                let order = reverse_post_order(&func);
+                assert_eq!(order.len(), count);
+                for (id, block) in order.into_iter().enumerate() {
+                    assert_eq!(block, BlockId::from_usize(id));
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// Manual pass benchmark; assertions above own correctness, not wall time.
+    #[test]
+    #[ignore = "informational CFG traversal benchmark"]
+    fn rpo_cfg_workload_measurement() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        for branching in [false, true] {
+            let count = 256;
+            let func = make_func(
+                (0..count)
+                    .map(|id| {
+                        if branching && id + 2 < count {
+                            make_block(id, &[id + 1, id + 2])
+                        } else if id + 1 < count {
+                            make_block(id, &[id + 1])
+                        } else {
+                            make_block(id, &[])
+                        }
+                    })
+                    .collect(),
+            );
+            for _ in 0..100 {
+                black_box(reverse_post_order(black_box(&func)));
+            }
+            let mut samples = Vec::new();
+            for _ in 0..7 {
+                let start = Instant::now();
+                for _ in 0..2_000 {
+                    black_box(reverse_post_order(black_box(&func)));
+                }
+                samples.push(start.elapsed());
+            }
+            samples.sort();
+            println!(
+                "RPO: blocks={count} branching={branching} rounds=2000 median={:?}",
+                samples[3]
+            );
+        }
     }
 }

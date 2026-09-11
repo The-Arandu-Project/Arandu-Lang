@@ -106,7 +106,14 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
         }
 
         match rvalue {
-            AmirRvalue::Use(op) => self.translate_operand(op, expected_ty),
+            AmirRvalue::Use(op) => {
+                let val = self.translate_operand(op, expected_ty);
+                let op_ty = self.get_operand_ar_type(op);
+                if matches!(op, AmirOperand::Copy(_)) && self.is_named_struct_ty(&op_ty) {
+                    return self.materialize_ptr_read_copy(val, &op_ty).unwrap_or(val);
+                }
+                val
+            }
             AmirRvalue::SliceView { data, len, .. } => {
                 let data = self.translate_operand(data, Some(self.ptr_type));
                 let len = self.translate_operand(len, Some(self.ptr_type));
@@ -747,6 +754,7 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
             }
             AmirRvalue::Borrow(place) | AmirRvalue::BorrowMut(place) => {
                 let ty = self.local_ar_ty(place.local);
+                let borrowed_ty = self.place_ar_ty(place);
                 let local_is_memory = self.current_func.locals[place.local.as_usize()].is_memory;
                 let has_stack_home = self.local_stack_slots.contains_key(&place.local);
                 // BC.4a: Deref means base local already holds a materialised pointer
@@ -779,6 +787,24 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
 
                 if is_memory_backed {
                     let (base_ptr, offset) = self.translate_place_address_for_load(place);
+                    // Named aggregates use a pointer representation in the JIT.
+                    // A projected struct field therefore contains the aggregate
+                    // pointer; borrowing that field passes the pointer value, not
+                    // the address of the field slot that stores it. Scalar fields
+                    // still borrow their slot address.
+                    if matches!(borrowed_ty, ArType::Named(_, _))
+                        && matches!(
+                            place.projections.last(),
+                            Some(arandu_semantics::amir::AmirProjection::Field(_))
+                        )
+                    {
+                        return self.builder.ins().load(
+                            self.ptr_type,
+                            cranelift_codegen::ir::MemFlagsData::new(),
+                            base_ptr,
+                            offset,
+                        );
+                    }
                     if offset == 0 {
                         base_ptr
                     } else {

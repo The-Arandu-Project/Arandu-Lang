@@ -385,7 +385,7 @@ pub(super) fn synth_call_expr(
                                 .map(|aid| synth_expr(checker, aid))
                                 .collect();
                             if let Some((ip, ir)) = infer_and_instantiate_func(
-                                checker, &gp, &params, ret, &arg_tys, expected,
+                                checker, &gp, &params, ret, &arg_tys, expected, span,
                             ) {
                                 params = ip;
                                 ret = ir;
@@ -488,6 +488,13 @@ pub(super) fn synth_call_expr(
                                         arg_span: checker.pool.expr_span(base_id),
                                         arg_index: 0,
                                     },
+                                );
+                            } else {
+                                super::super::ctor::validate_exclusive_receiver_autoref(
+                                    checker,
+                                    base_id,
+                                    receiver_ty_id,
+                                    actual_base_ty_id,
                                 );
                             }
                             let explicit_params = &params[1..];
@@ -645,9 +652,9 @@ pub(super) fn synth_call_expr(
                         .copied()
                         .map(|aid| synth_expr(checker, aid))
                         .collect();
-                    if let Some((ip, ir)) =
-                        infer_and_instantiate_func(checker, &gp, &params, ret, &arg_tys, expected)
-                    {
+                    if let Some((ip, ir)) = infer_and_instantiate_func(
+                        checker, &gp, &params, ret, &arg_tys, expected, span,
+                    ) {
                         params = ip;
                         ret = ir;
                         let func_ty = ArType::func(&params, ret, &checker.type_info.type_interner);

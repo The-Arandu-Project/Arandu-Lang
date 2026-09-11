@@ -8,9 +8,9 @@
 use crate::amir::{
     AmirFunc, AmirPlace, AmirProjection, AmirStmt, AmirStmtTable, AmirTerminator, LocalId,
 };
-use crate::move_checker::{DropState, move_states_at_block_exit};
+use crate::move_checker::{MoveState, move_states_at_block_exit};
 use arandu_middle::SymbolId;
-use arandu_middle::layout::DenseRange;
+use arandu_middle::layout::{DenseRange, instantiated_field_type};
 use arandu_middle::types::{ArType, TypeId};
 use arandu_typeck::TypeInfo;
 use smallvec::SmallVec;
@@ -25,7 +25,14 @@ fn type_needs_drop(ty: TypeId, type_info: &TypeInfo) -> bool {
             }
             if let Some(fields) = type_info.struct_fields.get(&sym) {
                 for f in fields.iter() {
-                    if type_needs_drop(f.ty, type_info) {
+                    let field_ty = instantiated_field_type(
+                        &resolved,
+                        &f.name,
+                        &type_info.type_interner,
+                        type_info,
+                    )
+                    .unwrap_or(f.ty);
+                    if type_needs_drop(field_ty, type_info) {
                         return true;
                     }
                 }
@@ -43,9 +50,13 @@ fn emit_recursive_drops(
     place: &AmirPlace,
     ty: TypeId,
     type_info: &TypeInfo,
+    move_state: &MoveState,
     skip_top_level_destructor: bool,
     rebuilt: &mut AmirStmtTable,
 ) {
+    if !move_state.place_itself_is_available(place) {
+        return;
+    }
     let resolved = type_info.resolve_type_id(ty);
     if let ArType::Named(sym, _) = resolved {
         let has_destructor = type_info.destructor_instances.contains_key(&ty);
@@ -55,8 +66,19 @@ fn emit_recursive_drops(
         }
 
         if let Some(fields) = type_info.struct_fields.get(&sym) {
-            let mut indexed: Vec<(usize, Option<SymbolId>, TypeId)> =
-                fields.iter().map(|f| (f.index, f.symbol, f.ty)).collect();
+            let mut indexed: Vec<(usize, Option<SymbolId>, TypeId)> = fields
+                .iter()
+                .map(|f| {
+                    let ty = instantiated_field_type(
+                        &resolved,
+                        &f.name,
+                        &type_info.type_interner,
+                        type_info,
+                    )
+                    .unwrap_or(f.ty);
+                    (f.index, f.symbol, ty)
+                })
+                .collect();
             indexed.sort_by_key(|(idx, _, _)| std::cmp::Reverse(*idx));
 
             for (_, fsym, fty) in indexed {
@@ -65,7 +87,7 @@ fn emit_recursive_drops(
                     if let Some(fsym) = fsym {
                         sub_place.projections.push(AmirProjection::Field(fsym));
                     }
-                    emit_recursive_drops(&sub_place, fty, type_info, false, rebuilt);
+                    emit_recursive_drops(&sub_place, fty, type_info, move_state, false, rebuilt);
                 }
             }
         }
@@ -91,17 +113,24 @@ pub fn elaborate_drops(func: &mut AmirFunc, type_info: &TypeInfo) {
             rebuilt.push(old.payloads[id].clone());
         }
         if matches!(block.terminator, AmirTerminator::Return) {
+            let move_state = &moved[block.id.as_usize()];
             for local in func.locals.iter().rev() {
                 let skip_self = is_destructor_func && local.id.as_usize() == 0;
                 if type_needs_drop(local.ty, type_info)
                     && initialized[block.id.as_usize()].contains(local.id)
-                    && moved[block.id.as_usize()][local.id.as_usize()] == DropState::Available
                 {
                     let root_place = AmirPlace {
                         local: LocalId::from_usize(local.id.as_usize()),
                         projections: SmallVec::new(),
                     };
-                    emit_recursive_drops(&root_place, local.ty, type_info, skip_self, &mut rebuilt);
+                    emit_recursive_drops(
+                        &root_place,
+                        local.ty,
+                        type_info,
+                        move_state,
+                        skip_self,
+                        &mut rebuilt,
+                    );
                 }
             }
         }

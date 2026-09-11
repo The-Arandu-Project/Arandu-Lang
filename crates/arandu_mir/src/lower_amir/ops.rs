@@ -1,10 +1,10 @@
 use super::LowerCtx;
 use crate::SymbolTable;
-use crate::amir::{AmirOperand, AmirRvalue, TempId};
+use crate::amir::{AmirConstant, AmirOperand, AmirRvalue, TempId};
 use crate::diagnostics::Diagnostic;
-use crate::hir::HirExprId;
+use crate::hir::{HirExprId, HirExprKind};
 use crate::ops::{BinaryOp, UnaryOp};
-use crate::passes::type_checker::types::ArType;
+use crate::passes::type_checker::types::{ArType, Primitive};
 
 impl LowerCtx<'_> {
     pub(crate) fn lower_binary(
@@ -17,6 +17,46 @@ impl LowerCtx<'_> {
         symbols: &SymbolTable,
     ) -> Result<AmirOperand, Diagnostic> {
         let l_op = self.lower_expr(left, None, symbols)?;
+        if matches!(op, BinaryOp::And | BinaryOp::Or) {
+            let dest = target.unwrap_or_else(|| self.new_temp_id(expr_ty));
+            if self.builder.current_block.is_none() {
+                return Ok(AmirOperand::Copy(dest));
+            }
+
+            let bb_short = self.new_block();
+            let bb_right = self.new_block();
+            let bb_join = self.new_block();
+            if matches!(op, BinaryOp::And) {
+                self.set_bool_branch(l_op, bb_right, bb_short);
+            } else {
+                self.set_bool_branch(l_op, bb_short, bb_right);
+            }
+            self.seal_block(bb_short);
+            self.seal_block(bb_right);
+
+            self.builder.current_block = Some(bb_short);
+            let result_local = self.new_compiler_local(ArType::Primitive(Primitive::Bool));
+            self.write_variable(
+                bb_short,
+                result_local,
+                AmirOperand::Constant(AmirConstant::Bool(matches!(op, BinaryOp::Or))),
+            );
+            self.emit_goto(bb_join);
+
+            self.builder.current_block = Some(bb_right);
+            let right_op = self.lower_expr(right, None, symbols)?;
+            if self.builder.current_block.is_some() {
+                let right_block = self.require_block()?;
+                self.write_variable(right_block, result_local, right_op);
+                self.emit_goto(bb_join);
+            }
+
+            self.seal_block(bb_join);
+            self.builder.current_block = Some(bb_join);
+            let result = self.read_variable(bb_join, result_local);
+            self.emit_assign_temp(dest, AmirRvalue::Use(result));
+            return Ok(AmirOperand::Copy(dest));
+        }
         let r_op = self.lower_expr(right, None, symbols)?;
         let dest = target.unwrap_or_else(|| self.new_temp_id(expr_ty));
         self.emit_assign_temp(
@@ -186,7 +226,45 @@ impl LowerCtx<'_> {
             return Ok(AmirOperand::Copy(dest));
         }
 
-        let op = self.lower_expr(arg, None, symbols)?;
+        // Preserve the source place for named-field move arguments. Ordinary field
+        // value lowering produces `FieldAccess`, which intentionally carries only the
+        // ordinal needed by codegen and loses the ownership path. A direct
+        // `Load(place)` keeps stable field symbols without rebuilding them later.
+        let projected_place = matches!(&arg_expr.kind, HirExprKind::Field { .. });
+        let op = if !mode.is_borrow() && !arg_is_ref && projected_place {
+            match self.lower_expr_to_place(arg, symbols) {
+                Ok(place) => {
+                    let root_has_destructor =
+                        self.locals
+                            .get(place.local.as_usize())
+                            .is_some_and(|local| {
+                                self.tc
+                                    .type_info
+                                    .destructor_instances
+                                    .contains_key(&local.ty)
+                            });
+                    if !place.projections.is_empty()
+                        && root_has_destructor
+                        && !self.tc.type_info.is_copy(arg_expr.ty)
+                    {
+                        return Err(Diagnostic::error(
+                            crate::DiagCode::U001FeatureNotSupported,
+                            "cannot move a field out of a value with an explicit destructor",
+                            arg_expr.span,
+                        )
+                        .with_note(
+                            "the destructor requires the complete value; move the whole value or borrow the field",
+                        ));
+                    }
+                    self.load_place(&place, arg_expr.ty)?
+                }
+                // A projection on a temporary is a value expression rather than a
+                // place rooted in a local. Keep ordinary lowering for that case.
+                Err(_) => self.lower_expr(arg, None, symbols)?,
+            }
+        } else {
+            self.lower_expr(arg, None, symbols)?
+        };
         if mode.is_borrow() || arg_is_ref {
             // shared/mut self or already a reference: do not move.
             Ok(op)

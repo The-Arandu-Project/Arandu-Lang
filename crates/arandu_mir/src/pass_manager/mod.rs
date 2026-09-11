@@ -23,8 +23,10 @@ pub use pipeline::pipeline_for_level;
 pub use stats::PassStats;
 
 use crate::Diagnostic;
+use crate::SymbolTable;
 use crate::amir::{AmirFunc, AmirProgram};
 use crate::literal_pool::AmirLiteralPool;
+use crate::types::TypeInterner;
 use bumpalo::Bump;
 
 /// Optimization levels for the AMIR middle-end pipeline.
@@ -122,6 +124,40 @@ impl PassManager {
             func,
             literal_pool,
             fixpoint::DEFAULT_MAX_FIXPOINT_ITERATIONS,
+            &mut |_, _| Ok(()),
+        )
+    }
+
+    /// Optimizes one function and validates AMIR immediately after each pass.
+    ///
+    /// This catches the pass that introduced malformed IR even when a later
+    /// pass would erase or rewrite the damaged structure.
+    pub fn run_function_checked(
+        &self,
+        func: &mut AmirFunc,
+        literal_pool: &mut AmirLiteralPool,
+        symbols: &SymbolTable,
+        interner: &TypeInterner,
+    ) -> Result<PassStats, Diagnostic> {
+        if self.passes.is_empty() {
+            return Ok(PassStats::default());
+        }
+        fixpoint::run_pipeline_to_fixpoint(
+            &self.passes,
+            func,
+            literal_pool,
+            fixpoint::DEFAULT_MAX_FIXPOINT_ITERATIONS,
+            &mut |func, pass| match crate::amir_validate::validate_amir_func(
+                func, symbols, interner,
+            )
+            .into_iter()
+            .next()
+            {
+                Some(issue) => Err(issue.with_note(format!(
+                    "AMIR invariant failed immediately after optimization pass `{pass}`"
+                ))),
+                None => Ok(()),
+            },
         )
     }
 
@@ -130,6 +166,22 @@ impl PassManager {
         let mut total = PassStats::default();
         for func in &mut program.funcs {
             let stats = self.run_function(func, &mut program.literal_pool)?;
+            total.merge(stats);
+        }
+        Ok(total)
+    }
+
+    /// Optimizes a program while checking invariants after every pass.
+    pub fn run_program_checked(
+        &self,
+        program: &mut AmirProgram,
+        symbols: &SymbolTable,
+        interner: &TypeInterner,
+    ) -> Result<PassStats, Diagnostic> {
+        let mut total = PassStats::default();
+        for func in &mut program.funcs {
+            let stats =
+                self.run_function_checked(func, &mut program.literal_pool, symbols, interner)?;
             total.merge(stats);
         }
         Ok(total)
@@ -146,6 +198,8 @@ mod tests {
     use crate::cfg::compute_cfg_edges;
     use crate::layout::DenseRange;
     use crate::passes::type_checker::types::{ArType, Primitive};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     fn intern_ty(ty: ArType) -> crate::types::TypeId {
         // Fresh interner per call is OK in unit tests (pre-interns primitives).
@@ -204,6 +258,41 @@ mod tests {
             _func: &mut AmirFunc,
             _resources: &mut PassResources<'_>,
         ) -> Result<bool, Diagnostic> {
+            Ok(true)
+        }
+    }
+
+    struct CorruptBlockIdPass;
+
+    impl FunctionPass for CorruptBlockIdPass {
+        fn name(&self) -> &'static str {
+            "corrupt_block_id"
+        }
+
+        fn run(
+            &self,
+            func: &mut AmirFunc,
+            _resources: &mut PassResources<'_>,
+        ) -> Result<bool, Diagnostic> {
+            func.blocks[0].id = BlockId::from_usize(1);
+            Ok(true)
+        }
+    }
+
+    struct RepairBlockIdPass(Arc<AtomicBool>);
+
+    impl FunctionPass for RepairBlockIdPass {
+        fn name(&self) -> &'static str {
+            "repair_block_id"
+        }
+
+        fn run(
+            &self,
+            func: &mut AmirFunc,
+            _resources: &mut PassResources<'_>,
+        ) -> Result<bool, Diagnostic> {
+            self.0.store(true, Ordering::Relaxed);
+            func.blocks[0].id = BlockId::from_usize(0);
             Ok(true)
         }
     }
@@ -299,6 +388,42 @@ mod tests {
             err.kind,
             crate::diagnostics::DiagnosticKind::InternalCompilerError
         );
+    }
+
+    #[test]
+    fn checked_pipeline_attributes_invalid_ir_to_the_first_faulty_pass() {
+        let repair_ran = Arc::new(AtomicBool::new(false));
+        let manager = PassManager::from_passes(
+            OptLevel::O1,
+            vec![
+                Box::new(CorruptBlockIdPass),
+                Box::new(RepairBlockIdPass(Arc::clone(&repair_ran))),
+            ],
+        );
+        let interner = TypeInterner::new();
+        let mut symbols = SymbolTable::new(0);
+        let symbol = symbols
+            .define(
+                symbols.global_scope(),
+                "probe",
+                crate::SymbolKind::Func,
+                arandu_lexer::Span::new(0, 0, 0),
+            )
+            .unwrap();
+        let mut f = func(Vec::new(), Vec::new());
+        f.symbol = symbol;
+
+        let err = manager
+            .run_function_checked(&mut f, &mut AmirLiteralPool::default(), &symbols, &interner)
+            .unwrap_err();
+
+        assert_eq!(err.code, crate::DiagCode::ICEGEN002);
+        assert!(
+            err.notes
+                .iter()
+                .any(|note| note.contains("`corrupt_block_id`"))
+        );
+        assert!(!repair_ran.load(Ordering::Relaxed));
     }
 
     #[test]
