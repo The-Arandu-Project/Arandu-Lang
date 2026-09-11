@@ -126,18 +126,21 @@ pub fn publish_native_artifact(
     let artifact_path = layout.deps.join(&artifact_name);
     atomic_write(&artifact_path, object)?;
 
-    let staging = unique_staging_path(
-        &layout.bin.join(if cfg!(windows) {
-            format!("{package}.exe")
-        } else {
-            package.to_string()
-        }),
-        "link",
-    );
+    let staging_dir = layout.bin.join(".staging");
+    fs::create_dir_all(&staging_dir)
+        .map_err(|error| failure("create artifact staging layout", &staging_dir, error))?;
+    let staging = staging_dir.join(if cfg!(windows) {
+        format!("{package}.exe")
+    } else {
+        package.to_string()
+    });
+    let _ = fs::remove_file(&staging);
+
     let linker = match link(&artifact_path, &staging) {
         Ok(linker) => linker,
         Err(error) => {
             let _ = fs::remove_file(&staging);
+            let _ = fs::remove_dir(&staging_dir);
             return Err(error);
         }
     };
@@ -145,6 +148,7 @@ pub fn publish_native_artifact(
         fs::read(&staging).map_err(|error| failure("read linked artifact", &staging, error))?;
     if executable.is_empty() {
         let _ = fs::remove_file(&staging);
+        let _ = fs::remove_dir(&staging_dir);
         return Err(CliFailure::operational(
             "publish linked artifact",
             Some(staging),
@@ -159,6 +163,7 @@ pub fn publish_native_artifact(
     };
     let executable_path = layout.bin.join(&executable_name);
     publish_staging(&staging, &executable_path)?;
+    let _ = fs::remove_dir(&staging_dir);
 
     let relative = format!("bin/{executable_name}");
     let object_relative = format!("deps/{artifact_name}");

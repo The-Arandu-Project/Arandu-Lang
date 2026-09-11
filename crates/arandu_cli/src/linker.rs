@@ -312,16 +312,19 @@ fn run_system_linker(
         } else {
             (object.to_path_buf(), None)
         };
-    if let Some(dir) = work_dir {
+    let output_arg = if let Some(dir) = work_dir {
         command.current_dir(dir);
-    }
+        make_relative(output, dir)
+    } else {
+        output.to_path_buf()
+    };
     if cfg!(windows) {
         command
             .arg("/NOLOGO")
             .arg("/INCREMENTAL:NO")
             .arg("/Brepro")
             .arg("/SUBSYSTEM:CONSOLE")
-            .arg(format!("/OUT:{}", output.display()))
+            .arg(format!("/OUT:{}", output_arg.display()))
             .arg(&object_arg)
             .arg(runtime)
             .args([
@@ -333,7 +336,11 @@ fn run_system_linker(
                 "msvcrt.lib",
             ]);
     } else {
-        command.arg(&object_arg).arg(runtime).arg("-o").arg(output);
+        command
+            .arg(&object_arg)
+            .arg(runtime)
+            .arg("-o")
+            .arg(&output_arg);
         #[cfg(target_os = "linux")]
         command.args([
             "-Wl,--gc-sections",
@@ -351,6 +358,7 @@ fn run_system_linker(
             "-Wl,-dead_strip",
             "-Wl,-x",
             "-Wl,-S",
+            "-Wl,-oso_prefix,.",
             "-framework",
             "Security",
             "-framework",
@@ -362,6 +370,8 @@ fn run_system_linker(
         ]);
         #[cfg(target_os = "macos")]
         command.env("ZERO_AR_DATE", "1");
+        #[cfg(target_os = "macos")]
+        command.env("LD_DETERMINISTIC_MODE", "YES");
     }
     match command.output() {
         Ok(result) if result.status.success() => Ok(()),
@@ -389,15 +399,20 @@ fn link_with_rustc(object: &Path, runtime: &Path, output: &Path) -> Result<(), C
         } else {
             (object.to_path_buf(), None)
         };
+    let (stub_arg, output_arg) = if let Some(dir) = work_dir {
+        (make_relative(&stub, dir), make_relative(output, dir))
+    } else {
+        (stub.clone(), output.to_path_buf())
+    };
     let mut command = Command::new("rustc");
     if let Some(dir) = work_dir {
         command.current_dir(dir);
     }
     command
         .args(["--crate-name", "arandu_link", "--edition", "2024"])
-        .arg(&stub)
+        .arg(&stub_arg)
         .arg("-o")
-        .arg(output)
+        .arg(&output_arg)
         .arg("-C")
         .arg(format!("link-arg={}", object_arg.display()))
         .arg("-C")
@@ -405,6 +420,8 @@ fn link_with_rustc(object: &Path, runtime: &Path, output: &Path) -> Result<(), C
         .args(rustc_reproducible_link_args());
     #[cfg(target_os = "macos")]
     command.env("ZERO_AR_DATE", "1");
+    #[cfg(target_os = "macos")]
+    command.env("LD_DETERMINISTIC_MODE", "YES");
     let result = command.output();
     let _ = fs::remove_file(&stub);
     match result {
@@ -431,10 +448,35 @@ fn rustc_reproducible_link_args() -> Vec<&'static str> {
             "link-arg=-Wl,-x",
             "-C",
             "link-arg=-Wl,-S",
+            "-C",
+            "link-arg=-Wl,-oso_prefix,.",
         ]
     } else {
         vec!["-C", "link-arg=-Wl,--build-id=sha1"]
     }
+}
+
+fn make_relative(target: &Path, base: &Path) -> PathBuf {
+    let target_components: Vec<_> = target.components().collect();
+    let base_components: Vec<_> = base.components().collect();
+    let mut common = 0;
+    while common < target_components.len()
+        && common < base_components.len()
+        && target_components[common] == base_components[common]
+    {
+        common += 1;
+    }
+    if common == 0 {
+        return target.to_path_buf();
+    }
+    let mut result = PathBuf::new();
+    for _ in common..base_components.len() {
+        result.push("..");
+    }
+    for component in &target_components[common..] {
+        result.push(component.as_os_str());
+    }
+    result
 }
 
 fn format_output(linker: impl AsRef<std::ffi::OsStr>, output: &Output) -> String {
