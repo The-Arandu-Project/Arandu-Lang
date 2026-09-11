@@ -500,11 +500,15 @@ mod tests {
 
     struct Blocked {
         gate: Arc<Gate>,
+        started: Option<Arc<AtomicBool>>,
     }
 
     unsafe extern "C" fn hold(context: *mut u8, result: *mut u8) -> i32 {
         // SAFETY: the test pairs this thunk with Blocked -> usize.
         let blocked = unsafe { ptr::read(context.cast::<Blocked>()) };
+        if let Some(started) = &blocked.started {
+            started.store(true, Ordering::SeqCst);
+        }
         blocked.gate.wait_until_released();
         // SAFETY: result points to aligned, uninitialized usize storage.
         unsafe { ptr::write(result.cast::<usize>(), 0) };
@@ -518,6 +522,7 @@ mod tests {
             WorkerTask::try_new::<Blocked, usize>(
                 Blocked {
                     gate: Arc::clone(gate),
+                    started: None,
                 },
                 hold,
             )
@@ -657,27 +662,53 @@ mod tests {
     #[test]
     fn external_blocking_submit_wakes_after_pool_progresses() {
         let gate = Arc::new(Gate::new());
+        let root_started = Arc::new(AtomicBool::new(false));
         let pool = WorkerPool::new(1, 1).unwrap();
 
-        let root = pool.submit(hold_task(&gate)).unwrap();
-        // Fill the single admission slot so the external submit below blocks.
+        // SAFETY: hold is paired with Blocked -> usize here.
+        let root_task = unsafe {
+            WorkerTask::try_new::<Blocked, usize>(
+                Blocked {
+                    gate: Arc::clone(&gate),
+                    started: Some(Arc::clone(&root_started)),
+                },
+                hold,
+            )
+        }
+        .unwrap();
+        let root = pool.submit(root_task).unwrap();
+
+        // Wait until worker has picked root and entered execution (waiting on gate).
+        while !root_started.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+
+        // Fill the single admission slot so any subsequent external submit blocks.
         let queued = pool.submit(hold_task(&gate)).unwrap();
         assert_eq!(pool.queued(), Some(1));
 
         let core = pool.core();
         let entered = Arc::new(AtomicBool::new(false));
+        let submit_started = Arc::new(AtomicBool::new(false));
         // SAFETY: pass is paired with usize -> usize here.
         let block_task = unsafe { WorkerTask::try_new::<usize, usize>(5, pass) }.unwrap();
         let block_handle = {
             let entered = Arc::clone(&entered);
+            let submit_started = Arc::clone(&submit_started);
             let core = core.clone();
             std::thread::spawn(move || {
+                submit_started.store(true, Ordering::SeqCst);
                 let pending = core.submit(block_task).unwrap();
                 entered.store(true, Ordering::SeqCst);
                 pending.wait().unwrap().try_take::<usize>().unwrap()
             })
         };
 
+        // Wait until the spawned thread has started its submit call.
+        while !submit_started.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+        // Brief sleep ensuring it reached and blocked on sync_channel admission.
         std::thread::sleep(Duration::from_millis(20));
         assert!(!entered.load(Ordering::SeqCst));
 

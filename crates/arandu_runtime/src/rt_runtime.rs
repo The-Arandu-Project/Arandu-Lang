@@ -693,7 +693,11 @@ mod tests {
                 ),
                 1
             );
-            assert_eq!(std::slice::from_raw_parts(data, len), b"/tmp/owned");
+            let expected = std::path::Path::new("/tmp")
+                .join("owned")
+                .to_string_lossy()
+                .into_owned();
+            assert_eq!(std::slice::from_raw_parts(data, len), expected.as_bytes());
             assert_eq!(capacity, len);
             crate::vec_runtime::ar_vec_buf_free(data, capacity);
         }

@@ -105,11 +105,16 @@ Entrada (fatia []T ou coleção)
 
 ---
 
-## Dívida Técnica Classificada e Futuro
+## PONTOS DE MELHORIA (O que não está no roadmap)
 
 1. **F2.5 — ABI de Agregados por Valor na Stack do JIT:**
    Atualmente, structs nomeadas no Cranelift JIT são alocadas como ponteiros de heap em `materialize_ptr_read_copy`. O passo F2.5 migrará agregados para homes na stack do frame de chamada, alinhando completamente com o modelo `is_memory` do backend C e eliminando alocações temporárias.
 2. **Generalização do Tipo de Retorno `R`:**
    Atualmente o retorno de chunks suporta tipos `Copy` ou com destruidor explícito; a generalização completa para tipos arbitrários `Clone` sem destruidor requer a propagação de `PayloadDropGlue` para o resultado parcial.
-3. **Validação Multiplataforma (Gate de Release):**
+
+## Futuro e Próximos Passos
+
+1. **Validação Multiplataforma (Gate de Release):**
    Exercitar os testes de paralelismo e `WorkerPool` nos runners nativos de CI Windows e macOS durante os testes de release `rc.5`.
+2. **Avaliação de Trabalho I/O em Fatias Descontínuas:**
+   Expandir além de fatias contíguas (`[]T`) para geradores/streams sem materialização prévia de fatias completas.

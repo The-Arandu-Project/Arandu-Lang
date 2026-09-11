@@ -44,7 +44,7 @@ fn emits_parseable_host_object_with_defined_function() {
 
     let main = file
         .symbols()
-        .find(|symbol| symbol.name() == Ok("main"))
+        .find(|symbol| symbol.name() == Ok("main") || symbol.name() == Ok("_main"))
         .expect("object must define the source function");
     assert!(main.is_definition());
     assert!(main.is_global());
