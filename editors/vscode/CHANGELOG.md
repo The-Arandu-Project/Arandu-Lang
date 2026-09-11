@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.0-rc.5
+
+- Release candidate promotion preparation.
+
 ## 0.1.0-rc.4
 
 - Release candidate promotion preparation.
