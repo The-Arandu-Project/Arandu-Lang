@@ -340,6 +340,7 @@ fn run_system_linker(
         #[cfg(target_os = "macos")]
         command.args([
             "-Wl,-dead_strip",
+            "-Wl,-x",
             "-framework",
             "Security",
             "-framework",
@@ -349,6 +350,8 @@ fn run_system_linker(
             "-lc",
             "-lm",
         ]);
+        #[cfg(target_os = "macos")]
+        command.env("ZERO_AR_DATE", "1");
     }
     match command.output() {
         Ok(result) if result.status.success() => Ok(()),
@@ -370,7 +373,8 @@ fn link_with_rustc(object: &Path, runtime: &Path, output: &Path) -> Result<(), C
             error.to_string(),
         )
     })?;
-    let result = Command::new("rustc")
+    let mut command = Command::new("rustc");
+    command
         .args(["--crate-name", "arandu_link", "--edition", "2024"])
         .arg(&stub)
         .arg("-o")
@@ -379,8 +383,10 @@ fn link_with_rustc(object: &Path, runtime: &Path, output: &Path) -> Result<(), C
         .arg(format!("link-arg={}", object.display()))
         .arg("-C")
         .arg(format!("link-arg={}", runtime.display()))
-        .args(rustc_reproducible_link_args())
-        .output();
+        .args(rustc_reproducible_link_args());
+    #[cfg(target_os = "macos")]
+    command.env("ZERO_AR_DATE", "1");
+    let result = command.output();
     let _ = fs::remove_file(&stub);
     match result {
         Ok(result) if result.status.success() => Ok(()),
@@ -399,7 +405,7 @@ fn rustc_reproducible_link_args() -> Vec<&'static str> {
     if cfg!(windows) {
         vec!["-C", "link-arg=/Brepro"]
     } else if cfg!(target_os = "macos") {
-        vec!["-C", "link-arg=-Wl,-dead_strip"]
+        vec!["-C", "link-arg=-Wl,-dead_strip", "-C", "link-arg=-Wl,-x"]
     } else {
         vec!["-C", "link-arg=-Wl,--build-id=sha1"]
     }

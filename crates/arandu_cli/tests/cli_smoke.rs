@@ -664,25 +664,37 @@ fn emit_c_host_m25_fs_env_compiles_and_runs() {
     {
         let temp_dir = std::env::temp_dir();
         let c_file = temp_dir.join("arandu_test_m25_fs_env.c");
-        let bin_file = temp_dir.join("arandu_test_m25_fs_env");
+        let bin_name = if cfg!(windows) {
+            "arandu_test_m25_fs_env.exe"
+        } else {
+            "arandu_test_m25_fs_env"
+        };
+        let bin_file = temp_dir.join(bin_name);
         fs::write(&c_file, c_source.as_bytes()).expect("write c file");
-        let status = std::process::Command::new("gcc")
+        let compile_output = std::process::Command::new("gcc")
             .arg(&c_file)
             .arg("-o")
             .arg(&bin_file)
-            .status()
+            .output()
             .expect("invoke C compiler");
-        assert!(status.success(), "C compilation of m25_fs_env failed");
+        assert!(
+            compile_output.status.success(),
+            "C compilation of m25_fs_env failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&compile_output.stdout),
+            String::from_utf8_lossy(&compile_output.stderr)
+        );
 
-        let run_status = std::process::Command::new(&bin_file)
+        let run_output = std::process::Command::new(&bin_file)
             .current_dir(manifest_dir.to_owned() + "/../..")
-            .status()
+            .output()
             .expect("run compiled m25_fs_env");
         let _ = fs::remove_file(&c_file);
         let _ = fs::remove_file(&bin_file);
         assert!(
-            run_status.success(),
-            "compiled m25_fs_env exited with non-zero"
+            run_output.status.success(),
+            "compiled m25_fs_env exited with non-zero:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&run_output.stdout),
+            String::from_utf8_lossy(&run_output.stderr)
         );
     }
 }

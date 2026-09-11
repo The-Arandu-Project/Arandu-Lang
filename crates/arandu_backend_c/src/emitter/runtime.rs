@@ -824,7 +824,14 @@ static void ar_fs_readdir(ArStr path, uint8_t **out_buf, {uint_c_ty} *out_count,
 static int ar_env_c_argc = 0;
 static char **ar_env_c_argv = NULL;
 
-#if defined(__GNUC__) || defined(__clang__)
+#if defined(_WIN32)
+static void ar_init_env_args_if_needed(void) {{
+    if (!ar_env_c_argv) {{
+        ar_env_c_argc = __argc;
+        ar_env_c_argv = __argv;
+    }}
+}}
+#elif defined(__GNUC__) || defined(__clang__)
 __attribute__((constructor)) static void ar_capture_env_args(int argc, char **argv) {{
     ar_env_c_argc = argc;
     ar_env_c_argv = argv;
@@ -832,10 +839,16 @@ __attribute__((constructor)) static void ar_capture_env_args(int argc, char **ar
 #endif
 
 static {int_c_ty} ar_env_args_len(void) {{
+#if defined(_WIN32)
+    ar_init_env_args_if_needed();
+#endif
     return ({int_c_ty})ar_env_c_argc;
 }}
 
 static ArStr ar_env_arg({int_c_ty} index) {{
+#if defined(_WIN32)
+    ar_init_env_args_if_needed();
+#endif
     if (index < 0 || index >= ({int_c_ty})ar_env_c_argc || !ar_env_c_argv) {{
         return ar_str_pack((const uint8_t*)"", 0);
     }}
@@ -865,6 +878,10 @@ static {int_c_ty} ar_env_var_is_set(ArStr name) {{
         let _ = writeln!(&mut self.output, "#include <errno.h>");
         let _ = writeln!(&mut self.output, "#include <sys/types.h>");
         let _ = writeln!(&mut self.output, "#include <sys/stat.h>");
+        let _ = writeln!(
+            &mut self.output,
+            "#ifndef S_ISDIR\n#define S_ISDIR(mode) (((mode) & S_IFMT) == S_IFDIR)\n#endif"
+        );
         let _ = writeln!(
             &mut self.output,
             "#if !defined(_WIN32) || defined(__MINGW32__)\n#include <dirent.h>\n#endif"

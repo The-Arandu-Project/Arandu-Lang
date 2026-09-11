@@ -439,8 +439,25 @@ mod tests {
         fn wait_until_released(&self) {
             let mut released = self.released.lock().unwrap();
             while !*released {
-                released = self.signal.wait(released).unwrap();
+                let (guard, timeout_res) = self
+                    .signal
+                    .wait_timeout(released, Duration::from_secs(5))
+                    .unwrap();
+                released = guard;
+                if timeout_res.timed_out() {
+                    break;
+                }
             }
+        }
+    }
+
+    fn wait_for_flag(flag: &AtomicBool) {
+        let start = std::time::Instant::now();
+        while !flag.load(Ordering::SeqCst) {
+            if start.elapsed() > Duration::from_secs(5) {
+                panic!("timed out waiting for flag");
+            }
+            std::thread::yield_now();
         }
     }
 
@@ -479,11 +496,15 @@ mod tests {
     struct Parked {
         gate: Arc<Gate>,
         core: PoolCore,
+        started: Option<Arc<AtomicBool>>,
     }
 
     unsafe extern "C" fn parked_root(context: *mut u8, result: *mut u8) -> i32 {
         // SAFETY: the test pairs this thunk with Parked -> usize here.
         let root = unsafe { ptr::read(context.cast::<Parked>()) };
+        if let Some(started) = &root.started {
+            started.store(true, Ordering::SeqCst);
+        }
         root.gate.wait_until_released();
         // SAFETY: pass is paired with usize -> usize here.
         let child = unsafe { WorkerTask::try_new::<usize, usize>(7, pass) }.unwrap();
@@ -514,6 +535,20 @@ mod tests {
         unsafe { ptr::write(result.cast::<usize>(), 0) };
         drop(blocked);
         WORK_COMPLETED
+    }
+
+    fn hold_task_started(gate: &Arc<Gate>, started: &Arc<AtomicBool>) -> WorkerTask {
+        // SAFETY: hold is paired with Blocked -> usize here.
+        unsafe {
+            WorkerTask::try_new::<Blocked, usize>(
+                Blocked {
+                    gate: Arc::clone(gate),
+                    started: Some(Arc::clone(started)),
+                },
+                hold,
+            )
+        }
+        .unwrap()
     }
 
     fn hold_task(gate: &Arc<Gate>) -> WorkerTask {
@@ -564,9 +599,14 @@ mod tests {
     #[test]
     fn queued_is_bounded_when_workers_are_blocked() {
         let gate = Arc::new(Gate::new());
+        let running_started = Arc::new(AtomicBool::new(false));
         let pool = WorkerPool::new(1, 2).unwrap();
 
-        let running = pool.submit(hold_task(&gate)).unwrap();
+        let running = pool
+            .submit(hold_task_started(&gate, &running_started))
+            .unwrap();
+        wait_for_flag(&running_started);
+
         let queued = pool.submit(hold_task(&gate)).unwrap();
         let queued_again = pool.submit(hold_task(&gate)).unwrap();
         assert_eq!(pool.queued(), Some(2));
@@ -585,6 +625,7 @@ mod tests {
     #[test]
     fn worker_self_help_runs_nested_task_when_admission_is_full() {
         let gate = Arc::new(Gate::new());
+        let root_started = Arc::new(AtomicBool::new(false));
         let pool = WorkerPool::new(1, 1).unwrap();
         let core = pool.core();
 
@@ -594,12 +635,14 @@ mod tests {
                 Parked {
                     gate: Arc::clone(&gate),
                     core,
+                    started: Some(Arc::clone(&root_started)),
                 },
                 parked_root,
             )
         }
         .unwrap();
         let root_result = pool.submit(root).unwrap();
+        wait_for_flag(&root_started);
 
         // Fill the single admission slot while the worker is parked in root.
         let blocker = pool.submit(hold_task(&gate)).unwrap();
@@ -665,23 +708,10 @@ mod tests {
         let root_started = Arc::new(AtomicBool::new(false));
         let pool = WorkerPool::new(1, 1).unwrap();
 
-        // SAFETY: hold is paired with Blocked -> usize here.
-        let root_task = unsafe {
-            WorkerTask::try_new::<Blocked, usize>(
-                Blocked {
-                    gate: Arc::clone(&gate),
-                    started: Some(Arc::clone(&root_started)),
-                },
-                hold,
-            )
-        }
-        .unwrap();
-        let root = pool.submit(root_task).unwrap();
-
-        // Wait until worker has picked root and entered execution (waiting on gate).
-        while !root_started.load(Ordering::SeqCst) {
-            std::thread::yield_now();
-        }
+        let root = pool
+            .submit(hold_task_started(&gate, &root_started))
+            .unwrap();
+        wait_for_flag(&root_started);
 
         // Fill the single admission slot so any subsequent external submit blocks.
         let queued = pool.submit(hold_task(&gate)).unwrap();
@@ -727,10 +757,15 @@ mod tests {
     #[test]
     fn pre_canceled_task_does_not_block_on_full_queue_and_returns_canceled() {
         let gate = Arc::new(Gate::new());
+        let root_started = Arc::new(AtomicBool::new(false));
         let pool = WorkerPool::new(1, 1).unwrap();
 
         // Fill worker and queue so any normal submit would block
-        let root = pool.submit(hold_task(&gate)).unwrap();
+        let root = pool
+            .submit(hold_task_started(&gate, &root_started))
+            .unwrap();
+        wait_for_flag(&root_started);
+
         let queued = pool.submit(hold_task(&gate)).unwrap();
         assert_eq!(pool.queued(), Some(1));
 
@@ -751,10 +786,14 @@ mod tests {
     #[test]
     fn jdk_8311867_queued_task_canceled_before_start_does_not_execute_thunk() {
         let gate = Arc::new(Gate::new());
+        let root_started = Arc::new(AtomicBool::new(false));
         let pool = WorkerPool::new(1, 2).unwrap();
 
         // Worker is held by root task
-        let root = pool.submit(hold_task(&gate)).unwrap();
+        let root = pool
+            .submit(hold_task_started(&gate, &root_started))
+            .unwrap();
+        wait_for_flag(&root_started);
 
         // Enqueue task while worker is occupied
         let executed = Arc::new(AtomicBool::new(false));
