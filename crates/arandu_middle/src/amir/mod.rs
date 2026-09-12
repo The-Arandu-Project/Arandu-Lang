@@ -1,4 +1,5 @@
 pub mod block;
+pub mod cfg_viz;
 pub mod dominators;
 pub mod local;
 pub mod pretty;

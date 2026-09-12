@@ -12,6 +12,8 @@ pub struct CliInvocation {
     pub opt: bool,
     pub parallel: bool,
     pub genref_report: bool,
+    pub cfg: bool,
+    pub ascii: bool,
     pub args: Vec<String>,
     /// Arguments following `--`, forwarded verbatim to an executed program.
     pub program_args: Vec<String>,
@@ -25,6 +27,8 @@ pub fn parse_invocation(raw_args: impl IntoIterator<Item = String>) -> CliInvoca
     let mut opt = false;
     let mut parallel = false;
     let mut genref_report = false;
+    let mut cfg = false;
+    let mut ascii = false;
     let mut args = Vec::new();
     let mut program_args = Vec::new();
     let mut z_flags: Vec<String> = Vec::new();
@@ -46,6 +50,8 @@ pub fn parse_invocation(raw_args: impl IntoIterator<Item = String>) -> CliInvoca
             "--opt" => opt = true,
             "--parallel" => parallel = true,
             "--genref-report" => genref_report = true,
+            "--cfg" => cfg = true,
+            "--ascii" => ascii = true,
             // G2: long form of -Zno-generational-fallback (same atomic).
             "--no-generational-fallback" => {
                 z_flags.push("-Zno-generational-fallback".into());
@@ -78,6 +84,8 @@ pub fn parse_invocation(raw_args: impl IntoIterator<Item = String>) -> CliInvoca
         opt,
         parallel,
         genref_report,
+        cfg,
+        ascii,
         args,
         program_args,
         z_flags,
@@ -149,7 +157,7 @@ pub fn usage_and_exit() -> ! {
         "  lex        Dump concrete syntax tokens\n",
         "  parse      Dump concrete syntax tree (Rowan CST / AST)\n",
         "  hir        Dump High-Level Intermediate Representation\n",
-        "  amir       Dump Arandu Mid-Level IR (SSA/OSSA)\n",
+        "  amir       Dump Arandu Mid-Level IR (SSA/OSSA) [--cfg] [--ascii] [--opt]\n",
         "  graph      Emit module dependency graph in Graphviz DOT format\n",
         "  emit-c     Emit portable C source code\n",
         "  fmt        Format source files according to canonical style rules\n",

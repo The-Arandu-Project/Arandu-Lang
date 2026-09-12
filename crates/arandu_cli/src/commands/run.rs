@@ -156,6 +156,8 @@ pub fn cmd_single_file_dispatch(
     let debug = inv.debug;
     let opt = inv.opt;
     let genref_report = inv.genref_report;
+    let cfg = inv.cfg;
+    let ascii = inv.ascii;
     let data_layout = inv.data_layout;
     let project_flags = &inv.project_flags;
     let mut paths = Vec::new();
@@ -329,7 +331,13 @@ pub fn cmd_single_file_dispatch(
                     None => &artifacts.amir,
                 };
 
-                if debug {
+                if cfg {
+                    if ascii {
+                        print!("{}", amir.render_cfg_ascii(symbols, interner));
+                    } else {
+                        print!("{}", amir.render_cfg_dot(symbols, interner));
+                    }
+                } else if debug {
                     println!("{amir:#?}");
                 } else {
                     println!("--- AMIR for {} ---", filepath);

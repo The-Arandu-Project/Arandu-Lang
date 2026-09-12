@@ -166,7 +166,7 @@ impl AmirPlace {
 }
 
 impl AmirStmt {
-    fn pretty_print_to(&self, out: &mut String, symbols: &SymbolTable, pool: &AmirLiteralPool) {
+    pub fn pretty_print_to(&self, out: &mut String, symbols: &SymbolTable, pool: &AmirLiteralPool) {
         match self {
             AmirStmt::Assign { lhs, rhs } => {
                 out.push_str(&format!("_{} = ", lhs.0));
@@ -499,7 +499,7 @@ fn format_args(args: &[AmirOperand], symbols: &SymbolTable, pool: &AmirLiteralPo
 }
 
 impl AmirTerminator {
-    fn pretty_print_to(&self, out: &mut String, symbols: &SymbolTable, pool: &AmirLiteralPool) {
+    pub fn pretty_print_to(&self, out: &mut String, symbols: &SymbolTable, pool: &AmirLiteralPool) {
         match self {
             AmirTerminator::Return => {
                 out.push_str("return");
