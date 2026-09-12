@@ -20,8 +20,9 @@ verified toolchain in `rust-toolchain.toml`:
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/BrunoF2P/Arandu-Lang.git
-   cd Arandu-Lang
+   git clone https://github.com/arandu-lang/arandu.git
+   cd arandu
+   cargo check --workspace --locked
    ```
 
 2. Build the workspace:

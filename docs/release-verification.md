@@ -10,7 +10,7 @@ arquivo ausente, extra ou divergente antes de criar uma release pública.
 Baixe todos os assets da release e valide primeiro o checksum adequado ao host:
 
 ```bash
-gh release download v0.1.0-rc.1 --repo BrunoF2P/Arandu-Lang --dir arandu-release
+gh release download v0.1.0-rc.1 --repo arandu-lang/arandu --dir arandu-release
 cd arandu-release
 sha256sum --check SHA256SUMS
 ```
@@ -32,12 +32,12 @@ manifest, restringindo a identidade ao repositório e ao workflow de release:
 
 ```bash
 gh attestation verify arandu-0.1.0-rc.1-x86_64-unknown-linux-gnu.tar.gz \
-  --repo BrunoF2P/Arandu-Lang \
-  --signer-workflow BrunoF2P/Arandu-Lang/.github/workflows/release.yml
+  --repo arandu-lang/arandu \
+  --signer-workflow arandu-lang/arandu/.github/workflows/release.yml
 
 gh attestation verify release-manifest.json \
-  --repo BrunoF2P/Arandu-Lang \
-  --signer-workflow BrunoF2P/Arandu-Lang/.github/workflows/release.yml
+  --repo arandu-lang/arandu \
+  --signer-workflow arandu-lang/arandu/.github/workflows/release.yml
 ```
 
 Para uma política ainda mais estrita, acrescente `--source-ref refs/tags/vX.Y.Z`

@@ -170,7 +170,7 @@ pub(crate) fn compute_diagnostics(
             let code_description = (!d.code.starts_with("ICE"))
                 .then(|| {
                     parse_uri(&format!(
-                        "https://github.com/BrunoF2P/Arandu-Lang/blob/main/docs/errors/{}.md",
+                        "https://github.com/arandu-lang/arandu/blob/main/docs/errors/{}.md",
                         d.code
                     ))
                     .map(|href| CodeDescription { href })

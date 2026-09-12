@@ -82,10 +82,11 @@ quando cumprir seu contrato atual.
 | L0–L3 — LSP/editor | `gold` no escopo publicado | VFS/snapshots, Unicode, cancelamento, multi-file, UX e Extension Host; [arquitetura](./arandu-salsa-lsp-architecture-v0.1.md) e [matriz pública](./arandu-lsp-capabilities-v0.1.md) |
 | Decomposição arquitetural | `gold` | LSP handlers e IDE (`arandu_lsp/src/ide/`), pass manager, `arandu_runtime`, `arandu_codegen`, CLI (`main.rs`, `args.rs`, `pipeline.rs`, `commands/`, `project/`, `test_runner/`) e manifesto modularizados; separação de constraints permanece backlog futuro do type checker |
 | Minimal 0.1 e CLI de projeto | `gold` | superfície exercitada por `examples/minimal/` e comandos `new/check/run/build/doctor` |
-| Project & Package Lifecycle | `gold` | [manifesto, lockfile, grafo, cache e dependências remotas](./arandu-project-package-lifecycle-gold-v0.1.md) com recovery e E2E multiplataforma |
-| Anotações públicas | `gold` | contrato [PascalCase](./arandu-attribute-naming-v0.1.md), aliases legados apenas na janela de migração |
-| GenRef | `gold` no escopo seguro publicado | [RFC Gold](./arandu-genref-gold-rfc-v0.1.md), AMIR tipada, payload/drop, C/Cranelift, O004/LSP, fuzz, Miri e sanitizers |
+| Project & Package Lifecycle | `gold` | [manifesto, lockfile, grafo, cache e dependências remotas](./rfcs/0004-project-package-lifecycle.md) com recovery e E2E multiplataforma |
+| Anotações públicas | `gold` | contrato [PascalCase](./rfcs/0002-canonical-attribute-naming.md), aliases legados apenas na janela de migração |
+| GenRef (R0) | `frozen-R0` | [RFC 0001 (R0 Frozen)](./rfcs/0001-generational-fallback-genref.md); casca empírica congelada para medição acadêmica (TCC); AMIR tipada, payload/drop, C/Cranelift, O004/LSP |
 | SL_T — testes e benchmarks | `done`; soak para `gold` | [contrato consolidado](./arandu-testing-benchmark-harness-v0.1.md), SDK/VSIX e matriz nativa `SL_T / Harness` |
+| Paralelismo Estruturado | `gold` | [RFC 0003](./rfcs/0003-structured-parallelism.md); worker pool bounded e redução determinística |
 
 ### Fila de execução
 
@@ -111,11 +112,11 @@ quando cumprir seu contrato atual.
    fundação `core`/`alloc`, targets `bin`/`lib`, link multi-file, módulos,
    texto/coleções seguros, `std.path` estrutural e readiness `wasm32`, sem
    efeitos de sistema.
-4. Estabilizar a API pública do GenRef e concluir a paridade semântica C/Cranelift
-   nos alvos publicados; ampliar o corpus de regressão a cada etapa da stdlib.
-5. Publicar `0.1.0-rc.5` como candidata estável: contratos congelados, testes
-   de segurança e harness reproduzível, sem prometer suporte a APIs de sistema
-   ainda não definidas.
+4. **Isolamento e Congelamento do R0 (GenRef)**: Conforme [RFC 0001](./rfcs/0001-generational-fallback-genref.md),
+   a superfície pública, semântica (`@NoFallback`/`O004`/`O010`), métricas e paridade C/Cranelift
+   do GenRef permanecem estritamente congeladas para a coleta de dados empíricos do TCC.
+   O restante do compilador evolui de forma independente sem bloqueio.
+5. Publicação de `0.1.0-rc.5` concluída (tag `v0.1.0-rc.5`, PR #26).
 6. Implementar `A2` (Effect System) antes de APIs de filesystem, processos,
    plugins ou dependências externas.
 7. Entregar `SL_S-Host`: `std.path` e APIs de sistema com efeitos explícitos,
@@ -134,8 +135,10 @@ quando cumprir seu contrato atual.
 
 ### Resíduos que continuam abertos
 
-- GenRef não promete concorrência, persistência, FFI direta ou Cranelift
-  32-bit; i686 permanece layout + emissão C estrutural, não execução nativa.
+- GenRef R0 possui casca pública congelada ([RFC 0001](./rfcs/0001-generational-fallback-genref.md))
+  para aferição experimental (sem concorrência nos handles, thread-confined, host-only).
+  Evoluções como inlining R1 e cross-thread channels pertencem a marcos posteriores.
+- Governança formal de RFCs unificada em `docs/rfcs/`.
 - A remoção dos aliases legados de anotações exige uma fronteira de release.
 - A separação completa `constraint_gen`/solver do type checker é melhoria de
   arquitetura planejada, não bloqueador das garantias atuais.

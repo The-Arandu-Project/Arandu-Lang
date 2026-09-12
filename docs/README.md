@@ -7,6 +7,7 @@ Esta pasta tem uma única fila de planejamento: o [roadmap mestre](arandu-compil
 | Tipo | Finalidade | Pode conter fila de trabalho? |
 | --- | --- | --- |
 | roadmap | ordem executiva e estado de maturidade | somente o roadmap mestre |
+| rfc | proposta arquitetural ou de linguagem (docs/rfcs/) | apenas pendências e futuro do recurso |
 | contrato | comportamento público/normativo implementado | não |
 | arquitetura | fronteiras, invariantes e ownership | apenas dívida/futuro explícitos |
 | decisão concluída | motivação e escolha estabilizada | não |
@@ -19,16 +20,22 @@ por taxonomia.
 Ao terminar, seu conteúdo útil é consolidado no contrato/arquitetura permanente,
 dívidas e futuro são classificados, e o plano paralelo é removido.
 
-## Planejamento e decisões
+## Planejamento, RFCs e decisões
 
+- [Processo e Índice de RFCs](rfcs/README.md) — governança formal de propostas (`docs/rfcs/`).
 - [Roadmap mestre](arandu-compiler-roadmap-v0.1.md) — fases abertas e decisões Gold consolidadas.
-- [Projeto/pacotes Gold](arandu-project-package-lifecycle-gold-v0.1.md) — contrato detalhado implementado.
+- [RFC 0001: GenRef](rfcs/0001-generational-fallback-genref.md) — fallback geracional e fronteira congelada do R0.
+- [RFC 0002: Nomes de anotações](rfcs/0002-canonical-attribute-naming.md) — decisão @PascalCase canônica e migração.
+- [RFC 0003: Paralelismo estruturado](rfcs/0003-structured-parallelism.md) — modelo de concorrência estruturada e worker pool.
+- [RFC 0004: Ciclo de vida de pacotes](rfcs/0004-project-package-lifecycle.md) — contrato detalhado de projetos e manifesto.
+- [RFC 0005: Queries incrementais Salsa](rfcs/0005-incremental-query-system-salsa.md) — motor incremental orientado a demanda e o 6º invariante.
+- [RFC 0006: Armazenamento HIR IndexVec](rfcs/0006-hir-indexvec-storage.md) — armazenamento plano contíguo por função para compilação inteira.
+- [RFC 0007: Modelo semântico de memória](rfcs/0007-semantic-memory-model.md) — OSSA, janelas de vida e interfaces de empréstimo.
+- [RFC 0008: Runtime assíncrono](rfcs/0008-async-runtime-and-colorless-model.md) — modelo colorless e reator cooperativo.
+- [RFC 0009: Fatias e views emprestadas](rfcs/0009-borrowed-views-safety.md) — segurança estrutural de slices ([]T) e views.
+- [RFC 0010: Pipeline CST-first e IDE](rfcs/0010-cst-resilient-ide-typeck.md) — parsing resiliente com Rowan e reparse de sub-árvore.
 - [Guia de migração](arandu-project-package-migration-v0.1.md) — uso do contrato de projeto e dependências.
-- [GenRef Gold](arandu-genref-gold-rfc-v0.1.md) — RFC aceita e implementada.
-- [Testes e benchmarks](arandu-testing-benchmark-harness-v0.1.md) — contrato
-  consolidado; roadmaps SL_T.3–SL_T.6 removidos após implementação.
-- [Paralelismo estruturado](arandu-structured-parallelism-v0.1.md) — contrato de concorrência estruturada, worker pool, inlining AMIR e benchmarks.
-- [Nomes de anotações](arandu-attribute-naming-v0.1.md) — decisão PascalCase e migração.
+- [Testes e benchmarks](arandu-testing-benchmark-harness-v0.1.md) — contrato consolidado.
 - [Contrato de ferramentas e scripts](tooling-scripts-contract.md) — dono e plataforma de cada automação.
 - [Auditoria de arquitetura e performance](arandu-architecture-audit-v0.1.md) — achados, guardrails e dívida classificada.
 - [Contrato de texto](repository-text-contract.md) — UTF-8/LF em Git, editores e CI.

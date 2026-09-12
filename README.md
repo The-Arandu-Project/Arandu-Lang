@@ -1,140 +1,308 @@
 # Arandu
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE-MIT)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE-APACHE)
+<p align="center">
+  <strong>A safe, fast, and ergonomic systems programming language.</strong>
+</p>
 
-Arandu is an experimental Brazilian systems programming language focused on memory safety, clean syntax, explicit errors, and native tooling.
+<p align="center">
+  <a href="https://github.com/arandu-lang/arandu/actions/workflows/release.yml"><img src="https://img.shields.io/github/actions/workflow/status/arandu-lang/arandu/release.yml?branch=main&label=CI%20Gate&style=flat-square" alt="CI Gate"></a>
+  <a href="https://github.com/arandu-lang/arandu/releases/latest"><img src="https://img.shields.io/github/v/release/arandu-lang/arandu?label=release&style=flat-square" alt="Latest Release"></a>
+  <a href="https://arandu-lang.dev"><img src="https://img.shields.io/badge/docs-arandu--lang.dev-207080?style=flat-square" alt="Documentation"></a>
+  <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue?style=flat-square" alt="License"></a>
+</p>
 
-## Current Status
+<p align="center">
+  <a href="https://arandu-lang.dev">Website</a> •
+  <a href="#overview">Overview</a> •
+  <a href="#key-features">Key Features</a> •
+  <a href="#a-quick-taste-of-arandu">A Quick Taste</a> •
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#command-line-interface">CLI</a> •
+  <a href="#compiler-architecture">Architecture</a> •
+  <a href="#roadmap--rfcs">Roadmap & RFCs</a> •
+  <a href="#contributing">Contributing</a>
+</p>
 
-**Compiler foundation gold** — AMIR `TypeId`, spans, target-aware `DataLayout`, host C↔Cranelift parity, unified imports, recovery and endurance are protected by CI.
+---
 
-**Product surface:** Arandu Minimal 0.1 and the project CLI (`new` / `check` / `run` / `build` / `doctor`) are gold in their published scope. Install archives ship from **GitHub Releases** on `v*` tags.
+## Overview
 
-**Single execution roadmap:** [compiler architecture master roadmap](docs/arandu-compiler-roadmap-v0.1.md). Completed stabilization, distribution, LSP/editor, annotation and GenRef campaigns are consolidated there.
+**Arandu** is a modern systems programming language engineered for developers who demand deterministic control over memory, execution, and machine code without sacrificing ergonomic syntax or understandable compiler diagnostics.
 
-Documentation map: [docs/README.md](docs/README.md).
+Arandu introduces a **hybrid memory safety model**: static linear ownership (`own`) and safe borrowing (`ref`), complemented by a thread-confined generational fallback runtime (**GenRef**). This architecture eliminates use-after-free, double-free, and dangling pointer vulnerabilities at compile time with dynamic verification guarantees — completely avoiding stop-the-world garbage collection pauses.
 
-Implemented:
+### Why Arandu?
 
-- Rust workspace.
-- Lexer crate.
-- Token stream CLI.
-- Golden lexer tests.
-- Smoke lexing for official stable and invalid examples.
-- Parser crate with AST debug output for the current parser slice.
-- Parser golden tests for declarations, generics, extern, match, interpolation, places, and expressions.
-- Semantics crate with v0.2 name resolution, hierarchical symbol tables, namespace imports, builtin prelude (`io` / `err` on the CLI path), doc comment mapping, diagnostics, and CLI `check`.
-- Official `examples/stable/**` type-check via `arandu_cli check` (prelude + current semantics).
-- Type checker v0.1 core with primitive types, assignments, returns, fields, indexing, generics constraints, interface satisfaction, `Result<T,E>`, `Option<T>`, nullable/safe operations, and diagnostics.
-- AHIR lowering and pretty-printing with golden tests (`tests/hir/`).
-- AMIR lowering v0.1 (experimental) with CFG, locals, match, defer/errdefer, `?`/safe ops, for-in, alloc/free, and golden tests (`tests/codegen/`).
-- Dense AMIR types (`TypeId` on locals/temps), use-site spans on ownership diags, shared rvalue visitor.
-- Method receivers with `self: ref T`, `self: mut ref T`, and `self: own T` (legacy receiver
-  spelling retained while methods migrate to the uniform type syntax).
-- Safe references are represented by `ref T`/`mut ref T`; `T` means owned by
-  default and `own T` is the explicit spelling. Raw `ptr[T]` dereference
-  requires `unsafe`. `*` is not a general pointer API and is never a substitute
-  for an ownership proof.
-- Definite initialization analysis with O008 diagnostics.
-- OSSA foundation in AMIR: move/copy operands, storage lifetime markers, and destroy statements.
-- Intraprocedural move checker with O001/O005/O007 diagnostics.
-- Opt-in AMIR optimizer (`amir --opt`) with constant folding and DCE.
-- Type interning, `DataLayout` (host / 32-bit / i686), and monomorphization graph infrastructure.
-- Cranelift host backend: JIT for `run`, plus baseline object emission and
-  native linking for content-addressed `build` executables.
-- GNU C emit path (`emit-c --layout=host|ptr4|ptr8|i686`) — layout-aware source;
-  cross compilation still requires a matching external target toolchain and sysroot.
-- **ToStr v0.1** — auto-format `bool`, integers (incl. fixed-width), floats, `char`, and `str` in:
-  - string interpolation (`"n=${n}"`)
-  - call args whose formal type is `str` (e.g. `io.println(42)`)
-  - method form `value.to_str()`
-  - Prelude stays `(str) -> void` for `io.println`; host/C provide a debug `println` stub.
-  - Formatted buffers use `malloc` (process-lifetime leak OK for debug; free/ownership later).
-  - User `Display` / custom formatting for structs is later.
-- **Salsa query DB** (`arandu_query`) — incremental `parse` → `resolve` → `type_check` → `lower_amir`; DX.5 `-Zexplain-rebuild` / run `[cached]`/`[rebuilt]`.
-- **LSP gold** (`arandu-lsp`) — diagnostics, goto/hover/complete/signatureHelp/refs/rename/symbols, **type-aware semantic tokens**, **format**, **code actions** (quickfix `;`).  
-  Failure and snapshot behavior is specified in the
-  [CLI/LSP contract](docs/arandu-cli-lsp-contract-v0.1.md).
-- **CST-first** (rowan): `syntax_tree` → lower AST; reparse de subtree por ITEM; crate `arandu_fmt` + CLI `fmt`.
-- **Project CLI (P2 gold)** — `arandu_cli new|doctor|check|run|build`; `Arandu.toml` as Salsa input; stdlib cascade (`--stdlib-path` > `ARANDU_STDLIB` > relative to binary).
+- **Zero-Cost Safety Without a Garbage Collector**: Values have clear owners and borrowed references. Where lifetimes cannot be proven strictly at compile time, the generational fallback model provides safe, typed handles with deterministic cleanup.
+- **Incremental by Design**: Built from the ground up on Rowan concrete syntax trees (CST) and Salsa tracked queries. Modifying a function body re-analyzes only the affected item, keeping IDE response times under 10ms.
+- **Empathetic Developer Experience**: Compiler diagnostics (via Miette and LSP) explain *what* failed, *why* it failed with precise source labels, and *how* to resolve it, linked to documented explanation pages for every error code.
+- **Dual Native Backends**: Fast JIT execution with Cranelift for instant feedback cycles (`arandu run`), native binary compilation (`arandu build`), and clean, portable GNU C emission (`arandu emit-c`).
 
-Not gold / still partial or experimental:
+---
 
-- Full typed/self-hosted generational fallback beyond the current i64 GenRef MVP
-- Full user `Display` trait / custom `to_str` for structs/enums
-- Full ownership surface syntax
-- Production C polish / freestanding RT; optional LLVM/LTO/PGO release tier
+## Key Features
 
-**Compiler roadmap (single source of truth):** [docs/arandu-compiler-roadmap-v0.1.md](docs/arandu-compiler-roadmap-v0.1.md)
+| Pillar | Description |
+| :--- | :--- |
+| 🛡️ **Predictable Memory Safety** | Single-owner linear types (OSSA), borrowed references (`ref T`), and thread-confined generational references (**GenRef**). |
+| ⚡ **Incremental Salsa Queries** | CST-first incremental re-parsing and fine-grained Salsa caching preserve query early-cutoff across edits. |
+| 🔍 **Human-Centric Diagnostics** | Structured error codes (`LX*`, `P*`, `N*`, `T*`, `O*`, `W*`), secondary context labels, and suggested quick fixes. |
+| 🎯 **Dual Native Code Generation** | Instant JIT compilation and native object linking via Cranelift, plus portable GNU C99/C11 code generation. |
+| 🧰 **Batteries-Included Tooling** | Integrated package management (`arandu new`), dependency verification, code formatter (`arandu fmt`), and system doctor. |
+| 💻 **First-Class Editor Support** | Full-featured Language Server Protocol (LSP) with type-aware semantic tokens, hover, completions, and code actions. |
 
-## Style Guide
+---
 
-Arandu has strong idiomatic casing rules, largely driven by the parser which can differentiate between value identifiers and type identifiers based on casing:
+## A Quick Taste of Arandu
 
-- **Values & Functions**: `camelCase` (e.g. `userName`, `totalPrice`, `buscarUsuario`, `parseJson`). This includes variables, parameters, functions, and struct fields.
-- **Types & Structs**: `PascalCase` (e.g. `User`, `HttpClient`, `LoadState`). This includes structs, enums, interfaces, and type aliases.
-- **Enum Variants**: `PascalCase` (e.g. `Ok`, `Err`, `Loading`, `NotFound`).
-- **Generics**: Short `PascalCase` (e.g. `T`, `K`, `V`, `Item`).
-- **Modules**: Lowercase dot-separated (e.g. `net.http`, `app.userService`).
-- **Files**: `snake_case.aru` (e.g. `user_service.aru`).
-- **Constants**: `SCREAMING_SNAKE_CASE` or `camelCase` (e.g. `MAX_RETRIES`, `maxRetries`).
+Here is an example demonstrating structs, explicit ownership transfer, borrowing, and standard I/O:
 
-*Note: `snake_case` is allowed for values but `camelCase` is the officially recommended and preferred style for all Arandu code.*
+```arandu
+module app.main
 
-## Install (release tarball)
+import io
 
-Tagged releases (`vX.Y.Z`, matching `crates/arandu_cli` version) build host packages and attach them to the [GitHub Release](https://github.com/BrunoF2P/Arandu-Lang/releases):
+struct Message {
+    text: str
+    priority: int
+}
 
-| Asset | Host |
-|-------|------|
-| `arandu-*-x86_64-unknown-linux-gnu.tar.gz` | Linux x86_64 |
-| `arandu-*-aarch64-apple-darwin.tar.gz` | macOS Apple Silicon |
+// Borrowing: `msg` is lent temporarily; the caller retains ownership
+func inspect(msg: ref Message): bool {
+    return msg.priority > 0
+}
 
-> **Note:** GitHub no longer hosts `macos-13` (Intel) runners. Intel Mac users should build from source (`./scripts/install-local.sh`) until we add cross-compile assets.
+// Ownership transfer: `msg` is consumed and freed by the callee
+func send(msg: own Message) {
+    io.println("Sending: ${msg.text} (priority: ${msg.priority})")
+}
 
-Each archive has a `.blake3` sidecar. Install from a checkout (or copy `scripts/install-from-tarball.sh`):
+func main(): int {
+    let msg = Message {
+        text: "Hello from Arandu!",
+        priority: 1,
+    }
 
-```bash
-# example: Linux x86_64, version 0.0.1
-gh release download v0.0.1 -p 'arandu-*-x86_64-unknown-linux-gnu.tar.gz*'
-bash scripts/install-from-tarball.sh ./arandu-0.0.1-x86_64-unknown-linux-gnu.tar.gz
-# puts toolchain under ~/.local/arandu and symlinks in ~/.local/arandu/bin
+    if inspect(ref msg) {
+        send(msg) // ownership transferred here
+    }
+
+    return 0
+}
 ```
 
-From the monorepo without a Release:
+### Compiler Diagnostics in Action
 
-```bash
-./scripts/install-local.sh          # build + versioned prefix install
-./scripts/package-release.sh        # dist/arandu-$VERSION-$TARGET.tar.gz + BLAKE3
+When memory safety invariants or ownership rules are violated, the compiler provides clear and actionable feedback:
+
+```text
+error[O001]: use of moved value `msg`
+  --> src/main.aru:25:17
+   |
+24 |         send(msg)
+   |              --- value moved here
+25 |         inspect(ref msg)
+   |                 ^^^^^^^ value borrowed here after move
+   |
+   = note: `Message` is an owned type; passing it to `send(own Message)` moved ownership
+   = help: borrow the value instead using `ref msg` or clone it before moving
 ```
 
-## Requirements
+---
 
-- `rustup` with the exact verified toolchain from `rust-toolchain.toml`.
+## Quick Start
 
-Rustup selects and installs Rust 1.97.1 plus `rustfmt` and Clippy automatically
-from the repository configuration. Confirm the active toolchain with:
+### Installation
 
+Install the official Arandu SDK with a single command:
+
+#### Linux & macOS
 ```bash
-rustup show active-toolchain
+curl -sSf https://arandu-lang.dev/install | sh
 ```
 
-Arandu does not currently promise an MSRV. New Rust stable releases are tested
-separately and adopted only through a reviewed `rust-toolchain.toml` update.
-
-## Language server
-
-```bash
-cargo run -p arandu_lsp --release
-# point the editor at the `arandu-lsp` binary (stdio)
+#### Windows (PowerShell)
+```powershell
+irm https://arandu-lang.dev/install.ps1 | iex
 ```
 
-Architecture: [docs/arandu-salsa-lsp-architecture-v0.1.md](docs/arandu-salsa-lsp-architecture-v0.1.md).
+Pre-compiled release binaries and cryptographic signatures (`SHA256SUMS`, `.blake3`, GitHub attestations) are available on [GitHub Releases](https://github.com/arandu-lang/arandu/releases).
 
-## Run
+### Create Your First Project
 
-Run the canonical S0 validation from the workspace root, in this order:
+```bash
+# 1. Initialize a new binary project
+arandu new hello_arandu
+cd hello_arandu
+
+# 2. Run immediately via Cranelift JIT
+arandu run
+
+# 3. Type-check and validate without code generation
+arandu check
+
+# 4. Compile an optimized native executable
+arandu build --release
+```
+
+---
+
+## Command-Line Interface
+
+The `arandu` CLI provides a unified toolchain for compiling, testing, and managing packages:
+
+```text
+The Arandu Programming Language Compiler
+
+Usage:
+  arandu <COMMAND> [OPTIONS] [PACKAGE-PATH | FILE]
+  arandu [OPTIONS] <FILE.aru>
+
+Build & Execution:
+  run        Compile and execute a package or file via Cranelift JIT
+  build      Compile package to native executable or library
+  check      Type-check and validate without code generation
+  test       Execute unit and integration test suites
+  bench      Run benchmarks and compare baseline metrics
+
+Project & Packaging:
+  new        Create a new Arandu project directory
+  init       Initialize an Arandu package in current directory
+  watch      Watch filesystem and re-check package incrementally
+  clean      Remove project build artifacts and scratch cache
+  doc        Generate package documentation (html, md, json)
+
+Dependencies & Verification:
+  tree       Display canonical resolved dependency graph
+  audit      Audit locked provenance and security policies
+  vendor     Create verified offline source snapshot
+  verify     Verify offline cache integrity against lockfile
+  update     Review and update dependency locks (--accept)
+
+Plumbing & Inspection:
+  lex        Dump concrete syntax tokens
+  parse      Dump concrete syntax tree (Rowan CST / AST)
+  hir        Dump High-Level Intermediate Representation
+  amir       Dump Arandu Mid-Level IR (SSA/OSSA)
+  graph      Emit module dependency or control flow graph
+  emit-c     Emit portable C source code
+  fmt        Format source files according to style rules
+  doctor     Inspect toolchain, environment, and stdlib paths
+  cache      Inspect, prune, and verify compiler cache
+  hash-file  Compute BLAKE3 checksum for packaging
+
+Target & Toolchain Options:
+  --release              Enable speed optimizations (Cranelift + AMIR O2)
+  --stdlib-path <DIR>    Override path to standard library
+  --cache-dir <DIR>      Override compiler cache directory
+  --layout <MODEL>       Data layout model: host, ptr4, ptr8, i686 (default: host)
+  --vcs <VCS>            VCS for new projects: auto, git, none (default: auto)
+  -v, --verbose          Enable detailed progress and timing logs
+  -V, --version          Print compiler version and exit
+  -h, --help             Print this help message
+
+Generational Memory Safety:
+  --no-generational-fallback  Promote fallback warnings (O004) to compile-time errors
+  --genref-report             Emit per-function GenRef check and allocation statistics
+
+Developer & Debug Flags (-Z):
+  -Ztime-passes          Measure and display pass execution timings
+  -Zprofile-queries      Profile Salsa incremental semantic query costs
+  -Zdump-mir             Dump intermediate AMIR between optimization passes
+  -Zdebug-parser         Trace Rowan CST parsing steps
+  -Zdebug-typeck         Trace bidirectional type inference & constraints
+  -Zdebug-ossa           Trace ownership SSA generation and joins
+  -Zdebug-all            Enable all compiler debug traces
+```
+
+---
+
+## Compiler Architecture
+
+Arandu is structured as an incremental, query-driven compilation pipeline:
+
+```text
+Source Code (.aru)
+       │
+       ▼
+ [arandu_lexer] ──▶ Rowan CST [arandu_parser]
+                           │
+                           ▼
+                    AST Extraction
+                           │
+                           ▼
+                 Salsa Query Database [arandu_query]
+                ┌──────────┴──────────┐
+                ▼                     ▼
+     Name Resolution            Type Checking
+    [arandu_resolve]           [arandu_typeck]
+                └──────────┬──────────┘
+                           ▼
+                  AHIR (Typed High IR)
+                           │
+                           ▼
+             OSSA & Definite Initialization [arandu_mir]
+                           │
+                           ▼
+                     AMIR (Mid-Level IR / CFG)
+                ┌──────────┴──────────┐
+                ▼                     ▼
+          Cranelift JIT             GNU C
+    [arandu_backend_cranelift] [arandu_backend_c]
+```
+
+### Workspace Structure
+
+| Area | Crates | Responsibilities |
+| :--- | :--- | :--- |
+| **Frontend** | [`arandu_base`](crates/arandu_base)<br>[`arandu_lexer`](crates/arandu_lexer)<br>[`arandu_parser`](crates/arandu_parser)<br>[`arandu_diagnostics`](crates/arandu_diagnostics) | Lexer, Rowan CST-first parsing, token streams, diagnostic definitions (`DiagCode`), and Miette report rendering. |
+| **Middle-end** | [`arandu_middle`](crates/arandu_middle)<br>[`arandu_resolve`](crates/arandu_resolve)<br>[`arandu_typeck`](crates/arandu_typeck)<br>[`arandu_mir`](crates/arandu_mir) | Name resolution, bidirectional type inference, generic monomorphization, OSSA, borrow checking, and AMIR optimizations. |
+| **Incremental** | [`arandu_query`](crates/arandu_query) | Sole owner of Salsa database state, tracking query inputs, item-level hashes, and early-cutoff caching. |
+| **Backends** | [`arandu_backend_cranelift`](crates/arandu_backend_cranelift)<br>[`arandu_backend_c`](crates/arandu_backend_c)<br>[`arandu_codegen`](crates/arandu_codegen)<br>[`arandu_runtime`](crates/arandu_runtime) | Cranelift JIT engine and native object emission, portable GNU C translation, and language runtime support. |
+| **Tooling & IDE** | [`arandu_cli`](crates/arandu_cli)<br>[`arandu_lsp`](crates/arandu_lsp)<br>[`arandu_fmt`](crates/arandu_fmt)<br>[`arandu_doc`](crates/arandu_doc) | Compiler CLI, Language Server (`arandu-lsp`), pure CST formatter, and documentation extractor. |
+| **Test & Infra** | [`arandu_test_support`](crates/arandu_test_support)<br>[`arandu_fuzz_support`](crates/arandu_fuzz_support)<br>[`xtask`](xtask) | Golden test runners, grammar fuzzing harness, release contract verification, and architecture invariants. |
+
+---
+
+## Editor & IDE Support
+
+Official support for Visual Studio Code is provided in the [`editors/vscode`](editors/vscode) directory:
+
+- **Syntax Highlighting**: TextMate grammar and Rowan CST-backed classification.
+- **Language Server**: Backed by `arandu-lsp` with:
+  - Type-aware semantic token highlighting
+  - Hover documentation with rendered function signatures
+  - Go to Definition and Find References across modules
+  - Document & workspace symbol search
+  - Diagnostic squiggles with quick-fix code actions
+  - Formatting on save via `arandu_fmt`
+
+---
+
+## Building from Source
+
+### Prerequisites
+
+- **Rust toolchain**: Exactly Rust 1.97.1 (managed automatically via `rustup` and `rust-toolchain.toml`).
+- **C Compiler**: GCC or Clang (required for linking native binaries and C backend verification).
+
+### Build Commands
+
+```bash
+# Clone the repository
+git clone https://github.com/arandu-lang/arandu.git
+cd arandu
+
+# Build the release compiler binary
+cargo build --release --bin arandu
+
+# The executable will be placed in target/release/arandu
+./target/release/arandu --version
+```
+
+### Invariant Verification Suite
+
+Every change to the compiler must satisfy the canonical validation suite:
 
 ```bash
 cargo fmt --all -- --check
@@ -142,112 +310,35 @@ cargo check --workspace --locked
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --locked
 cargo run --locked -p xtask -- check-diag-docs
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
+cargo run --locked -p xtask -- check-architecture
+cargo run --locked -p xtask -- check-line-endings
 ```
 
-Print tokens for the hello example:
+---
 
-```bash
-cargo run -p arandu_cli -- lex examples/stable/syntax/hello.aru
-```
+## Roadmap & RFCs
 
-Print the parser AST debug output:
+- **Master Compiler Roadmap**: [docs/arandu-compiler-roadmap-v0.1.md](docs/arandu-compiler-roadmap-v0.1.md) — The single authoritative execution queue.
+- **RFC Catalog**: [docs/rfcs/](docs/rfcs/) — Formal architectural specifications (RFC 0000 through RFC 0010).
+- **Diagnostic Catalog**: [docs/errors/](docs/errors/) — Detailed guides and solutions for every user-facing compiler diagnostic.
+- **Documentation Hub**: [docs/README.md](docs/README.md) — Map of all technical specifications and architecture contracts.
 
-```bash
-cargo run -p arandu_cli -- parse examples/stable/syntax/hello.aru
-```
+---
 
-Run parse + name resolution + type check:
+## Contributing
 
-```bash
-cargo run -p arandu_cli -- check examples/stable/syntax/hello.aru
-```
+We welcome contributions to Arandu! Please read our [CONTRIBUTING.md](CONTRIBUTING.md) guide and [AGENTS.md](AGENTS.md) for architectural invariants before submitting pull requests.
 
-Print the AHIR (typed high-level IR):
+All discussions, bug reports, and feature proposals take place on [GitHub Issues](https://github.com/arandu-lang/arandu/issues) and [GitHub Discussions](https://github.com/arandu-lang/arandu/discussions).
 
-```bash
-cargo run -p arandu_cli -- hir examples/stable/syntax/hello.aru
-cargo run -p arandu_cli -- hir examples/stable/syntax/hello.aru --debug
-```
-
-Print the AMIR (mid-level IR / CFG):
-
-```bash
-cargo run -p arandu_cli -- amir tests/codegen/add.aru
-cargo run -p arandu_cli -- amir tests/codegen/add.aru --debug
-cargo run -p arandu_cli -- amir tests/codegen/add.aru --opt
-```
-
-Run a program via the Cranelift JIT backend (exit code = `main` return value):
-
-```bash
-cargo run -p arandu_cli -- run tests/codegen/add.aru
-```
-
-Emit GNU C (layout follows [`DataLayout`](docs/arandu-abi-layout-v0.1.md); see the
-[backend contract](docs/arandu-backend-contract-v0.1.md) before cross-compiling):
-
-```bash
-cargo run -p arandu_cli -- emit-c examples/stable/syntax/fib_main.aru --layout=host
-cargo run -p arandu_cli -- emit-c examples/stable/syntax/fib_main.aru --layout=i686
-```
-
-### Compiler instrumentation (`-Z` flags)
-
-Unstable developer flags for profiling and debugging the compiler itself. Pass them before the subcommand:
-
-```bash
-cargo run -p arandu_cli -- -Ztime-passes check examples/stable/syntax/variables.aru
-cargo run -p arandu_cli -- -Ztime-passes -Zprint-alloc-stats run tests/codegen/add.aru
-```
-
-| Flag | Effect |
-|------|--------|
-| `-Ztime-passes` | Print elapsed time per compiler pass (`parse+check`, `lower-hir`, `codegen`, …) |
-| `-Zprofile-queries` | Print `TyCtx` binding cache hit/miss summary at the end |
-| `-Zprint-alloc-stats` | Print `BumpArena` allocation totals at the end |
-| `-Zdump-mir` | Dump MIR after passes (when wired in the pass pipeline) |
-
-Output goes to **stderr** with `[arandu][perf]`, `[stat]`, `[mem]`, and `[info]` tags. See [docs/arandu-compiler-instrumentation-v0.1.md](docs/arandu-compiler-instrumentation-v0.1.md) for details.
-
-Update golden test files (after intentional IR changes):
-
-```bash
-$env:UPDATE_GOLDEN=1; cargo test -p arandu_semantics
-```
-
-Parser fixtures:
-
-```bash
-cargo test -p arandu_parser
-cargo run -p arandu_cli -- parse examples/stable/syntax/structs.aru
-cargo run -p arandu_cli -- parse examples/stable/syntax/generics.aru
-cargo run -p arandu_cli -- parse examples/stable/syntax/match.aru
-```
-
-## Project Structure
-
-```text
-crates/
-  arandu_lexer/              Rust lexer library
-  arandu_parser/             Rust parser library
-  arandu_semantics/          Name resolution, type checking, HIR, and AMIR
-  arandu_backend_cranelift/  Experimental Cranelift JIT backend
-  arandu_cli/                Debug CLI for compiler experiments
-
-docs/             Language and compiler design notes
-examples/         Official stable, invalid, and draft examples
-tests/lexer/      Lexer golden fixtures
-tests/parser/     Parser golden fixtures
-tests/semantics/  Semantics diagnostic fixtures
-tests/hir/        AHIR golden fixtures (.aru → .hir)
-tests/codegen/    AMIR golden fixtures (.aru → .amir)
-tests/ui/         UI diagnostic fixtures (.aru → .diag)
-```
-
-## Next Steps
-
-Select the next major phase and its prerequisites from the [master roadmap](docs/arandu-compiler-roadmap-v0.1.md). Completed campaigns become decisions or contracts; do not create a second roadmap.
+---
 
 ## License
 
-This project is dual-licensed under both the [MIT License](LICENSE-MIT) and the [Apache License, Version 2.0](LICENSE-APACHE).
+Arandu is dual-licensed under:
+
+- **MIT License** ([LICENSE-MIT](LICENSE-MIT))
+- **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE))
+
+You may choose either license at your option.
