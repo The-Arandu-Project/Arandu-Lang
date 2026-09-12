@@ -17,6 +17,17 @@ mod watch;
 use std::env;
 
 fn main() {
+    let _ = miette::set_hook(Box::new(|_| {
+        Box::new(
+            miette::MietteHandlerOpts::new()
+                .terminal_links(true)
+                .unicode(true)
+                .context_lines(2)
+                .tab_width(4)
+                .build(),
+        )
+    }));
+
     let raw_args: Vec<String> = env::args().collect();
     let result = commands::run(raw_args);
     pipeline::finish(result);

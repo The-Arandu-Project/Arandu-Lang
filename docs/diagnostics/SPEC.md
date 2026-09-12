@@ -222,7 +222,7 @@ Abaixo estão listados todos os diagnósticos mapeados para o compilador Arandu.
 | **N003** | `redefined name: '{name}' is already defined in this scope` | Error | `0.1.0` | Declaração duplicada de uma variável, função ou tipo no mesmo escopo local ou global. |
 | **N004** | `type '{name}' is used as a value` | Error | `0.1.0` | Uso incorreto de um identificador de tipo (como `User`) em uma posição onde um valor era esperado. |
 | **N005** | `value '{name}' is used as a type` | Error | `0.1.0` | Uso incorreto de um identificador de variável ou valor em uma posição onde um tipo era esperado. |
-| **N006** | *[Movido → M001]* | - | `0.1.0` | *Código de importação não resolvida movido para a categoria de módulos.* |
+| **N006** | `import name conflict: '{name}' is already defined in this scope` | Error | `0.1.0` | Um import introduz um nome que já foi vinculado no mesmo escopo (por outro import ou declaração). |
 | **N007** | `undefined assignment target: cannot assign to '{name}'` | Error | `0.1.0` | Tentativa de atribuir um valor a algo que não é um local de memória gravável. |
 | **N008** | *[Movido → M003]* | - | `0.1.0` | *Código de namespace usado como valor movido para categoria de módulos.* |
 | **N009** | *[Movido → M002]* | - | `0.1.0` | *Código de membro de namespace não encontrado movido para categoria de módulos.* |
@@ -296,6 +296,10 @@ Abaixo estão listados todos os diagnósticos mapeados para o compilador Arandu.
 | **O009** | `lifetime mismatch: lifetime of '{expected}' does not match lifetime of '{found}'` | Error | `0.1.0` | As restrições de tempo de vida de referências genéricas não conferem na passagem de argumentos ou atribuição. |
 | **O010** | `escape of borrowed value: returning reference to local variable '{name}'` | Error | `0.1.0` | Retorno de uma referência para um objeto alocado na pilha local da função corrente, o que causaria memória corrompida. |
 | **O011** | `free requires pointer type: cannot free expression of type '{type}'` | Error | `0.1.0` | O comando de desalocação explícita `free` foi chamado em uma variável que não é um ponteiro bruto (`*mut` ou `*const`). (Antigo `T023`). |
+| **O012** | `` `alloc` requires an `unsafe` block `` | Error | `0.1.0` | Alocação direta de memória bruta na heap via `alloc` exige contexto explícito `unsafe`. |
+| **O013** | `` call to extern function requires an `unsafe` block `` | Error | `0.1.0` | Chamadas para funções externas de FFI (`extern "C"`) exigem bloco `unsafe`. |
+| **O014** | `` `free` requires an `unsafe` block `` | Error | `0.1.0` | Desalocação manual de memória via `free` é operação insegura e exige bloco `unsafe`. |
+
 
 ---
 
@@ -358,6 +362,8 @@ Erros de pânico gerados devido a falhas do próprio compilador Arandu. O sufixo
 | **ICE-O-001** | `internal ownership error: lifetime solver state corrupted` | ICE (Fatal) | `0.1.0` | O resolvedor de lifetimes entrou em inconsistência lógica ao calcular o tempo de vida. |
 | **ICE-L-001** | `internal lowering error: unexpected AST state during lowering` | ICE (Fatal) | `0.1.0` | Pânico provocado por discrepâncias de tipos durante a conversão da AST para HIR/AMIR. |
 | **ICE-GEN-001** | `internal monomorphization error: instantiation limit loop error` | ICE (Fatal) | `0.1.0` | Colapso no cálculo de dependências ou ordenação topológica das monomorfizações de genéricos. |
+| **ICE-GEN-002** | `internal IR error: AMIR validation failed` | ICE (Fatal) | `0.1.0` | Falha de validação estrutural no AMIR (invariantes SSA, tipos, parâmetros ou arestas de CFG corrompidas). |
+
 
 ---
 
@@ -372,7 +378,7 @@ Para adicionar um novo código de erro ao compilador Arandu, siga exatamente as 
 
 ### 4.2 Roteiro de Modificações no Código (Erros Normais e Warnings)
 1.  **Declaração do Enum**:
-    Edite o arquivo `crates/arandu_semantics/src/diagnostics.rs` e adicione a nova variante ao enum `DiagCode`. Por exemplo:
+    Edite o arquivo `crates/arandu_diagnostics/src/lib.rs` e adicione a nova variante ao enum `DiagCode`. Por exemplo:
     ```rust
     pub enum DiagCode {
         // ...
@@ -380,12 +386,12 @@ Para adicionar um novo código de erro ao compilador Arandu, siga exatamente as 
     }
     ```
 2.  **Mapeamento de String**:
-    No mesmo arquivo `crates/arandu_semantics/src/diagnostics.rs`, implemente o mapeamento da string na função `as_str()` correspondente ao código sequencial definido:
+    No mesmo arquivo `crates/arandu_diagnostics/src/lib.rs`, implemente o mapeamento da string na função `as_str()` e adicione a variante à constante `ALL`:
     ```rust
     DiagCode::T026NewTypeError => "T026",
     ```
 3.  **Criação do Documento Humano**:
-    Crie o arquivo Markdown com a explicação detalhada em português sob o caminho `docs/errors/T026.md`. Certifique-se de que ele contém:
+    Crie o arquivo Markdown com a explicação detalhada em inglês (conforme exigido pelo `AGENTS.md`) sob o caminho `docs/errors/T026.md`. Certifique-se de que ele contém:
     *   Título descrevendo o erro.
     *   Exemplo de código incorreto.
     *   Explicação semântica.

@@ -854,16 +854,28 @@ impl miette::Diagnostic for Diagnostic {
     }
 
     fn help<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
-        if self.hints.is_empty() {
+        if self.notes.is_empty() && self.hints.is_empty() {
             None
         } else {
-            let hints_str = self
-                .hints
-                .iter()
-                .map(|h| h.message.as_str())
-                .collect::<Vec<_>>()
-                .join("\n");
-            Some(Box::new(hints_str))
+            let mut parts = Vec::new();
+            for note in &self.notes {
+                parts.push(format!("note: {note}"));
+            }
+            for hint in &self.hints {
+                parts.push(hint.message.clone());
+            }
+            Some(Box::new(parts.join("\n")))
+        }
+    }
+
+    fn url<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
+        if self.is_ice() {
+            None
+        } else {
+            Some(Box::new(format!(
+                "https://arandu-lang.dev/docs/errors/{}",
+                self.code.as_str()
+            )))
         }
     }
 }
@@ -1177,5 +1189,32 @@ mod tests {
         let d = Diagnostic::error(DiagCode::T001CannotInferType, "x", dummy_span());
         let display = d.to_string();
         assert_eq!(display, "x");
+    }
+
+    // ── miette::Diagnostic ──
+
+    #[test]
+    fn miette_diagnostic_url_and_help() {
+        use miette::Diagnostic as _;
+
+        let user_diag = Diagnostic::error(
+            DiagCode::T002IncompatibleAssignment,
+            "mismatch",
+            dummy_span(),
+        )
+        .with_note("consider explicit cast")
+        .with_hint("change type to int");
+
+        assert_eq!(
+            user_diag.url().map(|u| u.to_string()),
+            Some("https://arandu-lang.dev/docs/errors/T002".to_string())
+        );
+
+        let help_text = user_diag.help().map(|h| h.to_string()).expect("help text");
+        assert!(help_text.contains("note: consider explicit cast"));
+        assert!(help_text.contains("change type to int"));
+
+        let ice_diag = Diagnostic::ice(DiagCode::ICET001, "internal error", dummy_span());
+        assert!(ice_diag.url().is_none());
     }
 }

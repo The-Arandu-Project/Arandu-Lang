@@ -46,6 +46,9 @@ pub(super) fn synth_control_flow_expr(
             Some(checker.intern(ArType::Error))
         }
         ExprKind::Alloc { expr: inner_expr } => {
+            checker.current_observed_effects = checker
+                .current_observed_effects
+                .union(arandu_middle::EffectFlags::HEAP);
             if !checker.ctx.is_in_unsafe() {
                 checker.diagnostics.push(
                     crate::Diagnostic::error(

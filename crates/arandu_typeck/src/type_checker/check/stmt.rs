@@ -69,9 +69,6 @@ pub fn check_stmt(checker: &mut TypeChecker<'_>, pool: &AstPool, stmt: &Stmt) {
             check_loop_control_stmt(checker, stmt, *span);
         }
         Stmt::Unsafe { span: _, block } => {
-            // Root cause fix (RC-F64 / O013): statement-form `unsafe { ... }`
-            // was previously swallowed by `_ => {}`, so the body was never
-            // type-checked and expressions inside kept `ArType::Error`.
             checker.ctx.enter_unsafe();
             check_block(checker, pool, block);
             checker.ctx.exit_unsafe();
@@ -492,6 +489,9 @@ fn check_free_stmt(
     span: arandu_base::Span,
     expr: arandu_parser::ast_pool::ExprId,
 ) {
+    checker.current_observed_effects = checker
+        .current_observed_effects
+        .union(arandu_middle::EffectFlags::HEAP);
     if !checker.ctx.is_in_unsafe() {
         checker.diagnostics.push(
             crate::Diagnostic::error(
