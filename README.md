@@ -44,12 +44,12 @@ Arandu introduces a **hybrid memory safety model**: static linear ownership (`ow
 
 | Pillar | Description |
 | :--- | :--- |
-| 🛡️ **Predictable Memory Safety** | Single-owner linear types (OSSA), borrowed references (`ref T`), and thread-confined generational references (**GenRef**). |
-| ⚡ **Incremental Salsa Queries** | CST-first incremental re-parsing and fine-grained Salsa caching preserve query early-cutoff across edits. |
-| 🔍 **Human-Centric Diagnostics** | Structured error codes (`LX*`, `P*`, `N*`, `T*`, `O*`, `W*`), secondary context labels, and suggested quick fixes. |
-| 🎯 **Dual Native Code Generation** | Instant JIT compilation and native object linking via Cranelift, plus portable GNU C99/C11 code generation. |
-| 🧰 **Batteries-Included Tooling** | Integrated package management (`arandu new`), dependency verification, code formatter (`arandu fmt`), and system doctor. |
-| 💻 **First-Class Editor Support** | Full-featured Language Server Protocol (LSP) with type-aware semantic tokens, hover, completions, and code actions. |
+| **Memory Safety Without GC** | Single-owner linear types (OSSA), borrowed references (`ref T`), and thread-confined generational references (**GenRef**). |
+| **Incremental Salsa Queries** | CST-first incremental re-parsing and fine-grained Salsa caching preserve query early-cutoff across edits. |
+| **Human-Centric Diagnostics** | Structured error codes (`LX*`, `P*`, `N*`, `T*`, `O*`, `W*`), secondary context labels, and suggested quick fixes. |
+| **Dual Native Code Generation** | Instant JIT compilation and native object linking via Cranelift, plus portable GNU C99/C11 code generation. |
+| **Batteries-Included Tooling** | Integrated package management (`arandu new`), dependency verification, code formatter (`arandu fmt`), and system doctor. |
+| **First-Class Editor Support** | Full-featured Language Server Protocol (LSP) with type-aware semantic tokens, hover, completions, and code actions. |
 
 ---
 
@@ -221,34 +221,20 @@ Developer & Debug Flags (-Z):
 
 Arandu is structured as an incremental, query-driven compilation pipeline:
 
-```text
-Source Code (.aru)
-       │
-       ▼
- [arandu_lexer] ──▶ Rowan CST [arandu_parser]
-                           │
-                           ▼
-                    AST Extraction
-                           │
-                           ▼
-                 Salsa Query Database [arandu_query]
-                ┌──────────┴──────────┐
-                ▼                     ▼
-     Name Resolution            Type Checking
-    [arandu_resolve]           [arandu_typeck]
-                └──────────┬──────────┘
-                           ▼
-                  AHIR (Typed High IR)
-                           │
-                           ▼
-             OSSA & Definite Initialization [arandu_mir]
-                           │
-                           ▼
-                     AMIR (Mid-Level IR / CFG)
-                ┌──────────┴──────────┐
-                ▼                     ▼
-          Cranelift JIT             GNU C
-    [arandu_backend_cranelift] [arandu_backend_c]
+```mermaid
+flowchart TD
+    Source["Source Code (.aru)"] --> Lexer["arandu_lexer"]
+    Lexer --> Parser["arandu_parser<br/>(Rowan CST)"]
+    Parser --> AST["AST Lowering"]
+    AST --> Salsa["arandu_query<br/>(Salsa Database)"]
+    Salsa --> Resolve["arandu_resolve<br/>(Name Resolution)"]
+    Salsa --> Typeck["arandu_typeck<br/>(Type Inference & Checking)"]
+    Resolve --> AHIR["AHIR<br/>(High-Level IR)"]
+    Typeck --> AHIR
+    AHIR --> MIR["arandu_mir<br/>(OSSA & Definite Init)"]
+    MIR --> AMIR["AMIR<br/>(Mid-Level IR / CFG)"]
+    AMIR --> Cranelift["arandu_backend_cranelift<br/>(Cranelift JIT & Native)"]
+    AMIR --> CBackend["arandu_backend_c<br/>(Portable GNU C)"]
 ```
 
 ### Workspace Structure
