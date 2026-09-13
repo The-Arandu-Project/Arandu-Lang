@@ -21,6 +21,16 @@ const DISC_PENDING_ONCE: u32 = 1;
 const HEADER: usize = 8;
 const PAYLOAD_OFF: usize = 8;
 const CO_MAGIC: u32 = 0x4152434f; // "ARCO"
+/// Maximum number of short spin iterations before yielding thread in cooperative block_on.
+const CO_SPIN_LIMIT: u32 = 32;
+
+const fn co_i64_layout() -> Layout {
+    match Layout::from_size_align(HEADER + 8, 8) {
+        Ok(l) => l,
+        Err(_) => unreachable!(),
+    }
+}
+const CO_I64_LAYOUT: Layout = co_i64_layout();
 
 #[repr(C)]
 struct CoHeader {
@@ -34,7 +44,7 @@ struct CoHeader {
 /// C ABI for Cranelift JIT symbol table.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_co_make_ready_i64(payload: i64) -> *mut u8 {
-    let layout = Layout::from_size_align(HEADER + 8, 8).expect("layout");
+    let layout = CO_I64_LAYOUT;
     let p = unsafe { alloc(layout) };
     if p.is_null() {
         std::process::abort();
@@ -55,7 +65,7 @@ pub unsafe extern "C" fn ar_co_make_ready_i64(payload: i64) -> *mut u8 {
 /// C ABI for Cranelift JIT symbol table.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_co_pending_once_i64(payload: i64) -> *mut u8 {
-    let layout = Layout::from_size_align(HEADER + 8, 8).expect("layout");
+    let layout = CO_I64_LAYOUT;
     let p = unsafe { alloc(layout) };
     if p.is_null() {
         std::process::abort();
@@ -76,7 +86,7 @@ pub unsafe extern "C" fn ar_co_pending_once_i64(payload: i64) -> *mut u8 {
 /// `state` / `out` must be valid for the coroutine blob and write.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ar_co_poll_i64(state: *mut u8, out: *mut i64) -> i32 {
-    if state.is_null() {
+    if state.is_null() || out.is_null() {
         std::process::abort();
     }
     let header = unsafe { &mut *(state as *mut CoHeader) };
@@ -121,7 +131,7 @@ pub unsafe extern "C" fn ar_co_block_on_i64(state: *mut u8) -> i64 {
             return out;
         }
         // Cooperative backoff: short spin before yielding to prevent CPU core lockup.
-        if spins < 32 {
+        if spins < CO_SPIN_LIMIT {
             std::hint::spin_loop();
             spins += 1;
         } else {
@@ -144,7 +154,7 @@ pub unsafe extern "C" fn ar_co_free(state: *mut u8) {
     if header.magic != CO_MAGIC {
         std::process::abort();
     }
-    let layout = Layout::from_size_align(HEADER + 8, 8).expect("layout");
+    let layout = CO_I64_LAYOUT;
     unsafe {
         dealloc(state, layout);
     }

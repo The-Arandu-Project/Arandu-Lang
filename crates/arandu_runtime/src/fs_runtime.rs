@@ -22,6 +22,14 @@ use std::path::Path;
 /// Max buffer, matching `std.alloc.string.maxBufferCapacity()` (i32::MAX).
 const MAX_BUFFER_SIZE: usize = i32::MAX as usize;
 
+/// Header size in bytes for directory serialization: `[u32 count][u32 blob_len]`.
+const DIR_BLOB_HEADER_SIZE: usize = 8;
+/// Size in bytes of one serialized directory entry:
+/// `u32 name_off` + `u32 name_len` + `u8 is_dir` + `u8 kind` + `u16 pad` + 4 padding.
+const DIR_ENTRY_SIZE: usize = 16;
+/// Initial growth capacity when reading dynamic/special files whose metadata length is 0 (e.g. `/proc`).
+const INITIAL_GROWTH_CAPACITY: usize = 8192;
+
 const ERR_OK: isize = 0;
 /// `IoErrorKind::NotFound`.
 const ERR_NOT_FOUND: isize = 1;
@@ -101,7 +109,7 @@ fn read_all_impl(ptr: *const u8, len: isize) -> Result<(*mut u8, usize, usize), 
                 break;
             }
             let next_capacity = if capacity == 0 {
-                8192.min(MAX_BUFFER_SIZE)
+                INITIAL_GROWTH_CAPACITY.min(MAX_BUFFER_SIZE)
             } else {
                 (capacity * 2).min(MAX_BUFFER_SIZE)
             };
@@ -156,6 +164,9 @@ pub unsafe extern "C" fn ar_fs_read_all(
     out_cap: *mut usize,
     err: *mut isize,
 ) {
+    if out_buf.is_null() || out_len.is_null() || out_cap.is_null() || err.is_null() {
+        return;
+    }
     match read_all_impl(path_ptr, path_len) {
         Ok((data, len, capacity)) => {
             // SAFETY: contract mandates writable out-pointers.
@@ -221,8 +232,8 @@ fn read_dir_impl(ptr: *const u8, len: isize) -> Result<(*mut u8, usize, usize), 
     }
 
     let names_len: usize = entries.iter().map(|e| e.name.len()).sum();
-    let entry_table = count.checked_mul(16).ok_or(ERR_OTHER)?;
-    let blob_len = 8usize
+    let entry_table = count.checked_mul(DIR_ENTRY_SIZE).ok_or(ERR_OTHER)?;
+    let blob_len = DIR_BLOB_HEADER_SIZE
         .checked_add(entry_table)
         .and_then(|v| v.checked_add(names_len))
         .ok_or(ERR_OTHER)?;
@@ -239,10 +250,10 @@ fn read_dir_impl(ptr: *const u8, len: isize) -> Result<(*mut u8, usize, usize), 
     let bytes = unsafe { std::slice::from_raw_parts_mut(data, blob_len) };
     bytes[0..4].copy_from_slice(&(count as u32).to_le_bytes());
     bytes[4..8].copy_from_slice(&(blob_len as u32).to_le_bytes());
-    let names_base = 8 + count * 16;
+    let names_base = DIR_BLOB_HEADER_SIZE + count * DIR_ENTRY_SIZE;
     let mut cursor = names_base;
     for (i, entry) in entries.iter().enumerate() {
-        let base = 8 + i * 16;
+        let base = DIR_BLOB_HEADER_SIZE + i * DIR_ENTRY_SIZE;
         let name_off = cursor - names_base;
         bytes[base..base + 4].copy_from_slice(&(name_off as u32).to_le_bytes());
         bytes[base + 4..base + 8].copy_from_slice(&(entry.name.len() as u32).to_le_bytes());
@@ -268,6 +279,9 @@ pub unsafe extern "C" fn ar_fs_readdir(
     out_cap: *mut usize,
     err: *mut isize,
 ) {
+    if out_buf.is_null() || out_count.is_null() || out_cap.is_null() || err.is_null() {
+        return;
+    }
     match read_dir_impl(path_ptr, path_len) {
         Ok((data, count, capacity)) => {
             // SAFETY: contract mandates writable out-pointers.
@@ -519,6 +533,41 @@ mod tests {
         assert_eq!(err, ERR_NOT_FOUND);
         assert!(buf.is_null());
         assert_eq!((count, cap), (0, 0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn null_out_pointers_are_safely_ignored() {
+        let text = b"safe";
+        let dir = temp_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("safe.txt"), text).unwrap();
+        let fat = FatStr::new(&dir.join("safe.txt"));
+        let mut buf: *mut u8 = std::ptr::null_mut();
+        let mut len = 0usize;
+        let mut cap = 0usize;
+
+        unsafe {
+            // Null err pointer should safely return without dereference
+            ar_fs_read_all(
+                fat.ptr,
+                fat.len,
+                &mut buf,
+                &mut len,
+                &mut cap,
+                std::ptr::null_mut(),
+            );
+            // Null out_buf should safely return
+            ar_fs_readdir(
+                fat.ptr,
+                fat.len,
+                std::ptr::null_mut(),
+                &mut len,
+                &mut cap,
+                std::ptr::null_mut(),
+            );
+        }
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

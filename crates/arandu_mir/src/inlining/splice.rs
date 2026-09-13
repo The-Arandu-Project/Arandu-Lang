@@ -356,6 +356,7 @@ fn remap_rvalue(rv: &AmirRvalue, temp_map: &[TempId], local_map: &[LocalId]) -> 
             payload: payload.as_ref().map(|p| remap_op(p, temp_map)),
         },
         AmirRvalue::Len(op) => AmirRvalue::Len(remap_op(op, temp_map)),
+        AmirRvalue::SliceData(op) => AmirRvalue::SliceData(remap_op(op, temp_map)),
         AmirRvalue::SliceView { owner, data, len } => AmirRvalue::SliceView {
             owner: remap_op(owner, temp_map),
             data: remap_op(data, temp_map),

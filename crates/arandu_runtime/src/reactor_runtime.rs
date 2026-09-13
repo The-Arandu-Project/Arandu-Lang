@@ -14,6 +14,19 @@ pub const BACKEND_EPOLL: i64 = 1;
 /// Linux io_uring (timeout ops).
 pub const BACKEND_IO_URING: i64 = 2;
 
+/// Default capacity for the reactor's io_uring ring buffer.
+#[cfg(target_os = "linux")]
+const IO_URING_DEFAULT_ENTRIES: u32 = 8;
+/// User data tag for timeout completions in io_uring.
+#[cfg(target_os = "linux")]
+const IO_URING_USER_DATA_TIMEOUT: u64 = 1;
+/// Maximum batch size of epoll events collected per poll cycle.
+#[cfg(target_os = "linux")]
+const MAX_EPOLL_EVENTS: usize = 8;
+/// Size in bytes of the timerfd notification counter buffer (uint64_t).
+#[cfg(target_os = "linux")]
+const TIMERFD_COUNTER_SIZE: usize = 8;
+
 /// Opaque reactor id (>= 0). Invalid / closed = negative.
 type ReactorId = i64;
 
@@ -101,7 +114,7 @@ fn probe_backend() -> i64 {
 
 #[cfg(target_os = "linux")]
 fn try_io_uring_setup() -> bool {
-    match io_uring::IoUring::new(8) {
+    match io_uring::IoUring::new(IO_URING_DEFAULT_ENTRIES) {
         Ok(_ring) => true,
         Err(_) => false,
     }
@@ -131,7 +144,7 @@ pub unsafe extern "C" fn ar_rt_reactor_create() -> ReactorId {
             return -1;
         }
         let ring = if unsafe { ar_rt_reactor_backend() } == BACKEND_IO_URING {
-            io_uring::IoUring::new(8).ok()
+            io_uring::IoUring::new(IO_URING_DEFAULT_ENTRIES).ok()
         } else {
             None
         };
@@ -218,7 +231,9 @@ unsafe fn sleep_ms_io_uring(slot: &mut ReactorSlot, ms: u64) -> bool {
     };
     use io_uring::types;
     let ts = types::Timespec::from(Duration::from_millis(ms));
-    let entry = io_uring::opcode::Timeout::new(&ts).build().user_data(1);
+    let entry = io_uring::opcode::Timeout::new(&ts)
+        .build()
+        .user_data(IO_URING_USER_DATA_TIMEOUT);
     unsafe {
         if ring.submission().push(&entry).is_err() {
             return false;
@@ -363,7 +378,7 @@ pub unsafe extern "C" fn ar_rt_reactor_poll_ms(id: ReactorId, timeout_ms: i64) -
             return 0;
         }
 
-        let mut events: [libc::epoll_event; 8] = unsafe { std::mem::zeroed() };
+        let mut events: [libc::epoll_event; MAX_EPOLL_EVENTS] = unsafe { std::mem::zeroed() };
         let timeout_arg = if timeout_ms < 0 {
             -1
         } else {
@@ -390,7 +405,7 @@ pub unsafe extern "C" fn ar_rt_reactor_poll_ms(id: ReactorId, timeout_ms: i64) -
         for event in events.iter().take(n as usize) {
             let fd_val = event.u64 as i32;
             if Some(fd_val) == tfd_opt {
-                let mut buf = [0u8; 8];
+                let mut buf = [0u8; TIMERFD_COUNTER_SIZE];
                 let _ = unsafe { libc::read(fd_val, buf.as_mut_ptr() as *mut _, buf.len()) };
                 timer_fired = true;
             } else {

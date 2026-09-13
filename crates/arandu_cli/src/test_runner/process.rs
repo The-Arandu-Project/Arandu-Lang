@@ -3,6 +3,7 @@
 use arandu_codegen::testing::{TestEventV1, TestFailure, TestStatus};
 use std::fs;
 use std::io::Read;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -52,9 +53,16 @@ pub fn run_cases(
     let cases = Arc::new(cases);
     let next = Arc::new(AtomicUsize::new(0));
     let stop = Arc::new(AtomicBool::new(false));
-    let (sender, receiver) = mpsc::channel();
-    let workers = options.jobs.max(1).min(cases.len());
+    let system_limit = thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1)
+        .saturating_mul(2)
+        .clamp(1, 64);
+    let workers = options.jobs.max(1).min(cases.len()).min(system_limit);
+    let channel_bound = workers.saturating_mul(2).max(1);
+    let (sender, receiver) = mpsc::sync_channel(channel_bound);
     let mut handles = Vec::new();
+    let mut spawn_error = None;
 
     for _ in 0..workers {
         let cases = Arc::clone(&cases);
@@ -66,39 +74,83 @@ pub fn run_cases(
         let timeout = options.timeout;
         let fail_fast = options.fail_fast;
 
-        handles.push(thread::spawn(move || {
-            loop {
-                if CANCELLED.load(Ordering::Acquire) || (fail_fast && stop.load(Ordering::Acquire))
-                {
-                    break;
+        match thread::Builder::new()
+            .name("arandu-test-worker".to_string())
+            .spawn(move || {
+                loop {
+                    if CANCELLED.load(Ordering::Acquire)
+                        || (fail_fast && stop.load(Ordering::Acquire))
+                    {
+                        break;
+                    }
+                    let index = next.fetch_add(1, Ordering::AcqRel);
+                    let Some(id) = cases.get(index) else { break };
+                    let sequence = u64::try_from(index).unwrap_or(u64::MAX);
+                    let started = Instant::now();
+                    let event = run_case_guarded(sequence, id, started, || {
+                        run_case(&project, &stdlib_root, id, timeout, sequence)
+                    });
+                    if !matches!(event.status, TestStatus::Passed | TestStatus::Skipped) {
+                        stop.store(true, Ordering::Release);
+                    }
+                    if sender.send(event).is_err() {
+                        break;
+                    }
                 }
-                let index = next.fetch_add(1, Ordering::AcqRel);
-                let Some(id) = cases.get(index) else { break };
-                let sequence = u64::try_from(index).unwrap_or(u64::MAX);
-
-                let event = run_case(&project, &stdlib_root, id, timeout, sequence);
-                if !matches!(event.status, TestStatus::Passed | TestStatus::Skipped) {
-                    stop.store(true, Ordering::Release);
-                }
-                if sender.send(event).is_err() {
-                    break;
-                }
+            }) {
+            Ok(handle) => handles.push(handle),
+            Err(error) => {
+                spawn_error = Some(error.to_string());
+                break;
             }
-        }));
+        }
     }
     drop(sender);
 
     let mut events: Vec<_> = receiver.into_iter().collect();
+    let mut join_error = false;
     for handle in handles {
-        let _ = handle.join();
+        join_error |= handle.join().is_err();
     }
 
     events.sort_by(|left, right| left.id.cmp(&right.id));
     report(&events, options)?;
 
+    if let Some(error) = spawn_error {
+        return Err(format!("failed spawning test worker: {error}"));
+    }
+    if join_error {
+        return Err("test worker terminated without a structured result".to_string());
+    }
+
     Ok(events
         .iter()
         .all(|event| matches!(event.status, TestStatus::Passed | TestStatus::Skipped)))
+}
+
+fn run_case_guarded(
+    sequence: u64,
+    id: &str,
+    started: Instant,
+    run: impl FnOnce() -> TestEventV1,
+) -> TestEventV1 {
+    catch_unwind(AssertUnwindSafe(run)).unwrap_or_else(|payload| {
+        failed_event(
+            sequence,
+            id,
+            started,
+            TestStatus::Crashed,
+            format!("test worker panicked: {}", panic_message(&payload)),
+        )
+    })
+}
+
+fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> &str {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("non-string panic payload")
 }
 
 fn run_case(
@@ -394,5 +446,21 @@ pub fn atomic_write_file(path: &Path, content: &[u8]) -> Result<(), String> {
             let _ = fs::remove_file(&staging);
             error.to_string()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn worker_panic_becomes_a_structured_crash_event() {
+        let event = run_case_guarded(7, "panic-case", Instant::now(), || {
+            panic!("synthetic runner panic")
+        });
+        assert_eq!(event.sequence, 7);
+        assert_eq!(event.id, "panic-case");
+        assert_eq!(event.status, TestStatus::Crashed);
+        assert!(event.failure.is_some());
     }
 }

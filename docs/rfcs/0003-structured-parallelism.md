@@ -31,8 +31,8 @@ O Arandu resolve esses problemas através de **Paralelismo Estruturado**: as tar
 Entrada (fatia []T ou coleção contígua)
            │
            ▼
-    particionamento
-   disjunto em chunks
+ particionamento fixo pela entrada
+ (independente de workers)
            │
            ▼
   WorkerPool bounded ──► [Worker 0] ... [Worker N] (WorkThunk ABI)
@@ -41,7 +41,7 @@ Entrada (fatia []T ou coleção contígua)
   redução ordinal associativa (Combine<R>)
            │
            ▼
-   Resultado determinístico e bit-idêntico
+ resultado estável entre contagens de workers
 ```
 
 ---
@@ -56,7 +56,7 @@ int32_t (*ar_work_thunk)(void *context, void *result);
 ```
 * `context`: Ponteiro para a struct contendo o subintervalo de dados e argumentos de entrada.
 * `result`: Ponteiro para a região onde o resultado do chunk será gravado pelo worker.
-* Retorno: Código `0` para sucesso ou código de erro positivo em caso de falha controlada.
+* Retorno: `0` para sucesso, `2` para cancelamento e outro código não zero para falha controlada.
 
 ### Inlining de Funções-Folha na AMIR
 
@@ -71,5 +71,10 @@ Para evitar a sobrecarga de chamadas indiretas no laço quente de processamento 
 ## 5. Invariantes de Arquitetura
 
 1. **Escopo Imutável**: Um grupo paralelo não pode concluir sua execução até que todas as tarefas admitidas tenham terminado ou sido cooperativamente canceladas.
-2. **Ordem de Redução Estável**: Em operações `parallelFold`, os resultados parciais dos chunks são combinados respeitando a ordem ordinal original, garantindo determinismo bit a bit nos cálculos.
-3. **Limitação de Admissão (*Bounded Admission*)**: A fila de tarefas possui capacidade finita com estratégia *self-help*: se o pool estiver saturado, a thread chamadora assume o processamento do chunk em vez de alocar tarefas infinitamente.
+2. **Partição e Ordem Estáveis**: Em `parallelFold`, os limites de chunks derivam apenas da entrada e os parciais são combinados em ordem ordinal. Alterar somente a contagem de workers não altera a árvore de redução.
+3. **Contrato Algébrico Explícito**: `Combine` deve ser associativo, possuir a identidade fornecida como elemento neutro e ser estável sob o reagrupamento. Isso não implica igualdade com fold linear para aritmética IEEE-754 comum.
+4. **Limitação de Admissão (*Bounded Admission*)**: A fila possui capacidade finita. Chamadas externas aguardam admissão; submissões aninhadas feitas por workers executam inline para impedir deadlock e crescimento ilimitado.
+
+O runtime Rust usa workers persistentes. O backend C mantém o mesmo escopo e
+critério de falha, mas ainda cria e junta threads nativas em cada chamada; a
+reutilização equivalente permanece requisito de promoção a `gold`.
