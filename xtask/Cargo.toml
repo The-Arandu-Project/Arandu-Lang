@@ -18,3 +18,4 @@ arandu_query = { path = "../crates/arandu_query" }
 arandu_fuzz_support = { path = "../crates/arandu_fuzz_support" }
 salsa = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }

@@ -6,6 +6,84 @@ use crate::cli_error::CliFailure;
 use crate::pipeline::{fail_usage, finish};
 use crate::project::{self, ProjectFlags};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColorChoice {
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
+impl ColorChoice {
+    #[must_use]
+    pub fn should_color_stream(self, is_terminal: bool) -> bool {
+        match self {
+            Self::Always => true,
+            Self::Never => false,
+            Self::Auto => {
+                let no_color = std::env::var("NO_COLOR").is_ok_and(|v| !v.is_empty());
+                if no_color {
+                    return false;
+                }
+                is_terminal
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn should_color_stderr(self) -> bool {
+        use std::io::IsTerminal;
+        self.should_color_stream(std::io::stderr().is_terminal())
+    }
+
+    #[must_use]
+    pub fn should_color_stdout(self) -> bool {
+        use std::io::IsTerminal;
+        self.should_color_stream(std::io::stdout().is_terminal())
+    }
+}
+
+/// Detects CLI color preferences early before the diagnostic hook is initialized.
+#[must_use]
+pub fn detect_color_choice(raw_args: &[String]) -> ColorChoice {
+    let mut choice = ColorChoice::Auto;
+    let mut i = 0;
+    while i < raw_args.len() {
+        let arg = &raw_args[i];
+        if arg == "--" {
+            break;
+        }
+        if arg == "--no-color" {
+            choice = ColorChoice::Never;
+        } else if let Some(val) = arg.strip_prefix("--color=") {
+            match val {
+                "always" => choice = ColorChoice::Always,
+                "never" => choice = ColorChoice::Never,
+                "auto" => choice = ColorChoice::Auto,
+                _ => {}
+            }
+        } else if arg == "--color" && i + 1 < raw_args.len() {
+            match raw_args[i + 1].as_str() {
+                "always" => {
+                    choice = ColorChoice::Always;
+                    i += 1;
+                }
+                "never" => {
+                    choice = ColorChoice::Never;
+                    i += 1;
+                }
+                "auto" => {
+                    choice = ColorChoice::Auto;
+                    i += 1;
+                }
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+    choice
+}
+
 #[derive(Debug, Clone)]
 pub struct CliInvocation {
     pub debug: bool,
@@ -14,6 +92,8 @@ pub struct CliInvocation {
     pub genref_report: bool,
     pub cfg: bool,
     pub ascii: bool,
+    #[allow(dead_code)]
+    pub color: ColorChoice,
     pub args: Vec<String>,
     /// Arguments following `--`, forwarded verbatim to an executed program.
     pub program_args: Vec<String>,
@@ -23,12 +103,14 @@ pub struct CliInvocation {
 }
 
 pub fn parse_invocation(raw_args: impl IntoIterator<Item = String>) -> CliInvocation {
+    let raw_args_vec: Vec<String> = raw_args.into_iter().collect();
     let mut debug = false;
     let mut opt = false;
     let mut parallel = false;
     let mut genref_report = false;
     let mut cfg = false;
     let mut ascii = false;
+    let mut color = ColorChoice::Auto;
     let mut args = Vec::new();
     let mut program_args = Vec::new();
     let mut z_flags: Vec<String> = Vec::new();
@@ -36,13 +118,17 @@ pub fn parse_invocation(raw_args: impl IntoIterator<Item = String>) -> CliInvoca
     let mut raw_project_flags: Vec<String> = Vec::new();
 
     let mut after_separator = false;
-    for arg in raw_args {
+    let mut i = 0;
+    while i < raw_args_vec.len() {
+        let arg = &raw_args_vec[i];
         if after_separator {
-            program_args.push(arg);
+            program_args.push(arg.clone());
+            i += 1;
             continue;
         }
         if arg == "--" {
             after_separator = true;
+            i += 1;
             continue;
         }
         match arg.as_str() {
@@ -52,12 +138,58 @@ pub fn parse_invocation(raw_args: impl IntoIterator<Item = String>) -> CliInvoca
             "--genref-report" => genref_report = true,
             "--cfg" => cfg = true,
             "--ascii" => ascii = true,
+            "--no-color" => {
+                color = ColorChoice::Never;
+                raw_project_flags.push(arg.clone());
+            }
+            "--color=always" => {
+                color = ColorChoice::Always;
+                raw_project_flags.push(arg.clone());
+            }
+            "--color=never" => {
+                color = ColorChoice::Never;
+                raw_project_flags.push(arg.clone());
+            }
+            "--color=auto" => {
+                color = ColorChoice::Auto;
+                raw_project_flags.push(arg.clone());
+            }
+            "--color" => {
+                i += 1;
+                if i < raw_args_vec.len() {
+                    match raw_args_vec[i].as_str() {
+                        "always" => {
+                            color = ColorChoice::Always;
+                            raw_project_flags.push(format!("--color={}", raw_args_vec[i]));
+                        }
+                        "never" => {
+                            color = ColorChoice::Never;
+                            raw_project_flags.push(format!("--color={}", raw_args_vec[i]));
+                        }
+                        "auto" => {
+                            color = ColorChoice::Auto;
+                            raw_project_flags.push(format!("--color={}", raw_args_vec[i]));
+                        }
+                        other => fail_usage(format!(
+                            "unknown --color option: '{other}' (use auto|always|never)"
+                        )),
+                    }
+                } else {
+                    fail_usage("--color requires an argument (use auto|always|never)");
+                }
+            }
+            s if s.starts_with("--color=") => {
+                fail_usage(format!(
+                    "unknown --color option: '{}' (use auto|always|never)",
+                    &s["--color=".len()..]
+                ));
+            }
             // G2: long form of -Zno-generational-fallback (same atomic).
             "--no-generational-fallback" => {
                 z_flags.push("-Zno-generational-fallback".into());
             }
-            s if s.starts_with("-Z") => z_flags.push(arg),
-            s if s.starts_with("--layout=") => layout_flags.push(arg),
+            s if s.starts_with("-Z") => z_flags.push(arg.clone()),
+            s if s.starts_with("--layout=") => layout_flags.push(arg.clone()),
             // Collect project flags even before we know the subcommand.
             s if s.starts_with("--stdlib-path")
                 || s.starts_with("--cache-dir")
@@ -69,15 +201,17 @@ pub fn parse_invocation(raw_args: impl IntoIterator<Item = String>) -> CliInvoca
                 || s == "--frozen"
                 || s == "--accept" =>
             {
-                raw_project_flags.push(arg);
+                raw_project_flags.push(arg.clone());
             }
-            _ => args.push(arg),
+            _ => args.push(arg.clone()),
         }
+        i += 1;
     }
     let data_layout = parse_data_layout(&layout_flags);
-    let (project_flags, extra_positional) = project::parse_project_flags(&raw_project_flags)
+    let (mut project_flags, extra_positional) = project::parse_project_flags(&raw_project_flags)
         .unwrap_or_else(|message| fail_usage(format!("error: {message}")));
     let _ = extra_positional;
+    project_flags.color = color;
 
     CliInvocation {
         debug,
@@ -86,6 +220,7 @@ pub fn parse_invocation(raw_args: impl IntoIterator<Item = String>) -> CliInvoca
         genref_report,
         cfg,
         ascii,
+        color,
         args,
         program_args,
         z_flags,
@@ -170,6 +305,8 @@ pub fn usage_and_exit() -> ! {
         "  --cache-dir <dir>          Override compiler cache directory\n",
         "  --layout=host|ptr4|ptr8|i686  (default: host)\n",
         "                             layout model only; cross compiler/sysroot are external\n",
+        "  --color=auto|always|never  Control ANSI color output (default: auto)\n",
+        "  --no-color                 Disable ANSI color output (respects https://no-color.org)\n",
         "  --vcs=auto|git|none        VCS initialization mode for new projects\n",
         "  -v, --verbose              Enable detailed progress and timing logs\n",
         "  -V, --version              Print compiler version and exit\n",

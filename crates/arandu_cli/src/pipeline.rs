@@ -125,6 +125,65 @@ pub struct CheckedProgram {
     pub type_check: arandu_semantics::TypeCheckResult,
 }
 
+pub struct PipelineLowerOutcome {
+    pub artifacts: std::sync::Arc<arandu_query::LowerAmirArtifacts>,
+    pub diagnostics: Vec<arandu_middle::Diagnostic>,
+}
+
+fn dedupe_accumulated_diags(
+    diags: &[impl std::ops::Deref<Target = arandu_middle::db::DiagnosticsAccumulator>],
+) -> Vec<arandu_middle::Diagnostic> {
+    let mut deduped = Vec::with_capacity(diags.len());
+    for diagnostic in diags {
+        if !deduped.contains(&diagnostic.0) {
+            deduped.push(diagnostic.0.clone());
+        }
+    }
+    deduped
+}
+
+pub fn render_nonfatal_diagnostics(
+    db: &dyn arandu_query::db::ArandCompilerDb,
+    diagnostics: &[arandu_middle::Diagnostic],
+    filepath: &str,
+) {
+    for diagnostic in diagnostics {
+        let (path_str, text_arc) = if diagnostic.span.file_id != 0 {
+            (
+                db.file_path(diagnostic.span.file_id)
+                    .to_string_lossy()
+                    .to_string(),
+                db.source_text(diagnostic.span.file_id),
+            )
+        } else {
+            let source = std::fs::read_to_string(filepath).unwrap_or_default();
+            (filepath.to_string(), source.into())
+        };
+        let named_source = miette::NamedSource::new(path_str, text_arc);
+        let report = miette::Report::new(diagnostic.clone()).with_source_code(named_source);
+        eprintln!("{:?}", report);
+    }
+}
+
+pub fn render_pipeline_failure(
+    db: &dyn arandu_query::db::ArandCompilerDb,
+    diagnostics: Vec<arandu_middle::Diagnostic>,
+    filepath: &str,
+) -> ! {
+    let target_path = diagnostics
+        .iter()
+        .find(|diagnostic| matches!(diagnostic.severity, arandu_middle::Severity::Error))
+        .and_then(|diagnostic| {
+            (diagnostic.span.file_id != 0).then(|| {
+                db.file_path(diagnostic.span.file_id)
+                    .to_string_lossy()
+                    .to_string()
+            })
+        })
+        .unwrap_or_else(|| filepath.to_string());
+    print_diagnostics_and_exit(diagnostics, &target_path)
+}
+
 /// Render non-fatal Salsa diagnostics or terminate through the typed diagnostic path.
 pub fn handle_accumulated_diags(
     db: &dyn arandu_query::db::ArandCompilerDb,
@@ -134,46 +193,69 @@ pub fn handle_accumulated_diags(
     if diags.is_empty() {
         return;
     }
-    let mut deduped: Vec<&arandu_middle::Diagnostic> = Vec::with_capacity(diags.len());
-    for d in diags {
-        let diag = &d.0;
-        if !deduped.contains(&diag) {
-            deduped.push(diag);
-        }
-    }
+    let deduped = dedupe_accumulated_diags(diags);
     if deduped
         .iter()
         .any(|d| matches!(d.severity, arandu_middle::Severity::Error))
     {
-        let target_path = deduped
-            .iter()
-            .find(|d| matches!(d.severity, arandu_middle::Severity::Error))
-            .and_then(|d| {
-                if d.span.file_id != 0 {
-                    Some(db.file_path(d.span.file_id).to_string_lossy().to_string())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| filepath.to_string());
-        print_diagnostics_and_exit(deduped.into_iter().cloned(), &target_path);
+        render_pipeline_failure(db, deduped, filepath);
     }
-    for diagnostic in deduped {
-        let (path_str, text_arc) = if diagnostic.span.file_id != 0 {
-            (
-                db.file_path(diagnostic.span.file_id)
-                    .to_string_lossy()
-                    .to_string(),
-                db.source_text(diagnostic.span.file_id),
-            )
-        } else {
-            let s = std::fs::read_to_string(filepath).unwrap_or_default();
-            (filepath.to_string(), s.into())
-        };
-        let named_source = miette::NamedSource::new(path_str, text_arc);
-        let report = miette::Report::new(diagnostic.clone()).with_source_code(named_source);
-        eprintln!("{:?}", report);
+    render_nonfatal_diagnostics(db, &deduped, filepath);
+}
+
+/// Pure, non-emitting pipeline boundary used by parallel CLI orchestration.
+/// Diagnostics are returned to the caller so observable output can be emitted
+/// later in stable input order.
+pub fn pipeline_lower_checked(
+    db: &dyn arandu_query::db::ArandCompilerDb,
+    file: arandu_query::db::SourceFile,
+) -> Result<PipelineLowerOutcome, Vec<arandu_middle::Diagnostic>> {
+    {
+        arandu_base::time_pass!("parse");
+        let program_res = arandu_query::passes::parse(db, file);
+        if let Err(error) = &**program_res {
+            return Err(vec![arandu_middle::Diagnostic::from(error.clone())]);
+        }
     }
+
+    {
+        arandu_base::time_pass!("type_check");
+        let _ = arandu_query::passes::type_check(db, file);
+    }
+    let type_accumulated = arandu_query::passes::type_check::accumulated::<
+        arandu_middle::db::DiagnosticsAccumulator,
+    >(db, file);
+    let mut diagnostics = dedupe_accumulated_diags(&type_accumulated);
+    if diagnostics
+        .iter()
+        .any(|diagnostic| matches!(diagnostic.severity, arandu_middle::Severity::Error))
+    {
+        return Err(diagnostics);
+    }
+
+    let artifacts = {
+        arandu_base::time_pass!("lower-amir");
+        arandu_query::passes::lower_amir(db, file)
+    };
+    let lower_accumulated = arandu_query::passes::lower_amir::accumulated::<
+        arandu_middle::db::DiagnosticsAccumulator,
+    >(db, file);
+    for diagnostic in dedupe_accumulated_diags(&lower_accumulated) {
+        if !diagnostics.contains(&diagnostic) {
+            diagnostics.push(diagnostic);
+        }
+    }
+    if diagnostics
+        .iter()
+        .any(|diagnostic| matches!(diagnostic.severity, arandu_middle::Severity::Error))
+    {
+        return Err(diagnostics);
+    }
+
+    Ok(PipelineLowerOutcome {
+        artifacts: std::sync::Arc::clone(&artifacts.value),
+        diagnostics,
+    })
 }
 
 /// Single pipeline entry for check / run / amir / emit-c:
@@ -184,38 +266,13 @@ pub fn pipeline_lower(
     file: arandu_query::db::SourceFile,
     filepath: &str,
 ) -> std::sync::Arc<arandu_query::LowerAmirArtifacts> {
-    {
-        arandu_base::time_pass!("parse");
-        let program_res = arandu_query::passes::parse(db, file);
-        if let Err(err) = &**program_res {
-            print_parse_error_and_exit(err, filepath);
+    match pipeline_lower_checked(db, file) {
+        Ok(outcome) => {
+            render_nonfatal_diagnostics(db, &outcome.diagnostics, filepath);
+            outcome.artifacts
         }
+        Err(diagnostics) => render_pipeline_failure(db, diagnostics, filepath),
     }
-
-    {
-        arandu_base::time_pass!("type_check");
-        let _ = arandu_query::passes::type_check(db, file);
-    }
-    let type_diags = arandu_query::passes::type_check::accumulated::<
-        arandu_middle::db::DiagnosticsAccumulator,
-    >(db, file);
-    if type_diags
-        .iter()
-        .any(|d| matches!(d.0.severity, arandu_middle::Severity::Error))
-    {
-        handle_accumulated_diags(db, &type_diags, filepath);
-    }
-
-    let artifacts = {
-        arandu_base::time_pass!("lower-amir");
-        arandu_query::passes::lower_amir(db, file)
-    };
-    let lower_diags = arandu_query::passes::lower_amir::accumulated::<
-        arandu_middle::db::DiagnosticsAccumulator,
-    >(db, file);
-    handle_accumulated_diags(db, &lower_diags, filepath);
-
-    std::sync::Arc::clone(&artifacts.value)
 }
 
 /// Parse + type-check for paths that still need a local TypeCheckResult (e.g. `hir`).

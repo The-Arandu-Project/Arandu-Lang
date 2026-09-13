@@ -183,4 +183,9 @@ impl CraneliftObjectBackend {
             target: self.target,
         })
     }
+
+    /// Consumes the backend and returns the underlying compiler context.
+    pub fn into_compiler(self) -> AranduModule<ObjectModule> {
+        self.compiler
+    }
 }

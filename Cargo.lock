@@ -61,6 +61,7 @@ dependencies = [
  "arandu_parser",
  "arandu_runtime",
  "arandu_semantics",
+ "blake3",
  "cranelift-codegen",
  "cranelift-frontend",
  "cranelift-jit",
@@ -2078,6 +2079,7 @@ dependencies = [
  "arandu_query",
  "salsa",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

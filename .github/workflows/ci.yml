@@ -27,6 +27,7 @@ jobs:
       code: ${{ steps.classify.outputs.code }}
       distribution: ${{ steps.classify.outputs.distribution }}
       editor: ${{ steps.classify.outputs.editor }}
+      host_sensitive: ${{ steps.classify.outputs.host_sensitive }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -59,32 +60,47 @@ jobs:
         run: cargo run --locked -p xtask -- check-diag-docs
       - name: Rust formatting
         run: cargo fmt --all -- --check
+      - name: Check workspace
+        run: cargo check --workspace --locked
+      - name: Clippy workspace
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: Generated files and snapshots leave the tree clean
         run: git diff --exit-code
 
   rust-core:
-    name: Rust core
+    name: Rust core (${{ matrix.shard }})
     if: needs.scope.outputs.code == 'true'
     needs: scope
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: frontend
+            crates: -p arandu_base -p arandu_lexer -p arandu_diagnostics -p arandu_parser -p arandu_resolve -p arandu_typeck
+          - shard: middle-end
+            crates: -p arandu_middle -p arandu_mir -p arandu_semantics -p arandu_query
+          - shard: backend-runtime
+            crates: -p arandu_codegen -p arandu_backend_c -p arandu_backend_cranelift -p arandu_runtime
+          - shard: tooling
+            crates: -p arandu_cli -p arandu_lsp -p arandu_fmt -p arandu_doc -p arandu_test_support -p arandu_fuzz_support -p xtask
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-rust
         with:
-          cache-key: core-rust-1.97.1
-      - name: Check workspace
-        run: cargo check --workspace --locked
-      - name: Clippy workspace
-        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      # This single invocation already includes the P3/P4, minimal Gold, CLI,
-      # query, LSP and other non-ignored workspace integration tests.
-      - name: Test workspace once
-        run: cargo test --workspace --locked
+          cache-key: core-rust-1.97.1-${{ matrix.shard }}
+      - name: Test ${{ matrix.shard }} shard
+        run: cargo test --locked ${{ matrix.crates }}
       - name: SL_T portable JUnit contract
+        if: matrix.shard == 'tooling'
         run: cargo run --locked -p arandu_cli -- test tests/projects/slt5_product --format junit --output target/sl-t/test-results.xml
+      - name: RFC 0011 native determinism and incremental benchmark
+        if: matrix.shard == 'tooling'
+        run: cargo run --locked -p xtask -- bench-incremental --verify-determinism
       - name: Publish SL_T JUnit evidence
+        if: matrix.shard == 'tooling'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sl-t-junit-${{ github.sha }}
@@ -92,6 +108,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Rustdoc
+        if: matrix.shard == 'tooling'
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 
   windows-portability:
@@ -106,8 +123,12 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           cache-key: windows-portability-rust-1.97.1
-      - name: Test the complete workspace on native Windows
+      - name: Test full workspace (host-sensitive changes)
+        if: needs.scope.outputs.host_sensitive == 'true'
         run: cargo test --workspace --locked
+      - name: Test essential smoke (pure compiler changes)
+        if: needs.scope.outputs.host_sensitive != 'true'
+        run: cargo test --locked -p arandu_cli -p arandu_runtime -p arandu_parser
 
   macos-portability:
     name: macOS portability
@@ -121,8 +142,12 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           cache-key: macos-portability-rust-1.97.1
-      - name: Test the complete workspace on native macOS
+      - name: Test full workspace (host-sensitive changes)
+        if: needs.scope.outputs.host_sensitive == 'true'
         run: cargo test --workspace --locked
+      - name: Test essential smoke (pure compiler changes)
+        if: needs.scope.outputs.host_sensitive != 'true'
+        run: cargo test --locked -p arandu_cli -p arandu_runtime -p arandu_parser
 
   diag-determinism:
     name: Diagnostic determinism
@@ -422,6 +447,8 @@ jobs:
           path: |
             target/s2-performance-report.txt
             target/l2-lsp-performance-report.txt
+            target/benchmarks/incremental.json
+            target/benchmarks/incremental.md
           if-no-files-found: error
           retention-days: 30
 

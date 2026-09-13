@@ -13,6 +13,7 @@ mod churn;
 mod corpus;
 mod docs_taxonomy;
 mod fuzz_regressions;
+mod incremental;
 mod line_endings;
 mod performance;
 mod release_contract;
@@ -36,6 +37,7 @@ fn main() {
         "check-fuzz-regressions" => fuzz_regressions::check(&workspace_root()),
         "check-architecture" => architecture::check(&workspace_root()),
         "check-line-endings" => line_endings::check(&workspace_root()),
+        "bench-incremental" => incremental::run(&workspace_root(), args),
         "run-fuzz-seed" => fuzz_regressions::run_one(args),
         "check-release-contract" => release_contract::check(&workspace_root(), args.next()),
         "prepare-release" => release_contract::prepare(&workspace_root(), args.next()),
@@ -67,6 +69,7 @@ Commands:
   check-fuzz-regressions  Run the versioned adversarial corpus with isolation
   check-architecture  Enforce compiler crate and effect boundaries
   check-line-endings  Reject CRLF or mixed text stored in the Git index
+  bench-incremental  Measure five edit classes and prove native binary determinism
   check-release-contract  Validate component versions and an optional v* tag
   prepare-release    Update every Arandu component to one version atomically
   check-slt6-sdk     Exercise an installed SDK outside the repository
@@ -81,6 +84,7 @@ Examples:
   cargo run -p xtask -- check-fuzz-regressions
   cargo run -p xtask -- check-architecture
   cargo run -p xtask -- check-line-endings
+  cargo run -p xtask -- bench-incremental
   cargo run -p xtask -- check-release-contract [vX.Y.Z[-rc.N]]
   cargo run -p xtask -- prepare-release X.Y.Z[-rc.N]
   cargo run -p xtask -- check-slt6-sdk --arandu PATH --work-dir DIR --evidence-dir DIR

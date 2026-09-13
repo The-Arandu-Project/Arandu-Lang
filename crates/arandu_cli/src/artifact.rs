@@ -2,10 +2,10 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::cli_error::CliFailure;
 
@@ -18,7 +18,7 @@ pub enum NativeProfile {
 }
 
 impl NativeProfile {
-    fn directory(self) -> &'static str {
+    pub(crate) fn directory(self) -> &'static str {
         match self {
             Self::Dev => "dev",
             Self::Release => "release",
@@ -41,6 +41,13 @@ pub struct ArtifactLayout {
     pub deps: PathBuf,
     pub incremental: PathBuf,
     pub triple: String,
+}
+
+/// Content-addressed executable published by the artifact transaction.
+#[derive(Debug)]
+pub struct PublishedNativeArtifact {
+    pub path: PathBuf,
+    pub digest: String,
 }
 
 #[derive(Serialize)]
@@ -95,7 +102,7 @@ pub fn publish_native_artifact(
     profile: NativeProfile,
     object: &[u8],
     link: impl FnOnce(&Path, &Path) -> Result<&'static str, CliFailure>,
-) -> Result<PathBuf, CliFailure> {
+) -> Result<PublishedNativeArtifact, CliFailure> {
     let layout = layout(project_root, profile.directory());
     for directory in [&layout.bin, &layout.deps, &layout.incremental] {
         fs::create_dir_all(directory)
@@ -185,7 +192,231 @@ pub fn publish_native_artifact(
     })?;
     encoded.push(b'\n');
     atomic_replace(&layout.profile_root.join("build-state.json"), &encoded)?;
-    Ok(executable_path)
+    Ok(PublishedNativeArtifact {
+        path: executable_path,
+        digest: executable_digest,
+    })
+}
+
+/// Publishes a native executable linked from partitioned CGU object files.
+pub fn publish_partitioned_native_artifact(
+    project_root: &Path,
+    package: &str,
+    version: &str,
+    profile: NativeProfile,
+    cgu_objects: &[PathBuf],
+    link: impl FnOnce(&[&Path], &Path) -> Result<&'static str, CliFailure>,
+) -> Result<PublishedNativeArtifact, CliFailure> {
+    let layout = layout(project_root, profile.directory());
+    for directory in [&layout.bin, &layout.deps, &layout.incremental] {
+        fs::create_dir_all(directory)
+            .map_err(|error| failure("create artifact layout", directory, error))?;
+    }
+    let lock_path = layout.profile_root.join(".publish.lock");
+    let publish_lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|error| failure("open build publication lock", &lock_path, error))?;
+    publish_lock
+        .lock()
+        .map_err(|error| failure("lock build publication", &lock_path, error))?;
+    atomic_write(
+        &layout.target_root.join(TARGET_MARKER),
+        b"arandu-target-v1\n",
+    )?;
+
+    let staging_dir = layout.bin.join(".staging");
+    fs::create_dir_all(&staging_dir)
+        .map_err(|error| failure("create artifact staging layout", &staging_dir, error))?;
+    let staging = staging_dir.join(if cfg!(windows) {
+        format!("{package}.exe")
+    } else {
+        package.to_string()
+    });
+    let _ = fs::remove_file(&staging);
+
+    let object_refs: Vec<&Path> = cgu_objects.iter().map(|p| p.as_path()).collect();
+    let linker = match link(&object_refs, &staging) {
+        Ok(linker) => linker,
+        Err(error) => {
+            let _ = fs::remove_file(&staging);
+            let _ = fs::remove_dir(&staging_dir);
+            return Err(error);
+        }
+    };
+    let executable =
+        fs::read(&staging).map_err(|error| failure("read linked artifact", &staging, error))?;
+    if executable.is_empty() {
+        let _ = fs::remove_file(&staging);
+        let _ = fs::remove_dir(&staging_dir);
+        return Err(CliFailure::operational(
+            "publish linked artifact",
+            Some(staging),
+            "linker produced an empty file",
+        ));
+    }
+    let executable_digest = blake3::hash(&executable).to_hex().to_string();
+    let executable_name = if cfg!(windows) {
+        format!("{package}-{}.exe", &executable_digest[..16])
+    } else {
+        format!("{package}-{}", &executable_digest[..16])
+    };
+    let executable_path = layout.bin.join(&executable_name);
+    publish_staging(&staging, &executable_path)?;
+    let _ = fs::remove_dir(&staging_dir);
+
+    let relative = format!("bin/{executable_name}");
+    let object_relative = if let Some(first) = cgu_objects.first() {
+        if let Ok(rel) = first.strip_prefix(&layout.profile_root) {
+            rel.to_string_lossy().to_string()
+        } else {
+            first.to_string_lossy().to_string()
+        }
+    } else {
+        String::new()
+    };
+    let state = BuildState {
+        schema: 2,
+        package,
+        version,
+        profile: profile.directory(),
+        target: &layout.triple,
+        backend: profile.backend(),
+        artifact_digest: &executable_digest,
+        compiler_version: crate::project::ARANDU_VERSION,
+        artifact: &relative,
+        object: &object_relative,
+        linker,
+    };
+    let mut encoded = serde_json::to_vec_pretty(&state).map_err(|error| {
+        CliFailure::operational("serialize build provenance", None, error.to_string())
+    })?;
+    encoded.push(b'\n');
+    atomic_replace(&layout.profile_root.join("build-state.json"), &encoded)?;
+    Ok(PublishedNativeArtifact {
+        path: executable_path,
+        digest: executable_digest,
+    })
+}
+
+/// Returns a verified current native artifact if one exists in build-state.json.
+pub fn current_native_artifact(
+    project_root: &Path,
+    profile: NativeProfile,
+) -> Option<PublishedNativeArtifact> {
+    let artifact = current_native_artifact_candidate(project_root, profile)?;
+    let bytes = fs::read(&artifact.path).ok()?;
+    (!bytes.is_empty() && blake3::hash(&bytes).to_hex().as_str() == artifact.digest)
+        .then_some(artifact)
+}
+
+/// Resolves a safely confined artifact candidate without trusting its bytes.
+///
+/// Callers must verify the digest before reuse. The ELF patcher may instead
+/// copy this candidate to staging and validate that copy against its
+/// independent layout digest before performing any write.
+pub fn current_native_artifact_candidate(
+    project_root: &Path,
+    profile: NativeProfile,
+) -> Option<PublishedNativeArtifact> {
+    let layout = layout(project_root, profile.directory());
+    let state_path = layout.profile_root.join("build-state.json");
+    let content = fs::read_to_string(state_path).ok()?;
+    #[derive(Deserialize)]
+    struct CurrentBuildState {
+        schema: u32,
+        artifact_digest: String,
+        artifact: String,
+    }
+    let state: CurrentBuildState = serde_json::from_str(&content).ok()?;
+    let relative = Path::new(&state.artifact);
+    if state.schema != 2 || !safe_relative_path(relative) {
+        return None;
+    }
+    let path = layout.profile_root.join(relative);
+    path.is_file().then_some(PublishedNativeArtifact {
+        path,
+        digest: state.artifact_digest,
+    })
+}
+
+/// Records the provenance of an in-place patched native executable.
+pub fn record_patched_native_artifact(
+    project_root: &Path,
+    package: &str,
+    version: &str,
+    profile: NativeProfile,
+    cgu_objects: &[PathBuf],
+    patched_executable_path: &Path,
+    new_digest: &str,
+) -> Result<PublishedNativeArtifact, CliFailure> {
+    let layout = layout(project_root, profile.directory());
+    fs::create_dir_all(&layout.bin)
+        .map_err(|error| failure("create artifact layout", &layout.bin, error))?;
+    let lock_path = layout.profile_root.join(".publish.lock");
+    let publish_lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|error| failure("open build publication lock", &lock_path, error))?;
+    publish_lock
+        .lock()
+        .map_err(|error| failure("lock build publication", &lock_path, error))?;
+    let digest_prefix = new_digest.get(..16).ok_or_else(|| {
+        CliFailure::operational(
+            "record patched native artifact",
+            Some(patched_executable_path.to_path_buf()),
+            "BLAKE3 digest is shorter than 16 hexadecimal characters",
+        )
+    })?;
+    let executable_name = if cfg!(windows) {
+        format!("{package}-{digest_prefix}.exe")
+    } else {
+        format!("{package}-{digest_prefix}")
+    };
+    let target_path = layout.bin.join(&executable_name);
+
+    if patched_executable_path != target_path {
+        publish_staging(patched_executable_path, &target_path)?;
+    }
+
+    let relative = format!("bin/{executable_name}");
+    let object_relative = if let Some(first) = cgu_objects.first() {
+        if let Ok(rel) = first.strip_prefix(&layout.profile_root) {
+            rel.to_string_lossy().to_string()
+        } else {
+            first.to_string_lossy().to_string()
+        }
+    } else {
+        String::new()
+    };
+    let state = BuildState {
+        schema: 2,
+        package,
+        version,
+        profile: profile.directory(),
+        target: &layout.triple,
+        backend: profile.backend(),
+        artifact_digest: new_digest,
+        compiler_version: crate::project::ARANDU_VERSION,
+        artifact: &relative,
+        object: &object_relative,
+        linker: crate::linker::LinkerKind::InProcessElf.label(),
+    };
+    let mut encoded = serde_json::to_vec_pretty(&state).map_err(|error| {
+        CliFailure::operational("serialize build provenance", None, error.to_string())
+    })?;
+    encoded.push(b'\n');
+    atomic_replace(&layout.profile_root.join("build-state.json"), &encoded)?;
+    Ok(PublishedNativeArtifact {
+        path: target_path,
+        digest: new_digest.to_owned(),
+    })
 }
 
 /// Publish the compiler-validated test registry and portable C entrypoint.
@@ -291,7 +522,10 @@ pub fn clean(project_root: &Path) -> Result<bool, CliFailure> {
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), CliFailure> {
     if path.is_file() {
-        return Ok(());
+        if fs::read(path).is_ok_and(|existing| existing == bytes) {
+            return Ok(());
+        }
+        return atomic_replace(path, bytes);
     }
     write_staging(path, bytes).and_then(|staging| {
         fs::rename(&staging, path).map_err(|error| {
@@ -354,9 +588,16 @@ fn atomic_platform_replace(path: &Path, staging: &Path) -> Result<(), CliFailure
 
 fn publish_staging(staging: &Path, destination: &Path) -> Result<(), CliFailure> {
     if destination.is_file() {
-        fs::remove_file(staging)
-            .map_err(|error| failure("discard duplicate artifact", staging, error))?;
-        return Ok(());
+        let existing = fs::read(destination)
+            .map_err(|error| failure("verify existing linked artifact", destination, error))?;
+        let candidate = fs::read(staging)
+            .map_err(|error| failure("verify staged linked artifact", staging, error))?;
+        if existing == candidate {
+            fs::remove_file(staging)
+                .map_err(|error| failure("discard duplicate artifact", staging, error))?;
+            return Ok(());
+        }
+        return atomic_platform_replace(destination, staging);
     }
     fs::rename(staging, destination)
         .map_err(|error| failure("publish linked artifact", destination, error))
@@ -387,4 +628,12 @@ fn unique_staging_path(path: &Path, operation: &str) -> PathBuf {
 
 fn failure(operation: &'static str, path: &Path, error: std::io::Error) -> CliFailure {
     CliFailure::operational(operation, Some(path.to_path_buf()), error.to_string())
+}
+
+fn safe_relative_path(path: &Path) -> bool {
+    !path.as_os_str().is_empty()
+        && !path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
 }
