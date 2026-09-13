@@ -35,7 +35,16 @@ pub(super) fn handle(
                 NumberOrString::Number(id) => lsp_server::RequestId::from(id),
                 NumberOrString::String(id) => lsp_server::RequestId::from(id),
             };
-            let _ = pool.cancel(&crate::pool::JobKey::Request(id));
+            if pool.cancel_for_response(&crate::pool::JobKey::Request(id.clone())) {
+                state.pending_requests.remove(&id);
+                connection.sender.send(lsp_server::Message::Response(
+                    lsp_server::Response::new_err(
+                        id,
+                        crate::dispatcher::LSP_REQUEST_CANCELLED,
+                        "request cancelled by client".into(),
+                    ),
+                ))?;
+            }
         }
         DidOpenTextDocument::METHOD => {
             let params: lsp_types::DidOpenTextDocumentParams =

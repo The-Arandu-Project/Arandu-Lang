@@ -33,7 +33,10 @@ pub use dataflow::{
     liveness_facts, BorrowFacts, DataflowFacts, IdeDiagnostic, IdeHint, IdeLabel, IdeReplacement,
     LivenessMap,
 };
-pub use db::{ArandCompilerDb, DatabaseImpl, RegistryMetrics, SourceFile};
+pub use db::{
+    catch_query_cancellation, ArandCompilerDb, DatabaseImpl, QueryCancellationToken,
+    QueryCancelled, RegistryMetrics, SourceFile,
+};
 pub use doc_store::{DocumentId, DocumentStore, OpenDocument};
 pub use docs::{file_doctests, item_doc, module_doc};
 pub use explain::{any_execute, RebuildCounts, RebuildEvent, RebuildLog};

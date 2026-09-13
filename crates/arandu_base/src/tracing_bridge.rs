@@ -27,7 +27,7 @@ use tracing::{
 };
 #[cfg(all(debug_assertions, feature = "self-profile"))]
 use tracing_subscriber::layer::{Context, Layer};
-use tracing_subscriber::{EnvFilter, Registry, prelude::*};
+use tracing_subscriber::{EnvFilter, Registry, fmt::format::FmtSpan, prelude::*};
 
 // ── Static helpers (lazy-init via OnceLock) ───────────────────────────
 
@@ -124,8 +124,6 @@ pub fn init_tracing(cfg: TracingConfig) {
     }
 
     let filter = flags_to_env_filter(&cfg);
-
-    use tracing_subscriber::fmt::format::FmtSpan;
 
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_target(true)

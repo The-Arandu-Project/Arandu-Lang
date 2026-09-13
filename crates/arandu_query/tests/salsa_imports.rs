@@ -289,3 +289,30 @@ fn test_local_generic_spawn_infer_still_ok() {
         .collect();
     assert!(errs.is_empty(), "local spawn infer failed: {errs:?}");
 }
+
+#[test]
+fn test_unresolved_named_import_suggests_levenshtein() {
+    let mut db = DatabaseImpl::default();
+    let _math = db.new_file(
+        "math.aru".to_string(),
+        "public func calculate_total() { }\n".to_string(),
+    );
+    let client = db.new_file(
+        "client.aru".to_string(),
+        "from math import { calculate_totla }\nfunc main() { }\n".to_string(),
+    );
+    let res = arandu_query::passes::resolve(&db, client);
+    let errs: Vec<_> = res
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == arandu_middle::DiagCode::M001UnresolvedImport)
+        .collect();
+    assert_eq!(
+        errs.len(),
+        1,
+        "Expected 1 M001 diagnostic, got: {:?}",
+        res.diagnostics
+    );
+    let hints: Vec<_> = errs[0].hints.iter().map(|h| h.message.as_str()).collect();
+    assert_eq!(hints, vec!["did you mean 'calculate_total'?"]);
+}

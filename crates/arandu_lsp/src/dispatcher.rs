@@ -306,21 +306,30 @@ pub(crate) fn spawn_goto(
             Priority::Interactive,
             Some(request_key),
             move |cancellation| {
+                cancellation.link_query(snap.db.query_cancellation_token());
                 if send_cancelled_if_needed(&tx, &req_id, &cancellation) {
                     return;
                 }
                 match catch_unwind(AssertUnwindSafe(|| {
-                    let location =
-                        handlers::goto_on_snapshot(&snap, &by_uri, &by_file_id, &docs, &uri, pos);
-                    match location {
-                        Some(loc) => {
-                            serde_json::to_value(lsp_types::GotoDefinitionResponse::Scalar(loc))
-                                .unwrap_or(serde_json::Value::Null)
+                    arandu_query::catch_query_cancellation(|| {
+                        let location = handlers::goto_on_snapshot(
+                            &snap,
+                            &by_uri,
+                            &by_file_id,
+                            &docs,
+                            &uri,
+                            pos,
+                        );
+                        match location {
+                            Some(loc) => {
+                                serde_json::to_value(lsp_types::GotoDefinitionResponse::Scalar(loc))
+                                    .unwrap_or(serde_json::Value::Null)
+                            }
+                            None => serde_json::Value::Null,
                         }
-                        None => serde_json::Value::Null,
-                    }
+                    })
                 })) {
-                    Ok(value) => {
+                    Ok(Ok(value)) => {
                         if send_cancelled_if_needed(&tx, &req_id, &cancellation) {
                             return;
                         }
@@ -329,6 +338,9 @@ pub(crate) fn spawn_goto(
                             revision,
                             value,
                         });
+                    }
+                    Ok(Err(_)) => {
+                        let _ = send_cancelled_if_needed(&tx, &req_id, &cancellation);
                     }
                     Err(payload) => {
                         crate::logging::log_panic("goto request", &payload);
@@ -372,11 +384,14 @@ pub(crate) fn spawn_json<F>(
             Priority::Interactive,
             Some(request_key),
             move |cancellation| {
+                cancellation.link_query(snap.db.query_cancellation_token());
                 if send_cancelled_if_needed(&tx, &req_id, &cancellation) {
                     return;
                 }
-                match catch_unwind(AssertUnwindSafe(|| f(&snap, &docs))) {
-                    Ok(value) => {
+                match catch_unwind(AssertUnwindSafe(|| {
+                    arandu_query::catch_query_cancellation(|| f(&snap, &docs))
+                })) {
+                    Ok(Ok(value)) => {
                         if send_cancelled_if_needed(&tx, &req_id, &cancellation) {
                             return;
                         }
@@ -385,6 +400,9 @@ pub(crate) fn spawn_json<F>(
                             revision,
                             value,
                         });
+                    }
+                    Ok(Err(_)) => {
+                        let _ = send_cancelled_if_needed(&tx, &req_id, &cancellation);
                     }
                     Err(payload) => {
                         crate::logging::log_panic("interactive request", &payload);
@@ -433,11 +451,14 @@ pub(crate) fn spawn_json_result<F>(
             Priority::Interactive,
             Some(request_key),
             move |cancellation| {
+                cancellation.link_query(snap.db.query_cancellation_token());
                 if send_cancelled_if_needed(&tx, &req_id, &cancellation) {
                     return;
                 }
-                match catch_unwind(AssertUnwindSafe(|| f(&snap, &docs))) {
-                    Ok(Ok(value)) => {
+                match catch_unwind(AssertUnwindSafe(|| {
+                    arandu_query::catch_query_cancellation(|| f(&snap, &docs))
+                })) {
+                    Ok(Ok(Ok(value))) => {
                         if send_cancelled_if_needed(&tx, &req_id, &cancellation) {
                             return;
                         }
@@ -447,13 +468,16 @@ pub(crate) fn spawn_json_result<F>(
                             value,
                         });
                     }
-                    Ok(Err((code, message))) => {
+                    Ok(Ok(Err((code, message)))) => {
                         let _ = tx.send(JobResult::JsonError {
                             id: req_id,
                             revision,
                             code,
                             message,
                         });
+                    }
+                    Ok(Err(_)) => {
+                        let _ = send_cancelled_if_needed(&tx, &req_id, &cancellation);
                     }
                     Err(payload) => {
                         crate::logging::log_panic("result request", &payload);
@@ -479,7 +503,7 @@ pub(crate) fn send_cancelled_if_needed(
     id: &RequestId,
     cancellation: &CancellationToken,
 ) -> bool {
-    if !cancellation.is_cancelled() {
+    if !cancellation.claim_cancelled() {
         return false;
     }
     let _ = tx.send(JobResult::Cancelled { id: id.clone() });
@@ -525,17 +549,23 @@ fn handle_job_result(
     job_tx: &Sender<JobResult>,
     job: JobResult,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
-    match &job {
+    let terminal = match &job {
         JobResult::JsonResponse { id, .. }
         | JobResult::JsonError { id, .. }
         | JobResult::Failed { id: Some(id), .. }
         | JobResult::Cancelled { id }
-        | JobResult::Rejected { id } => {
-            state.pending_requests.remove(id);
-        }
+        | JobResult::Rejected { id } => Some(id),
         JobResult::WorkspaceReload(_)
         | JobResult::Diagnostics { .. }
-        | JobResult::Failed { id: None, .. } => {}
+        | JobResult::Failed { id: None, .. } => None,
+    };
+    if let Some(id) = terminal {
+        let was_pending = state.pending_requests.remove(id);
+        if !was_pending && !matches!(&job, JobResult::Rejected { .. }) {
+            // An explicit $/cancelRequest may already have sent the terminal
+            // response. Suppress success/error produced by the retiring worker.
+            return Ok(());
+        }
     }
     match job {
         JobResult::WorkspaceReload(reload) if !state.pending_requests.is_empty() => {
