@@ -66,7 +66,7 @@ jobs:
 
   sdk:
     name: SL_T / SDK (${{ matrix.target }})
-    needs: vsix
+    # Starts concurrently with VSIX at t=0
     strategy:
       fail-fast: false
       matrix:
@@ -147,6 +147,73 @@ jobs:
             --evidence-dir "$env:RUNNER_TEMP/arandu-slt6-evidence" `
             --expected-version "$env:VERSION"
 
+      - name: Upload candidate SDK package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sl-t-candidate-sdk-${{ matrix.target }}-${{ github.sha }}
+          path: dist/arandu-${{ env.VERSION }}-${{ matrix.target }}.${{ matrix.archive }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Preserve native Gold evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sl-t-evidence-${{ matrix.target }}-${{ github.sha }}
+          path: ${{ runner.temp }}/arandu-slt6-evidence/*
+          if-no-files-found: warn
+          retention-days: 30
+
+  integration:
+    name: SL_T / Integration (${{ matrix.target }})
+    needs: [vsix, sdk]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Resolve package identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\([^"]*\)".*/\1/p' crates/arandu_cli/Cargo.toml | head -1)"
+          {
+            echo "VERSION=$version"
+            echo "TARGET=${{ matrix.target }}"
+          } >>"$GITHUB_ENV"
+      - name: Download candidate SDK package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sl-t-candidate-sdk-${{ matrix.target }}-${{ github.sha }}
+          path: dist
+      - name: Install candidate outside checkout (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ARANDU_NO_MODIFY_PATH=1 PREFIX="$RUNNER_TEMP/arandu-sdk" \
+            bash scripts/install-from-tarball.sh \
+            "dist/arandu-${VERSION}-${TARGET}.tar.gz"
+      - name: Install candidate outside checkout (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/install-from-zip.ps1 `
+            "dist/arandu-$env:VERSION-$env:TARGET.zip" `
+            -Prefix "$env:RUNNER_TEMP/arandu-sdk" -NoModifyPath
+
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -188,28 +255,20 @@ jobs:
           ARANDU_CLI_TEST_PATH: ${{ runner.temp }}/arandu-sdk/arandu-${{ env.VERSION }}/bin/arandu.exe
         run: node ./out/test/runInstalledTest.js
 
-      - name: Preserve native Gold evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: sl-t-evidence-${{ matrix.target }}-${{ github.sha }}
-          path: ${{ runner.temp }}/arandu-slt6-evidence/*
-          if-no-files-found: warn
-          retention-days: 30
-
   harness:
     name: SL_T / Harness
     if: always()
-    needs: [vsix, sdk]
+    needs: [vsix, sdk, integration]
     runs-on: ubuntu-latest
     steps:
       - name: Require the complete native matrix
         env:
           VSIX_RESULT: ${{ needs.vsix.result }}
           SDK_RESULT: ${{ needs.sdk.result }}
+          INT_RESULT: ${{ needs.integration.result }}
         run: |
-          if [[ "$VSIX_RESULT" != "success" || "$SDK_RESULT" != "success" ]]; then
-            echo "SL_T Gold matrix incomplete: vsix=$VSIX_RESULT sdk=$SDK_RESULT" >&2
+          if [[ "$VSIX_RESULT" != "success" || "$SDK_RESULT" != "success" || "$INT_RESULT" != "success" ]]; then
+            echo "SL_T Gold matrix incomplete: vsix=$VSIX_RESULT sdk=$SDK_RESULT integration=$INT_RESULT" >&2
             exit 1
           fi
           echo "SL_T Gold candidate passed Linux x86-64, macOS ARM64 and Windows x86-64" >>"$GITHUB_STEP_SUMMARY"
