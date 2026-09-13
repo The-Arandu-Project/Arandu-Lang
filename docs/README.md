@@ -34,6 +34,9 @@ dívidas e futuro são classificados, e o plano paralelo é removido.
 - [RFC 0008: Runtime assíncrono](rfcs/0008-async-runtime-and-colorless-model.md) — modelo colorless e reator cooperativo.
 - [RFC 0009: Fatias e views emprestadas](rfcs/0009-borrowed-views-safety.md) — segurança estrutural de slices ([]T) e views.
 - [RFC 0010: Pipeline CST-first e IDE](rfcs/0010-cst-resilient-ide-typeck.md) — parsing resiliente com Rowan e reparse de sub-árvore.
+- [RFC 0011: Pipeline AOT incremental e linker in-process](rfcs/0011-incremental-partitioned-aot-and-in-process-linker.md) — codegen particionado e link in-process.
+- [RFC 0012: Stack de computação científica e dados](rfcs/0012-scientific-computing-and-data-architecture.md) — tensores, Arrow, lazy query engine e GraphBLAS.
+- [RFC 0013: Metaprogramação e CTFE via AMIR VM](rfcs/0013-deterministic-ctfe-and-comptime-metaprogramming.md) — comptime, reflexão tipada e quasiquoting.
 - [Guia de migração](arandu-project-package-migration-v0.1.md) — uso do contrato de projeto e dependências.
 - [Testes e benchmarks](arandu-testing-benchmark-harness-v0.1.md) — contrato consolidado.
 - [Contrato de ferramentas e scripts](tooling-scripts-contract.md) — dono e plataforma de cada automação.

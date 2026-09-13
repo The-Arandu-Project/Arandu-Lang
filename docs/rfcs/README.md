@@ -43,6 +43,11 @@ Uma RFC evolui através dos seguintes estados formais:
 | [0008](0008-async-runtime-and-colorless-model.md) | Runtime Assíncrono e Modelo Colorless (SL_R / A3) | Runtime / Async | `Implemented` | 2026-08-20 |
 | [0009](0009-borrowed-views-safety.md) | Segurança Estrutural de Fatias e Views Emprestadas | Memória / Stdlib | `Implemented` | 2026-08-01 |
 | [0010](0010-cst-resilient-ide-typeck.md) | Pipeline CST-First Resiliente e Typeck Incremental | Frontend / IDE | `Implemented` | 2026-07-20 |
+| [0011](0011-incremental-partitioned-aot-and-in-process-linker.md) | Pipeline AOT Incremental, Codegen Particionado e Linker In-Process | Backend / Incremental | `Draft` | 2026-09-12 |
+| [0012](0012-scientific-computing-and-data-architecture.md) | Arquitetura da Stack de Computação Científica, Numérica e de Dados | Ecosystem (Out-of-Tree) | `Draft` | 2026-09-12 |
+| [0013](0013-deterministic-ctfe-and-comptime-metaprogramming.md) | Metaprogramação Determinística em Tempo de Compilação (CTFE & Comptime) via AMIR VM | Frontend / Middle-end | `Draft` | 2026-09-12 |
+| [0014](0014-native-wasm-component-model-and-runtime.md) | Backend WebAssembly Nativo com Component Model (WIT), Compilação Incremental e Paralelismo Determinístico | Backend | `Draft` | 2026-09-13 |
+| [0015](0015-native-mobile-architecture-and-zero-copy-interop.md) | Arquitetura Mobile Nativa, Interoperabilidade Zero-Copy e Pipeline de Bindings Multiplataforma | Backend / Tooling | `Draft` | 2026-09-13 |
 
 ---
 

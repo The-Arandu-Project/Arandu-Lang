@@ -86,7 +86,7 @@ quando cumprir seu contrato atual.
 | Anotações públicas | `gold` | contrato [PascalCase](./rfcs/0002-canonical-attribute-naming.md), aliases legados apenas na janela de migração |
 | GenRef (R0) | `frozen-R0` | [RFC 0001 (R0 Frozen)](./rfcs/0001-generational-fallback-genref.md); casca empírica congelada para medição acadêmica (TCC); AMIR tipada, payload/drop, C/Cranelift, O004/LSP |
 | SL_T — testes e benchmarks | `done`; soak para `gold` | [contrato consolidado](./arandu-testing-benchmark-harness-v0.1.md), SDK/VSIX e matriz nativa `SL_T / Harness` |
-| Paralelismo Estruturado | `gold` | [RFC 0003](./rfcs/0003-structured-parallelism.md); worker pool bounded e redução determinística |
+| Paralelismo Estruturado | `done` | [RFC 0003](./rfcs/0003-structured-parallelism.md); funcional em Linux, aguardando benchmark reproduzível e matriz nativa para `gold` |
 
 ### Fila de execução
 
@@ -132,6 +132,40 @@ quando cumprir seu contrato atual.
     antes/depois e sem inferir ganhos de hardware apenas da forma da AMIR.
 11. Avaliar templates `mixed`, `ffi`, `plugin` e `workspace` conforme ABI,
     efeitos e distribuição amadureçam.
+
+### Trilha incremental nativa — RFC 0011
+
+Os números abaixo são marcos de produto, não uma renumeração retroativa das
+fases históricas deste documento. O caminho batch completo continua sendo o
+fallback de correção em todos os marcos: cache ausente, incompatível ou
+corrompido deve causar rebuild/link completo com erro descritivo, nunca crash
+ou aceitação de estado não verificado.
+
+| Marco | Estado | Corpo funcional e critério de saída |
+| --- | --- | --- |
+| Fundação atual (`0.1`) | `done` | O CLI verifica a closure de inputs e o BLAKE3 do executável antes de aceitar cutoff; mudanças apenas documentais cortam antes das queries; fingerprints atuais são movidos para a sessão substituta sem reler inputs imutáveis; CGUs têm chaves canônicas e sidecars verificados. No Linux x86-64, se todas as CGUs forem hits e o layout provar igualdade exata da closure, o executável verificado é reutilizado sem link; caso contrário, o CLI tenta patch ELF fail-closed e sempre pode voltar ao linker completo. O oráculo compara SHA-256 entre paths e `RAYON_NUM_THREADS=1/16`, e o relatório schema 2 separa tempo de parede de custos por fase. Limite conhecido: cada `build` ainda nasce com uma DB nova e `lower_amir` continua program-wide. |
+| Motor quente e imagem dev (`0.2`) | `planned` | Manter uma `DatabaseImpl` viva em um serviço local supervisionado, com protocolo versionado, fila limitada/coalescida, prioridade para o build solicitado e fallback transparente ao CLI batch após crash ou incompatibilidade. A DB Salsa não é serializada e queries continuam sem filesystem. Em paralelo, definir uma publicação de imagem dev recuperável que sincronize somente ranges/páginas alterados ou use clone CoW quando disponível, sem mutar artefatos CAS publicados; ausência de suporte sempre cai no protocolo atômico atual. O gate exige equivalência byte a byte com clean build, testes de kill/recovery, corpus de edições repetidas e `p95 ≤ 100 ms` para edição de corpo no host de referência documentado; CI compartilhada observa, mas não impõe a latência. |
+| Granularidade por instância (`0.3`) | `planned` | Fazer `item_source_input → typeck por item → AMIR por instância → CGU` ser a cadeia real de demanda. A projeção atual `func_amir` sobre `lower_amir` monolítico não satisfaz este marco. Persistência em disco, se necessária, cobre apenas saídas canônicas e versionadas fora do grafo Salsa, com CAS BLAKE3, dependências explícitas, GC limitado e validação fail-closed. O gate exige que uma edição privada não rebaixe importadores nem CGUs irmãs, equivalência incremental/clean e `p95 ≤ 10 ms` no workload e host de referência. |
+
+Antes de otimizar estruturas por contagem de `.clone()`, `String` ou alocações,
+o relatório por fase deve localizar o custo dominante e um perfil antes/depois
+deve demonstrar o ganho. A ordem planejada é motor quente e publicação dev
+proporcional aos bytes alterados primeiro, lowering por instância depois e
+somente então cache remoto/distribuído ou novos formatos persistentes.
+
+### Trilha da Stack Científica, Numérica e de Dados — RFC 0012
+
+Esta trilha formaliza os marcos de maturidade para a infraestrutura oficial de
+computação científica, tensores, processamento colunar analítico e modelagem
+matemática, preservando o invariante de zero alocação oculta, `no_std` no core
+e interoperabilidade nativa com o padrão Apache Arrow.
+
+| Marco | Estado | Corpo funcional e critério de saída |
+| --- | --- | --- |
+| SCI.1 — Arandu Math v1 | `planned` | `Array<T, N, A>`, `ArrayView<T, N>` e `ArrayViewMut<T, N>` com strides e layouts row-major/col-major/strided sem cópia. Separação explícita entre `StaticMatrix<T, M, N>` (100% stack) e `Matrix<T, A>` (heap com alocador explícito). APIs com destino explícito (`math.addInto`, `math.mulAddInto`) com contrato estrito verificado em teste (`allocations = 0`). Gerenciamento de scratch via `ScratchArena` reutilizável (`linalg.gemmScratch`). Kernels elementwise com autovetorização SIMD segura baseada em não-aliasing provado por `mut ref`. Microkernels nativos bloqueados para GEMM (GotoBLAS) e conector FFI modular para BLAS/MKL/Accelerate via descritor de contexto (sem estado global mutável). |
+| SCI.2 — Arandu Data v1 | `planned` | Layout colunar compatível com Apache Arrow (`RecordBatch`, validity bitmaps de 1 bit por nulo, buffers contíguos de offsets para strings UTF-8). SoA explícito (`StructArray<T>` vs `Array<T>`). Interoperabilidade zero-copy bidirecional via Arrow C Data Interface (`ArrowArray`, `ArrowSchema`) com garantia de tipos para saneamento de buffers uninit antes da exportação. Leitores e escritores em streaming para CSV, Arrow IPC e Parquet. |
+| SCI.3 — Arandu Compute | `planned` | Motor de consultas preguiçosas (*lazy query engine*). Representação de planos lógicos desacoplada com otimizador puro em pipeline: predicate pushdown, projection pushdown, slice pushdown e simplificação de expressões. Motor de execução física colunar em streaming chunked com controle estrito de RSS para datasets maiores que a memória RAM. |
+| SCI.4 — Arandu Science | `planned` | Matrizes esparsas com ciclo de vida segregado: `CooBuilder` para construção dinâmica mutável e `CsrMatrix`/`CscMatrix`/`BsrMatrix` para computação imutável de alto desempenho. Algoritmos de grafos e redes complexas implementados via álgebra linear esparsa e semirings (padrão GraphBLAS: SpMV, SpGEMM). Transformada rápida de Fourier baseada no modelo de planos reutilizáveis (FFTW: `Plan.estimate` vs `Plan.measure`). Geradores de números pseudo-aleatórios counter-based (Philox) e PCG desacoplados de distribuições, sem estado global mutável e compatíveis com paralelismo determinístico. Solvers para EDOs e processamento digital de sinais. |
 
 ### Resíduos que continuam abertos
 
@@ -222,7 +256,7 @@ Fase 2 — A Construção da Infraestrutura & Execução (v0.2) · [FECHADA no c
    └─ [x] A10.d  AnalysisRevision / LspSymbolId — stale-safety de análise por revisão de snapshot
                   (não generation em SymbolId); ver `arandu_query::analysis`
 [x] A11    Token & String Storage Engine (packed tokens, SSO via smol_str, string interning)
-[ ] A12    Deterministic CTFE & Comptime Engine (AMIR VM, Salsa queries puras, fuel budget)
+[ ] A12    Deterministic CTFE & Comptime Metaprogramming (AMIR VM, Salsa queries, RFC 0013)
 [x] BC     Backend Cranelift (Dev/Debug com compilador em memória)
    ├─ [x] BC.1   Fat Pointer String JIT (tratar String como ptr + len na convenção de chamadas do Cranelift)
    ├─ [ ] BC.1a  Fechar ownership de buffers produzidos por `ToStr`, interpolação
@@ -351,13 +385,16 @@ Fase 3 — OSSA Avançado, Semântica e OS Runtime (v0.3) · [PARCIAL; vários m
                 depende de A2 e de contratos nativos por plataforma
 [x] SL_R   Async Runtime: SL_R.0 typed spawn/join/block_on Coroutine + SyncExecutor; SL_R.2 EpollReactor (epoll+timerfd); SL_R.1/3 open
 [x] SL_P   [Processamento paralelo estruturado](./arandu-structured-parallelism-v0.1.md):
-           implementação das Fases 1–7 concluída; `WorkerPool` bounded,
+           corpo funcional integrado; `WorkerPool` bounded e reutilizável no runtime Rust,
            WorkThunk ABI `(ptr[C], ptr[R]) -> i32`, operação pública `parallelFold`
            em `std.core.parallel`, inlining automático no AMIR (`arandu_mir::inlining`),
-           e integração completa no Pypor com 100% de identidade de bits no
-           corpus do Kernel Linux (65.370 arquivos, 37.900.970 linhas em 1.826s;
-           20.76M linhas/s, 490.9% CPU, 71.2 MB MaxRSS). Promoção formal a Gold
-           condicionada à matriz de release Windows/macOS.
+           chunks fixos independentes da contagem de workers, seed/identidade separadas,
+            slabs alinhados e integração Pypor acima do cutoff. O backend C usa
+            worker pool nativo reutilizável com fila bounded e self-help. Promoção a Gold depende de:
+            · [x] pool reutilizável no backend C com fila bounded e self-help
+            · [ ] benchmark versionado e reproduzível com 1/2/4/8 workers
+            · [ ] matriz nativa Windows/macOS com cancelamento e falha de spawn
+            · [ ] desenho de ownership/drop glue antes de aceitar resultados não-`Copy`
 [x] SL_T   [Testing & Benchmark Harness](./arandu-testing-benchmark-harness-v0.1.md):
            implementação, SDK/VSIX e matriz nativa concluídos; soak operacional
            permanece como único requisito para promoção formal a Gold
@@ -384,7 +421,12 @@ Fase 5 — Otimização Global, CodeGen & Ecossistema (v0.4+) · [NÃO INICIADA]
 [ ] PAN    Panic & Error Model sem unwinding (abort nativo UD2/BRK, zero metadata overhead)
 [ ] CACHE  Stable Serialization & Cache (.air, .amir, .ameta, reproducible DET builds)
 * Mover json e xml para arandu_ext::serialization
-[ ] EXT    Ecosystem Extensions: arandu_ext (ecs, game loop, renderer, audio, media, physics, gui)
+[ ] EXT    Ecosystem Extensions: arandu_ext (ecs, game loop, renderer, audio, media, physics, gui — Out-of-Tree)
+[ ] SCI    Scientific & Data Stack (Out-of-Tree / Crates Externas): arandu_math, arandu_data, arandu_science (RFC 0012)
+   ├─ [ ] SCI.1  Arandu Math v1 (Array/ArrayView strided sem cópia, StaticMatrix stack, *_into, ScratchArena, GEMM/BLAS)
+   ├─ [ ] SCI.2  Arandu Data v1 (Layout colunar Arrow, RecordBatch, validity bitmaps, Arrow C Data Interface zero-copy)
+   ├─ [ ] SCI.3  Arandu Compute (Motor de queries lazy, otimizador com pushdowns, executor streaming chunked)
+   └─ [ ] SCI.4  Arandu Science (Esparsos COO/CSR/CSC, GraphBLAS semirings, FFTW plans, Philox RNG, ODE solvers)
 
 Fase 6 — Bootstrap & Auto-Hospedagem (v1.0) · [NÃO INICIADA]
 [ ] HOST   Self-Hosting: compilador Arandu compilando a si mesmo de forma convergente (3-passos)
@@ -756,19 +798,21 @@ O frontend textual evita alocações individuais de tokens e strings, tratando o
 | **Small-String Optimization (SSO)** | Identificadores ≤ 23 bytes armazenados inline sem alocação heap | ~95% dos identificadores reais cabem inline |
 | **Buffer Reuse** | Buffers temporários de diagnósticos e formatação são arenas scratch reutilizadas | Zero pressão sobre o alocador global |
 
-#### A12 — Deterministic CTFE & Comptime Engine (AMIR VM)
+#### A12 — Deterministic CTFE & Comptime Metaprogramming (AMIR VM, RFC 0013)
 
-O Arandu adota **Compile-Time Function Execution (CTFE)** e metaprogramação de primeira classe via **interpretador de AMIR desacoplado e determinístico**, superando as limitações históricas de **Miri (Rust)** e **Zig Comptime**.
+O Arandu formaliza em sua [RFC 0013](./rfcs/0013-deterministic-ctfe-and-comptime-metaprogramming.md) o modelo canônico de **Compile-Time Function Execution (CTFE)** e metaprogramação de primeira classe via **interpretador de AMIR desacoplado e determinístico**, superando as limitações históricas de **Miri (Rust)**, **Zig Comptime** e **Rust Procedural Macros**.
 
-**Status:** `planned` (v0.3/v0.4).
+**Status:** `planned` (v0.3/v0.4); especificado normativamente pela RFC 0013.
 
-##### 1. O que aproveitamos de melhor (Miri & Zig)
+##### 1. O que aproveitamos de melhor (Miri, Zig, Circle e D)
 * **De Miri (Rust):**
   * Execução sobre a representação intermediária (**AMIR**) em vez de AST bruta, garantindo que o código em tempo de compilação siga exatamente a mesma semântica (CFG, SSA, tipos densos) do runtime.
   * Modelo de memória virtual tipada e segura com detecção rigorosa de bounds checking, *use-after-free* e *out-of-bounds* durante a compilação.
 * **Do Zig Comptime:**
-  * **Mesma Linguagem, Sem Macros:** O usuário programa metaprogramação usando a sintaxe e tipos regulares do Arandu (`comptime expr`, `comptime param: Type`), eliminando a necessidade de uma linguagem de macro separada ou compilação de crates externos (`proc-macros`).
-  * Introspecção e reflexão de tipos em tempo de compilação para geração natural de código de serialização, hashing e equivalentes ao `@derive`.
+  * **Mesma Linguagem, Sem Macros Secundárias:** O usuário programa metaprogramação usando a sintaxe e tipos regulares do Arandu (`comptime expr`, `comptime param: Type`), eliminando a necessidade de uma linguagem de macro separada ou compilação de crates externos (`proc-macros`).
+  * Introspecção e reflexão de tipos em tempo de compilação (`std.core.meta`) eliminando 90% das macros através de laços desdobrados (`comptime for`) e acesso a campos por nome (`val.@field(name)`).
+* **De Circle C++ e D Language:**
+  * Quasiquoting higiênico (`quote { ... }`) com splicing `${expr}` para os 10% restantes de metaprogramação (geração declarativa de novas estruturas, interfaces e anotações `@Derive`).
 
 ##### 2. Onde superamos o Miri e o Zig
 * **Salsa-First & Early-Cutoff (Superando o Zig):**
@@ -781,6 +825,8 @@ O Arandu adota **Compile-Time Function Execution (CTFE)** e metaprogramação de
   * Toda execução de comptime roda sob um **orçamento estrito de passos (*fuel budget*)** e suporte a cancelamento cooperativo assíncrono. Laços infinitos em código incompleto digitado no editor são interrompidos com diagnósticos claros, sem nunca travar a thread do LSP.
 * **Cross-Compilation Exata:**
   * A VM consulta o `DataLayout` e `TargetInfo` do alvo configurado (tamanho de ponteiro, endianness, padding de structs) e não o host onde o compilador roda.
+* **Inclusão de Arquivos Pura via Salsa:**
+  * Primitivas como `meta.embedBytes(path)` registram o arquivo como input Salsa (`FileId`), proibindo `fs::read` direto no hot path e mantendo a pureza do compilador.
 
 ##### 3. Invariantes de Arquitetura
 1. **Pureza Absoluta:** O interpretador de AMIR proíbe I/O de rede, mutação global e acesso não sandboxado ao sistema de arquivos do host.
@@ -1385,6 +1431,9 @@ Analisador estático avançado de uso de memória e desempenho.
 | 2026-08 | Codex | **Roadmap de otimização AMIR consolidado**: estado honesto de O0/O1/O2, análises cooperativas, LoopInfo, semântica de places/alias/ModRef, dataflow, canonicalização, MemorySSA virtual, TCO/escape e gates de correção e benchmark. |
 | 2026-09 | Codex | **Fechamento de hipóteses rc.5 em tipos, runtime e genéricos**: a substituição estrutural ganhou regressão que prova inserção finita sem expansão recursiva de aliases; o reactor passou a descartar o registro inteiro e liberar recursos após poison, restaurando um estado conhecido antes de aceitar novos IDs; acessos a um único campo genérico deixaram de materializar o mapa completo da struct; e um teste de integração passou a provar que instanciações genéricas idênticas feitas por módulos distintos convergem para uma única definição AMIR. |
 | 2026-09 | Codex | **Ownership sensível a campos na rc.5**: `Loan` e o M1 passaram a preservar caminhos compactos de campos do `AmirPlace`. Campos com `SymbolId` distintos não produzem O003/O001 falsos; roots/prefixes continuam sobrepostos, e índices/dereferences permanecem conservadores. O join distingue campo movido em todos ou apenas alguns predecessores, store reinicializa o subpath exato e drop glue ignora só o campo transferido. Extração parcial de tipos com `@Destructor` explícito é rejeitada porque o destrutor exige o valor completo. Matrizes tipadas cobrem shared/exclusive, paths aninhados, moves, reinicialização e CFG linear/diamond. |
+| 2026-09 | Codex | **Trilha RFC 0011 tornada executável**: a fundação batch verificável permanece funcional no 0.1; o 0.2 recebe o serviço de build quente sem persistir Salsa e o 0.3 recebe lowering/CGU realmente por instância, com gates explícitos de equivalência clean, determinismo e p95 em host documentado. |
+| 2026-09 | Antigravity | **Stack Científica e de Dados (RFC 0012)**: inclusão formal dos marcos SCI.1–SCI.4; arrays/views strided sem cópia, separação de matrizes stack/heap, destination-passing style, scratch arenas reutilizáveis, formato colunar Arrow, motor lazy em batches e álgebra de grafos sobre semirings GraphBLAS. |
+| 2026-09 | Antigravity | **Metaprogramação Comptime & CTFE (RFC 0013)**: especificação formal do subsistema A12; unificação sintática em `comptime`, reflexão estática de tipos (`std.core.meta`), eliminação de 90% das macros via `comptime for` e `@field`, quasiquoting higiênico com `${expr}`, AMIR VM determinística estilo Miri, fuel budget e queries Salsa puras com early-cutoff. |
 
 ---
 
