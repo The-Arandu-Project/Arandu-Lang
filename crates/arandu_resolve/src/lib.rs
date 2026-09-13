@@ -14,7 +14,10 @@ pub mod name_resolution;
 
 pub use import_path::{LogicalImport, canonicalize_import_path, logical_import};
 pub use module_loader::{EmptyModuleLoader, ModuleLoader, SourceDbLoader};
-pub use name_resolution::{resolve_for_test, resolve_imports_and_bodies, resolve_local};
+pub use name_resolution::{
+    resolve_for_test, resolve_imports_and_bodies, resolve_imports_and_bodies_with_poll,
+    resolve_local, resolve_local_with_poll,
+};
 
 pub use arandu_middle::{
     CodeReplacement, DiagCode, Diagnostic, DocCommentMap, Label, NodeKey, ResolutionResult,

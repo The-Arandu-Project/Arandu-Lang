@@ -1,5 +1,5 @@
 use arandu_semantics::amir::{AmirPlace, AmirProjection};
-use arandu_semantics::passes::type_checker::types::{ArType, is_vec_type};
+use arandu_semantics::passes::type_checker::types::{ArType, Primitive, is_vec_type};
 use cranelift_codegen::ir::{InstBuilder, Value};
 
 use super::FunctionTranslator;
@@ -55,16 +55,53 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 }
                 AmirProjection::Field(symbol_id) => {
                     let offset = self.translate_projection_offset(&mut current_ty, *symbol_id);
-                    ptr_val = self.builder.ins().load(
-                        self.ptr_type,
-                        cranelift_codegen::ir::MemFlagsData::new(),
-                        ptr_val,
-                        offset,
-                    );
+                    if matches!(
+                        current_ty,
+                        ArType::Primitive(Primitive::Str) | ArType::Slice(_)
+                    ) {
+                        // Fat-pointer fields live inline as `{ data, len }`. A following
+                        // projection needs the descriptor address; loading here would
+                        // turn its data word into a descriptor and make the bounds check
+                        // read element bytes as the length.
+                        if offset != 0 {
+                            ptr_val = self.builder.ins().iadd_imm_s(ptr_val, i64::from(offset));
+                        }
+                    } else {
+                        ptr_val = self.builder.ins().load(
+                            self.ptr_type,
+                            cranelift_codegen::ir::MemFlagsData::new(),
+                            ptr_val,
+                            offset,
+                        );
+                    }
                 }
                 AmirProjection::Index(op) => {
                     let idx_val = self.translate_operand(op, Some(self.ptr_type));
-                    if matches!(current_ty, ArType::Slice(_)) {
+                    if let ArType::Array(len, _) = &current_ty {
+                        let len_val = self.builder.ins().iconst(self.ptr_type, *len as i64);
+                        let is_oob = self.builder.ins().icmp(
+                            cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+                            idx_val,
+                            len_val,
+                        );
+                        self.builder
+                            .ins()
+                            .trapnz(is_oob, cranelift_codegen::ir::TrapCode::unwrap_user(1));
+                    } else if matches!(current_ty, ArType::Slice(_)) {
+                        let len_val = self.builder.ins().load(
+                            self.ptr_type,
+                            cranelift_codegen::ir::MemFlagsData::new(),
+                            ptr_val,
+                            self.ptr_type.bytes() as i32,
+                        );
+                        let is_oob = self.builder.ins().icmp(
+                            cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+                            idx_val,
+                            len_val,
+                        );
+                        self.builder
+                            .ins()
+                            .trapnz(is_oob, cranelift_codegen::ir::TrapCode::unwrap_user(1));
                         ptr_val = self.builder.ins().load(
                             self.ptr_type,
                             cranelift_codegen::ir::MemFlagsData::new(),
@@ -125,7 +162,38 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                 }
                 let is_vec = is_vec_type(&current_ty, self.symbol_table);
                 let idx_val = self.translate_operand(op, Some(self.ptr_type));
-                if matches!(current_ty, ArType::Slice(_)) || is_vec {
+                if let ArType::Array(len, _) = &current_ty {
+                    let len_val = self.builder.ins().iconst(self.ptr_type, *len as i64);
+                    let is_oob = self.builder.ins().icmp(
+                        cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+                        idx_val,
+                        len_val,
+                    );
+                    self.builder
+                        .ins()
+                        .trapnz(is_oob, cranelift_codegen::ir::TrapCode::unwrap_user(1));
+                } else if matches!(current_ty, ArType::Slice(_)) {
+                    let len_val = self.builder.ins().load(
+                        self.ptr_type,
+                        cranelift_codegen::ir::MemFlagsData::new(),
+                        ptr_val,
+                        self.ptr_type.bytes() as i32,
+                    );
+                    let is_oob = self.builder.ins().icmp(
+                        cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+                        idx_val,
+                        len_val,
+                    );
+                    self.builder
+                        .ins()
+                        .trapnz(is_oob, cranelift_codegen::ir::TrapCode::unwrap_user(1));
+                    ptr_val = self.builder.ins().load(
+                        self.ptr_type,
+                        cranelift_codegen::ir::MemFlagsData::new(),
+                        ptr_val,
+                        0,
+                    );
+                } else if is_vec {
                     ptr_val = self.builder.ins().load(
                         self.ptr_type,
                         cranelift_codegen::ir::MemFlagsData::new(),

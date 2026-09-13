@@ -185,6 +185,7 @@ Abaixo estão listados todos os diagnósticos mapeados para o compilador Arandu.
 | **LX001** | `unterminated string literal` | Error | `0.1.0` | Uma string literal foi aberta com aspas mas o arquivo terminou ou a linha quebrou antes de ser fechada. |
 | **LX002** | `invalid Unicode character: '{char}'` | Error | `0.1.0` | O arquivo contém caracteres inválidos fora da especificação Unicode aceita para identificadores ou operadores. |
 | **LX003** | `invalid number literal: '{literal}'` | Error | `0.1.0` | Formatação de número malformada (ex: múltiplos pontos decimais `1.2.3` ou sufixo inválido). |
+| **LX004** | `unescaped bidirectional Unicode control character: '{char}'` | Error | `0.1.0` | Tentativa de utilizar caracteres de controle bidirecional Unicode invisíveis (Trojan Source, CWE-1307) em comentários ou código. |
 
 ---
 
@@ -278,6 +279,7 @@ Abaixo estão listados todos os diagnósticos mapeados para o compilador Arandu.
 | **T037** | `invalid @Benchmark contract` | Error | `0.1.0` | A função de benchmark não satisfaz o contrato síncrono, não genérico, com um contexto `mut testing.Benchmark` e retorno `void`. |
 | **T038** | `integer literal does not fit in the expected type` | Error | `0.1.0` | Um literal inteiro contextual excede o intervalo representável pelo tipo inteiro esperado. |
 | **T039** | `function performs undeclared or denied effect '{effect}'` | Error | `0.1.0` | A função executa um efeito não declarado em `@Effects(...)` ou proibido pela política de efeitos do manifesto. |
+| **T040** | `attempt to divide by zero` | Error | `0.1.0` | Tentativa de realizar divisão ou cálculo de resto (`%`) com divisor zero em tempo de compilação. |
 
 ---
 

@@ -342,6 +342,50 @@ fn recovery_does_not_leak_past_closing_brace() {
     assert!(dump.contains("good"));
 }
 
+#[test]
+fn recovery_synchronizes_on_impl_block() {
+    let output = parse_recovering(
+        "module test\n\
+         func bad(\n\
+         impl Foo {\n\
+             func method(): i64 { return 42; }\n\
+         }\n",
+    );
+    let dump = output.program.dump("");
+    assert!(dump.contains("Foo"), "dump must contain impl Foo: {dump}");
+    assert!(dump.contains("method"), "dump must contain method: {dump}");
+    assert!(
+        !output.diagnostics.is_empty(),
+        "must have error from func bad("
+    );
+}
+
+#[test]
+fn recovery_synchronizes_on_let_and_var_stmt() {
+    let output = parse_recovering(
+        "module test\n\
+         func main() {\n\
+             let 1 = 2\n\
+             let valid = 10\n\
+             let mut another = 20\n\
+             return valid + another\n\
+         }\n",
+    );
+    let dump = output.program.dump("");
+    assert!(
+        dump.contains("valid"),
+        "dump must contain valid variable: {dump}"
+    );
+    assert!(
+        dump.contains("another"),
+        "dump must contain another variable: {dump}"
+    );
+    assert!(
+        !output.diagnostics.is_empty(),
+        "must report error on let 1 = 2"
+    );
+}
+
 // ── AstPool unit tests ────────────────────────────────────────────────────────
 
 #[test]

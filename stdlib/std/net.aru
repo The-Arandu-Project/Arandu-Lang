@@ -11,6 +11,7 @@ module std.net
 
 import std.io as io
 import std.runtime.waker as waker
+import std.core.slice as slice
 
 // ===========================================================================
 // experimental — not Minimal 0.1 — Raw host TCP bridge
@@ -185,22 +186,27 @@ public func TcpStream.connect(port: int): Result<TcpStream, io.IoError> {
     return Result.Ok(TcpStream { raw: s })
 }
 
-/// Reads data from the stream into the provided buffer.
-public func TcpStream.read(self: mut ref TcpStream, buf: ptr[u8], maxLen: int): Result<int, io.IoError> {
-    let n = tcpRead(self.raw, buf, maxLen)
+/// Reads data from the stream into the provided buffer slice.
+public func TcpStream.read(self: mut ref TcpStream, buf: mut ref []u8): Result<uint, io.IoError> {
+    let n = tcpRead(self.raw, slice.asPtr<u8>(*buf), slice.len<u8>(*buf) as int)
     if n < 0 {
         return Result.Err(io.newIoError(io.IoErrorKind.BrokenPipe, -1))
     }
-    return Result.Ok(n)
+    return Result.Ok(n as uint)
 }
 
-/// Writes data from the provided buffer to the stream.
-public func TcpStream.write(self: mut ref TcpStream, buf: ptr[u8], len: int): Result<int, io.IoError> {
-    let n = tcpWrite(self.raw, buf, len)
+/// Writes data from the provided buffer slice to the stream.
+public func TcpStream.write(self: mut ref TcpStream, buf: []u8): Result<uint, io.IoError> {
+    let n = tcpWrite(self.raw, slice.asPtr<u8>(buf), slice.len<u8>(buf) as int)
     if n < 0 {
         return Result.Err(io.newIoError(io.IoErrorKind.BrokenPipe, -1))
     }
-    return Result.Ok(n)
+    return Result.Ok(n as uint)
+}
+
+/// Flushes any pending writes (no-op for raw TCP stream, always returns true).
+public func TcpStream.flush(self: mut ref TcpStream): Result<bool, io.IoError> {
+    return Result.Ok(true)
 }
 
 /// Closes the stream socket.

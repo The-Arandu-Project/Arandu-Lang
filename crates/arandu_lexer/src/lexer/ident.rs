@@ -126,3 +126,24 @@ pub(crate) fn keyword_kind(text: &str) -> Option<TokenKind> {
         _ => return None,
     })
 }
+
+/// Returns whether a character is an unescaped bidirectional Unicode formatting control character
+/// that can be used in Trojan Source attacks (CVE-2021-42574, CWE-1307).
+#[inline]
+pub(crate) fn is_bidi_control(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{202A}' // LEFT-TO-RIGHT EMBEDDING (LRE)
+        | '\u{202B}' // RIGHT-TO-LEFT EMBEDDING (RLE)
+        | '\u{202C}' // POP DIRECTIONAL FORMATTING (PDF)
+        | '\u{202D}' // LEFT-TO-RIGHT OVERRIDE (LRO)
+        | '\u{202E}' // RIGHT-TO-LEFT OVERRIDE (RLO)
+        | '\u{2066}' // LEFT-TO-RIGHT ISOLATE (LRI)
+        | '\u{2067}' // RIGHT-TO-LEFT ISOLATE (RLI)
+        | '\u{2068}' // FIRST STRONG ISOLATE (FSI)
+        | '\u{2069}' // POP DIRECTIONAL ISOLATE (PDI)
+        | '\u{200E}' // LEFT-TO-RIGHT MARK (LRM)
+        | '\u{200F}' // RIGHT-TO-LEFT MARK (RLM)
+        | '\u{061C}' // ARABIC LETTER MARK (ALM)
+    )
+}

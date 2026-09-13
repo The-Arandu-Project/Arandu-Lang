@@ -307,6 +307,12 @@ impl AmirRvalue {
             AmirRvalue::Len(value) => {
                 out.push_str(&format!("len({})", value.to_pretty_string(symbols, pool)));
             }
+            AmirRvalue::SliceData(value) => {
+                out.push_str(&format!(
+                    "slice_data({})",
+                    value.to_pretty_string(symbols, pool)
+                ));
+            }
             AmirRvalue::SliceView { owner, data, len } => {
                 out.push_str(&format!(
                     "slice_view({}, {}, {})",

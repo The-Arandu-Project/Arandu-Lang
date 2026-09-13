@@ -11,6 +11,7 @@ const RESULT_ARU: &str = include_str!("../../../stdlib/core/result.aru");
 const OPTION_ARU: &str = include_str!("../../../stdlib/core/option.aru");
 const STR_ARU: &str = include_str!("../../../stdlib/core/str.aru");
 const INTRINSICS_ARU: &str = include_str!("../../../stdlib/core/intrinsics.aru");
+const SLICE_ARU: &str = include_str!("../../../stdlib/core/slice.aru");
 
 #[test]
 fn stdlib_fmt_parses_and_exports_expected_symbols() {
@@ -38,6 +39,7 @@ fn stdlib_fmt_usage_in_program() {
         "std/core/intrinsics.aru".to_string(),
         INTRINSICS_ARU.to_string(),
     );
+    let _ = db.new_file("std/core/slice.aru".to_string(), SLICE_ARU.to_string());
     let _ = db.new_file("std/core/mem.aru".to_string(), MEM_ARU.to_string());
     let _ = db.new_file("std/core/option.aru".to_string(), OPTION_ARU.to_string());
     let _ = db.new_file("std/core/result.aru".to_string(), RESULT_ARU.to_string());
@@ -49,7 +51,12 @@ import std.core.fmt as fmt
 
 func testFormatter(f: mut ref fmt.Formatter): bool {
     let res = f.writeBool(true)
-    return res.isOk()
+    let b = f.writeByte(10 as u8)
+    return res.isOk() && b.isOk()
+}
+
+func testNew(buf: []u8): fmt.Formatter {
+    return fmt.newFormatter(buf)
 }
 
 func main(): int {

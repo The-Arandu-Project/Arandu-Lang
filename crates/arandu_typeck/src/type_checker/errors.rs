@@ -154,12 +154,19 @@ pub fn constraint_to_diagnostic(
         ConstraintOrigin::UnaryOp {
             op_span,
             operand_span,
-        } => Diagnostic::error(
-            DiagCode::T005OperatorNotApplicable,
-            format!("operator not applicable to '{found_str}'"),
-            *op_span,
-        )
-        .with_label(*operand_span, format!("type '{found_str}'")),
+        } => {
+            let mut diag = Diagnostic::error(
+                DiagCode::T005OperatorNotApplicable,
+                format!("operator not applicable to '{found_str}'"),
+                *op_span,
+            )
+            .with_label(*operand_span, format!("type '{found_str}'"));
+
+            if constraint.found.is_integer() && !constraint.found.is_signed() {
+                diag = diag.with_hint("unsigned integer types cannot be negated with `-`");
+            }
+            diag
+        }
 
         ConstraintOrigin::Condition { span } => Diagnostic::error(
             DiagCode::T009ConditionNotBool,
@@ -436,6 +443,25 @@ fn add_operator_hint(
             "convert explicitly: 'value as {}'",
             if left.is_float() { left_str } else { right_str }
         ));
+    }
+
+    if super::types::unify(left, right, interner) {
+        if is_string_type(left) {
+            return diag.with_hint(
+                "relational comparisons on strings are not supported directly; use `std.core.cmp` or `.compare()`",
+            );
+        }
+        if matches!(left, ArType::Primitive(super::types::Primitive::Bool)) {
+            return diag.with_hint("type `bool` is not orderable");
+        }
+        if left.is_float() {
+            return diag.with_hint("modulo operator `%` is only defined for integer types");
+        }
+        if matches!(left, ArType::Named(_, _) | ArType::Tuple(_)) {
+            return diag.with_hint(
+                "composite types require implementing an explicit comparison interface",
+            );
+        }
     }
 
     diag

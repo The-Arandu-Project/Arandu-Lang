@@ -217,6 +217,27 @@ arandu_ext
 
 ---
 
+### 🔬 Stack de Computação Científica e de Dados (RFC 0012) — Triagem Arquitetural
+
+Conforme formalizado na [RFC 0012](rfcs/0012-scientific-computing-and-data-architecture.md), o Arandu rejeita transformar a stdlib básica em um monólito numérico pesado:
+
+* **In-Tree (`stdlib/core/math` e `stdlib/core/simd`)**: Apenas operações escalares puras (IEEE-754, trigonometria elementar, constantes `PI`/`TAU`/`E`) e tipos primitivos de registradores SIMD (`f32x4`, `u8x16`) pertencem à biblioteca padrão do compilador. São estritamente livres de heap (`no_std`) e mapeadas diretamente para instruções de CPU ou `libm`.
+* **Out-of-Tree / Ecossistema Externo (`arandu_math`, `arandu_data`, `arandu_science`)**: Todo o ferramental pesado de tensores N-dimensionais, matrizes esparsas, BLAS/LAPACK, processamento colunar Apache Arrow, DataFrames e solvers de EDOs reside em pacotes modulares externos do ecossistema, completamente fora da árvore de código do compilador v0.1.
+
+```text
+stdlib (In-Tree)    ──► core::math (escalar, IEEE-754, libm) e core::simd (tipos primitivos)
+       │ (fronteira desacoplada)
+arandu_math (Crate) ──► Array/ArrayView (strides), StaticMatrix, GEMM/BLAS, ScratchArena, Sparse, FFT
+arandu_data (Crate) ──► Apache Arrow, RecordBatch, Validity Bitmaps, DataFrames, Lazy Engine
+arandu_science (Crate) Solvers (ODE), Sinais, Otimização, GraphBLAS (Grafos sobre Semirings)
+```
+
+* **Invariante de Isolamento**: O compilador `arandu` e programas de uso geral jamais dependem de pacotes científicos externos;
+* **Zero Hidden Allocation**: Operações de destino explícito (`*_into`) e scratch reutilizável (`ScratchArena`);
+* **Fronteira Estrita Tensores vs Dados Tabulares**: `arandu_math` opera sobre views densas com strides; `arandu_data` opera sobre estruturas SoA colunares, validity bitmaps e chunks compatíveis com a Arrow C Data Interface.
+
+---
+
 ### 🎯 Modularidade Criptográfica (`crypto`)
 
 Para mitigar o aumento do tempo de compilação e do tamanho do executável gerado, o módulo `arandu_std::crypto` é estruturado em sub-módulos independentes de forma estrita.

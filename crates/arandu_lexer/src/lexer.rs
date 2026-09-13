@@ -108,16 +108,14 @@ impl<'a> Lexer<'a> {
         match first {
             b'/' => {
                 if remaining >= 3 && bytes[self.pos + 1] == b'/' && bytes[self.pos + 2] == b'/' {
-                    self.lex_line_doc_comment();
-                    return Ok(());
+                    return self.lex_line_doc_comment();
                 } else if remaining >= 3
                     && bytes[self.pos + 1] == b'*'
                     && bytes[self.pos + 2] == b'*'
                 {
                     return self.lex_block_doc_comment();
                 } else if remaining >= 2 && bytes[self.pos + 1] == b'/' {
-                    self.skip_line_comment();
-                    return Ok(());
+                    return self.skip_line_comment();
                 } else if remaining >= 2 && bytes[self.pos + 1] == b'*' {
                     return self.skip_block_comment();
                 }
@@ -142,6 +140,16 @@ impl<'a> Lexer<'a> {
                 return self.lex_number();
             }
             _ => {}
+        }
+
+        if first >= 128 && self.peek().is_some_and(ident::is_bidi_control) {
+            let start = self.mark();
+            self.bump();
+            return Err(self.error_from(
+                start,
+                LexErrorCode::BidiTrojanSource,
+                "unescaped bidirectional Unicode control character (Trojan Source, CWE-1307)",
+            ));
         }
 
         if first < 128 && is_ident_start(first as char)

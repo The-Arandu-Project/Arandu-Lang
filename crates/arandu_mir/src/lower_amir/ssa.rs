@@ -481,7 +481,7 @@ impl LowerCtx<'_> {
                 }
             }
 
-            AmirRvalue::Len(value) => {
+            AmirRvalue::Len(value) | AmirRvalue::SliceData(value) => {
                 *value = Self::resolve_operand(redirected_temps, *value);
             }
             AmirRvalue::SliceView { owner, data, len } => {

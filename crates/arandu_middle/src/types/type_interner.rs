@@ -66,6 +66,10 @@ impl TypeArgsPool {
     fn get(&self, range: IndexRange) -> &[TypeId] {
         &self.args[range.range()]
     }
+
+    fn try_get(&self, range: IndexRange) -> Option<&[TypeId]> {
+        self.args.get(range.range())
+    }
 }
 
 /// A global interner that assigns a unique `TypeId` to every structural `ArType`.
@@ -166,6 +170,32 @@ impl TypeInterner {
             .unwrap_or_else(|e| e.into_inner())
             .get(range)
             .to_vec()
+    }
+
+    /// Borrow a contiguous type-argument range for the duration of `f`.
+    ///
+    /// Prefer this over [`Self::type_args`] in hashing and codegen hot paths;
+    /// it avoids allocating a temporary `Vec<TypeId>`.
+    #[inline]
+    pub fn with_type_args<R>(&self, range: IndexRange, f: impl FnOnce(&[TypeId]) -> R) -> R {
+        let pool = self
+            .type_args_pool
+            .read()
+            .unwrap_or_else(|error| error.into_inner());
+        f(pool.get(range))
+    }
+
+    /// Return one argument from a contiguous type-argument range without
+    /// materializing the whole range as a temporary `Vec`.
+    #[must_use]
+    #[inline]
+    pub fn type_arg(&self, range: IndexRange, index: usize) -> Option<TypeId> {
+        self.type_args_pool
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .try_get(range)?
+            .get(index)
+            .copied()
     }
 
     /// Resolve a `TypeId` back to its `ArType` (clones the interned value).

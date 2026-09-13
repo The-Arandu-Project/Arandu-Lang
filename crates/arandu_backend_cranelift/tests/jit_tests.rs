@@ -1761,3 +1761,149 @@ func main(): bool {
     };
     assert!(result);
 }
+
+#[test]
+fn jit_char_unsigned_comparison() {
+    let src = r#"
+func main(): bool {
+    let a: char = 'a'
+    let b: char = 'b'
+    return a < b && b > a
+}
+"#;
+    let (amir, symbols, type_info) = compile_src(src);
+    let backend = backend_for_test();
+    let module = backend.compile(&amir, &symbols, &type_info).unwrap();
+
+    let result: bool = unsafe {
+        let f: unsafe fn() -> bool = module.get_fn("main").unwrap();
+        f()
+    };
+    assert!(result);
+}
+
+#[test]
+fn jit_int_to_float_and_back_cast() {
+    let src = r#"
+func main(): bool {
+    let x: int = 42
+    let f: float = x as float
+    let y: int = f as int
+    return y == 42
+}
+"#;
+    let (amir, symbols, type_info) = compile_src(src);
+    let backend = backend_for_test();
+    let module = backend.compile(&amir, &symbols, &type_info).unwrap();
+
+    let result: bool = unsafe {
+        let f: unsafe fn() -> bool = module.get_fn("main").unwrap();
+        f()
+    };
+    assert!(result);
+}
+
+#[test]
+fn jit_float_promotion_and_demotion() {
+    let src = r#"
+func main(): bool {
+    let a: f32 = 3.5 as f32
+    let b: f64 = a as f64
+    let c: f32 = b as f32
+    return c == 3.5
+}
+"#;
+    let (amir, symbols, type_info) = compile_src(src);
+    let backend = backend_for_test();
+    let module = backend.compile(&amir, &symbols, &type_info).unwrap();
+
+    let result: bool = unsafe {
+        let f: unsafe fn() -> bool = module.get_fn("main").unwrap();
+        f()
+    };
+    assert!(result);
+}
+
+#[test]
+fn jit_unsigned_comparisons_prevent_sign_extension_bug() {
+    let src = r#"
+func main(): bool {
+    let u1: u8 = 250 as u8
+    let u2: u8 = 5 as u8
+    return u1 > u2
+}
+"#;
+    let (amir, symbols, type_info) = compile_src(src);
+    let backend = backend_for_test();
+    let module = backend.compile(&amir, &symbols, &type_info).unwrap();
+
+    let result: bool = unsafe {
+        let f: unsafe fn() -> bool = module.get_fn("main").unwrap();
+        f()
+    };
+    assert!(result);
+}
+
+#[test]
+fn jit_array_indexing_in_bounds() {
+    let src = r#"
+func main(): int {
+    let arr: [3]int = [10, 20, 30]
+    return arr[1]
+}
+"#;
+    let (amir, symbols, type_info) = compile_src(src);
+    let backend = backend_for_test();
+    let module = backend.compile(&amir, &symbols, &type_info).unwrap();
+
+    let result: i32 = unsafe {
+        let f: unsafe fn() -> i32 = module.get_fn("main").unwrap();
+        f()
+    };
+    assert_eq!(result, 20);
+}
+
+#[test]
+fn jit_array_indexing_all_positions_and_mutation() {
+    let src = r#"
+func main(): int {
+    let mut arr: [3]int = [10, 20, 30]
+    arr[1] = 50
+    return arr[0] + arr[1] + arr[2]
+}
+"#;
+    let (amir, symbols, type_info) = compile_src(src);
+    let backend = backend_for_test();
+    let module = backend.compile(&amir, &symbols, &type_info).unwrap();
+
+    let result: i32 = unsafe {
+        let f: unsafe fn() -> i32 = module.get_fn("main").unwrap();
+        f()
+    };
+    assert_eq!(result, 10 + 50 + 30);
+}
+
+#[test]
+fn jit_array_indexing_dynamic_variable() {
+    let src = r#"
+func main(): int {
+    let arr: [5]int = [100, 200, 300, 400, 500]
+    let mut sum = 0
+    let mut i = 0
+    while i < 5 {
+        sum = sum + arr[i]
+        i = i + 1
+    }
+    return sum
+}
+"#;
+    let (amir, symbols, type_info) = compile_src(src);
+    let backend = backend_for_test();
+    let module = backend.compile(&amir, &symbols, &type_info).unwrap();
+
+    let result: i32 = unsafe {
+        let f: unsafe fn() -> i32 = module.get_fn("main").unwrap();
+        f()
+    };
+    assert_eq!(result, 100 + 200 + 300 + 400 + 500);
+}

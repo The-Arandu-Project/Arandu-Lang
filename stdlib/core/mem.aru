@@ -35,12 +35,12 @@ extern "arandu-intrinsic" {
     /// # Safety
     /// `p` must be a valid, properly aligned pointer with write permissions.
     func ptrWrite<T>(p: ptr[T], val: T) : void
+
+    /// Directly writes `val` into the exclusive reference `dest`.
+    func refWrite<T>(dest: mut ref T, val: T) : void
 }
 
-/// Swaps the values pointed to by `x` and `y` in-place without extra allocation.
-///
-/// # Safety
-/// Both `x` and `y` must be valid, properly aligned, non-overlapping pointers.
+/// Swaps the values referenced by `x` and `y` in-place without extra allocation.
 ///
 /// # Examples
 /// ```arandu
@@ -50,18 +50,13 @@ extern "arandu-intrinsic" {
 /// assert(a == 200)
 /// assert(b == 100)
 /// ```
-public func swap<T>(x: ptr[T], y: ptr[T]): void {
-    unsafe {
-        let tmp = ptrRead(x)
-        ptrWrite(x, ptrRead(y))
-        ptrWrite(y, tmp)
-    }
+public func swap<T>(x: mut ref T, y: mut ref T): void {
+    let tmp = *x
+    refWrite<T>(x, *y)
+    refWrite<T>(y, tmp)
 }
 
 /// Replaces the value at `dest` with `src`, returning the old value.
-///
-/// # Safety
-/// `dest` must be a valid, properly aligned pointer with write permissions.
 ///
 /// # Examples
 /// ```arandu
@@ -70,18 +65,13 @@ public func swap<T>(x: ptr[T], y: ptr[T]): void {
 /// assert(old == 50)
 /// assert(buffer == 100)
 /// ```
-public func replace<T>(dest: ptr[T], src: T): T {
-    unsafe {
-        let old = ptrRead(dest)
-        ptrWrite(dest, src)
-        return old
-    }
+public func replace<T>(dest: mut ref T, src: T): T {
+    let old = *dest
+    refWrite<T>(dest, src)
+    return old
 }
 
 /// Replaces the value at `dest` with `Option.None`, returning the previous value.
-///
-/// # Safety
-/// `dest` must be a valid, properly aligned pointer with write permissions.
 ///
 /// # Examples
 /// ```arandu
@@ -90,7 +80,7 @@ public func replace<T>(dest: ptr[T], src: T): T {
 /// assert(prev.isSome())
 /// assert(opt.isNone())
 /// ```
-public func take<T>(dest: ptr[Option<T>]): Option<T> {
+public func take<T>(dest: mut ref Option<T>): Option<T> {
     return replace<Option<T>>(dest, Option.None)
 }
 

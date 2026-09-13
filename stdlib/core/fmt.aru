@@ -1,6 +1,6 @@
 module std.core.fmt
 
-import std.core.mem as mem
+import std.core.slice as slice
 import std.core.str as strings
 
 /// Error encountered during buffer formatting.
@@ -13,18 +13,16 @@ public enum FmtError {
 
 /// Zero-allocation, stream-like text buffer formatter.
 ///
-/// Wraps a contiguous memory buffer (`ptr[u8]`) with capacity and current length.
+/// Wraps a contiguous memory buffer slice (`[]u8`) with current length.
 public struct Formatter {
-    buf: ptr[u8]
-    capacity: uint
+    buf: []u8
     len: uint
 }
 
-/// Creates a new `Formatter` operating over a pre-allocated raw buffer.
-public func newFormatter(buf: ptr[u8], capacity: uint): Formatter {
+/// Creates a new `Formatter` operating over a pre-allocated slice buffer.
+public func newFormatter(buf: []u8): Formatter {
     return Formatter {
         buf: buf,
-        capacity: capacity,
         len: 0,
     }
 }
@@ -34,23 +32,27 @@ public func Formatter.len(self: ref Formatter): uint {
     return self.len
 }
 
+/// Returns the total capacity of the underlying buffer in bytes.
+public func Formatter.capacity(self: ref Formatter): uint {
+    return slice.len<u8>(self.buf)
+}
+
 /// Returns the remaining writable capacity in bytes.
 public func Formatter.remaining(self: ref Formatter): uint {
-    if self.len >= self.capacity {
+    let cap = slice.len<u8>(self.buf)
+    if self.len >= cap {
         return 0
     }
-    return self.capacity - self.len
+    return cap - self.len
 }
 
 /// Writes a single byte into the formatter buffer.
 public func Formatter.writeByte(self: mut ref Formatter, b: u8): Result<uint, FmtError> {
-    if self.len >= self.capacity {
+    let cap = slice.len<u8>(self.buf)
+    if self.len >= cap {
         return Result.Err(FmtError.BufferFull)
     }
-    unsafe {
-        let p = mem.ptrOffset<u8>(self.buf, self.len as i32)
-        mem.ptrWrite<u8>(p, b)
-    }
+    self.buf[self.len] = b
     self.len = self.len + 1
     return Result.Ok(1)
 }
@@ -66,7 +68,8 @@ public func Formatter.writeBool(self: mut ref Formatter, b: bool): Result<uint, 
 /// Writes a string slice into the formatter buffer without allocations.
 public func Formatter.writeStr(self: mut ref Formatter, s: str): Result<uint, FmtError> {
     let slen = strings.lenBytes(s)
-    if self.len + slen > self.capacity {
+    let cap = slice.len<u8>(self.buf)
+    if self.len + slen > cap {
         return Result.Err(FmtError.BufferFull)
     }
     self.len = self.len + slen

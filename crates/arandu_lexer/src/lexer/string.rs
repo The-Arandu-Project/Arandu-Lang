@@ -1,4 +1,5 @@
 use super::{Lexer, Mark};
+use crate::ident::is_bidi_control;
 use crate::ident::is_digit;
 use crate::ident::is_ident_start;
 use crate::{LexError, LexErrorCode, Span, TokenKind};
@@ -14,6 +15,17 @@ impl<'a> Lexer<'a> {
         let start = self.mark();
         self.bump_ascii(2);
         while !self.is_at_end() && self.peek() != Some('"') {
+            if let Some(ch) = self.peek()
+                && is_bidi_control(ch)
+            {
+                let err_start = self.mark();
+                self.bump();
+                return Err(self.error_from(
+                    err_start,
+                    LexErrorCode::BidiTrojanSource,
+                    "unescaped bidirectional Unicode control character (Trojan Source, CWE-1307)",
+                ));
+            }
             self.bump();
         }
         if self.is_at_end() {
@@ -32,6 +44,17 @@ impl<'a> Lexer<'a> {
         let start = self.mark();
         self.bump_ascii(4);
         while !self.is_at_end() && !self.starts_with("\"\"\"") {
+            if let Some(ch) = self.peek()
+                && is_bidi_control(ch)
+            {
+                let err_start = self.mark();
+                self.bump();
+                return Err(self.error_from(
+                    err_start,
+                    LexErrorCode::BidiTrojanSource,
+                    "unescaped bidirectional Unicode control character (Trojan Source, CWE-1307)",
+                ));
+            }
             self.bump();
         }
         if self.is_at_end() {
@@ -93,6 +116,17 @@ impl<'a> Lexer<'a> {
                     text_start,
                     unterminated_code,
                     "unterminated string literal",
+                ));
+            }
+            if let Some(ch) = self.peek()
+                && is_bidi_control(ch)
+            {
+                let err_start = self.mark();
+                self.bump();
+                return Err(self.error_from(
+                    err_start,
+                    LexErrorCode::BidiTrojanSource,
+                    "unescaped bidirectional Unicode control character (Trojan Source, CWE-1307)",
                 ));
             }
             if self.starts_with("${") {
@@ -175,7 +209,7 @@ impl<'a> Lexer<'a> {
             } else if self.peek().is_some_and(is_ident_start) {
                 self.lex_ident_or_keyword();
             } else if self.starts_with("//") {
-                self.skip_line_comment();
+                self.skip_line_comment()?;
             } else if self.starts_with("/*") {
                 self.skip_block_comment()?;
             } else {
@@ -273,6 +307,17 @@ impl<'a> Lexer<'a> {
                         start,
                         LexErrorCode::UnterminatedChar,
                         "unterminated char literal",
+                    ));
+                }
+                if let Some(ch) = self.peek()
+                    && is_bidi_control(ch)
+                {
+                    let err_start = self.mark();
+                    self.bump();
+                    return Err(self.error_from(
+                        err_start,
+                        LexErrorCode::BidiTrojanSource,
+                        "unescaped bidirectional Unicode control character (Trojan Source, CWE-1307)",
                     ));
                 }
                 count += 1;

@@ -52,4 +52,5 @@ pub enum LexErrorCode {
     InvalidHexDigit,
     LeadingZero,
     UnclosedInterpolation,
+    BidiTrojanSource,
 }

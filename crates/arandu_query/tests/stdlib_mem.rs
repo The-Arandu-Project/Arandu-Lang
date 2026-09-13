@@ -6,6 +6,7 @@ use arandu_query::file_ide_diagnostics;
 use arandu_query::passes::{exported_symbols, parse};
 
 const MEM_ARU: &str = include_str!("../../../stdlib/core/mem.aru");
+const OPTION_ARU: &str = include_str!("../../../stdlib/core/option.aru");
 
 #[test]
 fn stdlib_mem_parses_and_exports_expected_symbols() {
@@ -22,8 +23,10 @@ fn stdlib_mem_parses_and_exports_expected_symbols() {
         "ptrOffset",
         "ptrRead",
         "ptrWrite",
+        "refWrite",
         "swap",
         "replace",
+        "take",
     ];
     for key in expected {
         assert!(
@@ -37,13 +40,18 @@ fn stdlib_mem_parses_and_exports_expected_symbols() {
 #[test]
 fn stdlib_mem_usage_in_program() {
     let mut db = DatabaseImpl::default();
+    let _ = db.new_file("std/core/option.aru".to_string(), OPTION_ARU.to_string());
     let mem_file = db.new_file("std/core/mem.aru".to_string(), MEM_ARU.to_string());
     let main_src = r#"
 import std.core.mem as mem
 
-func testUsage(p1: ptr[int], p2: ptr[int]): int {
+func testUsage(p1: mut ref int, p2: mut ref int): int {
     mem.swap<int>(p1, p2)
     return mem.replace<int>(p1, 42)
+}
+
+func testTake(opt: mut ref Option<int>): Option<int> {
+    return mem.take<int>(opt)
 }
 
 func main(): int {

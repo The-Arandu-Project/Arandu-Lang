@@ -496,7 +496,7 @@ pub(super) fn synth_call_expr(
                                     },
                                 );
                             } else {
-                                super::super::ctor::validate_exclusive_receiver_autoref(
+                                super::super::method::validate_exclusive_receiver_autoref(
                                     checker,
                                     base_id,
                                     receiver_ty_id,

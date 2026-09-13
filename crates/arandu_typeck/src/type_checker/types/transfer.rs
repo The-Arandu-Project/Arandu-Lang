@@ -1,4 +1,4 @@
-//! Conservative storage proof for the canonical Send/Sync bounds.
+//! Conservative storage proof for the canonical Copy/Send/Sync bounds.
 //!
 //! This does not prove a task's effects or a borrowed scope's lifetime. Raw
 //! storage, views, coroutine captures and resource destructors require separate
@@ -89,12 +89,29 @@ pub(super) fn satisfies(
                     }
                     continue;
                 }
-                if declaration.lang_item == Some(LangItem::TaskHandle)
-                    || info.destructors.contains_key(&symbol)
-                {
+                if declaration.lang_item == Some(LangItem::TaskHandle) {
                     return false;
                 }
                 let arguments = interner.type_args(arguments);
+                match declaration.lang_item {
+                    Some(LangItem::String) => {
+                        if capability == LangItem::Copy || !arguments.is_empty() {
+                            return false;
+                        }
+                        continue;
+                    }
+                    Some(LangItem::Vec) => {
+                        if capability == LangItem::Copy {
+                            return false;
+                        }
+                        pending.extend(arguments.iter().map(|&argument| (argument, depth + 1)));
+                        continue;
+                    }
+                    _ => {}
+                }
+                if info.destructors.contains_key(&symbol) {
+                    return false;
+                }
                 // Include phantom arguments: an empty wrapper must not launder
                 // a resource's negative transfer constraint.
                 pending.extend(arguments.iter().map(|&argument| (argument, depth + 1)));

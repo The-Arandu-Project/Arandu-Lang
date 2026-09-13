@@ -46,3 +46,70 @@ fn semicolon_before_rbrace() {
 fn semicolon_before_else() {
     assert_contract("semicolon_before_else");
 }
+
+#[test]
+fn bidi_trojan_source_rejected_in_comments_and_strings() {
+    use arandu_lexer::{LexErrorCode, Lexer};
+
+    let bidi_chars = [
+        '\u{202A}', // LRE
+        '\u{202B}', // RLE
+        '\u{202C}', // PDF
+        '\u{202D}', // LRO
+        '\u{202E}', // RLO
+        '\u{2066}', // LRI
+        '\u{2067}', // RLI
+        '\u{2068}', // FSI
+        '\u{2069}', // PDI
+        '\u{200E}', // LRM
+        '\u{200F}', // RLM
+        '\u{061C}', // ALM
+    ];
+
+    for ch in bidi_chars {
+        // Line comment
+        let line_src = format!("// evil comment {ch} rest\nlet x = 1");
+        let lexed = Lexer::new(&line_src).lex();
+        assert_eq!(
+            lexed.err().map(|e| e.code),
+            Some(LexErrorCode::BidiTrojanSource),
+            "should reject bidi char {ch:?} in line comment"
+        );
+
+        // Block comment
+        let block_src = format!("/* evil comment {ch} rest */\nlet x = 1");
+        let lexed = Lexer::new(&block_src).lex();
+        assert_eq!(
+            lexed.err().map(|e| e.code),
+            Some(LexErrorCode::BidiTrojanSource),
+            "should reject bidi char {ch:?} in block comment"
+        );
+
+        // String literal
+        let str_src = format!("let s = \"evil string {ch} rest\";");
+        let lexed = Lexer::new(&str_src).lex();
+        assert_eq!(
+            lexed.err().map(|e| e.code),
+            Some(LexErrorCode::BidiTrojanSource),
+            "should reject bidi char {ch:?} in string literal"
+        );
+
+        // Raw string
+        let raw_src = format!("let s = r\"evil raw {ch} rest\";");
+        let lexed = Lexer::new(&raw_src).lex();
+        assert_eq!(
+            lexed.err().map(|e| e.code),
+            Some(LexErrorCode::BidiTrojanSource),
+            "should reject bidi char {ch:?} in raw string"
+        );
+
+        // Outside tokens
+        let raw_code = format!("func foo() {{ {ch} }}");
+        let lexed = Lexer::new(&raw_code).lex();
+        assert_eq!(
+            lexed.err().map(|e| e.code),
+            Some(LexErrorCode::BidiTrojanSource),
+            "should reject bidi char {ch:?} outside tokens"
+        );
+    }
+}
