@@ -15,7 +15,7 @@ impl<'a> CEmitter<'a> {
     pub(super) fn emit_headers(&mut self, needs_str: bool) {
         let _ = writeln!(
             &mut self.output,
-            "#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)\n#define _POSIX_C_SOURCE 200112L\n#endif"
+            "#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)\n#define _DARWIN_C_SOURCE\n#endif\n#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)\n#define _POSIX_C_SOURCE 200112L\n#endif"
         );
         let _ = writeln!(&mut self.output, "#include <stdint.h>");
         let _ = writeln!(&mut self.output, "#include <stdbool.h>");
@@ -24,6 +24,7 @@ impl<'a> CEmitter<'a> {
         let _ = writeln!(&mut self.output, "#include <stdio.h>");
         let _ = writeln!(&mut self.output, "#include <errno.h>");
         let _ = writeln!(&mut self.output, "#include <stdatomic.h>");
+        let _ = writeln!(&mut self.output, "#include <sys/types.h>");
         let _ = writeln!(
             &mut self.output,
             "#if defined(_WIN32)\n#include <malloc.h>\n#include <windows.h>\n#endif\n#if !defined(_WIN32) || defined(__MINGW32__)\n#include <pthread.h>\n#include <unistd.h>\n#endif"
@@ -32,7 +33,6 @@ impl<'a> CEmitter<'a> {
             &mut self.output,
             "#if defined(__APPLE__)\n#include <sys/sysctl.h>\n#endif"
         );
-        let _ = writeln!(&mut self.output, "#include <sys/types.h>");
         let _ = writeln!(&mut self.output, "#include <sys/stat.h>");
         let _ = writeln!(
             &mut self.output,

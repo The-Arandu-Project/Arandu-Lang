@@ -334,7 +334,11 @@ static void ar_c_pool_init_routine(void) {{
     ar_global_c_pool.tail = 0;
     ar_global_c_pool.count = 0;
     ar_global_c_pool.shutdown = 0;
-#if defined(__APPLE__)
+#if defined(_WIN32)
+    SYSTEM_INFO sysinfo;
+    GetSystemInfo(&sysinfo);
+    long procs = (long)sysinfo.dwNumberOfProcessors;
+#elif defined(__APPLE__)
     int logical_procs = 1;
     size_t logical_procs_size = sizeof(logical_procs);
     long procs = sysctlbyname("hw.logicalcpu", &logical_procs, &logical_procs_size, NULL, 0) == 0
