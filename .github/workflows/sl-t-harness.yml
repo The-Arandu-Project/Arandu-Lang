@@ -151,7 +151,12 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sl-t-candidate-sdk-${{ matrix.target }}-${{ github.sha }}
-          path: dist/arandu-${{ env.VERSION }}-${{ matrix.target }}.${{ matrix.archive }}
+          path: |
+            dist/arandu-${{ env.VERSION }}-${{ matrix.target }}.${{ matrix.archive }}
+            dist/arandu-${{ env.VERSION }}-${{ matrix.target }}.${{ matrix.archive }}.blake3
+            dist/arandu-${{ env.VERSION }}-${{ matrix.target }}.${{ matrix.archive }}.blake3sum
+            dist/arandu-${{ env.VERSION }}-${{ matrix.target }}.${{ matrix.archive }}.sha256
+            dist/arandu-${{ env.VERSION }}-${{ matrix.target }}.${{ matrix.archive }}.sha256sum
           if-no-files-found: error
           retention-days: 7
 
