@@ -100,6 +100,11 @@ pub fn compute_cgu_hash(
     };
     context.func(func);
     context.direct_callee_signatures(func);
+    // ObjectModule declares the complete module surface before defining this
+    // function. Keep that declaration closure in the cache key: removing or
+    // changing a declaration must never reuse an object whose relocation or
+    // platform metadata was produced against the previous closure.
+    context.module_declaration_surface();
     hash.finish()
 }
 
@@ -163,6 +168,26 @@ struct HashContext<'a> {
 }
 
 impl HashContext<'_> {
+    fn module_declaration_surface(&mut self) {
+        self.hash.usize(self.program.funcs.len());
+        for func in &self.program.funcs {
+            self.symbol(func.symbol);
+            self.func_signature(func);
+        }
+
+        let mut externs: Vec<_> = self.program.extern_funcs.iter().collect();
+        externs.sort_by_key(|(symbol, _)| (symbol.file_id, symbol.local_id.0));
+        self.hash.usize(externs.len());
+        for (&symbol, (params, result)) in externs {
+            self.symbol(symbol);
+            self.hash.usize(params.len());
+            for param in params {
+                self.ar_type(param);
+            }
+            self.ar_type(result);
+        }
+    }
+
     fn symbol(&mut self, id: SymbolId) {
         if let Some(symbol) = self.symbols.try_get(id) {
             self.hash.tag(0);

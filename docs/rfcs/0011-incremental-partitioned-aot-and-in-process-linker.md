@@ -136,9 +136,9 @@ a8f5c3... target/debug/meu_app
 
 - Cutoff integral verifica a closure de inputs e o digest do executável; cache adulterado é miss e é reparado.
 - Em um miss seguro, fingerprints já capturados são transferidos para a nova sessão e o digest calculado pela publicação é reutilizado; compilador, runtime, stdlib e executável não são relidos apenas para duplicar hashes. Um conjunto integral de hits de CGU reutiliza o executável verificado sem relink.
-- O hash CGU não usa `Debug` nem spans e cobre AMIR exaustivamente, layouts concretos, literais, assinaturas de callees, target, otimização, Cranelift e compilador.
+- O hash CGU não usa `Debug` nem spans e cobre AMIR exaustivamente, layouts concretos, literais, assinaturas de callees, a closure de declarações fornecida ao `ObjectModule`, target, otimização, Cranelift e compilador. Alterar apenas um corpo preserva CGUs irmãs; adicionar, remover ou mudar uma declaração invalida os objetos produzidos contra a closure anterior.
 - O patch ELF valida digest, geometria de `.text`, ranges, tamanho exato e relocações antes do `mmap`; `msync` e `munmap` são verificados. `.rodata` e metadata hostil exercitam fallback em testes.
-- O teste ELF compara o executável incremental byte a byte com clean build para o mesmo source final.
+- O teste ELF compara o executável incremental byte a byte com clean build para o mesmo source final. Linkers cuja geometria ou metadata não satisfazem a prova exata exercitam o fallback explícito e determinístico em vez de transformar indisponibilidade da otimização em erro de compilação.
 - `cargo run --locked -p xtask -- bench-incremental --verify-determinism` mede as cinco mutações, registra timings por fase no schema 2 e falha se SHA-256 divergir entre diretórios e `RAYON_NUM_THREADS=1/16`. A metodologia vive em [`docs/benchmarks/`](../benchmarks/README.md).
 - A meta de latência sub-10 ms ainda não foi atingida; por isso esta RFC permanece `Draft` e os tempos não são gate em runners compartilhados.
 

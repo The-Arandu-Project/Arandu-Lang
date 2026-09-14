@@ -6,16 +6,21 @@
 //! so the caller can perform a deterministic full link.
 
 use std::collections::BTreeMap;
-use std::fs::{self, File, OpenOptions};
+use std::fs;
+#[cfg(target_os = "linux")]
+use std::fs::{File, OpenOptions};
+#[cfg(target_os = "linux")]
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use arandu_backend_cranelift::CodegenUnit;
 use arandu_backend_cranelift::object::{
-    self, File as ObjectFile, Object, ObjectSection, ObjectSymbol, RelocationKind,
-    RelocationTarget, SymbolKind,
+    self, File as ObjectFile, Object, ObjectSection, ObjectSymbol, SymbolKind,
 };
+#[cfg(target_os = "linux")]
+use arandu_backend_cranelift::object::{RelocationKind, RelocationTarget};
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "linux")]
 use tracing::trace;
 
 use crate::artifact;
@@ -232,17 +237,18 @@ pub fn record_elf_layout(
 pub fn try_patch_elf_in_place(
     executable_path: &Path,
     layout_file: &Path,
+    current_cgus: &[CodegenUnit],
     recompiled_cgus: &[(&CodegenUnit, &[u8])],
 ) -> Result<Option<String>, CliFailure> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (executable_path, layout_file, recompiled_cgus);
+        let _ = (executable_path, layout_file, current_cgus, recompiled_cgus);
         Ok(None)
     }
 
     #[cfg(target_os = "linux")]
     {
-        try_patch_linux(executable_path, layout_file, recompiled_cgus)
+        try_patch_linux(executable_path, layout_file, current_cgus, recompiled_cgus)
     }
 }
 
@@ -250,6 +256,7 @@ pub fn try_patch_elf_in_place(
 fn try_patch_linux(
     executable_path: &Path,
     layout_file: &Path,
+    current_cgus: &[CodegenUnit],
     recompiled_cgus: &[(&CodegenUnit, &[u8])],
 ) -> Result<Option<String>, CliFailure> {
     if recompiled_cgus.is_empty() || !layout_file.is_file() {
@@ -263,6 +270,20 @@ fn try_patch_linux(
         Ok(layout) if layout.schema_version == ELF_LAYOUT_SCHEMA => layout,
         _ => return Ok(None),
     };
+    let recompiled_names: std::collections::BTreeSet<_> = recompiled_cgus
+        .iter()
+        .map(|(unit, _)| unit.name.as_str())
+        .collect();
+    if layout.cgu_hashes.len() != current_cgus.len()
+        || !current_cgus.iter().all(|unit| {
+            layout.cgu_hashes.get(&unit.name).is_some_and(|old_hash| {
+                recompiled_names.contains(unit.name.as_str()) || old_hash == &unit.hash
+            })
+        })
+    {
+        trace!("[in-process-elf] linked CGU closure changed");
+        return Ok(None);
+    }
 
     let mut file = match OpenOptions::new()
         .read(true)

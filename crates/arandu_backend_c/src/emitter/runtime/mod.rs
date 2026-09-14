@@ -28,6 +28,10 @@ impl<'a> CEmitter<'a> {
             &mut self.output,
             "#if defined(_WIN32)\n#include <malloc.h>\n#include <windows.h>\n#endif\n#if !defined(_WIN32) || defined(__MINGW32__)\n#include <pthread.h>\n#include <unistd.h>\n#endif"
         );
+        let _ = writeln!(
+            &mut self.output,
+            "#if defined(__APPLE__)\n#include <sys/sysctl.h>\n#endif"
+        );
         let _ = writeln!(&mut self.output, "#include <sys/types.h>");
         let _ = writeln!(&mut self.output, "#include <sys/stat.h>");
         let _ = writeln!(

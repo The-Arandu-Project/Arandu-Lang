@@ -335,6 +335,8 @@ fn build_system_linker_command(
     output: &Path,
     patchable_elf: bool,
 ) -> Command {
+    #[cfg(not(target_os = "linux"))]
+    let _ = patchable_elf;
     let mut command = Command::new(linker);
     let work_dir = objects.first().and_then(|obj| obj.parent());
     let object_args: Vec<PathBuf> = objects
@@ -475,6 +477,7 @@ fn detect_fast_linker() -> Option<FastLinker> {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn is_executable_in_path(name: &str) -> bool {
     let Some(path) = std::env::var_os("PATH") else {
         return false;
@@ -661,7 +664,7 @@ fn link_failure(output: &Path, message: String) -> CliFailure {
     CliFailure::operational("link native artifact", Some(output.to_path_buf()), message)
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
 

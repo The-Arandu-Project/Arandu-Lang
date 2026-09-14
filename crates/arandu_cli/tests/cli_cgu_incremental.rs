@@ -268,7 +268,7 @@ fn removing_a_cached_cgu_forces_relink_instead_of_reusing_stale_executable() {
         String::from_utf8_lossy(&rebuilt.stderr)
     );
     assert!(
-        String::from_utf8_lossy(&rebuilt.stderr).contains("[cgu] 1 units: 1 cached, 0 recompiled")
+        String::from_utf8_lossy(&rebuilt.stderr).contains("[cgu] 1 units: 0 cached, 1 recompiled")
     );
     assert!(String::from_utf8_lossy(&rebuilt.stdout).contains("backend=cranelift-dev"));
 

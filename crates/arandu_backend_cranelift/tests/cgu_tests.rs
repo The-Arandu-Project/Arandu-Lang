@@ -71,6 +71,7 @@ func helper(): int {
 func calculate(): int {
     return helper() + 1;
 }
+
 "#;
     let (amir_v1, syms_v1, ti_v1) = compile_amir(src_v1);
     let target = Triple::host();
@@ -117,6 +118,39 @@ func calculate(): int {
     assert_ne!(
         calc_v1.hash, calc_v2.hash,
         "modified function must have different CGU hash"
+    );
+}
+
+#[test]
+fn removing_a_module_declaration_invalidates_remaining_cgus() {
+    let with_unused = "func main(): int { return 1; }\nfunc unused(): int { return 9; }\n";
+    let without_unused = "func main(): int { return 1; }\n";
+    let (first_program, first_symbols, first_types) = compile_amir(with_unused);
+    let (second_program, second_symbols, second_types) = compile_amir(without_unused);
+    let target = Triple::host();
+
+    let first = partition_program(
+        &first_program,
+        &first_symbols,
+        &first_types,
+        &target,
+        AotOptimization::Baseline,
+        TEST_TOOLCHAIN,
+    );
+    let second = partition_program(
+        &second_program,
+        &second_symbols,
+        &second_types,
+        &target,
+        AotOptimization::Baseline,
+        TEST_TOOLCHAIN,
+    );
+    let first_main = first.iter().find(|unit| unit.name == "main").unwrap();
+    let second_main = second.iter().find(|unit| unit.name == "main").unwrap();
+
+    assert_ne!(
+        first_main.hash, second_main.hash,
+        "the object cache key must include the declaration closure used by ObjectModule"
     );
 }
 

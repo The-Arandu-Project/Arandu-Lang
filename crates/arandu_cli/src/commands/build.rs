@@ -241,6 +241,7 @@ pub fn cmd_project_build(
                     match crate::linker_elf::try_patch_elf_in_place(
                         &staging_path,
                         &elf_layout_file,
+                        &result.units,
                         &recompiled_refs,
                     ) {
                         Ok(Some(new_digest)) => {
