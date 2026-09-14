@@ -3,7 +3,7 @@ use arandu_semantics::ops::BinaryOp;
 use cranelift_codegen::ir::{InstBuilder, Value};
 
 use super::FunctionTranslator;
-use crate::types::ar_type_is_unsigned_integer;
+use crate::types::ar_type_is_unsigned_comparison;
 
 impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
     pub(super) fn operand_is_unsigned_integer(&self, operand: &AmirOperand) -> Option<bool> {
@@ -14,7 +14,7 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
         self.current_func
             .temps
             .get(temp_id.as_usize())
-            .map(|temp| ar_type_is_unsigned_integer(&self.resolve_ty(temp.ty)))
+            .map(|temp| ar_type_is_unsigned_comparison(&self.resolve_ty(temp.ty)))
     }
 
     pub(super) fn operands_are_unsigned(

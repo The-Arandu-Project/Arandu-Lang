@@ -255,6 +255,18 @@ pub(crate) fn create_jit_builder() -> Result<JITBuilder, Diagnostic> {
         crate::vec_runtime::ar_vec_realloc as *const u8,
     );
     builder.symbol(
+        "ar_rt_copy_value",
+        crate::vec_runtime::ar_rt_copy_value as *const u8,
+    );
+    builder.symbol(
+        "ar_rt_alloc_aligned",
+        crate::vec_runtime::ar_rt_alloc_aligned as *const u8,
+    );
+    builder.symbol(
+        "ar_rt_free_aligned",
+        crate::vec_runtime::ar_rt_free_aligned as *const u8,
+    );
+    builder.symbol(
         "ar_path_join_owned",
         crate::rt_runtime::ar_path_join_owned as *const u8,
     );

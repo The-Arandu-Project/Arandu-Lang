@@ -64,6 +64,8 @@ pub enum AmirRvalue {
         payload: Option<AmirOperand>,
     },
     Len(AmirOperand),
+    /// Extract the raw data pointer from a slice fat pointer.
+    SliceData(AmirOperand),
 
     /// Construct a safe `[]T` view from an owner borrow plus raw storage.
     /// `owner` is compile-time provenance; backends erase it and emit ptr+len.

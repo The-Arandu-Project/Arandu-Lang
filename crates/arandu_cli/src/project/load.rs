@@ -56,6 +56,8 @@ pub struct ProjectContext {
     pub entry_rel: String,
     /// Canonical root target kind used in stable tooling identities.
     pub target_kind: TargetKind,
+    /// Deterministic filesystem closure consumed by native compilation.
+    pub build_inputs: Vec<crate::incremental::IncrementalInput>,
 }
 
 /// Shared flags for project / doctor commands.
@@ -69,6 +71,7 @@ pub struct ProjectFlags {
     pub offline: bool,
     /// Explicit authority to publish a changed graph containing remote code.
     pub accept_lock: bool,
+    pub color: crate::args::ColorChoice,
 }
 
 /// Parse `--stdlib-path=…` / `--stdlib-path …` / `--release` / `-v` from leftover args.
@@ -112,6 +115,34 @@ pub fn parse_project_flags(args: &[String]) -> Result<(ProjectFlags, Vec<String>
             flags.offline = true;
         } else if a == "--accept" {
             flags.accept_lock = true;
+        } else if a == "--no-color" {
+            flags.color = crate::args::ColorChoice::Never;
+        } else if a == "--color=always" {
+            flags.color = crate::args::ColorChoice::Always;
+        } else if a == "--color=never" {
+            flags.color = crate::args::ColorChoice::Never;
+        } else if a == "--color=auto" {
+            flags.color = crate::args::ColorChoice::Auto;
+        } else if a == "--color" {
+            i += 1;
+            if i < args.len() {
+                match args[i].as_str() {
+                    "always" => flags.color = crate::args::ColorChoice::Always,
+                    "never" => flags.color = crate::args::ColorChoice::Never,
+                    "auto" => flags.color = crate::args::ColorChoice::Auto,
+                    other => {
+                        return Err(format!(
+                            "unknown --color option: '{other}' (use auto|always|never)"
+                        ));
+                    }
+                }
+            } else {
+                return Err("--color requires an argument (use auto|always|never)".into());
+            }
+        } else if let Some(v) = a.strip_prefix("--color=") {
+            return Err(format!(
+                "unknown --color option: '{v}' (use auto|always|never)"
+            ));
         } else {
             rest.push(a.clone());
         }
@@ -203,6 +234,7 @@ pub fn load_project(
     .map_err(|e| e.to_string())?;
     db.set_stdlib_root(stdlib.path.clone());
     crate::pipeline::register_stdlib_sources(db, &stdlib.path);
+    let build_inputs = collect_build_inputs(&package_graph, &stdlib.path);
 
     // Package source root = directory containing the entry file (usually `src/`).
     let package_src = entry_path
@@ -260,7 +292,55 @@ pub fn load_project(
         version,
         entry_rel,
         target_kind,
+        build_inputs,
     })
+}
+
+fn collect_build_inputs(
+    graph: &LocalPackageGraph,
+    stdlib_root: &Path,
+) -> Vec<crate::incremental::IncrementalInput> {
+    let mut inputs = std::collections::BTreeMap::new();
+    for package in &graph.packages {
+        let manifest = [MANIFEST_FILENAME, arandu_query::LEGACY_MANIFEST_FILENAME]
+            .into_iter()
+            .map(|name| package.root.join(name))
+            .find(|path| path.is_file());
+        if let Some(path) = manifest {
+            let key = format!("package/{}/manifest", package.source);
+            inputs.insert(
+                key.clone(),
+                crate::incremental::IncrementalInput {
+                    key,
+                    path,
+                    semantic_source: false,
+                },
+            );
+        }
+        for relative in scan_aru_entries(&package.root) {
+            let key = format!("package/{}/source/{relative}", package.source);
+            inputs.insert(
+                key.clone(),
+                crate::incremental::IncrementalInput {
+                    key,
+                    path: package.root.join(relative),
+                    semantic_source: true,
+                },
+            );
+        }
+    }
+    for relative in scan_aru_entries(stdlib_root) {
+        let key = format!("stdlib/{relative}");
+        inputs.insert(
+            key.clone(),
+            crate::incremental::IncrementalInput {
+                key,
+                path: stdlib_root.join(relative),
+                semantic_source: true,
+            },
+        );
+    }
+    inputs.into_values().collect()
 }
 
 /// Backend selection convention (roadmap 4.1 dual backend).

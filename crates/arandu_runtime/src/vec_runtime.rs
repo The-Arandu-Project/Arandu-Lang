@@ -168,6 +168,9 @@ pub unsafe extern "C" fn ar_vec_destroy(id: i64) {
 
 // ── Raw buffer helpers for pure-Arandu Vec growth (L6.1) ─────────────────
 
+/// Default 8-byte alignment required by JIT raw buffers and vectors.
+const VEC_BUFFER_ALIGN: usize = 8;
+
 /// Allocate `size` bytes (8-aligned). Null on OOM / invalid size.
 ///
 /// # Safety
@@ -177,11 +180,55 @@ pub unsafe extern "C" fn ar_vec_malloc(size: usize) -> *mut u8 {
     if size == 0 {
         return std::ptr::null_mut();
     }
-    let layout = match std::alloc::Layout::from_size_align(size, 8) {
+    let layout = match std::alloc::Layout::from_size_align(size, VEC_BUFFER_ALIGN) {
         Ok(l) => l,
         Err(_) => return std::ptr::null_mut(),
     };
     unsafe { std::alloc::alloc(layout) }
+}
+
+/// Copy one compiler-proven `Copy` value into initialized chunk storage.
+///
+/// # Safety
+/// Both pointers must be valid for `size` bytes, properly aligned for their
+/// concrete type, and non-overlapping.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ar_rt_copy_value(dest: *mut u8, source: *const u8, size: usize) {
+    if size != 0 && !dest.is_null() && !source.is_null() {
+        // SAFETY: guaranteed by the ABI contract above.
+        unsafe { std::ptr::copy_nonoverlapping(source, dest, size) };
+    }
+}
+
+/// Allocate a raw buffer with the target-provided size and alignment.
+/// Returns null for invalid layouts or allocation failure.
+///
+/// # Safety
+/// The returned pointer must be released exactly once with
+/// [`ar_rt_free_aligned`] using the same `size` and `align`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ar_rt_alloc_aligned(size: usize, align: usize) -> *mut u8 {
+    let layout = match std::alloc::Layout::from_size_align(size, align) {
+        Ok(layout) if size != 0 => layout,
+        _ => return std::ptr::null_mut(),
+    };
+    // SAFETY: layout was validated above.
+    unsafe { std::alloc::alloc(layout) }
+}
+
+/// Release a buffer returned by [`ar_rt_alloc_aligned`].
+///
+/// # Safety
+/// `pointer`, `size`, and `align` must describe the same successful allocation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ar_rt_free_aligned(pointer: *mut u8, size: usize, align: usize) {
+    if pointer.is_null() || size == 0 {
+        return;
+    }
+    if let Ok(layout) = std::alloc::Layout::from_size_align(size, align) {
+        // SAFETY: guaranteed by the ABI contract above.
+        unsafe { std::alloc::dealloc(pointer, layout) };
+    }
 }
 
 /// Free buffer from [`ar_vec_malloc`].
@@ -193,7 +240,7 @@ pub unsafe extern "C" fn ar_vec_buf_free(p: *mut u8, size: usize) {
     if p.is_null() || size == 0 {
         return;
     }
-    let layout = match std::alloc::Layout::from_size_align(size, 8) {
+    let layout = match std::alloc::Layout::from_size_align(size, VEC_BUFFER_ALIGN) {
         Ok(l) => l,
         Err(_) => return,
     };
@@ -333,6 +380,32 @@ mod tests {
             assert_eq!((string.data, string.len, string.capacity), before);
 
             ar_vec_buf_free(string.data, string.capacity);
+        }
+    }
+
+    #[test]
+    fn aligned_buffer_honors_layout_and_supports_copy_values() {
+        unsafe {
+            let source = [0xA5_u8; 96];
+            let buffer = ar_rt_alloc_aligned(source.len(), 64);
+            assert!(!buffer.is_null());
+            assert_eq!((buffer as usize) % 64, 0);
+
+            ar_rt_copy_value(buffer, source.as_ptr(), source.len());
+            assert_eq!(
+                std::slice::from_raw_parts(buffer, source.len()),
+                source.as_slice()
+            );
+            ar_rt_free_aligned(buffer, source.len(), 64);
+        }
+    }
+
+    #[test]
+    fn aligned_buffer_rejects_zero_and_invalid_alignment() {
+        unsafe {
+            assert!(ar_rt_alloc_aligned(0, 8).is_null());
+            assert!(ar_rt_alloc_aligned(8, 0).is_null());
+            assert!(ar_rt_alloc_aligned(8, 3).is_null());
         }
     }
 }

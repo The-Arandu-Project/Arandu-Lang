@@ -12,17 +12,22 @@ fn workspace_root() -> std::path::PathBuf {
 }
 
 fn invoke(mode: &str, source: &str) -> Output {
+    invoke_with_args(mode, source, &[])
+}
+
+fn invoke_with_args(mode: &str, source: &str, extra_args: &[&str]) -> Output {
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!(
         "arandu-borrowed-view-{}-{id}.aru",
         std::process::id()
     ));
     fs::write(&path, source).expect("write borrowed-view fixture");
-    let output = Command::new(env!("CARGO_BIN_EXE_arandu_cli"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_arandu_cli"));
+    command
         .current_dir(workspace_root())
         .args([mode, path.to_str().expect("UTF-8 temp path")])
-        .output()
-        .expect("run Arandu check");
+        .args(extra_args);
+    let output = command.output().expect("run Arandu check");
     let _ = fs::remove_file(path);
     output
 }
@@ -86,6 +91,24 @@ fn jit_executes_borrowed_element_and_subslice() {
         "JIT borrowed element/subslice failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn jit_indexes_a_slice_stored_in_a_struct_field() {
+    for optimized in [false, true] {
+        let extra_args = if optimized { &["--opt"][..] } else { &[] };
+        let output = invoke_with_args(
+            "run",
+            include_str!("fixtures/struct_slice_field.aru"),
+            extra_args,
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(7),
+            "optimized={optimized}: JIT struct slice indexing failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[test]

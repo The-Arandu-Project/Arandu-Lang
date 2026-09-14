@@ -176,3 +176,87 @@ async func run(): int {
         .expect("T039UnsatisfiedEffect for await in Pure function");
     assert!(unsatisfied.message.contains("Suspend"));
 }
+
+#[test]
+fn noalloc_function_allocating_heap_fails_with_t039() {
+    let mut db = DatabaseImpl::new();
+    let file = db.new_file(
+        "effects_noalloc.aru".into(),
+        r#"
+@Effects(NoAlloc)
+func allocate(): int {
+    unsafe {
+        let p = alloc(64)
+        free(p)
+    }
+    return 0
+}
+"#
+        .into(),
+    );
+
+    let checked = type_check(&db, file);
+    let unsatisfied = checked
+        .diagnostics
+        .iter()
+        .find(|d| d.code == DiagCode::T039UnsatisfiedEffect)
+        .expect("T039UnsatisfiedEffect for heap allocation in NoAlloc function");
+    assert!(unsatisfied.message.contains("Heap"));
+    assert!(!unsatisfied.labels.is_empty());
+    assert!(!unsatisfied.hints.is_empty());
+}
+
+#[test]
+fn nosuspend_function_awaiting_fails_with_t039() {
+    let mut db = DatabaseImpl::new();
+    let file = db.new_file(
+        "effects_nosuspend.aru".into(),
+        r#"
+async func compute(): int {
+    return 42
+}
+
+@Effects(NoSuspend)
+async func execute(): int {
+    let v = await compute()
+    return v
+}
+"#
+        .into(),
+    );
+
+    let checked = type_check(&db, file);
+    let unsatisfied = checked
+        .diagnostics
+        .iter()
+        .find(|d| d.code == DiagCode::T039UnsatisfiedEffect)
+        .expect("T039UnsatisfiedEffect for await in NoSuspend function");
+    assert!(unsatisfied.message.contains("Suspend"));
+}
+
+#[test]
+fn pure_function_allocating_heap_fails_with_t039() {
+    let mut db = DatabaseImpl::new();
+    let file = db.new_file(
+        "effects_pure_heap.aru".into(),
+        r#"
+@Effects(Pure)
+func make_heap(): int {
+    unsafe {
+        let p = alloc(64)
+        free(p)
+    }
+    return 1
+}
+"#
+        .into(),
+    );
+
+    let checked = type_check(&db, file);
+    let unsatisfied = checked
+        .diagnostics
+        .iter()
+        .find(|d| d.code == DiagCode::T039UnsatisfiedEffect)
+        .expect("T039 for heap allocation in Pure function");
+    assert!(unsatisfied.message.contains("Heap"));
+}

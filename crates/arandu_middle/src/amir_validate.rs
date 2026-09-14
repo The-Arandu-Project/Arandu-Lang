@@ -411,6 +411,7 @@ fn validate_borrowed_gen_result(
         let safe_projection = match rhs {
             AmirRvalue::FieldAccess { base, .. }
             | AmirRvalue::Len(base)
+            | AmirRvalue::SliceData(base)
             | AmirRvalue::Discriminant { value: base }
             | AmirRvalue::EnumPayload { value: base, .. } => references(base),
             AmirRvalue::IndexAccess { base, index } => references(base) && !references(index),

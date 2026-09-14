@@ -1,6 +1,6 @@
 [package]
 name = "xtask"
-version = "0.1.0-rc.5"
+version = "0.1.0-rc.6"
 edition = "2021"
 publish = false
 license.workspace = true
@@ -18,3 +18,4 @@ arandu_query = { path = "../crates/arandu_query" }
 arandu_fuzz_support = { path = "../crates/arandu_fuzz_support" }
 salsa = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }

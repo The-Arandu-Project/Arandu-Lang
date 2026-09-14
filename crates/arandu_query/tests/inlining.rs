@@ -8,7 +8,7 @@ use arandu_query::passes::{lower_amir, type_check};
 
 const SOURCE: &str = r#"
 func isHorizontalWhitespace(c: int): bool {
-    return c == 32 || c == 9
+    return c == 32 || c == 9 || c == 13
 }
 
 func test_call(c: int): bool {
@@ -17,6 +17,33 @@ func test_call(c: int): bool {
 
 func test_const(): bool {
     return isHorizontalWhitespace(32)
+}
+
+struct Stats {
+    code: int
+    comment: int
+    blank: int
+}
+
+func finishLine(
+    stats: mut ref Stats,
+    hasNonWhitespace: bool,
+    hasCode: bool,
+    hasComment: bool,
+): void {
+    if !hasNonWhitespace {
+        stats.blank = stats.blank + 1
+    } else if hasCode {
+        stats.code = stats.code + 1
+    } else if hasComment {
+        stats.comment = stats.comment + 1
+    } else {
+        stats.code = stats.code + 1
+    }
+}
+
+func test_finish(stats: mut ref Stats): void {
+    finishLine(stats, true, false, true)
 }
 "#;
 
@@ -73,6 +100,27 @@ fn leaf_function_is_inlined_at_o1() {
     assert!(
         !has_call_o1,
         "At O1, leaf function isHorizontalWhitespace must be inlined into test_call"
+    );
+
+    let test_finish_o1 = amir_o1
+        .funcs
+        .iter()
+        .find(|f| symbols.get(f.symbol).name == "test_finish")
+        .expect("test_finish not found");
+    let finish_line_o0 = artifacts
+        .amir
+        .funcs
+        .iter()
+        .find(|f| symbols.get(f.symbol).name == "finishLine")
+        .expect("finishLine not found");
+    assert!(
+        !test_finish_o1
+            .stmts
+            .payloads
+            .iter()
+            .any(|stmt| matches!(stmt, AmirStmt::Call { .. })),
+        "At O1, a bounded branch-only leaf must be inlined into test_finish (callee blocks: {})",
+        finish_line_o0.blocks.len()
     );
 
     // In test_const, inlining + SCCP should fold the result to constant true

@@ -8,7 +8,8 @@ public func phantom<T>(): PhantomData<T> {
     return PhantomData<T> {}
 }
 
-/// Marker interface for types whose memory can be safely duplicated via byte copy.
+/// Compiler-checked marker for scalar storage and aggregates whose bytes can be
+/// duplicated without aliasing ownership or requiring destruction.
 public interface Copy {}
 
 /// Compiler-checked transfer bound for owned scalar storage and aggregates.

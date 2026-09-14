@@ -422,6 +422,7 @@ fn missing_methods_note(
             Some(
                 arandu_middle::symbol_table::LangItem::Send
                     | arandu_middle::symbol_table::LangItem::Sync
+                    | arandu_middle::symbol_table::LangItem::Copy
             )
         )
     }) {
@@ -468,7 +469,8 @@ pub(crate) fn type_satisfies_interface(
     };
     if let Some(
         capability @ (arandu_middle::symbol_table::LangItem::Send
-        | arandu_middle::symbol_table::LangItem::Sync),
+        | arandu_middle::symbol_table::LangItem::Sync
+        | arandu_middle::symbol_table::LangItem::Copy),
     ) = checker
         .symbols
         .try_get(iface_sym)

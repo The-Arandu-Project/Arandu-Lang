@@ -3,10 +3,14 @@
 use crate::amir::{AmirFunc, AmirStmt, AmirTerminator, BlockId};
 
 /// Default maximum statement/operation budget for inlining a leaf function.
-pub const INLINE_LEAF_BUDGET: usize = 25;
+pub const INLINE_LEAF_BUDGET: usize = 32;
 
 /// Maximum number of basic blocks allowed in an inlinable leaf function.
-pub const MAX_LEAF_BLOCKS: usize = 6;
+/// Short-circuit predicates and small branch-only classification helpers can
+/// lower to several blocks even though their instruction cost remains small.
+/// The independent instruction budget still prevents code-size growth from
+/// complex leaves.
+pub const MAX_LEAF_BLOCKS: usize = 12;
 
 /// Evaluates whether `func` is a leaf function eligible for inlining into callers,
 /// and returns its estimated cost if eligible.

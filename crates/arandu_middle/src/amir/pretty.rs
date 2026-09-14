@@ -166,7 +166,7 @@ impl AmirPlace {
 }
 
 impl AmirStmt {
-    fn pretty_print_to(&self, out: &mut String, symbols: &SymbolTable, pool: &AmirLiteralPool) {
+    pub fn pretty_print_to(&self, out: &mut String, symbols: &SymbolTable, pool: &AmirLiteralPool) {
         match self {
             AmirStmt::Assign { lhs, rhs } => {
                 out.push_str(&format!("_{} = ", lhs.0));
@@ -306,6 +306,12 @@ impl AmirRvalue {
             }
             AmirRvalue::Len(value) => {
                 out.push_str(&format!("len({})", value.to_pretty_string(symbols, pool)));
+            }
+            AmirRvalue::SliceData(value) => {
+                out.push_str(&format!(
+                    "slice_data({})",
+                    value.to_pretty_string(symbols, pool)
+                ));
             }
             AmirRvalue::SliceView { owner, data, len } => {
                 out.push_str(&format!(
@@ -499,7 +505,7 @@ fn format_args(args: &[AmirOperand], symbols: &SymbolTable, pool: &AmirLiteralPo
 }
 
 impl AmirTerminator {
-    fn pretty_print_to(&self, out: &mut String, symbols: &SymbolTable, pool: &AmirLiteralPool) {
+    pub fn pretty_print_to(&self, out: &mut String, symbols: &SymbolTable, pool: &AmirLiteralPool) {
         match self {
             AmirTerminator::Return => {
                 out.push_str("return");

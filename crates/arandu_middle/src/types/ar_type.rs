@@ -157,6 +157,29 @@ impl ArType {
         matches!(self, ArType::IntLiteral | ArType::FloatLiteral)
     }
 
+    /// Returns true if this type is signed (signed integers, floats, or unresolved numeric literals).
+    #[must_use]
+    pub fn is_signed(&self) -> bool {
+        match self {
+            ArType::Primitive(p) => p.is_signed(),
+            ArType::IntLiteral | ArType::FloatLiteral => true,
+            _ => false,
+        }
+    }
+
+    /// Returns true if this type has an intrinsic order (<, <=, >, >=).
+    ///
+    /// Specifically: numeric primitives (int, uint, float), unresolved numeric literals, and `char`.
+    /// Does NOT include `bool`, `str`, `struct`, `tuple`, `ptr`, etc.
+    #[must_use]
+    pub fn is_orderable(&self) -> bool {
+        match self {
+            ArType::Primitive(p) => p.is_numeric() || matches!(p, Primitive::Char),
+            ArType::IntLiteral | ArType::FloatLiteral => true,
+            _ => false,
+        }
+    }
+
     /// Whether this type can be auto-formatted to `str` in ToStr v0.1
     /// (string interpolation and call arguments whose formal type is `str`).
     ///

@@ -20,6 +20,9 @@ outputs:
   editor:
     description: VS Code and LSP client contracts need validation.
     value: ${{ steps.classify.outputs.editor }}
+  host_sensitive:
+    description: Host-dependent paths (runtime, CLI, LSP, packaging, filesystem, stdlib) need validation.
+    value: ${{ steps.classify.outputs.host_sensitive }}
 
 runs:
   using: composite
@@ -35,11 +38,13 @@ runs:
         code=false
         distribution=false
         editor=false
+        host_sensitive=false
 
         if [[ "$EVENT_NAME" != "pull_request" ]]; then
           code=true
           distribution=true
           editor=true
+          host_sensitive=true
         else
           mapfile -t files < <(
             git diff --name-only --diff-filter=ACMRD "$BASE_SHA" "$GITHUB_SHA"
@@ -61,6 +66,11 @@ runs:
                 distribution=true
                 ;;
             esac
+            case "$file" in
+              Cargo.toml|Cargo.lock|rust-toolchain.toml|crates/arandu_cli/*|crates/arandu_lsp/*|crates/arandu_runtime/*|crates/arandu_backend_c/*|crates/arandu_backend_cranelift/*|stdlib/*|scripts/*|xtask/*|.github/*)
+                host_sensitive=true
+                ;;
+            esac
           done
         fi
 
@@ -68,5 +78,6 @@ runs:
           echo "code=$code"
           echo "distribution=$distribution"
           echo "editor=$editor"
+          echo "host_sensitive=$host_sensitive"
         } | tee -a "$GITHUB_OUTPUT" >>"$GITHUB_STEP_SUMMARY"
 

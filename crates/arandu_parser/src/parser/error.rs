@@ -78,6 +78,7 @@ impl From<ParseError> for arandu_diagnostics::Diagnostic {
     fn from(err: ParseError) -> Self {
         let diag_code = match err.code {
             ParseErrorCode::Lex => match &*err.found {
+                "BidiTrojanSource" => arandu_diagnostics::DiagCode::LX004BidiTrojanSource,
                 "InvalidChar" => arandu_diagnostics::DiagCode::LX002InvalidUnicodeChar,
                 "UnterminatedString"
                 | "UnterminatedMultilineString"

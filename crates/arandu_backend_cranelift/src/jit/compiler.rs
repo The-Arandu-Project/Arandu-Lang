@@ -2,7 +2,7 @@
 
 use arandu_semantics::amir::AmirProgram;
 use arandu_semantics::passes::type_checker::types::{ArType, Primitive};
-use arandu_semantics::{Diagnostic, SymbolKind, SymbolTable};
+use arandu_semantics::{Diagnostic, SymbolId, SymbolKind, SymbolTable};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_jit::JITModule;
 use cranelift_module::{FuncId, Linkage, Module};
@@ -73,6 +73,21 @@ impl<M: Module> AranduModule<M> {
         symbols: &SymbolTable,
         type_info: &arandu_semantics::TypeInfo,
     ) -> Result<FxHashMap<String, FuncId>, Diagnostic> {
+        self.compile_filtered_module(program, symbols, type_info, None)
+    }
+
+    #[tracing::instrument(
+        level = "trace",
+        target = "arandu_backend_cranelift",
+        skip(self, program, symbols, type_info)
+    )]
+    pub(crate) fn compile_filtered_module(
+        &mut self,
+        program: &AmirProgram,
+        symbols: &SymbolTable,
+        type_info: &arandu_semantics::TypeInfo,
+        unit_func_symbols: Option<&[SymbolId]>,
+    ) -> Result<FxHashMap<String, FuncId>, Diagnostic> {
         if let Some(issue) =
             arandu_semantics::validate_amir_program(program, symbols, &type_info.type_interner)
                 .into_iter()
@@ -80,6 +95,7 @@ impl<M: Module> AranduModule<M> {
         {
             return Err(issue);
         }
+        let is_unit_func = |sym: SymbolId| unit_func_symbols.is_none_or(|set| set.contains(&sym));
         let mut func_ids = FxHashMap::default();
         let default_call_conv = self.module.isa().default_call_conv();
         let ptr_type = self.module.target_config().pointer_type();
@@ -98,9 +114,15 @@ impl<M: Module> AranduModule<M> {
             let ret_ty = type_info.type_interner.resolve(func.return_type);
             let sig = build_signature(&param_types, &ret_ty, default_call_conv, ptr_type);
 
+            let linkage = if is_unit_func(func.symbol) {
+                Linkage::Export
+            } else {
+                Linkage::Import
+            };
+
             let func_id = self
                 .module
-                .declare_function(host_name, Linkage::Export, &sig)
+                .declare_function(host_name, linkage, &sig)
                 .map_err(|err| {
                     codegen_ice(format!(
                         "failed to declare function '{}': {err:?}",
@@ -127,6 +149,9 @@ impl<M: Module> AranduModule<M> {
         // deallocating the runtime-owned payload storage.
         let mut drop_shims = std::collections::BTreeMap::new();
         for func in &program.funcs {
+            if !is_unit_func(func.symbol) {
+                continue;
+            }
             for stmt in func.stmts.payloads.iter() {
                 let arandu_semantics::amir::AmirStmt::Assign { rhs, .. } = stmt else {
                     continue;
@@ -230,6 +255,9 @@ impl<M: Module> AranduModule<M> {
         let mut context = self.module.make_context();
 
         for func in &program.funcs {
+            if !is_unit_func(func.symbol) {
+                continue;
+            }
             let mut builder_context = FunctionBuilderContext::new();
             let sym = symbols.get(func.symbol);
             let host_name = symbols.host_func_name(sym);

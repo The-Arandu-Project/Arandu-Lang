@@ -11,6 +11,7 @@
 
 pub mod abi;
 pub mod aot;
+pub mod cgu;
 pub mod jit;
 pub mod translator;
 pub mod types;
@@ -25,7 +26,10 @@ pub use arandu_runtime::{
 pub use crate::aot::{
     AotOptimization, CraneliftObjectBackend, ObjectArtifact, aot_triple_for_pointer_width,
 };
+pub use crate::cgu::{CodegenUnit, compile_cgu, compute_cgu_hash, partition_program};
 pub use crate::jit::CompiledModule;
+pub use cranelift_object::object;
+pub use target_lexicon::{Architecture as TargetArchitecture, Triple};
 
 use crate::jit::AranduJit;
 use arandu_codegen::{CodegenBackend, CompiledCode};

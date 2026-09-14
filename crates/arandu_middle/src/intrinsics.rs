@@ -23,6 +23,8 @@ pub enum IntrinsicKind {
     SliceSubslice,
     /// Length of slice (`sliceLen`).
     SliceLen,
+    /// Extract data pointer of slice (`sliceData` / `slicePtr`).
+    SliceData,
     /// View string as byte slice / view (`strView`).
     StrView,
 }
@@ -33,8 +35,8 @@ impl IntrinsicKind {
     pub fn from_name(name: &str) -> Option<Self> {
         let bare = name.rsplit(['.', '$']).next().unwrap_or(name);
         match bare {
-            "ptrRead" | "ptr_read" => Some(Self::PtrRead),
-            "ptrWrite" | "ptr_write" => Some(Self::PtrWrite),
+            "ptrRead" | "ptr_read" | "refRead" | "ref_read" => Some(Self::PtrRead),
+            "ptrWrite" | "ptr_write" | "refWrite" | "ref_write" => Some(Self::PtrWrite),
             "ptrOffset" | "ptr_offset" => Some(Self::PtrOffset),
             "sizeOf" | "size_of" => Some(Self::SizeOf),
             "alignOf" | "align_of" => Some(Self::AlignOf),
@@ -45,6 +47,7 @@ impl IntrinsicKind {
             s if s.starts_with("sliceFromRaw") => Some(Self::SliceFromRaw),
             s if s.starts_with("sliceSubslice") => Some(Self::SliceSubslice),
             s if s.starts_with("sliceLen") => Some(Self::SliceLen),
+            s if s.starts_with("sliceData") || s.starts_with("slicePtr") => Some(Self::SliceData),
             s if s.starts_with("strView") => Some(Self::StrView),
             _ => None,
         }

@@ -56,6 +56,55 @@ fn scalar_aggregates_satisfy_transfer_bounds() {
 }
 
 #[test]
+fn copy_is_structural_and_rejects_owned_string_storage() {
+    let mut db = DatabaseImpl::default();
+    db.new_file(
+        "stdlib/core/marker.aru".into(),
+        include_str!("../../../stdlib/core/marker.aru").into(),
+    );
+    db.new_file(
+        "stdlib/alloc/string.aru".into(),
+        include_str!("../../../stdlib/alloc/string.aru").into(),
+    );
+    let accepted = db.new_file(
+        "copy_scalar.aru".into(),
+        r#"
+import std.core.marker as marker
+struct Pair { left: int right: bool }
+func require<T: marker.Copy>(value: T): void {}
+func inspect(value: Pair): void { require(value) }
+func main(): int { return 0 }
+"#
+        .into(),
+    );
+    assert!(!type_check(&db, accepted)
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == Severity::Error));
+
+    let rejected = db.new_file(
+        "copy_string.aru".into(),
+        r#"
+import std.core.marker as marker
+import std.alloc.string as strings
+func require<T: marker.Copy>(value: T): void {}
+func inspect(value: strings.String): void { require(value) }
+func main(): int { return 0 }
+"#
+        .into(),
+    );
+    let result = type_check(&db, rejected);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == DiagCode::T025InterfaceNotSatisfied),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn raw_pointer_aggregates_do_not_satisfy_transfer_bounds() {
     check_storage("ptr[u8]", false);
     check_storage("Option<ptr[u8]>", false);
@@ -260,5 +309,54 @@ func inspect(value: Resource): void { require(value) }
 func main(): int { return 0 }
 "#,
         true,
+    );
+}
+
+#[test]
+fn canonical_bound_identity_survives_a_transitive_module_signature() {
+    let mut db = DatabaseImpl::default();
+    db.new_file(
+        "stdlib/core/marker.aru".into(),
+        include_str!("../../../stdlib/core/marker.aru").into(),
+    );
+    db.new_file(
+        "bridge.aru".into(),
+        r#"
+import std.core.marker as marker
+public func requireSync<T: marker.Sync>(value: T): void {}
+"#
+        .into(),
+    );
+
+    let accepted = db.new_file(
+        "accepted.aru".into(),
+        r#"
+import bridge
+func main(): int { bridge.requireSync(42); return 0 }
+"#
+        .into(),
+    );
+    assert!(!type_check(&db, accepted)
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == Severity::Error));
+
+    let rejected = db.new_file(
+        "rejected.aru".into(),
+        r#"
+import bridge
+func inspect(pointer: ptr[u8]): void { bridge.requireSync(pointer) }
+func main(): int { return 0 }
+"#
+        .into(),
+    );
+    let result = type_check(&db, rejected);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == DiagCode::T025InterfaceNotSatisfied),
+        "{:?}",
+        result.diagnostics
     );
 }

@@ -408,6 +408,35 @@ pub(crate) fn declare_runtime_imports<M: Module>(
             .map_err(|err| codegen_ice(format!("failed to declare ar_vec_buf_free: {err:?}")))?;
         insert_sym(func_ids, "ar_vec_buf_free", id);
 
+        let mut copy_value_sig = Signature::new(default_call_conv);
+        copy_value_sig.params.push(AbiParam::new(ptr_type));
+        copy_value_sig.params.push(AbiParam::new(ptr_type));
+        copy_value_sig.params.push(AbiParam::new(ptr_type));
+        let id = module
+            .declare_function("ar_rt_copy_value", Linkage::Import, &copy_value_sig)
+            .map_err(|err| codegen_ice(format!("failed to declare ar_rt_copy_value: {err:?}")))?;
+        insert_sym(func_ids, "ar_rt_copy_value", id);
+
+        let mut aligned_alloc_sig = Signature::new(default_call_conv);
+        aligned_alloc_sig.params.push(AbiParam::new(ptr_type));
+        aligned_alloc_sig.params.push(AbiParam::new(ptr_type));
+        aligned_alloc_sig.returns.push(AbiParam::new(ptr_type));
+        let id = module
+            .declare_function("ar_rt_alloc_aligned", Linkage::Import, &aligned_alloc_sig)
+            .map_err(|err| {
+                codegen_ice(format!("failed to declare ar_rt_alloc_aligned: {err:?}"))
+            })?;
+        insert_sym(func_ids, "ar_rt_alloc_aligned", id);
+
+        let mut aligned_free_sig = Signature::new(default_call_conv);
+        aligned_free_sig.params.push(AbiParam::new(ptr_type));
+        aligned_free_sig.params.push(AbiParam::new(ptr_type));
+        aligned_free_sig.params.push(AbiParam::new(ptr_type));
+        let id = module
+            .declare_function("ar_rt_free_aligned", Linkage::Import, &aligned_free_sig)
+            .map_err(|err| codegen_ice(format!("failed to declare ar_rt_free_aligned: {err:?}")))?;
+        insert_sym(func_ids, "ar_rt_free_aligned", id);
+
         let mut realloc_sig = Signature::new(default_call_conv);
         realloc_sig.params.push(AbiParam::new(ptr_type));
         realloc_sig.params.push(AbiParam::new(ptr_type));

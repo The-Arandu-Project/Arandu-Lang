@@ -18,6 +18,22 @@ public func len<T>(s: []T): uint {
     }
 }
 
+/// Returns the raw pointer to the underlying buffer of the slice `[]T`.
+///
+/// # Examples
+/// ```arandu
+/// let arr = [10, 20, 30]
+/// let p = slice.asPtr<int>(arr)
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func asPtr<T>(s: []T): ptr[T] {
+    unsafe {
+        return intrinsics.sliceData<T>(s)
+    }
+}
+
 /// Returns `true` if the slice contains no elements (`len == 0`).
 ///
 /// # Examples
@@ -137,3 +153,31 @@ public func Iterator.next<T>(self: mut ref Iterator<T>): Option<ref T> {
     return item
 }
 
+/// Result of splitting a slice into two contiguous subviews.
+public struct Split<T> {
+    public left: []T
+    public right: []T
+}
+
+/// Splits the slice at `mid`.
+/// Returns `Option.Some(Split { left, right })` if `mid <= len(s)`, or `Option.None` if out of bounds.
+///
+/// # Examples
+/// ```arandu
+/// let s = [1, 2, 3, 4]
+/// let res = slice.splitAt<int>(s, 2)
+/// ```
+///
+/// # Complexity
+/// Time: O(1) | Space: O(1)
+public func splitAt<T>(s: []T, mid: uint): Option<Split<T>> {
+    let total = len<T>(s)
+    if mid > total {
+        return Option.None
+    }
+    unsafe {
+        let left = intrinsics.sliceSubslice<T>(s, 0, mid)
+        let right = intrinsics.sliceSubslice<T>(s, mid, total - mid)
+        return Option.Some(Split<T> { left: left, right: right })
+    }
+}

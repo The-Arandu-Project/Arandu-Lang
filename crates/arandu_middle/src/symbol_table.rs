@@ -1,154 +1,3 @@
-#[cfg(test)]
-mod tests {
-    use super::*;
-    const S: Span = Span::new(0, 0, 0);
-
-    #[test]
-    fn new_table_has_global_scope() {
-        let table = SymbolTable::new(0);
-        assert_eq!(table.global_scope(), ScopeId(0));
-    }
-
-    #[test]
-    fn define_and_get_symbol() {
-        let mut table = SymbolTable::new(0);
-        let id = table
-            .define(ScopeId(0), "foo", SymbolKind::Func, S)
-            .unwrap();
-        assert_eq!(id, SymbolId::new(0, 0));
-        assert_eq!(table.get(id).name, "foo");
-        assert_eq!(table.get(id).kind, SymbolKind::Func);
-    }
-
-    #[test]
-    fn define_duplicate_in_same_scope_fails() {
-        let mut table = SymbolTable::new(0);
-        table
-            .define(ScopeId(0), "dup", SymbolKind::Const, S)
-            .unwrap();
-        let result = table.define(ScopeId(0), "dup", SymbolKind::Const, S);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn lookup_any_walks_scope_chain() {
-        let mut table = SymbolTable::new(0);
-        let outer = ScopeId(0);
-        let inner = table.new_scope(outer);
-        table.define(outer, "a", SymbolKind::Const, S).unwrap();
-        assert!(table.lookup_any(inner, "a").is_some());
-    }
-
-    #[test]
-    fn lookup_any_not_found() {
-        let table = SymbolTable::new(0);
-        assert!(table.lookup_any(ScopeId(0), "nonexistent").is_none());
-    }
-
-    #[test]
-    fn lookup_value_skips_type_symbols() {
-        let mut table = SymbolTable::new(0);
-        table
-            .define(ScopeId(0), "MyType", SymbolKind::Struct, S)
-            .unwrap();
-        assert!(table.lookup_value(ScopeId(0), "MyType").is_none());
-        assert!(table.lookup_type(ScopeId(0), "MyType").is_some());
-    }
-
-    #[test]
-    fn new_scope_increases_scope_count() {
-        let mut table = SymbolTable::new(0);
-        assert_eq!(table.scopes.len(), 1);
-        let child = table.new_scope(ScopeId(0));
-        assert_eq!(child, ScopeId(1));
-        assert_eq!(table.scopes.len(), 2);
-    }
-
-    #[test]
-    fn module_members_basic() {
-        let mut table = SymbolTable::new(0);
-        let id = table.define_module_member("mod1", "foo", S).unwrap();
-        assert_eq!(table.lookup_module_member("mod1", "foo"), Some(id));
-        assert_eq!(table.lookup_module_member("mod1", "bar"), None);
-    }
-
-    #[test]
-    fn associated_members_basic() {
-        let mut table = SymbolTable::new(0);
-        let struct_id = table
-            .define(ScopeId(0), "MyStruct", SymbolKind::Struct, S)
-            .unwrap();
-        let id = table
-            .define_associated_member(struct_id, "method", S)
-            .unwrap();
-        assert_eq!(
-            table.lookup_associated_member(struct_id, "method"),
-            Some(id)
-        );
-    }
-
-    #[test]
-    fn value_candidates_filters_type() {
-        let mut table = SymbolTable::new(0);
-        table
-            .define(ScopeId(0), "fn1", SymbolKind::Func, S)
-            .unwrap();
-        table
-            .define(ScopeId(0), "St", SymbolKind::Struct, S)
-            .unwrap();
-        let vals = table.value_candidates(ScopeId(0));
-        assert_eq!(vals.len(), 1);
-        assert_eq!(vals[0].name, "fn1");
-    }
-
-    #[test]
-    fn type_candidates_filters_value() {
-        let mut table = SymbolTable::new(0);
-        table
-            .define(ScopeId(0), "fn1", SymbolKind::Func, S)
-            .unwrap();
-        table
-            .define(ScopeId(0), "St", SymbolKind::Struct, S)
-            .unwrap();
-        let types = table.type_candidates(ScopeId(0));
-        assert_eq!(types.len(), 1);
-        assert_eq!(types[0].name, "St");
-    }
-
-    #[test]
-    fn merge_from_basic() {
-        let mut table1 = SymbolTable::new(0);
-        let mut table2 = SymbolTable::new(0);
-        let _id = table2
-            .define(ScopeId(0), "other", SymbolKind::Const, S)
-            .unwrap();
-        let len_before = table1.symbols.len();
-        table1.merge_from(table2);
-        assert_eq!(table1.symbols.len(), len_before + 1);
-        assert!(table1.lookup_any(ScopeId(0), "other").is_some());
-    }
-
-    #[test]
-    fn iter_includes_all_symbols() {
-        let mut table = SymbolTable::new(0);
-        table.define(ScopeId(0), "a", SymbolKind::Func, S).unwrap();
-        table.define(ScopeId(0), "b", SymbolKind::Const, S).unwrap();
-        let names: Vec<&str> = table.iter().map(|s| s.name.as_str()).collect();
-        assert!(names.contains(&"a"));
-        assert!(names.contains(&"b"));
-    }
-
-    #[test]
-    fn kind_classification() {
-        assert!(SymbolKind::Func.is_value());
-        assert!(!SymbolKind::Func.is_type());
-        assert!(SymbolKind::Struct.is_type());
-        assert!(!SymbolKind::Struct.is_value());
-        assert!(SymbolKind::Local.is_value());
-        assert!(SymbolKind::TypeParam.is_type());
-    }
-}
-
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
@@ -246,6 +95,7 @@ pub enum LangItem {
     Coroutine,
     String,
     Vec,
+    Copy,
     Send,
     Sync,
     /// Cooperative executor handle; its opaque ID is not a transfer proof.
@@ -876,5 +726,156 @@ impl SymbolTable {
 
     fn scope_mut(&mut self, id: ScopeId) -> &mut Scope {
         &mut self.scopes[id.0 as usize]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const S: Span = Span::new(0, 0, 0);
+
+    #[test]
+    fn new_table_has_global_scope() {
+        let table = SymbolTable::new(0);
+        assert_eq!(table.global_scope(), ScopeId(0));
+    }
+
+    #[test]
+    fn define_and_get_symbol() {
+        let mut table = SymbolTable::new(0);
+        let id = table
+            .define(ScopeId(0), "foo", SymbolKind::Func, S)
+            .unwrap();
+        assert_eq!(id, SymbolId::new(0, 0));
+        assert_eq!(table.get(id).name, "foo");
+        assert_eq!(table.get(id).kind, SymbolKind::Func);
+    }
+
+    #[test]
+    fn define_duplicate_in_same_scope_fails() {
+        let mut table = SymbolTable::new(0);
+        table
+            .define(ScopeId(0), "dup", SymbolKind::Const, S)
+            .unwrap();
+        let result = table.define(ScopeId(0), "dup", SymbolKind::Const, S);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn lookup_any_walks_scope_chain() {
+        let mut table = SymbolTable::new(0);
+        let outer = ScopeId(0);
+        let inner = table.new_scope(outer);
+        table.define(outer, "a", SymbolKind::Const, S).unwrap();
+        assert!(table.lookup_any(inner, "a").is_some());
+    }
+
+    #[test]
+    fn lookup_any_not_found() {
+        let table = SymbolTable::new(0);
+        assert!(table.lookup_any(ScopeId(0), "nonexistent").is_none());
+    }
+
+    #[test]
+    fn lookup_value_skips_type_symbols() {
+        let mut table = SymbolTable::new(0);
+        table
+            .define(ScopeId(0), "MyType", SymbolKind::Struct, S)
+            .unwrap();
+        assert!(table.lookup_value(ScopeId(0), "MyType").is_none());
+        assert!(table.lookup_type(ScopeId(0), "MyType").is_some());
+    }
+
+    #[test]
+    fn new_scope_increases_scope_count() {
+        let mut table = SymbolTable::new(0);
+        assert_eq!(table.scopes.len(), 1);
+        let child = table.new_scope(ScopeId(0));
+        assert_eq!(child, ScopeId(1));
+        assert_eq!(table.scopes.len(), 2);
+    }
+
+    #[test]
+    fn module_members_basic() {
+        let mut table = SymbolTable::new(0);
+        let id = table.define_module_member("mod1", "foo", S).unwrap();
+        assert_eq!(table.lookup_module_member("mod1", "foo"), Some(id));
+        assert_eq!(table.lookup_module_member("mod1", "bar"), None);
+    }
+
+    #[test]
+    fn associated_members_basic() {
+        let mut table = SymbolTable::new(0);
+        let struct_id = table
+            .define(ScopeId(0), "MyStruct", SymbolKind::Struct, S)
+            .unwrap();
+        let id = table
+            .define_associated_member(struct_id, "method", S)
+            .unwrap();
+        assert_eq!(
+            table.lookup_associated_member(struct_id, "method"),
+            Some(id)
+        );
+    }
+
+    #[test]
+    fn value_candidates_filters_type() {
+        let mut table = SymbolTable::new(0);
+        table
+            .define(ScopeId(0), "fn1", SymbolKind::Func, S)
+            .unwrap();
+        table
+            .define(ScopeId(0), "St", SymbolKind::Struct, S)
+            .unwrap();
+        let vals = table.value_candidates(ScopeId(0));
+        assert_eq!(vals.len(), 1);
+        assert_eq!(vals[0].name, "fn1");
+    }
+
+    #[test]
+    fn type_candidates_filters_value() {
+        let mut table = SymbolTable::new(0);
+        table
+            .define(ScopeId(0), "fn1", SymbolKind::Func, S)
+            .unwrap();
+        table
+            .define(ScopeId(0), "St", SymbolKind::Struct, S)
+            .unwrap();
+        let types = table.type_candidates(ScopeId(0));
+        assert_eq!(types.len(), 1);
+        assert_eq!(types[0].name, "St");
+    }
+
+    #[test]
+    fn merge_from_basic() {
+        let mut table1 = SymbolTable::new(0);
+        let mut table2 = SymbolTable::new(0);
+        let _id = table2
+            .define(ScopeId(0), "other", SymbolKind::Const, S)
+            .unwrap();
+        let len_before = table1.symbols.len();
+        table1.merge_from(table2);
+        assert_eq!(table1.symbols.len(), len_before + 1);
+        assert!(table1.lookup_any(ScopeId(0), "other").is_some());
+    }
+
+    #[test]
+    fn iter_includes_all_symbols() {
+        let mut table = SymbolTable::new(0);
+        table.define(ScopeId(0), "a", SymbolKind::Func, S).unwrap();
+        table.define(ScopeId(0), "b", SymbolKind::Const, S).unwrap();
+        let names: Vec<&str> = table.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"a"));
+        assert!(names.contains(&"b"));
+    }
+
+    #[test]
+    fn kind_classification() {
+        assert!(SymbolKind::Func.is_value());
+        assert!(!SymbolKind::Func.is_type());
+        assert!(SymbolKind::Struct.is_type());
+        assert!(!SymbolKind::Struct.is_value());
+        assert!(SymbolKind::Local.is_value());
+        assert!(SymbolKind::TypeParam.is_type());
     }
 }

@@ -296,6 +296,9 @@ pub(super) fn synth_call_expr(
                     }
                 }
                 if Some(callee_sym) == checker.symbols.builtin_alloc {
+                    checker.current_observed_effects = checker
+                        .current_observed_effects
+                        .union(arandu_middle::EffectFlags::HEAP);
                     let arg_ids = checker.pool.expr_list(args_range).to_vec();
                     let arg_ty = if let Some(first) = arg_ids.first() {
                         super::synth_expr(checker, *first)
@@ -307,6 +310,9 @@ pub(super) fn synth_call_expr(
                     return Some(ptr_ty);
                 }
                 if Some(callee_sym) == checker.symbols.builtin_free {
+                    checker.current_observed_effects = checker
+                        .current_observed_effects
+                        .union(arandu_middle::EffectFlags::HEAP);
                     let arg_ids = checker.pool.expr_list(args_range).to_vec();
                     if let Some(first) = arg_ids.first() {
                         let arg_ty_id = super::synth_expr(checker, *first);
@@ -490,7 +496,7 @@ pub(super) fn synth_call_expr(
                                     },
                                 );
                             } else {
-                                super::super::ctor::validate_exclusive_receiver_autoref(
+                                super::super::method::validate_exclusive_receiver_autoref(
                                     checker,
                                     base_id,
                                     receiver_ty_id,

@@ -5,7 +5,7 @@ use lsp_server::RequestId;
 use rustc_hash::FxHashMap;
 use std::collections::VecDeque;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
@@ -25,20 +25,66 @@ pub enum Priority {
     Background,
 }
 
-#[derive(Clone, Debug)]
-pub struct CancellationToken(Arc<AtomicBool>);
+struct CancellationState {
+    state: AtomicU8,
+    queries: Mutex<Vec<arandu_query::QueryCancellationToken>>,
+}
+
+#[derive(Clone)]
+pub struct CancellationToken(Arc<CancellationState>);
+
+impl std::fmt::Debug for CancellationToken {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CancellationToken")
+            .field("cancelled", &self.is_cancelled())
+            .finish_non_exhaustive()
+    }
+}
 
 impl CancellationToken {
     fn new() -> Self {
-        Self(Arc::new(AtomicBool::new(false)))
+        Self(Arc::new(CancellationState {
+            state: AtomicU8::new(0),
+            queries: Mutex::new(Vec::new()),
+        }))
     }
 
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
+        self.0.state.fetch_max(1, Ordering::Release);
+        let queries = self
+            .0
+            .queries
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        for query in queries.iter() {
+            query.cancel();
+        }
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.0.state.load(Ordering::Acquire) != 0
+    }
+
+    pub fn claim_cancelled(&self) -> bool {
+        self.0
+            .state
+            .compare_exchange(1, 2, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    pub fn link_query(&self, query: arandu_query::QueryCancellationToken) {
+        let mut queries = self
+            .0
+            .queries
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if self.is_cancelled() {
+            drop(queries);
+            query.cancel();
+        } else {
+            queries.push(query);
+        }
     }
 
     fn same_as(&self, other: &Self) -> bool {
@@ -68,6 +114,7 @@ struct Shared {
 
 pub struct WorkerPool {
     shared: Arc<Shared>,
+    workers: Vec<thread::JoinHandle<()>>,
 }
 
 impl Drop for WorkerPool {
@@ -77,8 +124,16 @@ impl Drop for WorkerPool {
         for token in state.active.values() {
             token.cancel();
         }
+        for job in state.interactive.iter().chain(&state.background) {
+            job.cancellation.cancel();
+        }
         drop(state);
         self.shared.ready.notify_all();
+        for worker in std::mem::take(&mut self.workers) {
+            if let Err(payload) = worker.join() {
+                crate::logging::log_panic("joining LSP worker", &payload);
+            }
+        }
     }
 }
 
@@ -96,13 +151,30 @@ impl WorkerPool {
             ready: Condvar::new(),
             capacity: capacity.max(1),
         });
+        let mut handles = Vec::with_capacity(workers.clamp(1, 16));
         for i in 0..workers.clamp(1, 16) {
-            let shared = Arc::clone(&shared);
-            thread::Builder::new()
+            let worker_shared = Arc::clone(&shared);
+            match thread::Builder::new()
                 .name(format!("arandu-lsp-worker-{i}"))
-                .spawn(move || worker_loop(&shared))?;
+                .spawn(move || worker_loop(&worker_shared))
+            {
+                Ok(handle) => handles.push(handle),
+                Err(error) => {
+                    let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+                    state.shutdown = true;
+                    drop(state);
+                    shared.ready.notify_all();
+                    for handle in handles {
+                        let _ = handle.join();
+                    }
+                    return Err(error);
+                }
+            }
         }
-        Ok(Self { shared })
+        Ok(Self {
+            shared,
+            workers: handles,
+        })
     }
 
     pub fn spawn<F>(
@@ -167,6 +239,22 @@ impl WorkerPool {
             }
         }
         true
+    }
+
+    /// Cancel an explicit client request and claim its single protocol reply.
+    /// A queued closure is dropped instead of run; an already-running closure
+    /// observes state 2 and cannot publish a duplicate terminal response.
+    pub fn cancel_for_response(&self, key: &JobKey) -> bool {
+        let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(token) = state.active.get(key).cloned() else {
+            return false;
+        };
+        token.cancel();
+        if let Some(job) = take_queued_key(&mut state, key) {
+            retire_job(&mut state, &job);
+        }
+        drop(state);
+        token.claim_cancelled()
     }
 
     pub fn cancel_requests(&self) {
@@ -434,5 +522,36 @@ mod tests {
         ];
         results.sort_unstable_by_key(|result| result.0);
         assert_eq!(results, [(10, true), (11, false)]);
+    }
+
+    #[test]
+    fn drop_cancels_queued_jobs_and_joins_the_worker() {
+        let pool = WorkerPool::with_capacity(1, 2).expect("test worker must start");
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        pool.spawn(Priority::Background, None, move |_| {
+            started_tx.send(()).expect("signal running job");
+            release_rx.recv().expect("release running job");
+        })
+        .expect("running job must queue");
+        started_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("worker must start first job");
+
+        let (cancelled_tx, cancelled_rx) = mpsc::channel();
+        pool.spawn(Priority::Background, None, move |token| {
+            cancelled_tx
+                .send(token.is_cancelled())
+                .expect("record queued cancellation");
+        })
+        .expect("queued job must fit");
+
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            release_tx.send(()).expect("release running job");
+        });
+        drop(pool);
+        releaser.join().expect("release helper must join cleanly");
+        assert_eq!(cancelled_rx.recv_timeout(Duration::from_secs(2)), Ok(true));
     }
 }

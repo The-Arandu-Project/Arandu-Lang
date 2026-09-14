@@ -151,11 +151,25 @@ pub fn check_func_body(checker: &mut TypeChecker<'_>, decl: &FuncDecl) {
             let missing = checker.current_observed_effects.difference(declared_flags);
             if !missing.is_empty() {
                 let names = missing.to_names().join(", ");
-                checker.diagnostics.push(arandu_middle::Diagnostic::error(
-                    arandu_middle::DiagCode::T039UnsatisfiedEffect,
-                    format!("function performs undeclared effect '{names}'"),
-                    decl.span,
-                ));
+                let name_span = match &decl.name {
+                    arandu_parser::FuncName::Free { span, .. }
+                    | arandu_parser::FuncName::Method { span, .. } => *span,
+                };
+                checker.diagnostics.push(
+                    arandu_middle::Diagnostic::error(
+                        arandu_middle::DiagCode::T039UnsatisfiedEffect,
+                        format!("function performs undeclared effect '{names}'"),
+                        decl.span,
+                    )
+                    .with_label(
+                        name_span,
+                        format!("declared effects do not permit '{names}'"),
+                    )
+                    .with_hint(format!(
+                        "declare '@Effects({})' or eliminate operations causing '{names}'",
+                        checker.current_observed_effects.to_names().join(", ")
+                    )),
+                );
             }
         }
         let total = declared

@@ -29,8 +29,17 @@ impl<'a> Resolver<'a> {
         resolver
     }
 
-    pub(crate) fn resolve_local(mut self, program: &Program) -> ResolutionResult {
+    pub(crate) fn resolve_local(self, program: &Program) -> ResolutionResult {
+        self.resolve_local_with_poll(program, || {})
+    }
+
+    pub(crate) fn resolve_local_with_poll(
+        mut self,
+        program: &Program,
+        mut poll: impl FnMut(),
+    ) -> ResolutionResult {
         for doc in &program.docs {
+            poll();
             self.docs
                 .entry(NodeKey::from(doc.target_span))
                 .or_default()
@@ -46,6 +55,7 @@ impl<'a> Resolver<'a> {
         }
 
         for decl_id in &program.decls {
+            poll();
             let decl = self.pool.decl(*decl_id);
             self.collect_top_level(global, decl);
         }
@@ -53,6 +63,7 @@ impl<'a> Resolver<'a> {
         if let Some(module) = &program.module {
             let module_name = module.path.join(".");
             for decl_id in &program.decls {
+                poll();
                 let TopLevelDecl::Func(decl) = self.pool.decl(*decl_id) else {
                     continue;
                 };

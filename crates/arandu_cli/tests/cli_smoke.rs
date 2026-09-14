@@ -1813,3 +1813,43 @@ func main(): int {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn amir_cfg_dot_and_ascii_flags() {
+    let dir = std::env::temp_dir();
+    let file = dir.join("arandu_cli_amir_cfg_test.aru");
+    fs::write(
+        &file,
+        r#"func main(): int {
+    let a = 1
+    let b = 2
+    return a + b
+}
+"#,
+    )
+    .expect("fixture");
+    let path = file.to_string_lossy();
+
+    // 1. DOT output
+    let dot_output = run_cli(&["amir", &path, "--cfg"]);
+    assert!(
+        dot_output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&dot_output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&dot_output.stdout);
+    assert!(stdout.contains("digraph \"CFG_main\""), "got:\n{stdout}");
+    assert!(stdout.contains("bb0"), "got:\n{stdout}");
+
+    // 2. ASCII output
+    let ascii_output = run_cli(&["amir", &path, "--cfg", "--ascii"]);
+    assert!(
+        ascii_output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&ascii_output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&ascii_output.stdout);
+    assert!(stdout.contains("=== CFG: main ==="), "got:\n{stdout}");
+    assert!(stdout.contains("bb0"), "got:\n{stdout}");
+    assert!(stdout.contains("(returns)"), "got:\n{stdout}");
+}

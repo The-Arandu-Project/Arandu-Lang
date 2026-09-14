@@ -69,7 +69,9 @@ pub fn cycle_recover(
 pub fn local_symbols(db: &dyn ArandCompilerDb, file: SourceFile) -> HashEq<ResolutionResult> {
     let program_res = parse(db, file);
     let resolved = match &**program_res {
-        Ok(program) => arandu_resolve::resolve_local(*file.file_id(db), program),
+        Ok(program) => arandu_resolve::resolve_local_with_poll(*file.file_id(db), program, || {
+            db.unwind_if_revision_cancelled();
+        }),
         Err(_) => ResolutionResult {
             is_cycle_fallback: false,
             symbols: arandu_semantics::SymbolTable::default(),
@@ -227,10 +229,11 @@ pub fn resolve(db: &dyn ArandCompilerDb, file: SourceFile) -> HashEq<ResolutionR
     // The resolver mutates its seed; the memoized local result must stay immutable.
     let locals_owned = (*locals_arc.value).clone();
     let resolved = match &**program_res {
-        Ok(program) => arandu_resolve::resolve_imports_and_bodies(
+        Ok(program) => arandu_resolve::resolve_imports_and_bodies_with_poll(
             &arandu_resolve::SourceDbLoader(db.as_source_db()),
             program,
             locals_owned,
+            || db.unwind_if_revision_cancelled(),
         ),
         Err(_) => locals_owned,
     };
@@ -292,6 +295,21 @@ pub fn module_signatures(db: &dyn ArandCompilerDb, file: SourceFile) -> ModuleSi
                         checker
                             .type_info
                             .merge_from(imported_sigs.type_info.as_ref());
+                        // Generic exports may mention an interface imported by
+                        // their defining module (for example `T: marker.Sync`).
+                        // Preserve those contract identities by SymbolId without
+                        // adding their names to this module's visible scope.
+                        for constraints in imported_sigs.type_info.param_constraints.values() {
+                            for constraint in constraints.iter() {
+                                if checker.symbols.try_get(constraint.iface_sym).is_none() {
+                                    if let Some(symbol) =
+                                        imported_sigs.symbols.try_get(constraint.iface_sym).cloned()
+                                    {
+                                        checker.symbols.register_imported_symbol(symbol);
+                                    }
+                                }
+                            }
+                        }
                         // Body-derived contracts cross the module boundary
                         // through their own HashEq query. A dependency body
                         // edit therefore stops here when the public relation is

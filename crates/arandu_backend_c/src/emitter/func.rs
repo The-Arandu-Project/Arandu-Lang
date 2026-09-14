@@ -72,6 +72,11 @@ impl<'a> CEmitter<'a> {
                                 }
                             }
                         }
+                        AmirRvalue::SliceData(operand) => {
+                            if let AmirOperand::Copy(t) | AmirOperand::Move(t) = operand {
+                                used_temps.insert(t.as_usize());
+                            }
+                        }
                         AmirRvalue::FieldAccess { base, .. } => {
                             if let AmirOperand::Copy(t) | AmirOperand::Move(t) = base {
                                 used_temps.insert(t.as_usize());

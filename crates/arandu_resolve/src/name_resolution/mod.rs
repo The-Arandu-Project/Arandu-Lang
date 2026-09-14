@@ -25,8 +25,11 @@ fn core_lang_item(path: &str, name: &str) -> Option<arandu_middle::symbol_table:
             "core/coroutine.aru",
             LangItem::Coroutine,
         ),
+        "Copy" => ("std.core.marker", "core/marker.aru", LangItem::Copy),
         "Send" => ("std.core.marker", "core/marker.aru", LangItem::Send),
         "Sync" => ("std.core.marker", "core/marker.aru", LangItem::Sync),
+        "String" => ("std.alloc.string", "alloc/string.aru", LangItem::String),
+        "Vec" => ("std.alloc.vec", "alloc/vec.aru", LangItem::Vec),
         "TaskHandle" => (
             "std.runtime.executor",
             "std/runtime/executor.aru",
@@ -91,6 +94,15 @@ pub fn resolve_local(file_id: u32, program: &Program) -> ResolutionResult {
     Resolver::new(file_id, &program.pool, Some(program)).resolve_local(program)
 }
 
+#[must_use]
+pub fn resolve_local_with_poll(
+    file_id: u32,
+    program: &Program,
+    poll: impl FnMut(),
+) -> ResolutionResult {
+    Resolver::new(file_id, &program.pool, Some(program)).resolve_local_with_poll(program, poll)
+}
+
 /// Single-file / unit-test resolve that runs the **same** import pipeline as
 /// production, with an empty module loader (no multi-file loads).
 ///
@@ -108,6 +120,16 @@ pub fn resolve_imports_and_bodies(
     program: &Program,
     result: ResolutionResult,
 ) -> ResolutionResult {
+    resolve_imports_and_bodies_with_poll(db, program, result, || {})
+}
+
+#[must_use]
+pub fn resolve_imports_and_bodies_with_poll(
+    db: &dyn crate::ModuleLoader,
+    program: &Program,
+    result: ResolutionResult,
+    mut poll: impl FnMut(),
+) -> ResolutionResult {
     let mut resolver = Resolver {
         symbols: result.symbols,
         resolved: result.resolved,
@@ -123,6 +145,7 @@ pub fn resolve_imports_and_bodies(
     let global = resolver.symbols.global_scope();
 
     for import in &program.imports {
+        poll();
         if db.package_mode() {
             match crate::logical_import(import) {
                 Some(crate::LogicalImport::LegacyExternal { source }) => {
@@ -421,14 +444,37 @@ pub fn resolve_imports_and_bodies(
                                 }
                             } else {
                                 // Missing or private: not in the export table.
-                                resolver.diagnostics.push(arandu_middle::Diagnostic::error(
+                                let mut diag = arandu_middle::Diagnostic::error(
                                     arandu_middle::DiagCode::M001UnresolvedImport,
                                     format!(
                                         "cannot import `{}`: not found or not public in module",
                                         item.name
                                     ),
                                     item.span,
-                                ));
+                                );
+                                let mut candidates: Vec<&str> =
+                                    exports.symbols.keys().map(String::as_str).collect();
+                                candidates.sort_unstable();
+                                let name_str = item.name.as_str();
+                                let max_distance = if name_str.len() <= 4 { 2 } else { 3 };
+                                let best_match = candidates
+                                    .into_iter()
+                                    .map(|cand| {
+                                        let dist = if cand.to_lowercase() == name_str.to_lowercase()
+                                        {
+                                            0
+                                        } else {
+                                            strsim::levenshtein(name_str, cand)
+                                        };
+                                        (cand, dist)
+                                    })
+                                    .filter(|(_, dist)| *dist <= max_distance)
+                                    .min_by_key(|(_, dist)| *dist)
+                                    .map(|(cand, _)| cand);
+                                if let Some(suggestion) = best_match {
+                                    diag = diag.with_hint(format!("did you mean '{suggestion}'?"));
+                                }
+                                resolver.diagnostics.push(diag);
                             }
                         }
                     }
@@ -461,9 +507,11 @@ pub fn resolve_imports_and_bodies(
         }
     }
 
+    poll();
     resolver.resolve_method_receivers(program);
 
     for decl_id in &program.decls {
+        poll();
         let decl = resolver.pool.decl(*decl_id);
         resolver.resolve_top_level(global, decl);
     }

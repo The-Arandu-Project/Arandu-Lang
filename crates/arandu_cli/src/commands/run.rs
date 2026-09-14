@@ -8,7 +8,8 @@ use crate::cli_error::{CliFailure, CliResult, CliSuccess};
 use crate::pipeline::{
     attach_stdlib, ensure_host_jit_layout, fail_operational, fail_usage, find_aru_files, finish,
     open_entry_file, optimize_amir_or_exit, parse_and_check, pipeline_lower,
-    print_diagnostics_and_exit, print_genref_report, validate_hir_and_monomorphize,
+    pipeline_lower_checked, print_diagnostics_and_exit, print_genref_report,
+    render_nonfatal_diagnostics, render_pipeline_failure, validate_hir_and_monomorphize,
 };
 use crate::project::{self, ProjectFlags};
 use arandu_middle::layout::DataLayout;
@@ -156,6 +157,8 @@ pub fn cmd_single_file_dispatch(
     let debug = inv.debug;
     let opt = inv.opt;
     let genref_report = inv.genref_report;
+    let cfg = inv.cfg;
+    let ascii = inv.ascii;
     let data_layout = inv.data_layout;
     let project_flags = &inv.project_flags;
     let mut paths = Vec::new();
@@ -205,11 +208,14 @@ pub fn cmd_single_file_dispatch(
     }
 
     let use_parallel = parallel || paths.len() > 1;
-    if use_parallel && matches!(command, "lex" | "parse" | "run" | "emit-c") {
+    if use_parallel && command != "check" {
         fail_operational(
             "run command",
             None,
-            format!("parallel/multi-file mode is not supported for command '{command}'"),
+            format!(
+                "parallel/multi-file mode is supported only for 'check'; \
+                 command '{command}' has ordered user-visible output"
+            ),
         );
     }
 
@@ -245,6 +251,51 @@ pub fn cmd_single_file_dispatch(
                 fail_operational("failed to read", Some(p.clone()), err.to_string());
             }
         }
+    }
+
+    if use_parallel {
+        let db_mutex = std::sync::Mutex::new(db);
+        let outcomes = source_files
+            .into_par_iter()
+            .map(|(source_file, filepath, _source)| {
+                let thread_db = match db_mutex.lock() {
+                    Ok(guard) => guard.clone(),
+                    Err(poisoned) => poisoned.into_inner().clone(),
+                };
+                let outcome = pipeline_lower_checked(&thread_db, source_file);
+                (filepath, outcome)
+            })
+            .collect::<Vec<_>>();
+        let db = match db_mutex.into_inner() {
+            Ok(db) => db,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        // `Vec::into_par_iter` is indexed, so collect preserves the sorted
+        // path order even though analysis completes in a different order.
+        for (filepath, outcome) in outcomes {
+            let outcome = match outcome {
+                Ok(outcome) => outcome,
+                Err(diagnostics) => render_pipeline_failure(&db, diagnostics, &filepath),
+            };
+            render_nonfatal_diagnostics(&db, &outcome.diagnostics, &filepath);
+            if genref_report {
+                print_genref_report(&filepath, &outcome.artifacts);
+            }
+            tracing::info!(
+                "Compilation verified successfully — no errors found for {}",
+                filepath
+            );
+            println!("ok {}", filepath);
+        }
+
+        if let Some(log) = rebuild_log {
+            let explain = arandu_base::EXPLAIN_REBUILD.load(std::sync::atomic::Ordering::Relaxed);
+            if explain {
+                eprint!("{}", log.format_chain(true));
+            }
+        }
+        return Ok(CliSuccess::Done);
     }
 
     let process_file = |source_file: arandu_query::db::SourceFile,
@@ -329,7 +380,13 @@ pub fn cmd_single_file_dispatch(
                     None => &artifacts.amir,
                 };
 
-                if debug {
+                if cfg {
+                    if ascii {
+                        print!("{}", amir.render_cfg_ascii(symbols, interner));
+                    } else {
+                        print!("{}", amir.render_cfg_dot(symbols, interner));
+                    }
+                } else if debug {
                     println!("{amir:#?}");
                 } else {
                     println!("--- AMIR for {} ---", filepath);
@@ -461,21 +518,8 @@ pub fn cmd_single_file_dispatch(
         }
     };
 
-    if use_parallel {
-        let db_mutex = std::sync::Mutex::new(db);
-        source_files
-            .into_par_iter()
-            .for_each(|(source_file, filepath, source)| {
-                let thread_db = match db_mutex.lock() {
-                    Ok(guard) => guard.clone(),
-                    Err(poisoned) => poisoned.into_inner().clone(),
-                };
-                process_file(source_file, filepath, source, thread_db);
-            });
-    } else {
-        for (source_file, filepath, source) in source_files {
-            process_file(source_file, filepath, source, db.clone());
-        }
+    for (source_file, filepath, source) in source_files {
+        process_file(source_file, filepath, source, db.clone());
     }
 
     if let Some(log) = rebuild_log {

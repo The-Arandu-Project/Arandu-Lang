@@ -342,7 +342,9 @@ fn transfer_statement(
                 AmirRvalue::SliceView { owner, .. } | AmirRvalue::StrView { owner } => {
                     operand_origins(*owner, temps)
                 }
-                AmirRvalue::SliceSubslice { slice, .. } => operand_origins(*slice, temps),
+                AmirRvalue::SliceSubslice { slice, .. } | AmirRvalue::SliceData(slice) => {
+                    operand_origins(*slice, temps)
+                }
                 _ => Origins::new(),
             };
             if let Some(target) = temps.get_mut(lhs.as_usize()) {

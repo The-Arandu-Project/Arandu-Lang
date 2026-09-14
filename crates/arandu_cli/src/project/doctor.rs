@@ -12,7 +12,7 @@ use crate::manifest_io::{find_manifest, load_manifest};
 
 /// Diagnose toolchain / project / backend (Flutter-style doctor report).
 pub fn cmd_doctor(flags: &ProjectFlags) -> i32 {
-    let color = use_color();
+    let color = flags.color.should_color_stdout();
     let mut categories: Vec<DoctorCategory> = Vec::new();
 
     // [Arandu] toolchain binary (show raw + canonical when they differ)
@@ -316,11 +316,6 @@ enum DoctorDetail {
     Info(String),
     Error(String),
     Hint(String),
-}
-
-fn use_color() -> bool {
-    use std::io::IsTerminal;
-    std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none()
 }
 
 fn paint(color: bool, code: &str, text: &str) -> String {

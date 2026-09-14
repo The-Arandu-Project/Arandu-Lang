@@ -55,13 +55,18 @@ impl<'a> Resolver<'a> {
                         );
                         // Suggest close matches from the members of that type.
                         if let Some(id) = type_sym {
-                            let max_distance = if member.len() <= 4 { 2 } else { 3 };
-                            let best_match = self
+                            let mut candidates: Vec<&str> = self
                                 .symbols
                                 .associated_members
                                 .keys()
                                 .filter(|(parent, _)| *parent == id)
-                                .map(|(_, name)| {
+                                .map(|(_, name)| name.as_str())
+                                .collect();
+                            candidates.sort_unstable();
+                            let max_distance = if member.len() <= 4 { 2 } else { 3 };
+                            let best_match = candidates
+                                .into_iter()
+                                .map(|name| {
                                     let dist = if name.to_lowercase() == member.to_lowercase() {
                                         0
                                     } else {
@@ -71,7 +76,7 @@ impl<'a> Resolver<'a> {
                                 })
                                 .filter(|(_, dist)| *dist <= max_distance)
                                 .min_by_key(|(_, dist)| *dist)
-                                .map(|(name, _)| name.clone());
+                                .map(|(name, _)| name.to_string());
                             if let Some(suggestion) = best_match {
                                 diag = diag.with_hint(format!("did you mean '{suggestion}'?"));
                             }

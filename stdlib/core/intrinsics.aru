@@ -14,6 +14,7 @@ extern "arandu-intrinsic" {
     func abortGenerationalMismatch() : void
     func sliceFromRaw<Owner, T>(owner: ref Owner, data: ptr[T], len: uint): []T
     func sliceLen<T>(source: []T): uint
+    func sliceData<T>(source: []T): ptr[T]
     func sliceSubslice<T>(source: []T, start: uint, len: uint): []T
     func strView<Owner>(owner: ref Owner): ref str
 }

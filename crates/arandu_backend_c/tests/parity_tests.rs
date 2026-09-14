@@ -16,6 +16,7 @@ use std::process::Command;
 
 fn c_compiler(cc: &str) -> Command {
     let mut command = Command::new(cc);
+    command.arg("-fwrapv");
     if env::var_os("ARANDU_C_SANITIZERS").is_some() {
         command.args([
             "-O1",
@@ -1635,8 +1636,7 @@ struct SliceDescriptorHost {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(C)]
 struct ChunkContextHost {
-    subslice: *const SliceDescriptorHost,
-    _pad0: u64,
+    subslice: SliceDescriptorHost,
     seed: *mut StatsHost,
     _pad1: [u64; 2],
     stop_flag: *const i64,
@@ -1683,8 +1683,7 @@ fn parallel_dispatch_chunk_executes_in_worker_pool_and_honors_cancellation() {
     };
 
     let ctx = ChunkContextHost {
-        subslice: &desc,
-        _pad0: 0,
+        subslice: desc,
         seed: &mut stats,
         _pad1: [0; 2],
         stop_flag: &stop_flag,
@@ -1717,8 +1716,7 @@ fn parallel_dispatch_chunk_executes_in_worker_pool_and_honors_cancellation() {
         blank: 0,
     };
     let cancel_ctx = ChunkContextHost {
-        subslice: &desc,
-        _pad0: 0,
+        subslice: desc,
         seed: &mut cancel_stats,
         _pad1: [0; 2],
         stop_flag: &canceled_flag,
@@ -1748,5 +1746,673 @@ fn parallel_dispatch_chunk_executes_in_worker_pool_and_honors_cancellation() {
     assert_eq!(
         pre_pending.wait().unwrap_err(),
         arandu_runtime::worker_runtime::WorkerError::Canceled
+    );
+}
+
+#[test]
+fn c_backend_worker_pool_reuses_threads_and_handles_self_help_and_errors() {
+    let (amir, tc) = compile_src("func main(): int { return 0 }");
+    let c_code = emit_c(&amir, &tc);
+
+    let test_harness = r#"
+#include <stdio.h>
+#include <assert.h>
+
+static int32_t thunk_add_one(uint8_t *ctx, uint8_t *res) {
+    int64_t val = *(int64_t*)ctx;
+    *(int64_t*)res = val + 1;
+    return 0;
+}
+
+static int32_t thunk_nested_self_help(uint8_t *ctx, uint8_t *res) {
+    int64_t val = *(int64_t*)ctx;
+    int64_t inner_in = val * 10;
+    int64_t inner_out = 0;
+    uint8_t *inner_ctx = (uint8_t*)&inner_in;
+    uint8_t *inner_res = (uint8_t*)&inner_out;
+    int32_t status = ar_rt_parallel_fold_run(1, &inner_ctx, thunk_add_one, &inner_res, 2, NULL);
+    if (status != 0) return 99;
+    *(int64_t*)res = inner_out;
+    return 0;
+}
+
+static _Atomic int failure_gate = 0;
+
+static int32_t thunk_fail_at_5_and_7(uint8_t *ctx, uint8_t *res) {
+    int64_t val = *(int64_t*)ctx;
+    (void)res;
+    if (val == 5 || val == 7) {
+        atomic_fetch_add_explicit(&failure_gate, 1, memory_order_release);
+        while (atomic_load_explicit(&failure_gate, memory_order_acquire) < 2) {}
+        return val == 5 ? 505 : 707;
+    }
+    return 0;
+}
+
+static int32_t thunk_fail_only_at_5(uint8_t *ctx, uint8_t *res) {
+    int64_t val = *(int64_t*)ctx;
+    (void)res;
+    if (val == 5) return 505;
+    return 0;
+}
+
+int main(void) {
+    // 1. Repeated calls: verify worker pool reuses threads across multiple calls
+    for (int iter = 0; iter < 50; iter++) {
+        int64_t in_vals[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+        int64_t out_vals[8] = {0};
+        uint8_t *ctx_ptrs[8];
+        uint8_t *res_ptrs[8];
+        for (int i = 0; i < 8; i++) {
+            ctx_ptrs[i] = (uint8_t*)&in_vals[i];
+            res_ptrs[i] = (uint8_t*)&out_vals[i];
+        }
+        int32_t status = ar_rt_parallel_fold_run(8, ctx_ptrs, thunk_add_one, res_ptrs, 4, NULL);
+        if (status != 0) return 10;
+        for (int i = 0; i < 8; i++) {
+            if (out_vals[i] != in_vals[i] + 1) return 11;
+        }
+    }
+
+    // 2. Nested self-help execution: prevents deadlock when worker submits parallel work
+    {
+        int64_t in_vals[4] = {2, 3, 4, 5};
+        int64_t out_vals[4] = {0};
+        uint8_t *ctx_ptrs[4];
+        uint8_t *res_ptrs[4];
+        for (int i = 0; i < 4; i++) {
+            ctx_ptrs[i] = (uint8_t*)&in_vals[i];
+            res_ptrs[i] = (uint8_t*)&out_vals[i];
+        }
+        int32_t status = ar_rt_parallel_fold_run(4, ctx_ptrs, thunk_nested_self_help, res_ptrs, 2, NULL);
+        if (status != 0) return 20;
+        if (out_vals[0] != 21 || out_vals[1] != 31 || out_vals[2] != 41 || out_vals[3] != 51) return 21;
+    }
+
+    // 3. Lowest ordinal and its code remain paired under concurrent failures.
+    {
+        int64_t in_vals[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+        int64_t out_vals[8] = {0};
+        uint8_t *ctx_ptrs[8];
+        uint8_t *res_ptrs[8];
+        for (int i = 0; i < 8; i++) {
+            ctx_ptrs[i] = (uint8_t*)&in_vals[i];
+            res_ptrs[i] = (uint8_t*)&out_vals[i];
+        }
+        for (int iter = 0; iter < 200; iter++) {
+            atomic_store_explicit(&failure_gate, 0, memory_order_release);
+            int32_t status = ar_rt_parallel_fold_run(
+                8, ctx_ptrs, thunk_fail_at_5_and_7, res_ptrs, 4, NULL
+            );
+            if (status != 505) return 30;
+        }
+    }
+
+    // 4. A worker failure publishes cancellation when a stop flag is supplied.
+    {
+        int64_t in_vals[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+        int64_t out_vals[8] = {0};
+        uint8_t *ctx_ptrs[8];
+        uint8_t *res_ptrs[8];
+        for (int i = 0; i < 8; i++) {
+            ctx_ptrs[i] = (uint8_t*)&in_vals[i];
+            res_ptrs[i] = (uint8_t*)&out_vals[i];
+        }
+        _Atomic int64_t stop_flag = 0;
+        int32_t status = ar_rt_parallel_fold_run(
+            8, ctx_ptrs, thunk_fail_only_at_5, res_ptrs, 4, (int64_t*)&stop_flag
+        );
+        if (status != 505) return 40;
+        if (atomic_load(&stop_flag) != 1) return 41;
+    }
+
+    // 5. Pre-admission cancellation check
+    {
+        int64_t in_vals[2] = {1, 2};
+        int64_t out_vals[2] = {0};
+        uint8_t *ctx_ptrs[2] = {(uint8_t*)&in_vals[0], (uint8_t*)&in_vals[1]};
+        uint8_t *res_ptrs[2] = {(uint8_t*)&out_vals[0], (uint8_t*)&out_vals[1]};
+        _Atomic int64_t stop_flag = 1;
+        int32_t status = ar_rt_parallel_fold_run(2, ctx_ptrs, thunk_add_one, res_ptrs, 2, (int64_t*)&stop_flag);
+        if (status != 2) return 50;
+    }
+
+    return 0;
+}
+"#;
+
+    let out_dir = env::temp_dir().join("arandu_c_tests");
+    fs::create_dir_all(&out_dir).unwrap();
+    let c_file = out_dir.join("worker_pool_suite.c");
+    let exe_file = out_dir.join("worker_pool_suite.exe");
+
+    let c_code = format!("#define main arandu_main\n{}\n#undef main\n", c_code);
+    let full_src = format!("{}\n{}", c_code, test_harness);
+    fs::write(&c_file, full_src).unwrap();
+
+    let cc = env::var("CC").unwrap_or_else(|_| "gcc".to_string());
+    let compile_status = c_compiler(&cc)
+        .arg(&c_file)
+        .arg("-o")
+        .arg(&exe_file)
+        .arg("-pthread")
+        .arg("-lm")
+        .output()
+        .expect("compile worker pool suite");
+
+    assert!(
+        compile_status.status.success(),
+        "Compilation failed: {}",
+        String::from_utf8_lossy(&compile_status.stderr)
+    );
+
+    let run_status = Command::new(&exe_file)
+        .output()
+        .expect("run worker pool suite");
+
+    assert!(
+        run_status.status.success(),
+        "Worker pool suite failed with exit code: {:?}, stderr: {}",
+        run_status.status.code(),
+        String::from_utf8_lossy(&run_status.stderr)
+    );
+}
+
+#[test]
+fn parity_safe_mem_swap_and_replace() {
+    let src = r#"
+module std.core.mem_test
+
+extern "arandu-intrinsic" {
+    func refWrite<T>(dest: mut ref T, val: T): void
+}
+
+func swap<T>(x: mut ref T, y: mut ref T): void {
+    let tmp = *x
+    refWrite<T>(x, *y)
+    refWrite<T>(y, tmp)
+}
+
+func replace<T>(dest: mut ref T, src: T): T {
+    let old = *dest
+    refWrite<T>(dest, src)
+    return old
+}
+
+func main(): int {
+    let mut a = 10
+    let mut b = 20
+    swap<int>(mut ref a, mut ref b)
+    if a != 20 || b != 10 {
+        return 1
+    }
+    let old = replace<int>(mut ref a, 99)
+    if old != 20 || a != 99 {
+        return 2
+    }
+    return 0
+}
+"#;
+    let (amir, tc) = compile_src_mono(src);
+    let c_res = execute_c("safe_mem_parity", &amir, &tc);
+    assert_eq!(c_res, 0, "C backend failed safe mem test");
+    let clif_res = execute_cranelift(&amir, &tc);
+    assert_eq!(clif_res, 0, "Cranelift backend failed safe mem test");
+}
+
+#[test]
+fn parity_safe_fmt_formatter() {
+    let src = r#"
+module std.core.fmt_test
+
+extern "arandu-intrinsic" {
+    func sliceFromRaw(owner: ptr[u8], data: ptr[u8], len: uint): []u8
+}
+
+struct Formatter {
+    buf: []u8
+    len: uint
+}
+
+func newFormatter(buf: []u8): Formatter {
+    return Formatter {
+        buf: buf,
+        len: 0,
+    }
+}
+
+func Formatter.writeByte(self: mut ref Formatter, b: u8): bool {
+    self.buf[self.len] = b
+    self.len = self.len + 1
+    return true
+}
+
+func main(): int {
+    let raw = alloc(16) as ptr[u8]
+    let s = unsafe { sliceFromRaw(raw, raw, 16 as uint) }
+    let mut f = newFormatter(s)
+    f.writeByte(65 as u8)
+    f.writeByte(66 as u8)
+    if s[0] != (65 as u8) || s[1] != (66 as u8) {
+        unsafe { free(raw) }
+        return 1
+    }
+    if f.len != 2 {
+        unsafe { free(raw) }
+        return 2
+    }
+    unsafe { free(raw) }
+    return 0
+}
+"#;
+    let (amir, tc) = compile_src(src);
+    let c_res = execute_c("safe_fmt_parity", &amir, &tc);
+    assert_eq!(c_res, 0, "C backend failed safe fmt test");
+    let clif_res = execute_cranelift(&amir, &tc);
+    assert_eq!(clif_res, 0, "Cranelift backend failed safe fmt test");
+}
+
+#[test]
+fn parity_slice_data_pointer() {
+    let src = r#"
+module std.core.slice_data_test
+
+extern "arandu-intrinsic" {
+    func sliceFromRaw(owner: ptr[u8], data: ptr[u8], len: uint): []u8
+    func sliceData<T>(source: []T): ptr[T]
+    func ptrRead<T>(p: ptr[T]): T
+    func ptrWrite<T>(p: ptr[T], val: T): void
+    func ptrOffset<T>(base: ptr[T], offset: i32): ptr[T]
+}
+
+func asPtr<T>(s: []T): ptr[T] {
+    unsafe {
+        return sliceData<T>(s)
+    }
+}
+
+func main(): int {
+    let raw = alloc(8) as ptr[u8]
+    let s = unsafe { sliceFromRaw(raw, raw, 8 as uint) }
+    s[0] = 42 as u8
+    s[1] = 99 as u8
+    let p = asPtr<u8>(s)
+    let v0 = unsafe { ptrRead<u8>(p) }
+    if v0 != (42 as u8) {
+        unsafe { free(raw) }
+        return 1
+    }
+    let p1 = unsafe { ptrOffset<u8>(p, 1) }
+    let v1 = unsafe { ptrRead<u8>(p1) }
+    if v1 != (99 as u8) {
+        unsafe { free(raw) }
+        return 2
+    }
+    unsafe { ptrWrite<u8>(p, 77 as u8) }
+    if s[0] != (77 as u8) {
+        unsafe { free(raw) }
+        return 3
+    }
+    unsafe { free(raw) }
+    return 0
+}
+"#;
+    let (amir, tc) = compile_src_mono(src);
+    let c_res = execute_c("slice_data_parity", &amir, &tc);
+    assert_eq!(c_res, 0, "C backend failed slice data test");
+    let clif_res = execute_cranelift(&amir, &tc);
+    assert_eq!(clif_res, 0, "Cranelift backend failed slice data test");
+}
+
+#[test]
+fn parity_slice_split_at() {
+    let src = r#"
+module std.core.slice_split_test
+
+extern "arandu-intrinsic" {
+    func sliceFromRaw(owner: ptr[int], data: ptr[int], len: uint): []int
+    func sliceLen(source: []int): uint
+    func sliceSubslice(source: []int, start: uint, len: uint): []int
+}
+
+struct Split {
+    left: []int
+    right: []int
+}
+
+func splitAt(s: []int, mid: uint): Split {
+    let total = unsafe { sliceLen(s) }
+    let left = unsafe { sliceSubslice(s, 0, mid) }
+    let right = unsafe { sliceSubslice(s, mid, total - mid) }
+    return Split { left: left, right: right }
+}
+
+func main(): int {
+    let raw = alloc(32) as ptr[int]
+    let s = unsafe { sliceFromRaw(raw, raw, 4 as uint) }
+    s[0] = 10
+    s[1] = 20
+    s[2] = 30
+    s[3] = 40
+    let parts = splitAt(s, 2 as uint)
+    if parts.left[0] != 10 || parts.left[1] != 20 {
+        unsafe { free(raw) }
+        return 1
+    }
+    if parts.right[0] != 30 || parts.right[1] != 40 {
+        unsafe { free(raw) }
+        return 2
+    }
+    unsafe { free(raw) }
+    return 0
+}
+"#;
+    let (amir, tc) = compile_src(src);
+    let c_res = execute_c("slice_split_parity", &amir, &tc);
+    assert_eq!(c_res, 0, "C backend failed slice split test");
+    let clif_res = execute_cranelift(&amir, &tc);
+    assert_eq!(clif_res, 0, "Cranelift backend failed slice split test");
+}
+
+#[test]
+fn parity_parallel_fold_non_copy() {
+    let src = r#"
+module std.core.parallel_non_copy_test
+
+extern "arandu-intrinsic" {
+    func ptrRead<T>(p: ptr[T]): T
+    func ptrWrite<T>(p: ptr[T], val: T): void
+    func ptrOffset<T>(base: ptr[T], offset: i32): ptr[T]
+    func sliceFromRaw(owner: ptr[int], data: ptr[int], len: uint): []int
+    func sliceLen(source: []int): uint
+    func sliceSubslice(source: []int, start: uint, len: uint): []int
+}
+
+interface AccumulatorInit<R> {
+    func init(self: ref Self): R
+}
+
+interface ParallelJob<T, R> {
+    func run(self: ref Self, item: ref T, state: mut ref R): void
+}
+
+interface Combine<R> {
+    func combine(self: ref Self, dest: mut ref R, partial: ref R): void
+}
+
+struct ManagedAcc {
+    total: int,
+    count: int,
+}
+
+struct AccFactory {
+    tag: int,
+}
+
+func AccFactory.init(self: ref AccFactory): ManagedAcc {
+    return ManagedAcc { total: self.tag, count: 0 }
+}
+
+struct SumJob {}
+func SumJob.run(self: ref SumJob, item: ref int, state: mut ref ManagedAcc): void {
+    state.total = state.total + *item
+    state.count = state.count + 1
+}
+
+struct AccCombine {}
+func AccCombine.combine(self: ref AccCombine, dest: mut ref ManagedAcc, partial: ref ManagedAcc): void {
+    dest.total = dest.total + partial.total
+    dest.count = dest.count + partial.count
+}
+
+struct ChunkContextWithInit {
+    subslice: []int,
+    job: SumJob,
+    init: AccFactory,
+    stop_flag: ptr[int],
+}
+
+func dispatchChunkWithInit(ctx: ref ChunkContextWithInit, result: mut ref ManagedAcc): i32 {
+    let mut state = ctx.init.init()
+    let count = unsafe { sliceLen(ctx.subslice) }
+    let mut i: uint = 0
+    let nullp: ptr[int] = nil
+    while i < count {
+        if ctx.stop_flag != nullp {
+            let flag_val: int = unsafe { ptrRead<int>(ctx.stop_flag) }
+            if flag_val != 0 {
+                return 2
+            }
+        }
+        ctx.job.run(ref ctx.subslice[i], mut ref state)
+        i = i + 1
+    }
+    result.total = state.total
+    result.count = state.count
+    return 0
+}
+
+func parallelFoldWithInitSim(
+    data: []int,
+    seed: ManagedAcc,
+    factory: AccFactory,
+    job: SumJob,
+    combine: AccCombine,
+    workers: uint
+): ManagedAcc {
+    let total_len = unsafe { sliceLen(data) }
+    if total_len == 0 {
+        return seed
+    }
+    let mut chunk_count = workers
+    if chunk_count > total_len {
+        chunk_count = total_len
+    }
+    let base_chunk_size = total_len / chunk_count
+    let remainder = total_len % chunk_count
+
+    let mut acc = seed
+    let mut offset: uint = 0
+    let mut c: uint = 0
+    while c < chunk_count {
+        let mut current_size = base_chunk_size
+        if c < remainder {
+            current_size = current_size + 1
+        }
+        if current_size > 0 {
+            let chunk_slice = unsafe { sliceSubslice(data, offset, current_size) }
+            let nullp: ptr[int] = nil
+            let ctx = ChunkContextWithInit {
+                subslice: chunk_slice,
+                job: job,
+                init: factory,
+                stop_flag: nullp,
+            }
+            let mut chunk_res = ManagedAcc { total: 0, count: 0 }
+            let code = dispatchChunkWithInit(ref ctx, mut ref chunk_res)
+            if code == 0 {
+                combine.combine(mut ref acc, ref chunk_res)
+            }
+            offset = offset + current_size
+        }
+        c = c + 1
+    }
+    return acc
+}
+
+func main(): int {
+    let raw = unsafe { alloc(48) as ptr[int] }
+    let mut i: int = 0
+    while i < 6 {
+        let p = unsafe { ptrOffset<int>(raw, i as i32) }
+        let val = (i + 1) * 10
+        unsafe { ptrWrite<int>(p, val) }
+        i = i + 1
+    }
+    let data = unsafe { sliceFromRaw(raw, raw, 6 as uint) }
+
+    let seed = ManagedAcc { total: 0, count: 0 }
+    let factory = AccFactory { tag: 100 }
+    let job = SumJob {}
+    let combiner = AccCombine {}
+
+    // 3 workers over 6 items -> 3 chunks of 2 items
+    // Each chunk starts with tag=100 from factory.init():
+    // Chunk 0: 100 + 10 + 20 = 130, count 2
+    // Chunk 1: 100 + 30 + 40 = 170, count 2
+    // Chunk 2: 100 + 50 + 60 = 210, count 2
+    // Total combined: 130 + 170 + 210 = 510, count: 6
+    let res = parallelFoldWithInitSim(data, seed, factory, job, combiner, 3 as uint)
+
+    if res.total != 510 {
+        unsafe { free(raw as ptr[u8]) }
+        return 1
+    }
+    if res.count != 6 {
+        unsafe { free(raw as ptr[u8]) }
+        return 2
+    }
+
+    unsafe { free(raw as ptr[u8]) }
+    return 0
+}
+"#;
+    let (amir, tc) = compile_src_mono(src);
+    let c_res = execute_c("parallel_fold_non_copy", &amir, &tc);
+    assert_eq!(c_res, 0, "C backend failed non-copy parallel fold test");
+    let clif_res = execute_cranelift(&amir, &tc);
+    assert_eq!(
+        clif_res, 0,
+        "Cranelift backend failed non-copy parallel fold test"
+    );
+}
+
+#[test]
+fn parity_parallel_float_determinism() {
+    let src = r#"
+module std.core.parallel_float_determinism
+
+extern "arandu-intrinsic" {
+    func ptrRead<T>(p: ptr[T]): T
+    func ptrWrite<T>(p: ptr[T], val: T): void
+    func ptrOffset<T>(base: ptr[T], offset: i32): ptr[T]
+    func sliceFromRaw(owner: ptr[float], data: ptr[float], len: uint): []float
+    func sliceLen(source: []float): uint
+    func sliceSubslice(source: []float, start: uint, len: uint): []float
+}
+
+struct FloatAcc {
+    val: float,
+}
+
+struct FloatJob {}
+
+func FloatJob.run(self: ref FloatJob, item: ref float, state: mut ref FloatAcc): void {
+    state.val = state.val + *item
+}
+
+struct FloatCombine {}
+
+func FloatCombine.combine(self: ref FloatCombine, dest: mut ref FloatAcc, partial: ref FloatAcc): void {
+    dest.val = dest.val + partial.val
+}
+
+// In Arandu parallel reduction, the chunk partition depends strictly on input size
+// and chunk granularity, NOT on worker count. Workers only schedule chunk batches.
+// Partial results are then combined strictly in ordinal order (0, 1, ..., chunk_count - 1).
+func runOrdinalFloatReduction(
+    data: []float,
+    chunk_count: uint,
+    worker_count: uint
+): FloatAcc {
+    let total_len = unsafe { sliceLen(data) }
+    let base_chunk_size = total_len / chunk_count
+    let remainder = total_len % chunk_count
+
+    let job = FloatJob {}
+    let combiner = FloatCombine {}
+
+    // 1. Each chunk calculates its partial sum
+    let partials_raw = unsafe { alloc(chunk_count * (8 as uint)) as ptr[FloatAcc] }
+    let mut offset: uint = 0
+    let mut c: uint = 0
+    while c < chunk_count {
+        let mut current_size = base_chunk_size
+        if c < remainder {
+            current_size = current_size + 1
+        }
+        let chunk_slice = unsafe { sliceSubslice(data, offset, current_size) }
+        let mut chunk_acc = FloatAcc { val: 0.0 }
+        let len = unsafe { sliceLen(chunk_slice) }
+        let mut j: uint = 0
+        while j < len {
+            job.run(ref chunk_slice[j], mut ref chunk_acc)
+            j = j + 1
+        }
+        let p = unsafe { ptrOffset<FloatAcc>(partials_raw, c as i32) }
+        unsafe { ptrWrite<FloatAcc>(p, chunk_acc) }
+        offset = offset + current_size
+        c = c + 1
+    }
+
+    // 2. Combining partial sums strictly in ordinal order:
+    let mut acc = FloatAcc { val: 0.0 }
+    let mut k: uint = 0
+    while k < chunk_count {
+        let p = unsafe { ptrOffset<FloatAcc>(partials_raw, k as i32) }
+        let partial_val = unsafe { ptrRead<FloatAcc>(p) }
+        combiner.combine(mut ref acc, ref partial_val)
+        k = k + 1
+    }
+
+    unsafe { free(partials_raw as ptr[u8]) }
+    return acc
+}
+
+func main(): int {
+    let len: uint = 16
+    let raw = unsafe { alloc(len * (8 as uint)) as ptr[float] }
+    let mut i: int = 0
+    // Fill with values that have non-terminating binary expansions to test IEEE-754 rounding
+    while i < 16 {
+        let p = unsafe { ptrOffset<float>(raw, i as i32) }
+        let f = (i as float) * 0.125 + 0.1
+        unsafe { ptrWrite<float>(p, f) }
+        i = i + 1
+    }
+    let data = unsafe { sliceFromRaw(raw, raw, len) }
+
+    // Regardless of how many workers (1, 2, 4, 8) process the fixed chunks (4 chunks),
+    // the canonical ordinal reduction yields bit-for-bit identical results!
+    let fixed_chunks: uint = 4
+    let res1 = runOrdinalFloatReduction(data, fixed_chunks, 1 as uint)
+    let res2 = runOrdinalFloatReduction(data, fixed_chunks, 2 as uint)
+    let res4 = runOrdinalFloatReduction(data, fixed_chunks, 4 as uint)
+    let res8 = runOrdinalFloatReduction(data, fixed_chunks, 8 as uint)
+
+    if res1.val != res2.val {
+        unsafe { free(raw as ptr[u8]) }
+        return 1
+    }
+    if res2.val != res4.val {
+        unsafe { free(raw as ptr[u8]) }
+        return 2
+    }
+    if res4.val != res8.val {
+        unsafe { free(raw as ptr[u8]) }
+        return 3
+    }
+
+    unsafe { free(raw as ptr[u8]) }
+    return 0
+}
+"#;
+    let (amir, tc) = compile_src_mono(src);
+    let c_res = execute_c("parallel_float_determinism", &amir, &tc);
+    assert_eq!(c_res, 0, "C backend failed float determinism test");
+    let clif_res = execute_cranelift(&amir, &tc);
+    assert_eq!(
+        clif_res, 0,
+        "Cranelift backend failed float determinism test"
     );
 }

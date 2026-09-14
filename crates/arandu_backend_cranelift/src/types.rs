@@ -50,6 +50,20 @@ pub fn ar_type_is_unsigned_integer(ty: &ArType) -> bool {
     )
 }
 
+/// Returns `true` if `ty` should use unsigned comparison in Cranelift (IntCC::Unsigned*).
+/// Includes unsigned integers, char (Unicode code points), and raw pointers (address space).
+#[must_use]
+pub fn ar_type_is_unsigned_comparison(ty: &ArType) -> bool {
+    ar_type_is_unsigned_integer(ty)
+        || matches!(
+            ty,
+            ArType::Primitive(Primitive::Char)
+                | ArType::Ptr(_)
+                | ArType::Ref(_)
+                | ArType::RefMut(_)
+        )
+}
+
 /// Maps an Arandu [`ArType`] to a single [`ClifType`].
 ///
 /// For composite types that expand to multiple Cranelift slots (e.g. `str`),

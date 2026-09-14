@@ -324,24 +324,14 @@ impl<'a> CEmitter<'a> {
                 }
                 resolved_fields.sort_by_key(|f| f.0);
 
-                let _ = write!(
-                    &mut self.output,
-                    "({{ {expected_c_type} _res = {{0}}; struct {{"
-                );
-                for (offset, field_c_ty, _) in &resolved_fields {
-                    let _ = write!(&mut self.output, " {} f_{};", field_c_ty, offset);
+                let _ = write!(&mut self.output, "({{ {expected_c_type} _res = {{0}};");
+                for (offset, field_c_ty, op_str) in &resolved_fields {
+                    let _ = write!(
+                        &mut self.output,
+                        " *({field_c_ty}*)((uint8_t*)&_res + {offset}) = {op_str};"
+                    );
                 }
-                let _ = write!(&mut self.output, "}} _s = {{");
-                for (i, (_, _, op_str)) in resolved_fields.iter().enumerate() {
-                    if i > 0 {
-                        let _ = write!(&mut self.output, ", ");
-                    }
-                    let _ = write!(&mut self.output, "{}", op_str);
-                }
-                let _ = write!(
-                    &mut self.output,
-                    "}}; memcpy(&_res, &_s, sizeof(_s) < sizeof(_res) ? sizeof(_s) : sizeof(_res)); _res; }})"
-                );
+                let _ = write!(&mut self.output, " _res; }})");
             }
             AmirRvalue::Unary { op, operand } => {
                 let op_val = self.format_operand(operand, func);
@@ -535,6 +525,13 @@ impl<'a> CEmitter<'a> {
                 let _ = write!(
                     &mut self.output,
                     "({{ {expected_c_type} view = {{0}}; void* _orig_ptr = 0; memcpy(&_orig_ptr, (uint8_t*)&{slice} + 0, sizeof(_orig_ptr)); void* _ptr = (void*)((( {elem_c}*)_orig_ptr) + ({start})); {len_ty} _len = ({len_ty})({len}); memcpy((uint8_t*)&view + 0, &_ptr, sizeof(_ptr)); memcpy((uint8_t*)&view + {off}, &_len, sizeof(_len)); view; }})"
+                );
+            }
+            AmirRvalue::SliceData(slice) => {
+                let slice = self.format_operand(slice, func);
+                let _ = write!(
+                    &mut self.output,
+                    "({{ void* _ptr = 0; memcpy(&_ptr, (uint8_t*)&{slice} + 0, sizeof(_ptr)); ({expected_c_type})_ptr; }})"
                 );
             }
             AmirRvalue::StrView { owner } => {

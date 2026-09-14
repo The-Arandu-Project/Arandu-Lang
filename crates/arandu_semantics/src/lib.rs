@@ -34,9 +34,10 @@ pub use arandu_mir::{
 pub use arandu_resolve::{resolve_for_test, resolve_imports_and_bodies, resolve_local};
 pub use arandu_typeck::type_checker::TargetInfo;
 pub use arandu_typeck::{
-    TypeCheckResult, TypeChecker, TypeInfo, body_item_symbols, check_bodies, check_bodies_only,
-    check_func_body_only, check_item_body_only, check_non_func_bodies_only, check_signatures,
-    check_signatures_only, free_func_symbols, item_source_span, primary_def_key, type_check,
+    EnumPayloadShape, TypeCheckResult, TypeChecker, TypeInfo, body_item_symbols, check_bodies,
+    check_bodies_only, check_func_body_only, check_item_body_only, check_non_func_bodies_only,
+    check_signatures, check_signatures_only, free_func_symbols, item_source_span, primary_def_key,
+    type_check,
 };
 pub use passes::lower_hir::{link_hir_module, lower_to_hir};
 pub use passes::monomorphize::monomorphize_program;

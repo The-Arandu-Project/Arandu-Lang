@@ -2,7 +2,7 @@
     "name": "arandu-lang",
     "displayName": "Arandu Language Support",
     "description": "VS Code support for the Arandu Programming Language",
-    "version": "0.1.0-rc.5",
+    "version": "0.1.0-rc.6",
     "publisher": "arandu",
     "license": "MIT",
     "preview": true,
@@ -13,11 +13,11 @@
     },
     "repository": {
         "type": "git",
-        "url": "https://github.com/BrunoF2P/Arandu-Lang.git"
+        "url": "https://github.com/arandu-lang/arandu.git"
     },
-    "homepage": "https://github.com/BrunoF2P/Arandu-Lang#readme",
+    "homepage": "https://github.com/arandu-lang/arandu#readme",
     "bugs": {
-        "url": "https://github.com/BrunoF2P/Arandu-Lang/issues"
+        "url": "https://github.com/arandu-lang/arandu/issues"
     },
     "keywords": [
         "arandu",

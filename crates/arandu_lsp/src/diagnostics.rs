@@ -41,11 +41,14 @@ pub(crate) fn spawn_diagnostics(
         Priority::Background,
         Some(JobKey::Diagnostics(doc_id)),
         move |cancellation| {
+            cancellation.link_query(snap.db.query_cancellation_token());
             if cancellation.is_cancelled() {
                 return;
             }
-            match catch_unwind(AssertUnwindSafe(|| compute_diagnostics(&snap, source))) {
-                Ok((diags, fingerprint)) => {
+            match catch_unwind(AssertUnwindSafe(|| {
+                arandu_query::catch_query_cancellation(|| compute_diagnostics(&snap, source))
+            })) {
+                Ok(Ok((diags, fingerprint))) => {
                     if cancellation.is_cancelled() {
                         return;
                     }
@@ -58,6 +61,7 @@ pub(crate) fn spawn_diagnostics(
                         diags,
                     });
                 }
+                Ok(Err(_)) => {}
                 Err(payload) => {
                     crate::logging::log_panic("diagnostics", &payload);
                     let _ = tx.send(crate::dispatcher::JobResult::Failed { id: None, revision });
@@ -170,7 +174,7 @@ pub(crate) fn compute_diagnostics(
             let code_description = (!d.code.starts_with("ICE"))
                 .then(|| {
                     parse_uri(&format!(
-                        "https://github.com/BrunoF2P/Arandu-Lang/blob/main/docs/errors/{}.md",
+                        "https://github.com/arandu-lang/arandu/blob/main/docs/errors/{}.md",
                         d.code
                     ))
                     .map(|href| CodeDescription { href })

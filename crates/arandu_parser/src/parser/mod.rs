@@ -631,6 +631,7 @@ impl<'a> Parser<'a> {
                 | TokenKind::KwStruct
                 | TokenKind::KwEnum
                 | TokenKind::KwInterface
+                | TokenKind::KwImpl
                 | TokenKind::KwExtern
                 | TokenKind::KwType
                 | TokenKind::KwConst
@@ -648,6 +649,7 @@ impl<'a> Parser<'a> {
                     | TokenKind::KwStruct
                     | TokenKind::KwEnum
                     | TokenKind::KwInterface
+                    | TokenKind::KwImpl
                     | TokenKind::KwExtern
                     | TokenKind::KwType
                     | TokenKind::KwConst
@@ -667,6 +669,7 @@ impl<'a> Parser<'a> {
         if matches!(
             self.current().kind,
             TokenKind::RBrace
+                | TokenKind::KwLet
                 | TokenKind::KwReturn
                 | TokenKind::KwIf
                 | TokenKind::KwFor
@@ -687,6 +690,7 @@ impl<'a> Parser<'a> {
             if matches!(
                 self.current().kind,
                 TokenKind::RBrace
+                    | TokenKind::KwLet
                     | TokenKind::KwReturn
                     | TokenKind::KwIf
                     | TokenKind::KwFor

@@ -74,6 +74,19 @@ pub fn get_socket_fd(sock_id: i64) -> Option<i32> {
 pub const WAIT_READ: i64 = 1;
 pub const WAIT_WRITE: i64 = 2;
 
+/// Default connect timeout for socket establishment.
+const TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Default queue size for temporary io_uring instances.
+#[cfg(target_os = "linux")]
+const IO_URING_DEFAULT_ENTRIES: u32 = 8;
+/// User data identifying read completions in io_uring.
+#[cfg(target_os = "linux")]
+const IO_URING_USER_DATA_READ: u64 = 1;
+/// User data identifying write completions in io_uring.
+#[cfg(target_os = "linux")]
+const IO_URING_USER_DATA_WRITE: u64 = 2;
+
 /// Listen on `127.0.0.1:port`. Returns handle >= 0 or -1.
 ///
 /// # Safety
@@ -133,8 +146,8 @@ pub unsafe extern "C" fn ar_rt_tcp_connect(port: i64) -> i64 {
     let addr = format!("127.0.0.1:{port}");
     match TcpStream::connect(&addr) {
         Ok(s) => {
-            let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
-            let _ = s.set_write_timeout(Some(Duration::from_secs(5)));
+            let _ = s.set_read_timeout(Some(TCP_CONNECT_TIMEOUT));
+            let _ = s.set_write_timeout(Some(TCP_CONNECT_TIMEOUT));
             insert(SockKind::Stream(s))
         }
         Err(_) => -1,
@@ -413,10 +426,10 @@ unsafe fn read_io_uring(sock: i64, buf: *mut u8, len: i64) -> Option<i64> {
         let slot = g.get(sock as usize).and_then(|s| s.as_ref())?;
         raw_fd_of(&slot.kind)
     };
-    let mut ring = IoUring::new(8).ok()?;
+    let mut ring = IoUring::new(IO_URING_DEFAULT_ENTRIES).ok()?;
     let entry = opcode::Read::new(types::Fd(fd), buf, len as u32)
         .build()
-        .user_data(1);
+        .user_data(IO_URING_USER_DATA_READ);
     unsafe {
         ring.submission().push(&entry).ok()?;
     }
@@ -444,10 +457,10 @@ unsafe fn write_io_uring(sock: i64, buf: *const u8, len: i64) -> Option<i64> {
         let slot = g.get(sock as usize).and_then(|s| s.as_ref())?;
         raw_fd_of(&slot.kind)
     };
-    let mut ring = IoUring::new(8).ok()?;
+    let mut ring = IoUring::new(IO_URING_DEFAULT_ENTRIES).ok()?;
     let entry = opcode::Write::new(types::Fd(fd), buf, len as u32)
         .build()
-        .user_data(2);
+        .user_data(IO_URING_USER_DATA_WRITE);
     unsafe {
         ring.submission().push(&entry).ok()?;
     }

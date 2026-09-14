@@ -140,12 +140,17 @@ impl<'a> Resolver<'a> {
                     decl.span,
                     is_public(decl.visibility),
                 );
-                if let Some(symbol) = symbol
-                    && self.current_module.as_deref() == Some("std.runtime.executor")
-                    && decl.name == "TaskHandle"
-                {
-                    self.symbols
-                        .set_lang_item(symbol, arandu_middle::symbol_table::LangItem::TaskHandle);
+                if let Some(symbol) = symbol {
+                    use arandu_middle::symbol_table::LangItem;
+                    let item = match (self.current_module.as_deref(), decl.name.as_str()) {
+                        (Some("std.runtime.executor"), "TaskHandle") => Some(LangItem::TaskHandle),
+                        (Some("std.alloc.string"), "String") => Some(LangItem::String),
+                        (Some("std.alloc.vec"), "Vec") => Some(LangItem::Vec),
+                        _ => None,
+                    };
+                    if let Some(item) = item {
+                        self.symbols.set_lang_item(symbol, item);
+                    }
                 }
             }
             TopLevelDecl::Enum(decl) => {
@@ -247,6 +252,7 @@ impl<'a> Resolver<'a> {
                 if let Some(symbol) = symbol {
                     use arandu_middle::symbol_table::LangItem;
                     let capability = match (self.current_module.as_deref(), decl.name.as_str()) {
+                        (Some("std.core.marker"), "Copy") => Some(LangItem::Copy),
                         (Some("std.core.marker"), "Send") => Some(LangItem::Send),
                         (Some("std.core.marker"), "Sync") => Some(LangItem::Sync),
                         _ => None,

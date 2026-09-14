@@ -1,5 +1,6 @@
 //! Project native object build and linking.
 
+use std::fs;
 use std::path::Path;
 
 use crate::artifact;
@@ -22,16 +23,78 @@ pub fn cmd_project_build(
     let backend = project::BackendChoice::from_release_flag(flags.release);
     let (mut db, rebuild_log) = arandu_query::DatabaseImpl::with_rebuild_log();
     db.set_target_config(data_layout);
-    let ctx = match project::load_project(&mut db, start, flags) {
-        Ok(c) => c,
-        Err(e) => {
-            return Err(CliFailure::operational(
-                "load project",
-                Some(start.into()),
-                e,
-            ));
+    let ctx = {
+        arandu_base::time_pass!("project-load");
+        match project::load_project(&mut db, start, flags) {
+            Ok(c) => c,
+            Err(e) => {
+                return Err(CliFailure::operational(
+                    "load project",
+                    Some(start.into()),
+                    e,
+                ));
+            }
         }
     };
+    let profile = if flags.release {
+        artifact::NativeProfile::Release
+    } else {
+        artifact::NativeProfile::Dev
+    };
+    let compiler_path = std::env::current_exe().map_err(|error| {
+        CliFailure::operational("locate active Arandu compiler", None, error.to_string())
+    })?;
+    let runtime_path = linker::runtime_library()?;
+    let mut build_inputs = ctx.build_inputs.clone();
+    build_inputs.push(crate::incremental::IncrementalInput {
+        key: "toolchain/compiler".to_owned(),
+        path: compiler_path.clone(),
+        semantic_source: false,
+    });
+    build_inputs.push(crate::incremental::IncrementalInput {
+        key: "toolchain/runtime".to_owned(),
+        path: runtime_path,
+        semantic_source: false,
+    });
+
+    let session_config = crate::incremental::SessionConfig {
+        project_root: &ctx.root,
+        package: &ctx.name,
+        version: &ctx.version,
+        profile,
+        pointer_width: data_layout.pointer_width(),
+        opt,
+        manifest_path: &ctx.manifest_path,
+        extra_inputs: &build_inputs,
+    };
+
+    let check = {
+        arandu_base::time_pass!("incremental-cutoff");
+        crate::incremental::check_incremental(&session_config)
+    };
+    let reusable_input_fingerprints = match check {
+        crate::incremental::IncrementalCheck::UpToDate { artifact_path } => {
+            println!(
+                "built {} v{} (backend={}, entry={}, artifact={}, incremental: up-to-date)",
+                ctx.name,
+                ctx.version,
+                backend.label(),
+                ctx.entry_rel,
+                artifact_path.display()
+            );
+            return Ok(CliSuccess::Done);
+        }
+        crate::incremental::IncrementalCheck::NeedsRebuild {
+            reason,
+            reusable_input_fingerprints,
+        } => {
+            if flags.verbose {
+                eprintln!("[incremental] rebuild triggered: {reason}");
+            }
+            reusable_input_fingerprints
+        }
+    };
+
     let mut registry = arandu_base::SourceRegistry::default();
     let (file, filepath) = open_entry_file(&db, &mut registry, &ctx.entry_path);
     let artifacts = pipeline_lower(&db, file, &filepath);
@@ -60,8 +123,19 @@ pub fn cmd_project_build(
         Some(a) => a,
         None => &artifacts.amir,
     };
+    let toolchain_fingerprint = {
+        arandu_base::time_pass!("toolchain-fingerprint");
+        if let Some(fingerprint) = reusable_input_fingerprints
+            .as_ref()
+            .and_then(|inputs| inputs.get("toolchain/compiler"))
+        {
+            std::borrow::Cow::Borrowed(fingerprint.content_hash.as_str())
+        } else {
+            std::borrow::Cow::Owned(crate::incremental::content_digest(&compiler_path)?)
+        }
+    };
 
-    let backend_impl = {
+    let (target, optimization) = {
         let Some(target) =
             arandu_backend_cranelift::aot_triple_for_pointer_width(data_layout.pointer_width())
         else {
@@ -85,41 +159,205 @@ pub fn cmd_project_build(
                 arandu_backend_cranelift::AotOptimization::Speed
             }
         };
-        let backend_impl =
-            arandu_backend_cranelift::CraneliftObjectBackend::for_target_with_optimization(
-                target,
-                optimization,
-            );
-        match backend_impl {
-            Ok(b) => b,
-            Err(diag) => print_diagnostics_and_exit(std::iter::once(diag), &filepath),
-        }
+        (target, optimization)
     };
-    match backend_impl.compile(
-        amir,
-        type_check.symbols.as_ref(),
-        type_check.type_info.as_ref(),
-    ) {
-        Ok(object) => {
-            let artifact = artifact::publish_native_artifact(
-                &ctx.root,
-                &ctx.name,
-                &ctx.version,
-                if flags.release {
-                    artifact::NativeProfile::Release
+
+    if profile == artifact::NativeProfile::Dev {
+        let layout = artifact::layout(&ctx.root, profile.directory());
+        let cgu_cache_dir = layout.incremental.join("cgu");
+        let result = {
+            arandu_base::time_pass!("cgu-codegen");
+            crate::cgu::compile_partitioned(
+                amir,
+                type_check.symbols.as_ref(),
+                type_check.type_info.as_ref(),
+                &target,
+                optimization,
+                toolchain_fingerprint.as_ref(),
+                &cgu_cache_dir,
+            )?
+        };
+        if flags.verbose {
+            eprintln!(
+                "[cgu] {} units: {} cached, {} recompiled",
+                result.object_files.len(),
+                result.cached_count,
+                result.recompiled_count
+            );
+        }
+        let elf_layout_file = layout.incremental.join("elf_layout.json");
+        let (artifact, linker_label) = {
+            arandu_base::time_pass!("native-artifact");
+            let existing_artifact = if result.recompiled_units.is_empty() {
+                artifact::current_native_artifact(&ctx.root, profile)
+            } else {
+                artifact::current_native_artifact_candidate(&ctx.root, profile)
+            };
+            let full_link = || -> Result<_, CliFailure> {
+                let published = artifact::publish_partitioned_native_artifact(
+                    &ctx.root,
+                    &ctx.name,
+                    &ctx.version,
+                    profile,
+                    &result.object_files,
+                    |objects, output| {
+                        linker::link_objects(objects, output).map(|kind| kind.label())
+                    },
+                )?;
+                crate::linker_elf::record_elf_layout(
+                    &published.path,
+                    &result.object_files,
+                    &elf_layout_file,
+                )?;
+                Ok((published, backend.label()))
+            };
+
+            if result.recompiled_units.is_empty()
+                && crate::linker_elf::layout_matches_cgus(&elf_layout_file, &result.units)
+                && let Some(existing) = existing_artifact
+            {
+                if flags.verbose {
+                    eprintln!(
+                        "[incremental-artifact] all CGUs are verified cache hits; reusing {}",
+                        existing.path.display()
+                    );
+                }
+                (existing, "incremental-reuse")
+            } else if !result.recompiled_units.is_empty()
+                && let Some(existing) = existing_artifact
+                && elf_layout_file.is_file()
+            {
+                let staging_dir = layout.bin.join(".staging");
+                let _ = fs::create_dir_all(&staging_dir);
+                let staging_path = staging_dir.join(format!("patch-{}.tmp", std::process::id()));
+                let mut in_place_patched = None;
+                if fs::copy(&existing.path, &staging_path).is_ok() {
+                    let recompiled_refs: Vec<(&arandu_backend_cranelift::CodegenUnit, &[u8])> =
+                        result
+                            .recompiled_units
+                            .iter()
+                            .map(|(unit, bytes)| (unit, bytes.as_slice()))
+                            .collect();
+                    match crate::linker_elf::try_patch_elf_in_place(
+                        &staging_path,
+                        &elf_layout_file,
+                        &result.units,
+                        &recompiled_refs,
+                    ) {
+                        Ok(Some(new_digest)) => {
+                            in_place_patched = Some((staging_path, new_digest));
+                        }
+                        Ok(None) => {
+                            if flags.verbose {
+                                eprintln!(
+                                    "[in-process-elf] safety/determinism precondition not met; falling back to a full link"
+                                );
+                            }
+                            let _ = fs::remove_file(&staging_path);
+                        }
+                        Err(error) => {
+                            if flags.verbose {
+                                eprintln!(
+                                    "[in-process-elf] patch failed safely ({error:?}); falling back to a full link"
+                                );
+                            }
+                            let _ = fs::remove_file(&staging_path);
+                        }
+                    }
+                }
+
+                if let Some((exec_path, new_digest)) = in_place_patched {
+                    if flags.verbose {
+                        eprintln!(
+                            "[in-process-elf] patched {} CGU(s) in-place in {}",
+                            result.recompiled_count,
+                            exec_path.display()
+                        );
+                    }
+                    let published = artifact::record_patched_native_artifact(
+                        &ctx.root,
+                        &ctx.name,
+                        &ctx.version,
+                        profile,
+                        &result.object_files,
+                        &exec_path,
+                        &new_digest,
+                    )?;
+                    (published, crate::linker::LinkerKind::InProcessElf.label())
                 } else {
-                    artifact::NativeProfile::Dev
-                },
-                object.bytes(),
-                |object, output| linker::link(object, output).map(|kind| kind.label()),
+                    full_link()?
+                }
+            } else {
+                full_link()?
+            }
+        };
+
+        {
+            arandu_base::time_pass!("incremental-record");
+            crate::incremental::record_session(
+                &session_config,
+                &artifact.path,
+                Some(artifact.digest),
+                reusable_input_fingerprints,
             )?;
+        }
+        println!(
+            "built {} v{} (backend={}, entry={}, artifact={})",
+            ctx.name,
+            ctx.version,
+            linker_label,
+            ctx.entry_rel,
+            artifact.path.display()
+        );
+        return Ok(CliSuccess::Done);
+    }
+
+    let backend_impl =
+        arandu_backend_cranelift::CraneliftObjectBackend::for_target_with_optimization(
+            target,
+            optimization,
+        );
+    let backend_impl = match backend_impl {
+        Ok(b) => b,
+        Err(diag) => print_diagnostics_and_exit(std::iter::once(diag), &filepath),
+    };
+    let object = {
+        arandu_base::time_pass!("codegen-monolithic");
+        backend_impl.compile(
+            amir,
+            type_check.symbols.as_ref(),
+            type_check.type_info.as_ref(),
+        )
+    };
+    match object {
+        Ok(object) => {
+            let artifact = {
+                arandu_base::time_pass!("native-artifact");
+                artifact::publish_native_artifact(
+                    &ctx.root,
+                    &ctx.name,
+                    &ctx.version,
+                    profile,
+                    object.bytes(),
+                    |object, output| linker::link(object, output).map(|kind| kind.label()),
+                )?
+            };
+            {
+                arandu_base::time_pass!("incremental-record");
+                crate::incremental::record_session(
+                    &session_config,
+                    &artifact.path,
+                    Some(artifact.digest),
+                    reusable_input_fingerprints,
+                )?;
+            }
             println!(
                 "built {} v{} (backend={}, entry={}, artifact={})",
                 ctx.name,
                 ctx.version,
                 backend.label(),
                 ctx.entry_rel,
-                artifact.display()
+                artifact.path.display()
             );
             Ok(CliSuccess::Done)
         }

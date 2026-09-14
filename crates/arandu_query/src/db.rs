@@ -6,7 +6,7 @@ use crate::explain::RebuildLog;
 use crate::manifest::ProjectManifest;
 use crate::vfs::{ModuleRoots, PackageModuleMap};
 use arandu_middle::DataLayout;
-use salsa::{Setter, Storage};
+use salsa::{Database as _, Setter, Storage};
 
 pub type FileId = u32;
 
@@ -195,6 +195,13 @@ impl Default for DatabaseImpl {
 impl salsa::Database for DatabaseImpl {}
 
 impl DatabaseImpl {
+    /// Cancellation handle scoped to this database clone. Long-running tracked
+    /// queries periodically observe it and unwind with Salsa's typed payload.
+    #[must_use]
+    pub fn query_cancellation_token(&self) -> QueryCancellationToken {
+        QueryCancellationToken(self.cancellation_token())
+    }
+
     /// Database without rebuild event overhead.
     #[must_use]
     pub fn new() -> Self {
@@ -460,6 +467,22 @@ impl DatabaseImpl {
         cache.by_file.insert(file_id, tree.clone());
         tree
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct QueryCancellationToken(salsa::CancellationToken);
+
+impl QueryCancellationToken {
+    pub fn cancel(&self) {
+        self.0.cancel();
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QueryCancelled;
+
+pub fn catch_query_cancellation<T>(operation: impl FnOnce() -> T) -> Result<T, QueryCancelled> {
+    salsa::Cancelled::catch(std::panic::AssertUnwindSafe(operation)).map_err(|_| QueryCancelled)
 }
 
 impl arandu_middle::db::SourceDatabase for DatabaseImpl {

@@ -144,7 +144,7 @@ fn attach_ice_report_metadata(
     );
     let body_encoded = urlencoding_simple(&body);
     let issue_url = format!(
-        "https://github.com/The-Arandu-Project/Arandu-Lang/issues/new?title={title_encoded}&body={body_encoded}"
+        "https://github.com/arandu-lang/arandu/issues/new?title={title_encoded}&body={body_encoded}"
     );
 
     diag.notes
@@ -207,7 +207,7 @@ mod tests {
         );
         assert!(diag.hints.iter().any(|h| {
             h.message
-                .contains("https://github.com/The-Arandu-Project/Arandu-Lang/issues/new")
+                .contains("https://github.com/arandu-lang/arandu/issues/new")
         }));
     }
 

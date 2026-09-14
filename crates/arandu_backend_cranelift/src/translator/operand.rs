@@ -220,7 +220,10 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                                     return self.poison_i32();
                                 }
                             };
-                            let ty = expected_ty.unwrap_or(cranelift_codegen::ir::types::I32);
+                            let ty = match expected_ty {
+                                Some(t) if t.is_int() => t,
+                                _ => cranelift_codegen::ir::types::I32,
+                            };
                             self.builder.ins().iconst(ty, val)
                         }
                         arandu_semantics::literal_pool::AmirLiteralEntry::Float(s) => {
@@ -236,7 +239,15 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                                     return self.poison_i32();
                                 }
                             };
-                            self.builder.ins().f64const(val)
+                            let ty = match expected_ty {
+                                Some(t) if t.is_float() => t,
+                                _ => cranelift_codegen::ir::types::F64,
+                            };
+                            if ty == cranelift_codegen::ir::types::F32 {
+                                self.builder.ins().f32const(val as f32)
+                            } else {
+                                self.builder.ins().f64const(val)
+                            }
                         }
                         arandu_semantics::literal_pool::AmirLiteralEntry::Str(s) => {
                             let str_bytes = s.as_bytes();
@@ -302,8 +313,25 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
 
         if let Some(target_ty) = expected_ty {
             let val_ty = self.builder.func.dfg.value_type(val);
-            if val_ty != target_ty && val_ty.is_int() && target_ty.is_int() {
-                if val_ty.bits() < target_ty.bits() {
+            if val_ty != target_ty {
+                if val_ty.is_int() && target_ty.is_int() {
+                    if val_ty.bits() < target_ty.bits() {
+                        let is_unsigned = match operand {
+                            AmirOperand::Copy(t) | AmirOperand::Move(t) => {
+                                let ar_ty = self.temp_ar_ty(*t);
+                                crate::types::ar_type_is_unsigned_integer(&ar_ty)
+                            }
+                            _ => false,
+                        };
+                        if is_unsigned {
+                            val = self.builder.ins().uextend(target_ty, val);
+                        } else {
+                            val = self.builder.ins().sextend(target_ty, val);
+                        }
+                    } else if val_ty.bits() > target_ty.bits() {
+                        val = self.builder.ins().ireduce(target_ty, val);
+                    }
+                } else if val_ty.is_int() && target_ty.is_float() {
                     let is_unsigned = match operand {
                         AmirOperand::Copy(t) | AmirOperand::Move(t) => {
                             let ar_ty = self.temp_ar_ty(*t);
@@ -312,12 +340,29 @@ impl<M: cranelift_module::Module> FunctionTranslator<'_, '_, M> {
                         _ => false,
                     };
                     if is_unsigned {
-                        val = self.builder.ins().uextend(target_ty, val);
+                        val = self.builder.ins().fcvt_from_uint(target_ty, val);
                     } else {
-                        val = self.builder.ins().sextend(target_ty, val);
+                        val = self.builder.ins().fcvt_from_sint(target_ty, val);
                     }
-                } else if val_ty.bits() > target_ty.bits() {
-                    val = self.builder.ins().ireduce(target_ty, val);
+                } else if val_ty.is_float() && target_ty.is_int() {
+                    let is_unsigned = match operand {
+                        AmirOperand::Copy(t) | AmirOperand::Move(t) => {
+                            let ar_ty = self.temp_ar_ty(*t);
+                            crate::types::ar_type_is_unsigned_integer(&ar_ty)
+                        }
+                        _ => false,
+                    };
+                    if is_unsigned {
+                        val = self.builder.ins().fcvt_to_uint(target_ty, val);
+                    } else {
+                        val = self.builder.ins().fcvt_to_sint(target_ty, val);
+                    }
+                } else if val_ty.is_float() && target_ty.is_float() {
+                    if val_ty.bits() < target_ty.bits() {
+                        val = self.builder.ins().fpromote(target_ty, val);
+                    } else if val_ty.bits() > target_ty.bits() {
+                        val = self.builder.ins().fdemote(target_ty, val);
+                    }
                 }
             }
         }
