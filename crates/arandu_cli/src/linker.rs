@@ -379,39 +379,41 @@ fn build_system_linker_command(
         }
         command.arg(runtime).arg("-o").arg(&output_arg);
         #[cfg(target_os = "linux")]
-        command.arg("-Wl,--gc-sections").arg(if patchable_elf {
-            "-Wl,--build-id=none"
-        } else {
-            "-Wl,--build-id=sha1"
-        });
-        command.args([
-            "-lgcc_s",
-            "-lutil",
-            "-lrt",
-            "-lpthread",
-            "-lm",
-            "-ldl",
-            "-lc",
-        ]);
+        {
+            command.arg("-Wl,--gc-sections").arg(if patchable_elf {
+                "-Wl,--build-id=none"
+            } else {
+                "-Wl,--build-id=sha1"
+            });
+            command.args([
+                "-lgcc_s",
+                "-lutil",
+                "-lrt",
+                "-lpthread",
+                "-lm",
+                "-ldl",
+                "-lc",
+            ]);
+        }
         #[cfg(target_os = "macos")]
-        command.args([
-            "-Wl,-dead_strip",
-            "-Wl,-x",
-            "-Wl,-S",
-            "-Wl,-oso_prefix,.",
-            "-framework",
-            "Security",
-            "-framework",
-            "CoreFoundation",
-            "-liconv",
-            "-lSystem",
-            "-lc",
-            "-lm",
-        ]);
-        #[cfg(target_os = "macos")]
-        command.env("ZERO_AR_DATE", "1");
-        #[cfg(target_os = "macos")]
-        command.env("LD_DETERMINISTIC_MODE", "YES");
+        {
+            command.args([
+                "-Wl,-dead_strip",
+                "-Wl,-x",
+                "-Wl,-S",
+                "-Wl,-oso_prefix,.",
+                "-framework",
+                "Security",
+                "-framework",
+                "CoreFoundation",
+                "-liconv",
+                "-lSystem",
+            ]);
+            command.env("ZERO_AR_DATE", "1");
+            command.env("LD_DETERMINISTIC_MODE", "YES");
+        }
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+        command.args(["-lpthread", "-lm", "-lc"]);
     }
     command
 }
